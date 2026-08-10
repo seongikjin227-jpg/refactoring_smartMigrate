@@ -303,12 +303,14 @@ def get_recent_fails(limit: int = 10) -> list[dict]:
 def get_tuning_status_summary() -> dict[str, int]:
     """Tuning status summary for converted SQL rows."""
     available_columns = _get_available_columns(SQL_TABLE)
+    conversion_status_column = _SQL_CONVERSION_STATUS_COLUMN
     tuned_status_column = _SQL_TUNING_STATUS_COLUMN
     to_sql_column = "TO_SQL"
     q = f"""
         SELECT NVL(TO_CHAR({tuned_status_column}), 'NULL'), COUNT(*)
         FROM {SQL_TABLE}
         WHERE {_clob_has_text_expr(available_columns, to_sql_column)}
+          AND UPPER(TRIM({conversion_status_column})) IN ({_sql_in(CONVERSION_PASS_STATUSES)})
         GROUP BY {tuned_status_column}
     """
     try:

@@ -6,7 +6,6 @@ from smart_migrate.shared.SharedLogging import logger
 from smart_migrate.shared.SharedTypes import SqlInfoJob
 from smart_migrate.integrations.oracle.OracleConnection import get_connection, get_result_table, split_table_owner_and_name
 from smart_migrate.shared.SqlStatuses import (
-    CONVERSION_FAIL_STATUSES,
     CONVERSION_SUCCESS_STATUSES,
     FAIL_TEST,
     LEGACY_FAIL,
@@ -17,7 +16,6 @@ from smart_migrate.shared.SqlStatuses import (
 
 _COLUMN_LENGTH_CACHE: dict[str, dict[str, int]] = {}
 _AVAILABLE_COLUMNS_CACHE: dict[str, set[str]] = {}
-_PENDING_JOB_STATUSES = ("URGENT", "READY", "PENDING", LEGACY_FAIL, *CONVERSION_FAIL_STATUSES)
 _SQL_LENGTH_SHORT_MAX = 5000
 _DEFAULT_JOB_MAX_BATCH_COUNT = 30
 
@@ -239,26 +237,12 @@ def get_pending_jobs() -> list[SqlInfoJob]:
     tuned_result_column = "TUNED_RESULT" if "TUNED_RESULT" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS TUNED_RESULT"
     priority_column = "PRIORITY" if "PRIORITY" in available_columns else "CAST(NULL AS NUMBER) AS PRIORITY"
     retry_count_column = "RETRY_COUNT" if "RETRY_COUNT" in available_columns else "CAST(NULL AS NUMBER) AS RETRY_COUNT"
-    priority_order_clause = (
-        "PRIORITY ASC NULLS LAST,"
-        if "PRIORITY" in available_columns
-        else f"""
-          CASE
-            WHEN UPPER(TRIM({conversion_status_column})) = 'URGENT' THEN 1
-            WHEN UPPER(TRIM({conversion_status_column})) = 'READY' THEN 2
-            WHEN UPPER(TRIM({conversion_status_column})) IN ({sql_in((LEGACY_FAIL, *CONVERSION_FAIL_STATUSES))}) THEN 3
-            WHEN UPPER(TRIM({conversion_status_column})) = 'PENDING' THEN 4
-            WHEN {conversion_status_column} IS NULL THEN 5
-            ELSE 9
-          END,
-        """
-    )
+    priority_order_clause = "PRIORITY ASC NULLS LAST," if "PRIORITY" in available_columns else ""
     batch_limit_clause = _get_batch_limit_clause(available_columns)
-    pending_status_sql = sql_in(_PENDING_JOB_STATUSES)
     query = f"""
         SELECT ROWIDTOCHAR(ROWID) AS RID
         FROM {table}
-        WHERE (UPPER(TRIM({conversion_status_column})) IN ({pending_status_sql}) OR {conversion_status_column} IS NULL)
+        WHERE {conversion_status_column} IS NULL
           {batch_limit_clause}
         ORDER BY
           {priority_order_clause}

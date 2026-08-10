@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import traceback
 import urllib.error
@@ -73,6 +74,7 @@ class BatchAgentCommandTool(Component):
     icon = "Timer"
 
     _db_cache: dict[str, Any] = {}
+    _worker_thread: threading.Thread | None = None
 
     _state: dict[str, Any] = {
         "running": False,
@@ -91,15 +93,16 @@ class BatchAgentCommandTool(Component):
         MessageTextInput(
             name="command_json",
             display_name="Command JSON",
-            required=True,
+            required=False,
             tool_mode=True,
-            info='Batch command. Supported actions: {"action":"start"}, {"action":"stop"}, {"action":"status"}. Plain text batch start phrases map to start.',
+            value='{"action":"start"}',
+            info='Batch command. Empty value defaults to {"action":"start"}. Supported actions: {"action":"start"}, {"action":"stop"}, {"action":"status"}.',
         ),
-        StrInput(name="db_host", display_name="DB Host", required=True),
-        IntInput(name="db_port", display_name="DB Port", value=1521, required=True),
-        StrInput(name="db_service_name", display_name="Service Name", required=True),
-        StrInput(name="db_username", display_name="Username", required=True),
-        SecretStrInput(name="db_password", display_name="Password", required=True),
+        StrInput(name="db_host", display_name="DB Host", value=str(DEFAULT_DB_CONFIG["db_host"]), required=False),
+        IntInput(name="db_port", display_name="DB Port", value=int(DEFAULT_DB_CONFIG["db_port"]), required=False),
+        StrInput(name="db_service_name", display_name="Service Name", value=str(DEFAULT_DB_CONFIG["db_service_name"]), required=False),
+        StrInput(name="db_username", display_name="Username", value=str(DEFAULT_DB_CONFIG["db_username"]), required=False),
+        SecretStrInput(name="db_password", display_name="Password", value=str(DEFAULT_DB_CONFIG["db_password"]), required=False),
         StrInput(
             name="llm_base_url",
             display_name="LLM Base URL",
@@ -112,12 +115,13 @@ class BatchAgentCommandTool(Component):
         IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=900, required=False),
         MessageTextInput(name="mig_sql_prompt", display_name="MIG SQL Prompt", required=False),
         MessageTextInput(name="verify_sql_prompt", display_name="VERIFY SQL Prompt", required=False),
-        MessageTextInput(name="to_sql_prompt", display_name="TO SQL Prompt", required=True),
+        MessageTextInput(name="to_sql_prompt", display_name="TO SQL Prompt", required=False),
         MessageTextInput(name="bind_sql_prompt", display_name="BIND SQL Prompt", required=False),
         MessageTextInput(name="test_sql_prompt", display_name="TEST SQL Prompt", required=False),
         StrInput(
             name="system_schema",
             display_name="System Schema",
+            value=str(DEFAULT_DB_CONFIG["system_schema"]),
             required=False,
             info="Schema containing SmartMigration metadata/log tables. Leave blank for current user.",
         ),
@@ -149,7 +153,7 @@ class BatchAgentCommandTool(Component):
         BoolInput(
             name="auto_install_packages",
             display_name="Auto Install Missing Packages",
-            value=False,
+            value=True,
             required=False,
             info="If true, installs missing runtime packages with pip before DB connection.",
         ),
@@ -186,6 +190,7 @@ class BatchAgentCommandTool(Component):
         control_result = self._start_control(config, run_id)
         if not control_result.get("acquired"):
             existing_run_id = control_result.get("run_id")
+            self.__class__._ensure_worker_thread(config, str(existing_run_id or run_id))
             self._write_batch_log_safe(
                 config,
                 existing_run_id,
@@ -200,16 +205,19 @@ class BatchAgentCommandTool(Component):
                 "running": control_status == "RUNNING" and bool(control_result.get("heartbeat_alive")),
                 "requested_running": control_status == "RUNNING",
                 "mode": "db_control",
+                "worker_thread_alive": self.__class__._is_worker_thread_alive(),
                 **control_result,
             }
         self._write_batch_log_safe(config, run_id, 0, "START", message="Batch agent started.")
+        self.__class__._ensure_worker_thread(config, run_id)
         return {
             "ok": True,
-            "status": "start_requested",
-            "running": False,
+            "status": "running",
+            "running": True,
             "requested_running": True,
             "run_id": run_id,
-            "mode": "db_control",
+            "mode": "component_thread",
+            "worker_thread_alive": self.__class__._is_worker_thread_alive(),
             "message": "Batch monitor will stay alive and write pending NEXT_MIG_INFO counts to NEXT_BATCH_LOG every 10 seconds.",
         }
 
@@ -234,7 +242,10 @@ class BatchAgentCommandTool(Component):
             and str(control_status.get("last_event") or "").upper() != "START"
         )
         state["running"] = bool(control_running)
+        if self.__class__._is_worker_thread_alive():
+            state["running"] = True
         state["requested_running"] = bool(requested_running)
+        state["worker_thread_alive"] = self.__class__._is_worker_thread_alive()
         state["status_source"] = "batch_control" if control_status else "none"
         state["control"] = control_status
         if control_status:
@@ -250,6 +261,24 @@ class BatchAgentCommandTool(Component):
     @staticmethod
     def _console(message: str) -> None:
         logger.info(f"[BatchSupervisor] {message}")
+
+    @classmethod
+    def _is_worker_thread_alive(cls) -> bool:
+        return bool(cls._worker_thread and cls._worker_thread.is_alive())
+
+    @classmethod
+    def _ensure_worker_thread(cls, config: dict[str, Any], run_id: str) -> None:
+        if cls._is_worker_thread_alive():
+            return
+        thread = threading.Thread(
+            target=cls._worker_loop,
+            args=(dict(config), str(run_id)),
+            name="SmartMigrateBatchMonitor",
+            daemon=True,
+        )
+        cls._worker_thread = thread
+        thread.start()
+        logger.info(f"[BatchSupervisor] background monitor thread started run_id={run_id}")
 
     def _start_control(self, config: dict[str, Any], run_id: str) -> dict[str, Any]:
         table = self._qualify_table("NEXT_BATCH_CONTROL", config["system_schema"])
@@ -1045,11 +1074,11 @@ class BatchAgentCommandTool(Component):
         self.default_max_attempts = config["migration_max_attempts"]
     def _snapshot_config(self) -> dict[str, Any]:
         return {
-            "db_host": str(self.db_host or "").strip(),
-            "db_port": int(self.db_port or 1521),
-            "db_service_name": str(self.db_service_name or "").strip(),
-            "db_username": str(self.db_username or "").strip(),
-            "db_password": self._secret_to_str(self.db_password),
+            "db_host": str(self.db_host or DEFAULT_DB_CONFIG["db_host"]).strip(),
+            "db_port": int(self.db_port or DEFAULT_DB_CONFIG["db_port"]),
+            "db_service_name": str(self.db_service_name or DEFAULT_DB_CONFIG["db_service_name"]).strip(),
+            "db_username": str(self.db_username or DEFAULT_DB_CONFIG["db_username"]).strip(),
+            "db_password": self._secret_to_str(self.db_password) or str(DEFAULT_DB_CONFIG["db_password"]),
             "llm_base_url": str(self.llm_base_url or "").strip(),
             "llm_api_key": self._secret_to_str(self.llm_api_key),
             "llm_model": str(self.llm_model or "").strip(),
@@ -1060,12 +1089,12 @@ class BatchAgentCommandTool(Component):
             "to_sql_prompt": str(self.to_sql_prompt or ""),
             "bind_sql_prompt": str(self.bind_sql_prompt or ""),
             "test_sql_prompt": str(self.test_sql_prompt or ""),
-            "system_schema": str(self.system_schema or "").strip(),
+            "system_schema": str(self.system_schema or DEFAULT_DB_CONFIG["system_schema"]).strip(),
             "source_schema": str(self.source_schema or "").strip(),
             "target_schema": str(self.target_schema or "").strip(),
             "migration_max_attempts": max(1, int(self.migration_max_attempts or 3)),
             "sql_conversion_max_attempts": max(1, int(self.sql_conversion_max_attempts or 3)),
-            "no_job_sleep_seconds": max(1, int(self.no_job_sleep_seconds or 600)),
+            "no_job_sleep_seconds": 10,
             "error_sleep_seconds": max(1, int(self.error_sleep_seconds or 60)),
             "status_log_alive_grace_seconds": max(1, int(self.status_log_alive_grace_seconds or 1800)),
             "auto_install_packages": self._as_bool(self.auto_install_packages),
@@ -1074,7 +1103,7 @@ class BatchAgentCommandTool(Component):
     def _parse_command(self) -> dict[str, Any]:
         raw = str(self.command_json or "").strip()
         if not raw:
-            return {}
+            return {"action": "start"}
         lowered = raw.lower()
         if lowered in {"start", "resume", "batch start", "batch resume"} or raw in {
             "배치 시작",
@@ -3404,7 +3433,7 @@ def build_service_config() -> dict[str, Any]:
         "no_job_sleep_seconds": 10,
         "error_sleep_seconds": _env_int("SMARTMIGRATE_ERROR_SLEEP_SECONDS", 60),
         "status_log_alive_grace_seconds": _env_int("SMARTMIGRATE_STATUS_ALIVE_GRACE_SECONDS", 1800),
-        "auto_install_packages": _env_bool("SMARTMIGRATE_AUTO_INSTALL_PACKAGES", False),
+        "auto_install_packages": _env_bool("SMARTMIGRATE_AUTO_INSTALL_PACKAGES", True),
     }
     config.update(file_config)
     config["no_job_sleep_seconds"] = 10

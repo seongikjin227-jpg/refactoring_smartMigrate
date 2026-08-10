@@ -132,7 +132,7 @@ class MigrationCommandTool(Component):
         BoolInput(
             name="auto_install_packages",
             display_name="Auto Install Missing Packages",
-            value=False,
+            value=True,
             required=False,
             info="If true, installs missing runtime packages with pip before DB connection.",
         ),

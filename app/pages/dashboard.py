@@ -1085,9 +1085,10 @@ def _dashboard_status(status, title: str = "") -> str | None:
         return normalized
     if normalized == "FAIL":
         return "FAIL"
+    if normalized == "PASS-TUNING":
+        return "PASS-TUNING"
     if (
         normalized in {
-            "PASS-TUNING",
             "PASS (NON-SELECT)",
             "PASS(NON-SELECT)",
             "PASS NON SELECT",
@@ -1097,8 +1098,6 @@ def _dashboard_status(status, title: str = "") -> str | None:
         or "NON-SELECT" in normalized
     ):
         return "PASS (non-select)"
-    if normalized == "PASS-TUNING":
-        return "PASS-TUNING"
     if normalized == "PASS-CONVERSION":
         return "PASS-CONVERSION"
     if normalized == "PASS":
