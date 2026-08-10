@@ -5,7 +5,34 @@ import os
 from pathlib import Path
 from typing import Any
 
+from lfx.custom.custom_component.component import Component
+from lfx.io import Output
+from lfx.schema.data import Data
+
 from components.batch_agent_command_tool import BatchAgentCommandTool
+
+
+class BatchSupervisorServiceInfo(Component):
+    display_name = "Batch Supervisor Service Info"
+    description = "Explains how to run the always-on SmartMigration batch supervisor service."
+    name = "BatchSupervisorServiceInfo"
+    icon = "Info"
+
+    outputs = [
+        Output(display_name="Info", name="info", method="info"),
+    ]
+
+    def info(self) -> Data:
+        return Data(
+            data={
+                "ok": True,
+                "message": (
+                    "Do not run the while loop inside a Langflow chat request. "
+                    "Start it as a server process: python langflow/batch_supervisor_service.py"
+                ),
+                "service_command": "python langflow/batch_supervisor_service.py",
+            }
+        )
 
 
 def _env(name: str, default: str = "") -> str:

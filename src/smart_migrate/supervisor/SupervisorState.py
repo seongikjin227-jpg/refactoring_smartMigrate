@@ -1,7 +1,7 @@
 """Supervisor 전역 상태 정의."""
 
-from typing import Annotated
-from typing_extensions import TypedDict
+from typing import Annotated, Any
+from typing_extensions import NotRequired, TypedDict
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
@@ -15,3 +15,8 @@ class SupervisorState(TypedDict):
 
     # SIGINT/SIGTERM 수신 시 True → 루프 종료
     stop_requested: bool
+
+    poll_result: NotRequired[str]
+    decision: NotRequired[dict[str, Any]]
+    action_result: NotRequired[str]
+    wait_result: NotRequired[str]

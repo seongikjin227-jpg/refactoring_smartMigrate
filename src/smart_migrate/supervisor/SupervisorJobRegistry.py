@@ -138,5 +138,5 @@ def get_current_metric_context() -> dict[str, int | None]:
 def finish_cycle_metrics(logger=None) -> None:
     """Clear the current in-memory supervisor cycle state."""
     if logger and cycle_metrics:
-        logger.debug(f"[SupervisorCycle] cycle {cycle_metrics.get('cycle_no')} finished")
+        logger.info(f"[SupervisorCycle] cycle {cycle_metrics.get('cycle_no')} finished")
     cycle_metrics.clear()

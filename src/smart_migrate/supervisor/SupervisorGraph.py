@@ -7,11 +7,11 @@
 
 from __future__ import annotations
 
-from typing import Literal
+import json
 
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
-from langgraph.prebuilt import ToolNode
 
 from smart_migrate.supervisor.SupervisorState import SupervisorState
 from smart_migrate.config.AppSettings import (
@@ -32,7 +32,6 @@ from smart_migrate.supervisor.SupervisorJobRegistry import (
     mig_registry,
     sql_registry,
     tuning_registry,
-    was_job_executed,
 )
 from smart_migrate.supervisor.tools.SupervisorCycleTool import request_wait
 from smart_migrate.supervisor.tools.SupervisorMigrationTool import run_data_migration
@@ -49,19 +48,6 @@ from smart_migrate.supervisor.tools.SupervisorSqlConversionTool import run_sql_c
 from smart_migrate.supervisor.tools.SupervisorSqlFormattingTool import run_sql_formatting
 from smart_migrate.supervisor.tools.SupervisorSqlTuningTool import run_sql_tuning
 
-_JOB_TOOL_NAMES = {
-    "run_data_migration",
-    "run_sql_conversion",
-    "run_sql_tuning",
-    "run_sql_formatting",
-}
-
-def _tool_call_name(call) -> str | None:
-    if isinstance(call, dict):
-        return call.get("name")
-    return getattr(call, "name", None)
-
-
 def _build_llm(model_name: str) -> ChatOpenAI:
     kwargs: dict = {
         "model": model_name,
@@ -71,6 +57,27 @@ def _build_llm(model_name: str) -> ChatOpenAI:
     if LLM_BASE_URL:
         kwargs["base_url"] = LLM_BASE_URL
     return ChatOpenAI(**kwargs)
+
+
+def _parse_decision(raw_decision: str) -> dict:
+    text = str(raw_decision or "").strip()
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start < 0 or end <= start:
+            return {"route": "", "reason": "decision JSON parse failed"}
+        try:
+            parsed = json.loads(text[start : end + 1])
+        except Exception:
+            return {"route": "", "reason": "decision JSON object parse failed"}
+    if not isinstance(parsed, dict):
+        return {"route": "", "reason": "decision is not an object"}
+    return {
+        "route": str(parsed.get("route") or "").strip(),
+        "reason": str(parsed.get("reason") or "").strip(),
+    }
 
 
 def build_supervisor_graph(
@@ -155,31 +162,61 @@ def build_supervisor_graph(
         get_formatting_jobs,
     )
 
-    tools = [
-        poll_jobs,
-        run_data_migration,
-        run_sql_conversion,
-        run_sql_tuning,
-        run_sql_formatting,
-        request_wait,
-    ]
-
-    tool_node = ToolNode(tools)
-
-    def supervisor_node(state: SupervisorState) -> dict:
+    def poll_jobs_node(state: SupervisorState) -> dict:
         if _stop_event.is_set() or state.get("stop_requested"):
             return {"stop_requested": True}
+        result = poll_jobs.invoke({})
+        logger.info("[SupervisorGraph] poll_jobs completed")
+        return {"poll_result": result}
 
-        messages = state.get("messages") or []
+    def supervisor_decide_node(state: SupervisorState) -> dict:
+        if _stop_event.is_set() or state.get("stop_requested"):
+            return {"stop_requested": True}
+        payload = {
+            "poll_result": state.get("poll_result") or "{}",
+            "available_routes": [
+                "run_data_migration",
+                "run_sql_conversion",
+                "run_sql_tuning",
+                "run_sql_formatting",
+                "no_job",
+            ],
+            "policy": [
+                "Choose exactly one route for this cycle.",
+                "DB migration has priority, then SQL conversion, SQL tuning, SQL formatting.",
+                "Choose no_job only when all job lists are empty.",
+                "Return JSON only with route and reason.",
+            ],
+            "required_json_schema": {
+                "route": "run_data_migration | run_sql_conversion | run_sql_tuning | run_sql_formatting | no_job",
+                "reason": "short reason",
+            },
+        }
+        messages = [
+            SystemMessage(
+                content=(
+                    "You are the SmartMigrate batch supervisor. "
+                    "Decide the single route for this already-polled cycle. "
+                    "Return JSON only. Do not call tools."
+                )
+            ),
+            HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
+        ]
         candidates = model_candidates(LLM_MODEL)
         last_exc: Exception | None = None
 
         for idx, candidate_model in enumerate(candidates):
             try:
-                llm_with_tools = _build_llm(candidate_model).bind_tools(tools)
-                response = llm_with_tools.invoke(messages)
+                response = _build_llm(candidate_model).invoke(messages)
                 set_active_model(candidate_model)
-                return {"messages": [response]}
+                raw_decision = str(getattr(response, "content", "") or "")
+                decision = _parse_decision(raw_decision)
+                logger.info(
+                    "[SupervisorGraph] decision "
+                    f"route={decision.get('route') or '-'} "
+                    f"reason={decision.get('reason') or '-'}"
+                )
+                return {"decision": decision}
             except Exception as exc:
                 message = str(exc)
                 if idx < len(candidates) - 1 and is_model_fallback_error(message):
@@ -195,32 +232,82 @@ def build_supervisor_graph(
             raise last_exc
         raise RuntimeError("No supervisor LLM model candidates are configured.")
 
-    def route_after_supervisor(
-        state: SupervisorState,
-    ) -> Literal["tools", "__end__"]:
+    def route_after_decision(state: SupervisorState) -> str:
         if _stop_event.is_set() or state.get("stop_requested"):
             return END
-        last = state["messages"][-1]
-        tool_calls = getattr(last, "tool_calls", None)
-        if tool_calls:
-            if was_job_executed():
-                tool_names = {_tool_call_name(call) for call in tool_calls}
-                if tool_names & _JOB_TOOL_NAMES:
-                    logger.info("[Supervisor] Job already executed in this cycle; ending before another job tool.")
-                    return END
-            return "tools"
-        return END
+        requested = str((state.get("decision") or {}).get("route") or "").strip()
+        if requested == "run_data_migration" and mig_registry:
+            return "run_action"
+        if requested == "run_sql_conversion" and not mig_registry and sql_registry:
+            return "run_action"
+        if requested == "run_sql_tuning" and not mig_registry and not sql_registry and tuning_registry:
+            return "run_action"
+        if requested == "run_sql_formatting" and not mig_registry and not sql_registry and not tuning_registry and formatting_registry:
+            return "run_action"
+        if requested == "no_job" and not any((mig_registry, sql_registry, tuning_registry, formatting_registry)):
+            return "wait"
+
+        corrected = _select_route_from_registries()
+        if corrected != requested:
+            logger.warning(
+                "[SupervisorGraph] corrected invalid decision route "
+                f"requested={requested or '-'} corrected={corrected}"
+            )
+        if corrected == "no_job":
+            return "wait"
+        return "run_action"
+
+    def _select_route_from_registries() -> str:
+        if mig_registry:
+            return "run_data_migration"
+        if sql_registry:
+            return "run_sql_conversion"
+        if tuning_registry:
+            return "run_sql_tuning"
+        if formatting_registry:
+            return "run_sql_formatting"
+        return "no_job"
+
+    def run_action_node(state: SupervisorState) -> dict:
+        route = _select_route_from_registries()
+        if route == "run_data_migration":
+            map_id = next(iter(mig_registry.keys()))
+            logger.info(f"[SupervisorGraph] run_data_migration map_id={map_id}")
+            return {"action_result": run_data_migration.invoke({"map_id": map_id})}
+        if route == "run_sql_conversion":
+            row_id = next(iter(sql_registry.keys()))
+            logger.info(f"[SupervisorGraph] run_sql_conversion row_id={row_id}")
+            return {"action_result": run_sql_conversion.invoke({"row_id": row_id})}
+        if route == "run_sql_tuning":
+            row_id = next(iter(tuning_registry.keys()))
+            logger.info(f"[SupervisorGraph] run_sql_tuning row_id={row_id}")
+            return {"action_result": run_sql_tuning.invoke({"row_ids": [row_id]})}
+        if route == "run_sql_formatting":
+            row_id = next(iter(formatting_registry.keys()))
+            logger.info(f"[SupervisorGraph] run_sql_formatting row_id={row_id}")
+            return {"action_result": run_sql_formatting.invoke({"row_ids": [row_id]})}
+        return {"action_result": "No job selected."}
+
+    def wait_node(state: SupervisorState) -> dict:
+        seconds = 1 if state.get("action_result") else 30
+        result = request_wait.invoke({"seconds": seconds})
+        logger.info(f"[SupervisorGraph] cycle wait finished: {result}")
+        return {"wait_result": result}
 
     workflow = StateGraph(SupervisorState)
-    workflow.add_node("supervisor", supervisor_node)
-    workflow.add_node("tools", tool_node)
+    workflow.add_node("poll_jobs", poll_jobs_node)
+    workflow.add_node("supervisor_decide", supervisor_decide_node)
+    workflow.add_node("run_action", run_action_node)
+    workflow.add_node("wait", wait_node)
 
-    workflow.set_entry_point("supervisor")
+    workflow.set_entry_point("poll_jobs")
+    workflow.add_edge("poll_jobs", "supervisor_decide")
     workflow.add_conditional_edges(
-        "supervisor",
-        route_after_supervisor,
-        {"tools": "tools", END: END},
+        "supervisor_decide",
+        route_after_decision,
+        {"run_action": "run_action", "wait": "wait", END: END},
     )
-    workflow.add_edge("tools", "supervisor")
+    workflow.add_edge("run_action", "wait")
+    workflow.add_edge("wait", END)
 
     return workflow.compile()
