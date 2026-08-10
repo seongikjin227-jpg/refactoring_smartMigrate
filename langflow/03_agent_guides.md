@@ -19,7 +19,7 @@ Supervisor Agent
 - Supervisor는 사용자가 명시적으로 요청한 agent 또는 tool로만 라우팅한다. 첫 사용자 메시지라는 이유만으로 Dashboard Agent를 자동 호출하지 않는다.
 - Dashboard Agent는 전체 작업 대상 현황 요약과 다음 작업 추천을 담당한다.
 - Dashboard Command Tool은 DB migration, SQL conversion, SQL tuning, SQL formatting 작업 대상 통계를 read-only로 조회한다.
-- Batch Agent는 Langflow 단독 컨테이너 안에서 background thread 방식의 배치 loop를 시작, 중지, 상태 조회하는 역할을 담당한다.
+- Batch Agent는 사용자 채팅 명령을 `NEXT_BATCH_CONTROL`에 반영하는 제어 agent이고, 실제 배치 loop는 서버 시작 시 실행되는 `batch_supervisor_service.py`가 담당한다.
 - Batch Agent Command Tool은 start/stop/status 명령을 받고, thread loop 내부에서 DB migration 또는 SQL conversion job을 1건씩 poll/run/log 처리한다.
 - DB Migration Agent는 migration 업무 판단과 tool command 생성을 담당한다.
 - Migration Command Tool은 DB 연결, LLM 연결 확인, DDL 조회, SQL 생성/실행/검증/저장을 담당한다.
@@ -142,7 +142,7 @@ command_json 안에 db_host, db_port, db_service_name, db_username, db_password,
 
 Batch Agent Command Tool을 호출할 때는 아래 command_json payload 중 하나만 사용한다.
 
-1. background thread 방식으로 배치 loop 시작 후 즉시 반환
+1. DB 제어 row에 배치 loop 시작 요청
 {"action":"start"}
 
 2. 백그라운드 배치 loop 중지 요청
@@ -153,13 +153,13 @@ Batch Agent Command Tool을 호출할 때는 아래 command_json payload 중 하
 
 판단 규칙:
 1. 사용자가 "백그라운드 실행", "백그라운드 배치 실행", "배치 에이전트 시작", "batch start", "계속 job 찾게 해줘", "무한 루프 돌려줘"처럼 말하면 start를 호출한다.
-2. start는 background thread를 시작하고 즉시 반환한다. tool 응답이 반환되어도 배치 loop는 thread에서 계속 실행 중일 수 있다.
-3. 이미 실행 중인 상태에서 start 요청이 오면 중복 thread를 만들지 않는다. tool의 already_running 또는 running 상태를 사용자에게 그대로 요약한다.
+2. start는 `NEXT_BATCH_CONTROL`을 `RUNNING`으로 바꾸고 즉시 반환한다. 실제 while loop는 서버 시작 시 같이 실행되는 `batch_supervisor_service.py`가 담당한다.
+3. 이미 실행 중인 상태에서 start 요청이 오면 중복 실행을 만들지 않는다. tool의 already_running 또는 running 상태를 사용자에게 그대로 요약한다.
 4. 사용자가 "배치 멈춰", "background stop", "loop 종료"처럼 말하면 stop을 호출한다.
 5. 사용자가 "배치 살아있어?", "지금 돌고 있어?", "상태 확인", "최근 loop 확인"처럼 말하면 status를 호출한다.
 6. run_migration_job, run_sql_conversion_job, generate_*, preview_*, reset, save_user_sql, analyze_failure를 직접 command_json으로 만들지 않는다. 이 action들은 채팅형 전문 agent 또는 Batch Agent Command Tool 내부 loop의 책임이다.
 7. batch loop는 한 cycle에 job을 최대 1건만 처리한다.
-8. batch loop는 DB_MIGRATION pending job을 먼저 찾고, 없으면 SQL_CONVERSION pending job을 찾는다.
+8. batch loop는 LangGraph의 `poll_jobs -> supervisor_decide -> conditional route -> run_data_migration/run_sql_conversion/no_job` 흐름으로 실행한다. `supervisor_decide`는 supervisor prompt로 route JSON을 만들고, conditional route는 존재하지 않는 job 실행만 최소 보정한다.
 9. job을 처리한 cycle 다음에는 즉시 다음 loop로 진행한다.
 10. job이 없어서 NO_JOB이면 NEXT_BATCH_LOG에 로그를 저장하고 no_job_sleep_seconds만큼 대기한다. 기본값은 600초다.
 11. loop error가 발생하면 NEXT_BATCH_LOG에 LOOP_ERROR를 저장하고 error_sleep_seconds만큼 대기한다. 기본값은 60초다.
@@ -171,15 +171,14 @@ Batch Agent Command Tool을 호출할 때는 아래 command_json payload 중 하
 17. tool이 ok=false를 반환하면 실패한 batch action과 다음 조치를 설명한다.
 
 중요:
-- Batch Agent는 백그라운드 worker 제어자다.
+- Batch Agent는 백그라운드 supervisor service 제어자다.
 - Batch Agent는 사용자의 자연어 요청을 start/stop/status 중 하나로 변환하는 역할만 한다.
-- Batch Agent Command Tool이 반환값을 주면 Langflow chat request는 끝나지만, start로 생성된 백그라운드 thread는 계속 실행된다.
-- `background_thread_daemon=false`가 기본값이며, non-daemon thread로 실행해 Langflow runtime이 정상 종료 과정에서 thread를 쉽게 정리하지 않도록 한다.
-- status 결과의 `status_source=batch_log`는 현재 tool 호출 메모리에서는 thread handle이 보이지 않지만 NEXT_BATCH_LOG 기준으로 실행 중임을 뜻한다.
-- 이 경우 "실행 중이 아니라고 단정하지 말고, 로그 기준으로 실행 중으로 보입니다"라고 답한다.
+- Batch Agent Command Tool이 반환값을 주면 Langflow chat request는 끝난다. 채팅 요청 안에서 worker thread를 만들지 않는다.
+- `batch_supervisor_service.py`는 서버 시작 스크립트에서 별도 프로세스로 실행되며, `NEXT_BATCH_CONTROL`이 RUNNING이면 while loop를 수행한다.
+- status 결과는 `NEXT_BATCH_CONTROL`의 RUNNING/heartbeat 기준으로 설명한다.
 - stop은 status가 memory 기준으로 running인지 확인한 뒤 조건부로 호출하지 않는다. 사용자가 종료를 요청하면 Batch Agent Command Tool의 stop을 호출한다.
-- stop은 `NEXT_BATCH_LOG`에 `STOP_REQUESTED`를 기록하고, background worker는 해당 로그를 확인해 while loop를 종료한다.
-- Langflow 컨테이너가 재시작되면 백그라운드 thread도 종료되므로 다시 start가 필요하다.
+- stop은 `NEXT_BATCH_CONTROL`에 `STOP_REQUESTED`를 기록하고, supervisor service는 해당 control row를 확인해 while loop를 종료한다.
+- Langflow 서버가 재시작되면 startup command에서 `batch_supervisor_service.py`가 다시 실행되고, `SMARTMIGRATE_BATCH_AUTO_START=true`이면 자동으로 loop를 시작한다.
 - 현재 구조는 Langflow 컨테이너 1개 고정을 전제로 한다. replica가 여러 개이면 중복 실행 방지를 위한 DB lock 설계가 추가로 필요하다.
 ```
 
@@ -588,11 +587,12 @@ Langflow의 Batch Agent Command Tool description에는 아래처럼 넣는다.
 SmartMigration 백그라운드 배치 loop를 제어한다.
 입력은 command_json이라는 JSON 문자열이다.
 start, stop, status에만 사용한다.
-start는 background thread를 시작하고 즉시 반환한다. 이미 실행 중이면 중복 시작하지 않고 already_running 상태를 반환한다.
-background_thread_daemon=false가 기본값이며, non-daemon thread로 시작한다.
-status는 메모리 thread handle과 NEXT_BATCH_LOG 최신 event를 함께 확인한다.
-background loop는 DB_MIGRATION, SQL_CONVERSION 순서로 pending job을 찾고 한 cycle에 최대 1건만 처리한다.
+start는 NEXT_BATCH_CONTROL을 RUNNING으로 바꾸고 즉시 반환한다. 이미 실행 중이면 중복 시작하지 않고 already_running 상태를 반환한다.
+실제 while loop는 서버 시작 시 실행되는 batch_supervisor_service.py가 담당한다.
+status는 NEXT_BATCH_CONTROL의 RUNNING 상태와 heartbeat를 기준으로 확인한다.
+background loop는 LangGraph에서 poll 결과를 supervisor prompt에 전달해 route를 결정하고 한 cycle에 최대 1건만 처리한다.
 job 처리 결과와 NO_JOB, LOOP_ERROR, STOPPED 이벤트는 NEXT_BATCH_LOG에 저장한다.
+터미널과 `runtime/agent.log`에는 cycle 시작, poll 결과, supervisor decision, 실행 agent/job_id/status/error가 출력된다.
 DB, LLM, prompt 설정은 component input이며 command_json field가 아니다.
 ```
 

@@ -1,210 +1,82 @@
 # Batch Agent Command Tool
 
-?뚯씪: `langflow/components/batch_agent_command_tool.py`
+파일: `langflow/components/batch_agent_command_tool.py`
 
-LangFlow ?⑤룆 而⑦뀒?대꼫 ?덉뿉??SmartMigration 諛곗튂 猷⑦봽瑜??ㅽ뻾?섎뒗 而ㅼ뒪? 而댄룷?뚰듃??
+이 component는 사용자 채팅 명령을 배치 실행 제어 테이블에 반영하는 control agent다.
+실제 배치 while loop는 `langflow/batch_supervisor_service.py`가 담당한다.
 
-DB Migration怨?SQL Conversion ?낅Т 濡쒖쭅? 媛숈? class ?대? ?⑥닔濡?蹂듭궗?섏뼱 ?덈떎. `migration_command_tool.py`, `sql_conversion_command_tool.py`瑜?import?섏? ?딅뒗??
+## 역할
 
-## ?ㅽ뻾 ?쒖뼱 ?먯튃
+- `start`: `NEXT_BATCH_CONTROL`의 `BATCH_AGENT` row를 `RUNNING`으로 변경한다.
+- `stop`: `NEXT_BATCH_CONTROL`에 `STOP_REQUESTED`를 기록한다.
+- `status`: `NEXT_BATCH_CONTROL` 상태와 heartbeat를 조회한다.
 
-諛곗튂 ?ㅽ뻾 ?щ???湲곗?? `NEXT_BATCH_CONTROL`?대떎.
+채팅 요청 안에서 worker thread를 만들지 않는다.
+Langflow chat request는 command 결과를 반환하면 끝난다.
 
-`NEXT_BATCH_LOG`???대젰/愿李곗슜 濡쒓렇 ?뚯씠釉붿씠硫? ?ㅽ뻾 ?щ???以묐났 ?ㅽ뻾 諛⑹???湲곗??쇰줈 ?ъ슜?섏? ?딅뒗??
+## 실행 프로세스
 
-?곹깭 蹂寃쎌? batch agent action?쇰줈留??섑뻾?쒕떎.
+```text
+사용자 채팅
+  -> Batch Agent
+  -> Batch Agent Command Tool
+  -> NEXT_BATCH_CONTROL 변경
 
-- `start`: `NEXT_BATCH_CONTROL`??`RUNNING`?쇰줈 蹂寃쏀븯怨?background thread瑜??쒖옉?쒕떎.
-- `stop`: `NEXT_BATCH_CONTROL`??stop ?붿껌??湲곕줉?쒕떎.
-- `status`: `NEXT_BATCH_CONTROL`怨??꾩옱 硫붾え由?thread ?곹깭瑜?議고쉶?쒕떎.
+서버 시작
+  -> python langflow/batch_supervisor_service.py
+  -> NEXT_BATCH_CONTROL 확인
+  -> RUNNING이면 while loop 실행
+```
 
-## Supported Actions
+## 지원 command_json
 
 ```json
 {"action":"start"}
 ```
 
-?숈옉:
-
-1. `NEXT_BATCH_CONTROL`??`BATCH_AGENT` row瑜?`SELECT ... FOR UPDATE`濡??좉렐??
-2. ?꾩옱 ?곹깭媛 `RUNNING`?닿퀬 heartbeat媛 ?댁븘 ?덉쑝硫???thread瑜?留뚮뱾吏 ?딄퀬 `already_running`??諛섑솚?쒕떎.
-3. ?ㅽ뻾 媛?ν븯硫?control row ??嫄댁쓣 `RUNNING`?쇰줈 ?낅뜲?댄듃?쒕떎. `RUN_ID`??濡쒓렇 異붿쟻??媛믪씠硫??ㅽ뻾 ?쒖뼱 議곌굔?먮뒗 ?ъ슜?섏? ?딅뒗??
-4. background thread瑜??쒖옉?섍퀬 利됱떆 諛섑솚?쒕떎.
-
 ```json
 {"action":"stop"}
 ```
-
-?숈옉:
-
-1. 硫붾え由?stop event瑜?set?쒕떎.
-2. `NEXT_BATCH_CONTROL`???⑥씪 row瑜?`STOP_REQUESTED`濡??낅뜲?댄듃?섍퀬 `STOP_REQUESTED_YN = 'Y'`濡?蹂寃쏀븳??
-3. worker loop??loop ?쒖옉, sleep 以? job ?대? 二쇱슂 ?④퀎 ?ъ씠?먯꽌 control row瑜??뺤씤?쒕떎.
-4. control row媛 `RUNNING`???꾨땲嫄곕굹 `STOP_REQUESTED_YN = 'Y'`?대㈃ ?꾩옱 worker??以묐떒?쒕떎. ?щ윭 worker媛 ???덉뼱??媛숈? row瑜?蹂대?濡?紐⑤몢 媛숈? stop ?좏샇瑜?諛쏅뒗??
-5. 以묐떒?섎㈃ ?꾩옱 job ?곹깭瑜?`STOPPED`濡???ν븯怨?control row瑜?`STOPPED`濡?蹂寃쏀븳??
-
-二쇱쓽: thread 湲곕컲?대?濡??대? ?ㅽ뻾 以묒씤 Oracle SQL execute ?먮뒗 LLM HTTP ?붿껌 ?먯껜瑜?利됱떆 kill?섏???紐삵븳?? ?대떦 ?몄텧??諛섑솚?섎뒗 利됱떆 ?ㅼ쓬 ?④퀎濡?媛吏 ?딄퀬 以묐떒?쒕떎.
-
-DB ?곌껐 ?먮뒗 `NEXT_BATCH_CONTROL` 議고쉶/heartbeat 媛깆떊???ㅽ뙣?섎㈃ 諛곗튂 worker??fatal ?곹깭濡??먮떒?섍퀬 loop瑜?醫낅즺?쒕떎. ?대븣 DB媛 ?댁븘 ?덉쑝硫?`NEXT_BATCH_LOG`??`FATAL_ERROR`瑜??④릿?? DB ?먯껜媛 ?놁쑝硫?濡쒓렇 ??λ룄 ?ㅽ뙣?????덉?留?loop??怨꾩냽 ?ъ떆?꾪븯吏 ?딅뒗??
 
 ```json
 {"action":"status"}
 ```
 
-?숈옉:
+## 상태 기준
 
-`NEXT_BATCH_CONTROL`???곹깭, heartbeat, loop/job ?뺣낫瑜?諛섑솚?쒕떎. ?꾩옱 LangFlow ?몄텧?먯꽌 硫붾え由?thread handle??蹂댁씠硫?memory ?곹깭???④퍡 諛섑솚?쒕떎.
-
-## NEXT_BATCH_CONTROL
-
-`NEXT_BATCH_CONTROL`? 諛곗튂 ?먯씠?꾪듃???⑥씪 ?ㅽ뻾 ?쒖뼱 ?뚯씠釉붿씠??
-
-```sql
-CREATE TABLE NEXT_BATCH_CONTROL (
-    CONTROL_NAME       VARCHAR2(64) PRIMARY KEY,
-    STATUS             VARCHAR2(30) NOT NULL,
-    RUN_ID             VARCHAR2(64),
-    STOP_REQUESTED_YN  CHAR(1) DEFAULT 'N',
-    LOOP_NO            NUMBER DEFAULT 0,
-    STARTED_AT         TIMESTAMP,
-    HEARTBEAT_AT       TIMESTAMP,
-    STOP_REQUESTED_AT  TIMESTAMP,
-    STOPPED_AT         TIMESTAMP,
-    UPDATED_AT         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    LAST_EVENT         VARCHAR2(50),
-    LAST_AGENT         VARCHAR2(50),
-    LAST_JOB_ID        VARCHAR2(200),
-    LAST_JOB_STATUS    VARCHAR2(50),
-    LAST_ERROR         CLOB,
-    MESSAGE            VARCHAR2(1000)
-);
-```
-
-珥덇린 row:
-
-```sql
-INSERT INTO NEXT_BATCH_CONTROL (
-    CONTROL_NAME, STATUS, STOP_REQUESTED_YN, LOOP_NO, UPDATED_AT, MESSAGE
-) VALUES (
-    'BATCH_AGENT', 'STOPPED', 'N', 0, CURRENT_TIMESTAMP, 'Initialized.'
-);
-```
-
-而댄룷?뚰듃 action? ??row瑜?留뚮뱾吏 ?딄퀬 `CONTROL_NAME = 'BATCH_AGENT'` ??row瑜??낅뜲?댄듃?쒕떎. ?뚯씠釉붽낵 珥덇린 row??誘몃━ ?앹꽦?섏뼱 ?덉뼱???쒕떎.
-
-?곹깭媛?
+`status.running=true`는 아래 조건을 만족할 때만 반환한다.
 
 ```text
-RUNNING
-STOP_REQUESTED
-STOPPED
+NEXT_BATCH_CONTROL.STATUS = RUNNING
+STOP_REQUESTED_YN = N
+HEARTBEAT_AT이 grace 시간 안에 있음
+LAST_EVENT가 START만 남아있는 상태가 아님
 ```
 
-?쒖뼱 議곌굔:
+`status.requested_running=true`이고 `running=false`이면 start 요청은 DB에 들어갔지만 service heartbeat가 아직 확인되지 않은 상태다.
+
+## 배치 실행 규칙
+
+배치 supervisor는 LangGraph로 아래 흐름을 구성한다.
 
 ```text
-CONTROL_NAME = 'BATCH_AGENT'
-AND STATUS = 'RUNNING'
-AND STOP_REQUESTED_YN = 'N'
+poll_jobs
+  -> supervisor_decide
+  -> run_data_migration | run_sql_conversion | no_job
 ```
 
-`RUN_ID`??`NEXT_BATCH_LOG` 議고쉶? ?ㅽ뻾 ?대젰 援щ텇???꾪븳 媛믪씠?? 諛곗튂 以묒?/?ㅽ뻾 ?먮떒?먮뒗 ?ъ슜?섏? ?딅뒗??
+`supervisor_decide`는 supervisor prompt로 현재 job 후보와 정책을 보고 route JSON을 생성한다.
+별도 `validate_decision` node는 두지 않는다. 대신 conditional route에서 존재하지 않는 job을 실행하려는 경우만 최소 보정한다.
+DB_MIGRATION은 `NEXT_MIG_INFO`에서 `USE_YN = Y`, `STATUS IS NULL`인 1건을 찾는다.
+SQL_CONVERSION은 `NEXT_SQL_INFO`에서 `STATUS_CONVERSION IS NULL`인 1건을 찾는다.
+터미널과 `runtime/agent.log`에는 cycle 시작, poll 결과, supervisor decision, 실행 agent, job_id, status, error가 출력된다.
 
-## NEXT_BATCH_LOG
+## 운영 주의
 
-`NEXT_BATCH_LOG`??諛곗튂 loop???대젰 ?뚯씠釉붿씠?? ?ㅽ뻾 ?쒖뼱?먮뒗 ?ъ슜?섏? ?딅뒗??
+서버 재시작 후 자동 실행이 필요하면 Langflow 서버 startup command 또는 process manager에서 아래 프로세스를 함께 실행한다.
 
-```sql
-CREATE TABLE NEXT_BATCH_LOG (
-    LOG_ID           NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
-    RUN_ID           VARCHAR2(64) NOT NULL,
-    LOOP_NO          NUMBER NOT NULL,
-    EVENT_TYPE       VARCHAR2(30) NOT NULL,
-    AGENT_NAME       VARCHAR2(50),
-    JOB_ID           VARCHAR2(200),
-    JOB_STATUS       VARCHAR2(50),
-    MESSAGE          VARCHAR2(1000),
-    ERROR_MESSAGE    CLOB,
-    SLEEP_SECONDS    NUMBER,
-    STARTED_AT       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FINISHED_AT      TIMESTAMP,
-    ELAPSED_SECONDS  NUMBER
-);
+```bash
+python langflow/batch_supervisor_service.py
 ```
 
-二쇱슂 event:
-
-```text
-START
-ALREADY_RUNNING
-LOOP_START
-JOB_SUCCESS
-JOB_FAIL
-JOB_STOPPED
-NO_JOB
-LOOP_ERROR
-FATAL_ERROR
-STOP_REQUESTED
-STOPPED
-```
-
-## Batch Loop
-
-??cycle?먯꽌??job??理쒕? 1嫄대쭔 泥섎━?쒕떎.
-
-諛곗튂 loop??湲곗〈 Supervisor 援ъ“? ?좎궗?섍쾶 LangChain tool calling???ъ슜?쒕떎.
-
-```text
-_worker_loop()
-  -> _run_batch_supervisor_cycle()
-      -> LLM.bind_tools([
-           poll_jobs,
-           run_data_migration,
-           run_sql_conversion,
-           no_job
-         ])
-      -> LLM???대쾲 cycle??tool???좏깮
-      -> Python guard媛 poll ?곗꽑, ??cycle 1嫄??쒗븳, stop/control check瑜?媛뺤젣
-```
-
-tool calling???ㅽ뙣?섍굅??LLM???좏슚??tool 寃곗젙??留뚮뱾吏 紐삵븯硫?湲곗〈 ?쒖감 濡쒖쭅?쇰줈 fallback?섏? ?딅뒗?? ?ㅽ뙣瑜??④린吏 ?딄린 ?꾪빐 `LOOP_ERROR`瑜?湲곕줉?섍퀬 `error_sleep_seconds` ???ㅼ쓬 loop?먯꽌 ?ㅼ떆 ?쒕룄?쒕떎.
-
-?곗꽑?쒖쐞:
-
-1. DB Migration
-2. SQL Conversion
-3. No Job
-
-?湲?洹쒖튃:
-
-```text
-job ?ㅽ뻾?? 利됱떆 ?ㅼ쓬 loop
-job ?놁쓬: no_job_sleep_seconds ?湲?loop error: error_sleep_seconds ?湲?```
-
-## Pending Job 議곌굔
-
-DB Migration:
-
-```sql
-SELECT MAP_ID
-FROM NEXT_MIG_INFO
-WHERE UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
-  AND STATUS IS NULL
-ORDER BY PRIORITY ASC, MAP_ID ASC;
-```
-
-SQL Conversion:
-
-```sql
-SELECT SPACE_NM, SQL_ID
-FROM NEXT_SQL_INFO
-WHERE STATUS_CONVERSION IS NULL
-ORDER BY PRIORITY ASC NULLS LAST, UPD_TS NULLS FIRST, SPACE_NM, SQL_ID;
-```
-
-## ?댁쁺 硫붾え
-
-?대? ?щ윭 background thread媛 ???덈뒗 ?곹깭?쇰㈃ ??control table 濡쒖쭅留뚯쑝濡?湲곗〈 thread瑜?利됱떆 ?쒓굅?????녿떎. 湲곗〈 thread???댁쟾 肄붾뱶濡??ㅽ뻾 以묒씠湲??뚮Ц?대떎.
-
-媛???뺤떎???뺣━ 諛⑸쾿? LangFlow 而⑦뀒?대꼫 ?ъ떆?묒씠?? ?ъ떆???꾩뿉??`NEXT_BATCH_CONTROL` 湲곗??쇰줈 start 以묐났??留됲엺??
-
+환경변수와 실행 예시는 `langflow/batch_supervisor_service.md`를 따른다.

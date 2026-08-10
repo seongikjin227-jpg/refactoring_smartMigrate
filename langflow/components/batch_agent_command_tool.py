@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import ast
 import json
+import logging
 import re
 import subprocess
 import sys
-import threading
 import time
 import traceback
 import urllib.error
@@ -20,6 +20,40 @@ from lfx.custom.custom_component.component import Component
 from lfx.io import BoolInput, IntInput, MessageTextInput, SecretStrInput, StrInput, Output
 from lfx.schema.data import Data
 
+_ROOT_DIR = Path(__file__).resolve().parents[2]
+_RUNTIME_DIR = _ROOT_DIR / "runtime"
+_LOG_FILE = _RUNTIME_DIR / "agent.log"
+
+
+def _setup_logger() -> logging.Logger:
+    logger = logging.getLogger("migration_agent")
+    if not logger.handlers:
+        logger.setLevel(logging.DEBUG)
+        try:
+            import io
+
+            sys.stdout = io.TextIOWrapper(sys.stdout.detach(), encoding="utf-8", line_buffering=True)
+        except Exception:
+            pass
+        formatter = logging.Formatter("%(asctime)s - [%(name)s] [%(levelname)s] - %(message)s")
+        stream_handler = logging.StreamHandler(sys.stdout)
+        stream_handler.setLevel(logging.DEBUG)
+        stream_handler.setFormatter(formatter)
+        logger.addHandler(stream_handler)
+        try:
+            _RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+            file_handler = logging.FileHandler(_LOG_FILE, encoding="utf-8")
+            file_handler.setLevel(logging.DEBUG)
+            file_handler.setFormatter(formatter)
+            logger.addHandler(file_handler)
+        except Exception:
+            pass
+        logger.propagate = False
+    return logger
+
+
+logger = _setup_logger()
+
 
 class BatchAgentCommandTool(Component):
     display_name = "Batch Agent Command Tool"
@@ -27,9 +61,6 @@ class BatchAgentCommandTool(Component):
     name = "BatchAgentCommandTool"
     icon = "Timer"
 
-    _thread: threading.Thread | None = None
-    _stop_event = threading.Event()
-    _state_lock = threading.Lock()
     _db_cache: dict[str, Any] = {}
 
     _state: dict[str, Any] = {
@@ -111,13 +142,6 @@ class BatchAgentCommandTool(Component):
             required=False,
             info="If true, installs missing runtime packages with pip before DB connection.",
         ),
-        BoolInput(
-            name="background_thread_daemon",
-            display_name="Background Thread Daemon",
-            value=False,
-            required=False,
-            info="If false, the background thread is non-daemon so normal Python process shutdown waits for it. This can improve survival but may delay container shutdown.",
-        ),
     ]
 
     outputs = [
@@ -147,85 +171,60 @@ class BatchAgentCommandTool(Component):
             return Data(data=result)
 
     def _start(self, config: dict[str, Any]) -> dict[str, Any]:
-        cls = self.__class__
-        with cls._state_lock:
-            if cls._thread and cls._thread.is_alive() and not cls._stop_event.is_set():
-                state = dict(cls._state)
-                self._write_batch_log_safe(config, state.get("run_id"), int(state.get("loop_no") or 0), "ALREADY_RUNNING", message="Batch agent is already running.")
-                return {"ok": True, "status": "already_running", "running": True}
-
-            run_id = datetime.now().strftime("%Y%m%d%H%M%S%f")
-            control_result = self._start_control(config, run_id)
-            if not control_result.get("acquired"):
-                existing_run_id = control_result.get("run_id")
-                self._write_batch_log_safe(config, existing_run_id, 0, "ALREADY_RUNNING", message=str(control_result.get("message") or "Batch agent is already running."))
-                control_status = str(control_result.get("control_status") or "").upper()
-                return {
-                    "ok": True,
-                    "status": control_result.get("status") or "already_running",
-                    "running": control_status == "RUNNING",
-                    **control_result,
-                }
-
-            cls._stop_event.clear()
-            cls._state.update(
-                {
-                    "running": True,
-                    "run_id": run_id,
-                    "loop_no": 0,
-                    "started_at": datetime.now().isoformat(timespec="seconds"),
-                    "updated_at": datetime.now().isoformat(timespec="seconds"),
-                    "last_event": "START",
-                    "last_agent": None,
-                    "last_job_id": None,
-                    "last_job_status": None,
-                    "last_error": None,
-                }
+        run_id = datetime.now().strftime("%Y%m%d%H%M%S%f")
+        control_result = self._start_control(config, run_id)
+        if not control_result.get("acquired"):
+            existing_run_id = control_result.get("run_id")
+            self._write_batch_log_safe(
+                config,
+                existing_run_id,
+                0,
+                "ALREADY_RUNNING",
+                message=str(control_result.get("message") or "Batch supervisor is already running."),
             )
-
-            cls._thread = threading.Thread(
-                target=cls._worker_loop,
-                args=(config, run_id),
-                daemon=bool(config["background_thread_daemon"]),
-                name=f"smartmigration-batch-{run_id}",
-            )
-            cls._thread.start()
-
+            control_status = str(control_result.get("control_status") or "").upper()
+            return {
+                "ok": True,
+                "status": control_result.get("status") or "already_running",
+                "running": control_status == "RUNNING" and bool(control_result.get("heartbeat_alive")),
+                "requested_running": control_status == "RUNNING",
+                "mode": "db_control",
+                **control_result,
+            }
         self._write_batch_log_safe(config, run_id, 0, "START", message="Batch agent started.")
-        return {"ok": True, "status": "started", "running": True, "mode": "background_thread", "daemon": bool(config["background_thread_daemon"])}
+        return {
+            "ok": True,
+            "status": "start_requested",
+            "running": False,
+            "requested_running": True,
+            "run_id": run_id,
+            "mode": "db_control",
+            "message": "Batch supervisor service will run the loop while NEXT_BATCH_CONTROL is RUNNING.",
+        }
 
     def _stop(self, config: dict[str, Any]) -> dict[str, Any]:
-        cls = self.__class__
         state = self._status(config)
-        cls._stop_event.set()
         control_result = self._request_stop_control(config)
         run_id = control_result.get("run_id") or state.get("run_id") or self._find_latest_active_run_id(config)
         loop_no = int(state.get("loop_no") or 0)
-        with cls._state_lock:
-            cls._state["running"] = False
-            cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
-            cls._state["last_event"] = "STOP_REQUESTED"
         self._write_batch_log_safe(config, run_id, loop_no, "STOP_REQUESTED", message="Stop requested.")
         return {"ok": True, "status": "stop_requested", "running": False, "run_id": run_id, "control": control_result}
 
     def _status(self, config: dict[str, Any] | None = None) -> dict[str, Any]:
-        cls = self.__class__
-        memory_alive = bool(cls._thread and cls._thread.is_alive() and not cls._stop_event.is_set())
-        with cls._state_lock:
-            state = dict(cls._state)
-        state_alive = bool(state.get("running") and not cls._stop_event.is_set())
+        state = dict(self.__class__._state)
         control_status = self._get_control_status(config) if config else {}
-        control_running = (
+        requested_running = (
             str(control_status.get("status") or "").upper() == "RUNNING"
             and not bool(control_status.get("stop_requested"))
-            and bool(control_status.get("heartbeat_alive"))
         )
-        state["running"] = bool(memory_alive or state_alive or control_running)
-        if control_running:
-            state["running"] = True
-        state["memory_thread_alive"] = memory_alive
-        state["memory_state_running"] = state_alive
-        state["status_source"] = "memory" if (memory_alive or state_alive) else ("batch_control" if control_running else "none")
+        control_running = (
+            requested_running
+            and bool(control_status.get("heartbeat_alive"))
+            and str(control_status.get("last_event") or "").upper() != "START"
+        )
+        state["running"] = bool(control_running)
+        state["requested_running"] = bool(requested_running)
+        state["status_source"] = "batch_control" if control_status else "none"
         state["control"] = control_status
         if control_status:
             state["run_id"] = control_status.get("run_id") or state.get("run_id")
@@ -236,6 +235,10 @@ class BatchAgentCommandTool(Component):
             state["last_job_status"] = control_status.get("last_job_status") or state.get("last_job_status")
             state["last_error"] = control_status.get("last_error") or state.get("last_error")
         return {"ok": True, **state}
+
+    @staticmethod
+    def _console(message: str) -> None:
+        logger.info(f"[BatchSupervisor] {message}")
 
     def _start_control(self, config: dict[str, Any], run_id: str) -> dict[str, Any]:
         table = self._qualify_table("NEXT_BATCH_CONTROL", config["system_schema"])
@@ -506,31 +509,102 @@ class BatchAgentCommandTool(Component):
 
     def _raise_if_batch_stop_requested(self) -> None:
         config = getattr(self, "_batch_runtime_config", None)
-        if self.__class__._stop_event.is_set():
-            raise InterruptedError("Batch stop requested.")
         if config and not self._is_control_running(config):
             raise InterruptedError("Batch control is not RUNNING.")
         if config and self._is_db_stop_requested(config):
             raise InterruptedError("Batch stop requested.")
 
     @classmethod
+    def serve_forever(cls, config: dict[str, Any], auto_start_on_boot: bool = True, idle_sleep_seconds: int = 10) -> None:
+        """Run the real always-on supervisor loop without a Langflow chat thread.
+
+        The chat-facing tool only changes NEXT_BATCH_CONTROL. This service owns
+        the blocking while loop and can be started by the Langflow/server startup
+        command so it survives normal flow request boundaries.
+        """
+        helper = object.__new__(cls)
+        boot_start_attempted = False
+        idle_sleep_seconds = max(1, int(idle_sleep_seconds or 10))
+
+        while True:
+            try:
+                status = helper._get_control_status(config)
+                control_status = str(status.get("status") or "").upper()
+                stop_requested = bool(status.get("stop_requested"))
+
+                if auto_start_on_boot and not boot_start_attempted and control_status != "RUNNING":
+                    run_id = datetime.now().strftime("%Y%m%d%H%M%S%f")
+                    start_result = helper._start_control(config, run_id)
+                    boot_start_attempted = True
+                    if start_result.get("acquired"):
+                        helper._write_batch_log_safe(
+                            config,
+                            run_id,
+                            0,
+                            "AUTO_START",
+                            message="Batch supervisor auto-started on service boot.",
+                        )
+                        cls._worker_loop(config, run_id)
+                        continue
+
+                if control_status == "RUNNING" and not stop_requested:
+                    run_id = str(status.get("run_id") or datetime.now().strftime("%Y%m%d%H%M%S%f"))
+                    helper._write_batch_log_safe(
+                        config,
+                        run_id,
+                        int(status.get("loop_no") or 0),
+                        "SERVICE_ATTACH",
+                        message="Batch supervisor service attached to RUNNING control.",
+                    )
+                    cls._worker_loop(config, run_id)
+                    continue
+
+                time.sleep(idle_sleep_seconds)
+            except KeyboardInterrupt:
+                raise
+            except Exception as exc:
+                try:
+                    helper._write_batch_log_safe(
+                        config,
+                        None,
+                        0,
+                        "SERVICE_ERROR",
+                        message="Batch supervisor service error.",
+                        error_message=str(exc),
+                    )
+                except Exception:
+                    pass
+                time.sleep(max(1, int(config.get("error_sleep_seconds") or 60)))
+
+    @classmethod
     def _worker_loop(cls, config: dict[str, Any], run_id: str) -> None:
         helper = object.__new__(cls)
         config = {**config, "batch_run_id": run_id}
         helper._batch_runtime_config = config
+        cls._state.update(
+            {
+                "running": True,
+                "run_id": run_id,
+                "loop_no": 0,
+                "started_at": datetime.now().isoformat(timespec="seconds"),
+                "updated_at": datetime.now().isoformat(timespec="seconds"),
+                "last_event": "START",
+                "last_agent": None,
+                "last_job_id": None,
+                "last_job_status": None,
+                "last_error": None,
+            }
+        )
         try:
             while True:
-                if cls._stop_event.is_set():
-                    break
                 try:
                     if not helper._is_control_running(config, run_id):
                         break
                 except ConnectionError as exc:
-                    with cls._state_lock:
-                        cls._state["running"] = False
-                        cls._state["last_event"] = "FATAL_ERROR"
-                        cls._state["last_error"] = str(exc)
-                        cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
+                    cls._state["running"] = False
+                    cls._state["last_event"] = "FATAL_ERROR"
+                    cls._state["last_error"] = str(exc)
+                    cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
                     helper._write_batch_log_safe(
                         config,
                         run_id,
@@ -540,13 +614,13 @@ class BatchAgentCommandTool(Component):
                         error_message=str(exc),
                     )
                     break
-                with cls._state_lock:
-                    cls._state["loop_no"] = int(cls._state.get("loop_no") or 0) + 1
-                    loop_no = int(cls._state["loop_no"])
-                    cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
-                    cls._state["last_event"] = "LOOP_START"
+                cls._state["loop_no"] = int(cls._state.get("loop_no") or 0) + 1
+                loop_no = int(cls._state["loop_no"])
+                cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
+                cls._state["last_event"] = "LOOP_START"
 
                 started = time.perf_counter()
+                helper._console(f"cycle {loop_no} started")
                 helper._update_control_heartbeat(config, run_id, loop_no, "LOOP_START", message="Batch loop started.")
                 helper._write_batch_log_safe(config, run_id, loop_no, "LOOP_START", message="Batch loop started.")
                 if not helper._is_control_running(config, run_id):
@@ -561,13 +635,12 @@ class BatchAgentCommandTool(Component):
                     elif result.get("job_executed") and not result.get("ok"):
                         event_type = "JOB_FAIL"
 
-                    with cls._state_lock:
-                        cls._state["last_event"] = event_type
-                        cls._state["last_agent"] = result.get("agent")
-                        cls._state["last_job_id"] = result.get("job_id")
-                        cls._state["last_job_status"] = result.get("status")
-                        cls._state["last_error"] = result.get("error")
-                        cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
+                    cls._state["last_event"] = event_type
+                    cls._state["last_agent"] = result.get("agent")
+                    cls._state["last_job_id"] = result.get("job_id")
+                    cls._state["last_job_status"] = result.get("status")
+                    cls._state["last_error"] = result.get("error")
+                    cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
 
                     sleep_seconds = 0 if result.get("job_executed") else int(config["no_job_sleep_seconds"])
                     helper._update_control_heartbeat(
@@ -594,6 +667,13 @@ class BatchAgentCommandTool(Component):
                         sleep_seconds=sleep_seconds,
                         elapsed_seconds=elapsed,
                     )
+                    helper._console(
+                        f"cycle {loop_no} {event_type}: "
+                        f"agent={result.get('agent') or '-'} "
+                        f"job_id={result.get('job_id') or '-'} "
+                        f"status={result.get('status') or '-'} "
+                        f"message={result.get('message') or '-'}"
+                    )
                     if event_type == "JOB_STOPPED":
                         break
                     if sleep_seconds > 0:
@@ -601,10 +681,9 @@ class BatchAgentCommandTool(Component):
 
                 except InterruptedError as exc:
                     elapsed = round(time.perf_counter() - started, 3)
-                    with cls._state_lock:
-                        cls._state["last_event"] = "JOB_STOPPED"
-                        cls._state["last_error"] = str(exc)
-                        cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
+                    cls._state["last_event"] = "JOB_STOPPED"
+                    cls._state["last_error"] = str(exc)
+                    cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
                     helper._update_control_heartbeat(config, run_id, loop_no, "JOB_STOPPED", last_error=str(exc), message=str(exc))
                     helper._write_batch_log_safe(
                         config,
@@ -614,15 +693,15 @@ class BatchAgentCommandTool(Component):
                         message=str(exc),
                         elapsed_seconds=elapsed,
                     )
+                    helper._console(f"cycle {loop_no} JOB_STOPPED: {exc}")
                     break
 
                 except ConnectionError as exc:
                     elapsed = round(time.perf_counter() - started, 3)
-                    with cls._state_lock:
-                        cls._state["running"] = False
-                        cls._state["last_event"] = "FATAL_ERROR"
-                        cls._state["last_error"] = str(exc)
-                        cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
+                    cls._state["running"] = False
+                    cls._state["last_event"] = "FATAL_ERROR"
+                    cls._state["last_error"] = str(exc)
+                    cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
                     helper._write_batch_log_safe(
                         config,
                         run_id,
@@ -632,15 +711,15 @@ class BatchAgentCommandTool(Component):
                         error_message=str(exc),
                         elapsed_seconds=elapsed,
                     )
+                    helper._console(f"cycle {loop_no} FATAL_ERROR: {exc}")
                     break
 
                 except Exception as exc:
                     elapsed = round(time.perf_counter() - started, 3)
                     error_message = f"{exc}\n{traceback.format_exc()}"
-                    with cls._state_lock:
-                        cls._state["last_event"] = "LOOP_ERROR"
-                        cls._state["last_error"] = str(exc)
-                        cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
+                    cls._state["last_event"] = "LOOP_ERROR"
+                    cls._state["last_error"] = str(exc)
+                    cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
                     helper._update_control_heartbeat(config, run_id, loop_no, "LOOP_ERROR", last_error=str(exc), message="Unexpected batch loop error.")
                     helper._write_batch_log_safe(
                         config,
@@ -652,192 +731,207 @@ class BatchAgentCommandTool(Component):
                         sleep_seconds=int(config["error_sleep_seconds"]),
                         elapsed_seconds=elapsed,
                     )
+                    helper._console(f"cycle {loop_no} LOOP_ERROR: {exc}")
                     helper._interruptible_sleep(int(config["error_sleep_seconds"]), config, run_id)
         finally:
-            with cls._state_lock:
-                cls._state["running"] = False
-                cls._state["last_event"] = "STOPPED"
-                cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
-                if cls._thread is threading.current_thread():
-                    cls._thread = None
+            cls._state["running"] = False
+            cls._state["last_event"] = "STOPPED"
+            cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
             helper._finish_control(config, run_id, "Batch agent stopped.")
             helper._write_batch_log_safe(config, run_id, int(cls._state.get("loop_no") or 0), "STOPPED", message="Batch agent stopped.")
 
     def _run_batch_supervisor_cycle(self, config: dict[str, Any]) -> dict[str, Any]:
-        """Run one batch supervisor cycle with LangChain tool calling.
+        """Run one LangGraph supervisor cycle with an LLM supervisor decision.
 
-        The LLM chooses one of the internal tools, but Python still enforces:
-        poll first, at most one job execution per cycle, and DB control stop checks.
+        The graph owns the orchestration shape:
+        poll_jobs -> supervisor_decide -> run_data_migration | run_sql_conversion | no_job.
+        The supervisor prompt decides the route, while the route function applies
+        a minimal existence guard so an impossible route cannot execute.
         """
-        from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
-        from langchain_core.tools import tool
+        from typing import TypedDict
+
+        from langchain_core.messages import HumanMessage, SystemMessage
         from langchain_openai import ChatOpenAI
+        from langgraph.graph import END, START, StateGraph
+
+        class BatchSupervisorState(TypedDict, total=False):
+            migration_job: dict[str, Any] | None
+            sql_job: dict[str, Any] | None
+            decision: dict[str, Any]
+            result: dict[str, Any]
 
         self._batch_runtime_config = config
         self._raise_if_batch_stop_requested()
 
-        poll_state: dict[str, Any] = {"called": False, "migration_job": None, "sql_job": None}
-        cycle_result: dict[str, Any] | None = None
-
-        def _json(data: dict[str, Any]) -> str:
-            return json.dumps(data, ensure_ascii=False, default=str)
-
-        @tool
-        def poll_jobs() -> str:
-            """Poll pending DB migration and SQL conversion jobs for this batch cycle."""
+        def poll_jobs(_: BatchSupervisorState) -> BatchSupervisorState:
             self._raise_if_batch_stop_requested()
             migration_job = self._poll_next_migration_job(config)
             sql_job = None if migration_job else self._poll_next_sql_conversion_job(config)
-            poll_state.update(
-                {
-                    "called": True,
-                    "migration_job": migration_job,
-                    "sql_job": sql_job,
-                }
+            self._console(
+                "poll result: "
+                f"migration_job={migration_job or '-'} "
+                f"sql_job={sql_job or '-'}"
             )
-            return _json(
-                {
-                    "ok": True,
-                    "migration_jobs": [migration_job] if migration_job else [],
-                    "sql_jobs": [sql_job] if sql_job else [],
-                    "rule": "Run one DB migration job first. If no DB migration job exists, run one SQL conversion job.",
-                }
+            return {"migration_job": migration_job, "sql_job": sql_job}
+
+        def supervisor_decide(state: BatchSupervisorState) -> BatchSupervisorState:
+            self._raise_if_batch_stop_requested()
+            payload = {
+                "migration_job": state.get("migration_job"),
+                "sql_job": state.get("sql_job"),
+                "policy": [
+                    "Choose exactly one route for this supervisor cycle.",
+                    "Available routes: run_data_migration, run_sql_conversion, no_job.",
+                    "Run at most one job per cycle.",
+                    "DB_MIGRATION has priority when a migration_job exists.",
+                    "Choose run_sql_conversion only when migration_job is null and sql_job exists.",
+                    "Choose no_job only when both migration_job and sql_job are null.",
+                ],
+                "required_json_schema": {
+                    "route": "run_data_migration | run_sql_conversion | no_job",
+                    "reason": "short reason",
+                },
+            }
+            messages = [
+                SystemMessage(
+                    content=(
+                        "You are the SmartMigration batch supervisor. "
+                        "Decide which route the current LangGraph cycle should take. "
+                        "Return JSON only. Do not include markdown."
+                    )
+                ),
+                HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
+            ]
+            llm_kwargs: dict[str, Any] = {
+                "model": config["llm_model"],
+                "api_key": config["llm_api_key"],
+                "max_tokens": min(int(config["llm_max_tokens"] or 4096), 1024),
+                "timeout": config["llm_timeout_seconds"],
+                "temperature": 0,
+            }
+            if config.get("llm_base_url"):
+                llm_kwargs["base_url"] = config["llm_base_url"]
+            response = ChatOpenAI(**llm_kwargs).invoke(messages)
+            raw_decision = str(getattr(response, "content", "") or "").strip()
+            decision = self._parse_supervisor_decision(raw_decision)
+            self._console(
+                "[SupervisorDecision] "
+                f"route={decision.get('route') or '-'} "
+                f"reason={decision.get('reason') or '-'} "
+                f"raw={raw_decision[:500]}"
             )
+            return {"decision": decision}
 
-        @tool
-        def run_data_migration(map_id: int) -> str:
-            """Run one DB migration job by map_id."""
-            nonlocal cycle_result
-            self._raise_if_batch_stop_requested()
-            if cycle_result is not None and cycle_result.get("job_executed"):
-                return _json({"ok": False, "status": "SKIP", "message": "A job already ran in this cycle."})
-            if not poll_state.get("called"):
-                return _json({"ok": False, "status": "SKIP", "message": "poll_jobs must be called before run_data_migration."})
-            selected = poll_state.get("migration_job") or {}
-            selected_map_id = int(selected.get("map_id") or 0)
-            if int(map_id) != selected_map_id:
-                return _json({"ok": False, "status": "SKIP", "message": f"map_id={map_id} is not the selected migration job."})
-            result = self._run_migration_job(config, int(map_id))
-            cycle_result = {
-                "job_executed": True,
-                "ok": bool(result.get("ok")),
-                "agent": "DB_MIGRATION",
-                "job_id": str(map_id),
-                "status": result.get("status"),
-                "message": result.get("message") or "Migration job finished.",
-                "error": result.get("error"),
-                "supervisor_tool": "run_data_migration",
-            }
-            return _json(cycle_result)
-
-        @tool
-        def run_sql_conversion(space_nm: str, sql_id: str) -> str:
-            """Run one SQL conversion job by space_nm and sql_id."""
-            nonlocal cycle_result
-            self._raise_if_batch_stop_requested()
-            if cycle_result is not None and cycle_result.get("job_executed"):
-                return _json({"ok": False, "status": "SKIP", "message": "A job already ran in this cycle."})
-            if not poll_state.get("called"):
-                return _json({"ok": False, "status": "SKIP", "message": "poll_jobs must be called before run_sql_conversion."})
-            if poll_state.get("migration_job"):
-                return _json({"ok": False, "status": "SKIP", "message": "DB migration has priority over SQL conversion."})
-            selected = poll_state.get("sql_job") or {}
-            selected_space = str(selected.get("space_nm") or "")
-            selected_sql_id = str(selected.get("sql_id") or "")
-            if str(space_nm) != selected_space or str(sql_id) != selected_sql_id:
-                return _json({"ok": False, "status": "SKIP", "message": "Requested SQL job is not the selected pending SQL conversion job."})
-            result = self._run_sql_conversion_job(config, selected_space, selected_sql_id)
-            cycle_result = {
-                "job_executed": True,
-                "ok": bool(result.get("ok")),
-                "agent": "SQL_CONVERSION",
-                "job_id": f"{selected_space}/{selected_sql_id}",
-                "status": result.get("status"),
-                "message": result.get("message") or "SQL conversion job finished.",
-                "error": result.get("error"),
-                "supervisor_tool": "run_sql_conversion",
-            }
-            return _json(cycle_result)
-
-        @tool
-        def no_job() -> str:
-            """Finish this cycle when no pending job exists."""
-            nonlocal cycle_result
-            self._raise_if_batch_stop_requested()
-            if not poll_state.get("called"):
-                return _json({"ok": False, "status": "SKIP", "message": "poll_jobs must be called before no_job."})
-            if poll_state.get("migration_job") or poll_state.get("sql_job"):
-                return _json({"ok": False, "status": "SKIP", "message": "A pending job exists. Run it instead of no_job."})
-            cycle_result = {
-                "job_executed": False,
-                "ok": True,
-                "agent": None,
-                "job_id": None,
-                "status": "NO_JOB",
-                "message": "No pending migration or SQL conversion job found.",
-                "error": None,
-                "supervisor_tool": "no_job",
-            }
-            return _json(cycle_result)
-
-        tools = [poll_jobs, run_data_migration, run_sql_conversion, no_job]
-        tool_by_name = {t.name: t for t in tools}
-        llm_kwargs: dict[str, Any] = {
-            "model": config["llm_model"],
-            "api_key": config["llm_api_key"],
-            "max_tokens": config["llm_max_tokens"],
-            "timeout": config["llm_timeout_seconds"],
-            "temperature": 0,
-        }
-        if config.get("llm_base_url"):
-            llm_kwargs["base_url"] = config["llm_base_url"]
-        llm = ChatOpenAI(**llm_kwargs).bind_tools(tools)
-
-        messages: list[Any] = [
-            SystemMessage(
-                content=(
-                    "You are the SmartMigration batch supervisor. "
-                    "Call poll_jobs first. Then call exactly one of these tools: "
-                    "run_data_migration, run_sql_conversion, or no_job. "
-                    "DB migration has priority over SQL conversion. "
-                    "Never call more than one job execution tool in one cycle."
+        def route_after_decision(state: BatchSupervisorState) -> str:
+            route = str((state.get("decision") or {}).get("route") or "").strip()
+            migration_job = state.get("migration_job")
+            sql_job = state.get("sql_job")
+            if route == "run_data_migration" and migration_job:
+                return "run_data_migration"
+            if route == "run_sql_conversion" and not migration_job and sql_job:
+                return "run_sql_conversion"
+            if route == "no_job" and not migration_job and not sql_job:
+                return "no_job"
+            if migration_job:
+                logger.warning(
+                    "[SupervisorDecision] invalid route corrected to run_data_migration "
+                    f"(requested={route or '-'})"
                 )
-            ),
-            HumanMessage(content="Start one batch cycle now."),
-        ]
+                return "run_data_migration"
+            if sql_job:
+                logger.warning(
+                    "[SupervisorDecision] invalid route corrected to run_sql_conversion "
+                    f"(requested={route or '-'})"
+                )
+                return "run_sql_conversion"
+            if route and route != "no_job":
+                logger.warning(
+                    "[SupervisorDecision] invalid route corrected to no_job "
+                    f"(requested={route})"
+                )
+            return "no_job"
 
-        for _ in range(4):
+        def run_data_migration(state: BatchSupervisorState) -> BatchSupervisorState:
             self._raise_if_batch_stop_requested()
-            response = llm.invoke(messages)
-            messages.append(response)
-            tool_calls = getattr(response, "tool_calls", None) or []
-            if not tool_calls:
-                break
-            for call in tool_calls:
-                name = call.get("name") if isinstance(call, dict) else getattr(call, "name", "")
-                args = call.get("args") if isinstance(call, dict) else getattr(call, "args", {})
-                call_id = call.get("id") if isinstance(call, dict) else getattr(call, "id", None)
-                selected_tool = tool_by_name.get(str(name))
-                if not selected_tool:
-                    content = _json({"ok": False, "error": f"Unknown tool: {name}"})
-                else:
-                    content = selected_tool.invoke(args or {})
-                messages.append(ToolMessage(content=str(content), tool_call_id=str(call_id or name)))
-                if cycle_result is not None:
-                    return cycle_result
-
-        if poll_state.get("called") and not poll_state.get("migration_job") and not poll_state.get("sql_job"):
+            migration_job = state.get("migration_job") or {}
+            map_id = int(migration_job["map_id"])
+            self._console(f"run DB_MIGRATION map_id={map_id}")
+            result = self._run_migration_job(config, map_id)
             return {
-                "job_executed": False,
-                "ok": True,
-                "agent": None,
-                "job_id": None,
-                "status": "NO_JOB",
-                "message": "No pending migration or SQL conversion job found.",
-                "error": None,
-                "supervisor_tool": "poll_jobs",
+                "result": {
+                    "job_executed": True,
+                    "ok": bool(result.get("ok")),
+                    "agent": "DB_MIGRATION",
+                    "job_id": str(map_id),
+                    "status": result.get("status"),
+                    "message": result.get("message") or "Migration job finished.",
+                    "error": result.get("error"),
+                    "supervisor_tool": "run_data_migration",
+                }
             }
-        raise RuntimeError("Batch supervisor did not produce a valid tool decision.")
+
+        def run_sql_conversion(state: BatchSupervisorState) -> BatchSupervisorState:
+            self._raise_if_batch_stop_requested()
+            sql_job = state.get("sql_job") or {}
+            selected_space = str(sql_job.get("space_nm") or "")
+            selected_sql_id = str(sql_job.get("sql_id") or "")
+            self._console(f"run SQL_CONVERSION space_nm={selected_space} sql_id={selected_sql_id}")
+            result = self._run_sql_conversion_job(config, selected_space, selected_sql_id)
+            return {
+                "result": {
+                    "job_executed": True,
+                    "ok": bool(result.get("ok")),
+                    "agent": "SQL_CONVERSION",
+                    "job_id": f"{selected_space}/{selected_sql_id}",
+                    "status": result.get("status"),
+                    "message": result.get("message") or "SQL conversion job finished.",
+                    "error": result.get("error"),
+                    "supervisor_tool": "run_sql_conversion",
+                }
+            }
+
+        def no_job(_: BatchSupervisorState) -> BatchSupervisorState:
+            self._raise_if_batch_stop_requested()
+            return {
+                "result": {
+                    "job_executed": False,
+                    "ok": True,
+                    "agent": None,
+                    "job_id": None,
+                    "status": "NO_JOB",
+                    "message": "No pending migration or SQL conversion job found.",
+                    "error": None,
+                    "supervisor_tool": "no_job",
+                }
+            }
+
+        workflow = StateGraph(BatchSupervisorState)
+        workflow.add_node("poll_jobs", poll_jobs)
+        workflow.add_node("supervisor_decide", supervisor_decide)
+        workflow.add_node("run_data_migration", run_data_migration)
+        workflow.add_node("run_sql_conversion", run_sql_conversion)
+        workflow.add_node("no_job", no_job)
+        workflow.add_edge(START, "poll_jobs")
+        workflow.add_edge("poll_jobs", "supervisor_decide")
+        workflow.add_conditional_edges(
+            "supervisor_decide",
+            route_after_decision,
+            {
+                "run_data_migration": "run_data_migration",
+                "run_sql_conversion": "run_sql_conversion",
+                "no_job": "no_job",
+            },
+        )
+        workflow.add_edge("run_data_migration", END)
+        workflow.add_edge("run_sql_conversion", END)
+        workflow.add_edge("no_job", END)
+
+        final_state = workflow.compile().invoke({})
+        result = final_state.get("result")
+        if not result:
+            raise RuntimeError("Batch supervisor graph finished without a result.")
+        return result
+
 
     def _run_migration_job(self, config: dict[str, Any], map_id: int) -> dict[str, Any]:
         self._apply_config(config)
@@ -863,6 +957,35 @@ class BatchAgentCommandTool(Component):
                 "max_attempts": config["sql_conversion_max_attempts"],
             },
         )
+
+    def _parse_supervisor_decision(self, raw_decision: str) -> dict[str, Any]:
+        text = str(raw_decision or "").strip()
+        if not text:
+            logger.warning("[SupervisorDecision] empty LLM response")
+            return {"route": "", "reason": "empty LLM response"}
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+            text = re.sub(r"\s*```$", "", text)
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+            if not match:
+                logger.warning(f"[SupervisorDecision] failed to parse JSON: {raw_decision[:500]}")
+                return {"route": "", "reason": "failed to parse JSON"}
+            try:
+                parsed = json.loads(match.group(0))
+            except Exception:
+                logger.warning(f"[SupervisorDecision] failed to parse JSON object: {raw_decision[:500]}")
+                return {"route": "", "reason": "failed to parse JSON object"}
+        if not isinstance(parsed, dict):
+            logger.warning(f"[SupervisorDecision] JSON is not an object: {raw_decision[:500]}")
+            return {"route": "", "reason": "JSON is not an object"}
+        return {
+            "route": str(parsed.get("route") or "").strip(),
+            "reason": str(parsed.get("reason") or "").strip(),
+        }
+
     def _poll_next_migration_job(self, config: dict[str, Any]) -> dict[str, Any] | None:
         table = self._qualify_table("NEXT_MIG_INFO", config["system_schema"])
         sql = f"""
@@ -928,13 +1051,35 @@ class BatchAgentCommandTool(Component):
             "error_sleep_seconds": max(1, int(self.error_sleep_seconds or 60)),
             "status_log_alive_grace_seconds": max(1, int(self.status_log_alive_grace_seconds or 1800)),
             "auto_install_packages": self._as_bool(self.auto_install_packages),
-            "background_thread_daemon": self._as_bool(self.background_thread_daemon),
         }
 
     def _parse_command(self) -> dict[str, Any]:
         raw = str(self.command_json or "").strip()
         if not raw:
             return {}
+        lowered = raw.lower()
+        if lowered in {"start", "resume", "batch start", "batch resume"} or raw in {
+            "배치 시작",
+            "배치 재개",
+            "백그라운드 실행",
+            "백그라운드 배치 실행",
+            "배치 에이전트 시작",
+        }:
+            return {"action": "start"}
+        if lowered in {"stop", "batch stop"} or raw in {
+            "배치 중지",
+            "배치 멈춰",
+            "백그라운드 중지",
+            "배치 에이전트 중지",
+        }:
+            return {"action": "stop"}
+        if lowered in {"status", "batch status"} or raw in {
+            "배치 상태",
+            "상태 확인",
+            "백그라운드 상태",
+            "배치 에이전트 상태",
+        }:
+            return {"action": "status"}
         if raw in {"백그라운드 실행", "백그라운드 에이전트 실행", "배치 에이전트 시작", "배치 시작"}:
             return {"action": "start"}
         if raw in {"배치 멈춰", "배치 중지", "백그라운드 중지"}:
@@ -1072,8 +1217,6 @@ class BatchAgentCommandTool(Component):
     def _interruptible_sleep(self, seconds: int, config: dict[str, Any] | None = None, run_id: str | None = None) -> None:
         deadline = time.time() + max(0, int(seconds))
         while time.time() < deadline:
-            if self.__class__._stop_event.is_set():
-                break
             if config and not self._is_control_running(config, run_id):
                 break
             if config and self._is_db_stop_requested(config, run_id):
