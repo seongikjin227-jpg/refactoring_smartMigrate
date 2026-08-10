@@ -1,17 +1,37 @@
-# Batch Supervisor Agent
+# Supervisor Agent 컴포넌트
 
-File: `langflow/components/Supervisor_Agent.py`
+파일: `langflow/components/Supervisor_Agent.py`
 
-This is a single Langflow custom component for the always-on SmartMigrate batch
-supervisor. It does not require chat input.
+`Supervisor_Agent.py`는 SmartMigrate 백그라운드 배치 처리를 담당하는 Langflow 커스텀 컴포넌트다.
+사용자 채팅 입력을 받지 않고, `Run YN` 값이 `Y`일 때 직접 while loop를 실행한다.
+
+## 핵심 구조
+
+```text
+Run YN=Y
+  -> blocking while loop 시작
+  -> poll_jobs
+  -> supervisor_decide
+  -> run_data_migration | run_sql_conversion | no_job
+  -> NEXT_BATCH_LOG 저장
+  -> 다음 cycle 반복
+```
+
+중요한 운영 기준:
+- worker thread를 만들지 않는다.
+- `NEXT_BATCH_CONTROL`을 사용하지 않는다.
+- `Run YN=Y`이면 컴포넌트 실행 요청 안에서 blocking loop가 직접 돈다.
+- `Run YN=N`이면 loop를 시작하지 않는다.
+- cycle 결과는 `NEXT_BATCH_LOG`에 저장한다.
+- DB migration 상세 로그는 `NEXT_MIG_LOG`에 저장한다.
+- SQL conversion 상세 로그는 `NEXT_SQL_LOG`에 저장한다.
 
 ## Langflow Input
 
-The component does not require chat input. It exposes one run switch plus SQL
-generation prompts:
+컴포넌트 input은 다음 값만 받는다.
 
 ```text
-Run YN = Y
+Run YN
 MIG SQL Prompt
 VERIFY SQL Prompt
 TO SQL Prompt
@@ -19,74 +39,68 @@ BIND SQL Prompt
 TEST SQL Prompt
 ```
 
-`Y` starts the supervisor loop. `N` requests stop. `STATUS` returns current
-in-memory runtime status.
-
-`Y` runs a blocking while loop directly in the component execution. It does not
-spawn a worker thread.
-
-## Runtime Behavior
-
-Each cycle runs this LangGraph shape:
+`Run YN` 값:
 
 ```text
-poll_jobs -> supervisor_decide -> run_data_migration | run_sql_conversion | no_job
+Y       loop 실행
+N       loop 미실행
+STATUS  현재 메모리 상태 조회
 ```
 
-The supervisor prompt chooses one route from the current job snapshot. The
-component still applies a guard so an invalid route cannot execute a missing
-job.
+프롬프트 input:
+- `MIG SQL Prompt`: migration insert SQL 생성용
+- `VERIFY SQL Prompt`: migration 검증 SQL 생성용
+- `TO SQL Prompt`: SQL conversion TO_SQL 생성용
+- `BIND SQL Prompt`: SQL conversion BIND_SQL 생성용
+- `TEST SQL Prompt`: SQL conversion TEST_SQL 생성용
 
-Priority:
+DB 접속 정보, LLM 설정, schema는 input으로 받지 않는다.
+
+## Tool Mode
+
+`Run YN` input은 `MessageTextInput(tool_mode=True)`로 설정되어 있다.
+
+Agent에 Tool로 연결할 때 Agent가 전달할 수 있는 값은 `Run YN`뿐이다.
+프롬프트 5개는 Tool Mode input이 아니므로 Agent가 임의로 변경하지 않는다.
+
+Tool 호출 예:
 
 ```text
-DB_MIGRATION -> SQL_CONVERSION -> NO_JOB
+Run YN = Y       Supervisor loop 실행
+Run YN = N       Supervisor loop 미실행/중지 요청
+Run YN = STATUS  현재 상태 조회
 ```
 
-DB migration pending condition:
+## 기본 설정
 
-```sql
-NEXT_MIG_INFO.USE_YN = 'Y'
-AND NEXT_MIG_INFO.STATUS IS NULL
-```
-
-SQL conversion pending condition:
-
-```sql
-NEXT_SQL_INFO.STATUS_CONVERSION IS NULL
-```
-
-## Tool Routes
-
-The component is intentionally self-contained. The route functions call the
-existing internal command-tool logic in this same file:
-
-```text
-run_data_migration  -> _run_migration_job()
-run_sql_conversion  -> _run_sql_conversion_job()
-no_job              -> sleep 10 seconds
-```
-
-## Standalone Entrypoint
-
-The same file can also be used as a server startup process:
-
-```bash
-python langflow/components/Supervisor_Agent.py
-```
-
-No separate background service file is used.
-
-## Default Config
-
-DB and LLM defaults are edited in the Python file:
+DB 기본값은 Python 파일의 `DEFAULT_DB_CONFIG`에서 관리한다.
 
 ```python
-DEFAULT_DB_CONFIG = {...}
-DEFAULT_LLM_CONFIG = {...}
+DEFAULT_DB_CONFIG = {
+    "db_host": "10.0.0.1",
+    "db_port": 1521,
+    "db_service_name": "ORCL",
+    "db_username": "SMARTMIGRATE",
+    "db_password": "password",
+    "system_schema": "SFAADM",
+    "source_schema": "SFAMIG",
+    "target_schema": "SFAADM",
+}
 ```
 
-Schema is fixed in `DEFAULT_DB_CONFIG`:
+LLM 기본값은 `DEFAULT_LLM_CONFIG`에서 관리한다.
+
+```python
+DEFAULT_LLM_CONFIG = {
+    "llm_base_url": "",
+    "llm_api_key": "",
+    "llm_model": "claude-haiku-4-5-20251001",
+    "llm_max_tokens": 4096,
+    "llm_timeout_seconds": 900,
+}
+```
+
+schema 고정값:
 
 ```text
 system_schema = SFAADM
@@ -94,5 +108,201 @@ source_schema = SFAMIG
 target_schema = SFAADM
 ```
 
-Prompt values are received from Langflow inputs. Environment/file prompt values
-are still used by the standalone startup process.
+## 자동 패키지 설치
+
+missing package는 input 없이 항상 자동 설치한다.
+
+```python
+AUTO_INSTALL_MISSING_PACKAGES = True
+```
+
+Supervisor runtime에서 확인하는 패키지:
+- `langchain-core`
+- `langchain-openai`
+- `langchain-community`
+- `langgraph`
+- `SQLAlchemy`
+- `oracledb`
+
+내부 migration/sql conversion 실행 로직에서도 필요한 패키지를 자동 설치한다.
+
+## 작업 조회 조건
+
+DB migration 작업 대상:
+
+```sql
+NEXT_MIG_INFO.USE_YN = 'Y'
+AND NEXT_MIG_INFO.STATUS IS NULL
+```
+
+SQL conversion 작업 대상:
+
+```sql
+NEXT_SQL_INFO.STATUS_CONVERSION IS NULL
+```
+
+우선순위:
+
+```text
+DB_MIGRATION -> SQL_CONVERSION -> NO_JOB
+```
+
+DB migration job이 있으면 SQL conversion job보다 먼저 실행한다.
+한 cycle에서는 최대 1건만 실행한다.
+
+## LangGraph 흐름
+
+각 cycle은 다음 그래프 형태로 실행된다.
+
+```text
+START
+  -> poll_jobs
+  -> supervisor_decide
+  -> run_data_migration
+       또는 run_sql_conversion
+       또는 no_job
+  -> END
+```
+
+`poll_jobs`:
+- `NEXT_MIG_INFO`에서 DB migration 대상 1건 조회
+- DB migration 대상이 없으면 `NEXT_SQL_INFO`에서 SQL conversion 대상 1건 조회
+
+`supervisor_decide`:
+- 현재 job snapshot을 LLM Supervisor에게 전달
+- route JSON을 받음
+- 허용 route:
+  - `run_data_migration`
+  - `run_sql_conversion`
+  - `no_job`
+
+route 보정:
+- LLM이 잘못된 route를 반환해도 실제 job 존재 여부 기준으로 보정한다.
+- migration job이 있으면 `run_data_migration`으로 보정한다.
+- migration job이 없고 sql job이 있으면 `run_sql_conversion`으로 보정한다.
+- 둘 다 없으면 `no_job`으로 보정한다.
+
+## Supervisor Prompt
+
+Supervisor system prompt는 `SUPERVISOR_SYSTEM_PROMPT`에 정의되어 있다.
+
+목적:
+- 채팅 없이 현재 job snapshot만 보고 route 결정
+- DB_MIGRATION 우선
+- cycle당 1건만 실행
+- JSON만 반환
+
+필수 반환 형식:
+
+```json
+{"route":"run_data_migration | run_sql_conversion | no_job","reason":"short reason"}
+```
+
+## 실행 route
+
+```text
+run_data_migration
+  -> _run_migration_job()
+  -> 내부 migration command 로직 실행
+  -> NEXT_MIG_LOG 기록
+
+run_sql_conversion
+  -> _run_sql_conversion_job()
+  -> 내부 SQL conversion command 로직 실행
+  -> NEXT_SQL_LOG 기록
+
+no_job
+  -> 10초 sleep
+  -> 다음 cycle
+```
+
+## NEXT_BATCH_LOG 저장
+
+Supervisor cycle 로그는 `NEXT_BATCH_LOG`에 저장한다.
+
+저장 함수:
+- `_write_batch_log_safe()`
+- `_write_batch_log()`
+
+저장 컬럼:
+
+```text
+RUN_ID
+LOOP_NO
+EVENT_TYPE
+AGENT_NAME
+JOB_ID
+JOB_STATUS
+MESSAGE
+ERROR_MESSAGE
+SLEEP_SECONDS
+STARTED_AT
+FINISHED_AT
+ELAPSED_SECONDS
+```
+
+저장 이벤트:
+
+```text
+START
+AUTO_START
+JOB_SUCCESS
+JOB_FAIL
+NO_JOB
+JOB_STOPPED
+FATAL_ERROR
+LOOP_ERROR
+STOP_REQUESTED
+STOPPED
+SERVICE_ERROR
+```
+
+`RUN_ID`는 제어용이 아니라 로그 묶음 식별자다.
+
+## Standalone 실행
+
+서버 startup에서 같은 파일을 직접 실행할 수 있다.
+
+```bash
+python langflow/components/Supervisor_Agent.py
+```
+
+standalone 실행 시 환경변수를 사용할 수 있다.
+
+대표 환경변수:
+
+```text
+SMARTMIGRATE_RUN_YN
+SMARTMIGRATE_DB_HOST
+SMARTMIGRATE_DB_PORT
+SMARTMIGRATE_DB_SERVICE_NAME
+SMARTMIGRATE_DB_USERNAME
+SMARTMIGRATE_DB_PASSWORD
+SMARTMIGRATE_LLM_BASE_URL
+SMARTMIGRATE_LLM_API_KEY
+SMARTMIGRATE_LLM_MODEL
+SMARTMIGRATE_MIG_SQL_PROMPT
+SMARTMIGRATE_VERIFY_SQL_PROMPT
+SMARTMIGRATE_TO_SQL_PROMPT
+SMARTMIGRATE_BIND_SQL_PROMPT
+SMARTMIGRATE_TEST_SQL_PROMPT
+```
+
+프롬프트는 환경변수 본문 또는 파일 경로 방식으로 전달할 수 있다.
+
+```text
+SMARTMIGRATE_MIG_SQL_PROMPT_FILE
+SMARTMIGRATE_VERIFY_SQL_PROMPT_FILE
+SMARTMIGRATE_TO_SQL_PROMPT_FILE
+SMARTMIGRATE_BIND_SQL_PROMPT_FILE
+SMARTMIGRATE_TEST_SQL_PROMPT_FILE
+```
+
+## 주의사항
+
+- `Run YN=Y`는 blocking loop이므로 Langflow 실행 요청이 계속 점유될 수 있다.
+- worker thread 방식이 아니므로 별도 background thread 상태는 없다.
+- `NEXT_BATCH_CONTROL` 기반 start/stop/heartbeat 제어는 사용하지 않는다.
+- 중복 실행 방지는 현재 프로세스 메모리 상태 기준이다.
+- 여러 서버 replica에서 동시에 실행하면 중복 실행 방지 장치가 부족할 수 있다.
+- 실제 운영에서 replica가 여러 개라면 DB lock 또는 별도 scheduler 제어가 필요하다.

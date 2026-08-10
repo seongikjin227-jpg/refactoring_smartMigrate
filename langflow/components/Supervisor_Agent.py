@@ -122,11 +122,12 @@ class BatchAgentCommandTool(Component):
     }
 
     inputs = [
-        StrInput(
+        MessageTextInput(
             name="run_yn",
             display_name="Run YN",
             value="Y",
             required=False,
+            tool_mode=True,
             info="Set Y to start the background supervisor loop. Set N to request stop.",
         ),
         MessageTextInput(name="mig_sql_prompt", display_name="MIG SQL Prompt", required=False),
