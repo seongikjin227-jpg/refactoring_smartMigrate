@@ -12,7 +12,7 @@ from typing import Any
 from urllib.parse import quote_plus
 
 from lfx.custom.custom_component.component import Component
-from lfx.io import BoolInput, IntInput, MessageTextInput, SecretStrInput, StrInput, Output
+from lfx.io import IntInput, MessageTextInput, SecretStrInput, StrInput, Output
 from lfx.schema.data import Data
 
 
@@ -25,7 +25,6 @@ class SqlConversionCommandTool(Component):
     _db_cache: dict[str, Any] = {}
 
 
-    # ==================== ?낅젰 ?뺤쓽: DB/LLM ?곌껐 ?뺣낫? command JSON, ?꾨＼?ы듃瑜??낅젰諛쏅뒗?? ====================
     inputs = [
         MessageTextInput(
             name="command_json",
@@ -91,24 +90,15 @@ class SqlConversionCommandTool(Component):
             required=False,
             info="Target schema to apply to physical TO-BE tables.",
         ),
-        BoolInput(
-            name="auto_install_packages",
-            display_name="Auto Install Missing Packages",
-            value=True,
-            required=False,
-            info="If true, installs missing runtime packages with pip before DB connection.",
-        ),
     ]
 
 
-    # ==================== 異쒕젰 ?뺤쓽: action 泥섎━ 寃곌낵瑜?result JSON?쇰줈 諛섑솚?쒕떎. ====================
     outputs = [
         Output(display_name="Result", name="result", method="run_command"),
     ]
 
 
     # ==================== ?≪뀡 肄붾뱶 ====================
-    # Langflow?먯꽌 諛쏆? action 媛믪쓣 if/elif濡?遺꾧린?쒕떎.
     def run_command(self) -> Data:
         try:
             command = self._parse_command()
@@ -120,8 +110,6 @@ class SqlConversionCommandTool(Component):
             bind_sql = command.get("bind_sql")
             bind_set = command.get("bind_set")
 
-            # command瑜?吏곸젒 action???곌껐?섎뒗寃?醫뗭?吏 ?꾨땲硫??뚮씪誘명꽣瑜??뺥솗?섍쾶 遺꾨━?댁꽌 諛쏅뒗寃?醫뗭?吏 怨좊?以? 
-            # ?쇰떒 command JSON??洹몃?濡?諛쏅뒗嫄몃줈. db migration?먯꽌??command瑜??꾨떖 諛쏅뒗 action??留롮???以꾩뿬???섎굹,,
             if action == "test_connection":
                 result = self._test_connection()
             elif action == "status":
@@ -154,7 +142,6 @@ class SqlConversionCommandTool(Component):
             return Data(data=result)
 
 
-    # action="test_connection": DB? LLM ?곌껐 ?곹깭瑜??뺤씤?쒕떎.
     def _test_connection(self) -> dict[str, Any]:
         try:
             result = self._get_db().run("SELECT 1 AS OK FROM DUAL", include_columns=True)
@@ -195,17 +182,14 @@ class SqlConversionCommandTool(Component):
         }
 
 
-    # action="status": space_nm/sql_id 湲곗? SQL Conversion ?묒뾽 ?곹깭瑜?議고쉶?쒕떎.
     def _status(self, space_nm: Any, sql_id: Any) -> dict[str, Any]:
         job = self._load_job(space_nm, sql_id)
         return {"ok": bool(job), "job": job, "error": "" if job else "job not found"}
 
 
-    # action="list_pending": STATUS_CONVERSION??NULL??SQL Conversion ?묒뾽 紐⑸줉??議고쉶?쒕떎.
     def _list_pending(self, limit: Any) -> dict[str, Any]:
         safe_limit = max(1, min(int(limit or 20), 100))
         table = self._qualify_table("NEXT_SQL_INFO", self.system_schema)
-        # fr_sql 媛숈? CLOB 而щ읆? DBMS_LOB.SUBSTR濡?誘몃━ ?섎씪??媛?몄삤嫄곕굹 length留?媛?몄샂
         sql = f"""
                 SELECT *
                 FROM (
@@ -240,11 +224,8 @@ class SqlConversionCommandTool(Component):
         ]
         return {"ok": True, "count": len(jobs), "jobs": jobs}
 
-    # action="get_table_ddl" ???꾨＼?ы듃???ｌ쓣吏 怨좊?以?, ?꾩슂?섎㈃ migration_tool?먯꽌 媛?몄???render_*_prompt???ｌ뼱二쇰㈃ ?좊벏
 
-    # action="generate_to_sql": TO_SQL???앹꽦?댁꽌 梨꾪똿 ?묐떟?쇰줈 諛섑솚?쒕떎. DB?먮뒗 ??ν븯吏 ?딅뒗??
     def _generate_to_sql(self, space_nm: Any, sql_id: Any, last_error: Any = None) -> dict[str, Any]:
-        # map id??sql id 議댁옱 ?좊Т???ㅻⅨ ?⑥닔?먯꽌???쒖슜?좉굅??
         if not str(space_nm or "").strip() or not str(sql_id or "").strip():
             raise ValueError("space_nm and sql_id are required")
         job = self._load_job(space_nm, sql_id)
@@ -266,7 +247,8 @@ class SqlConversionCommandTool(Component):
                 }
             return {"ok": False, "space_nm": space_nm, "sql_id": sql_id, "error": "USER_EDITED=Y but TO_SQL is empty"}
 
-        # edit_fr_sql ???덉쑝硫?source_sql濡??, ?꾨＼?ы듃?먮뒗 source_sql ???ㅼ뼱媛?        edit_fr_sql = str(job.get("edit_fr_sql") or "").strip()
+        # Prefer user-edited source SQL when it exists.
+        edit_fr_sql = str(job.get("edit_fr_sql") or "").strip()
         fr_sql = str(job.get("fr_sql") or "").strip()
         source_sql = edit_fr_sql if edit_fr_sql else fr_sql
         if not source_sql:
@@ -294,7 +276,6 @@ class SqlConversionCommandTool(Component):
             "to_sql": to_sql,
         }
 
-    # action="generate_bind_sql": BIND_SQL???앹꽦?댁꽌 梨꾪똿 ?묐떟?쇰줈 諛섑솚?쒕떎. DB?먮뒗 ??ν븯吏 ?딅뒗??
     def _generate_bind_sql(self, space_nm: Any, sql_id: Any, to_sql: Any = None, last_error: Any = None) -> dict[str, Any]:
         job = self._load_job(space_nm, sql_id)
         if not job:
@@ -342,7 +323,6 @@ class SqlConversionCommandTool(Component):
             "bind_sql": bind_sql,
         }
 
-    # action="generate_test_sql": TEST_SQL???앹꽦?댁꽌 梨꾪똿 ?묐떟?쇰줈 諛섑솚?쒕떎. DB?먮뒗 ??ν븯吏 ?딅뒗??
     def _generate_test_sql(self, space_nm: Any, sql_id: Any, to_sql: Any = None, bind_sql: Any = None, bind_set: Any = None, last_error: Any = None) -> dict[str, Any]:
         job = self._load_job(space_nm, sql_id)
         if not job:
@@ -394,7 +374,6 @@ class SqlConversionCommandTool(Component):
             "test_sql": test_sql,
         }
 
-    # action="preview_to_sql_prompt": LLM ?몄텧 ?놁씠 SQL Conversion prompt瑜?誘몃━ ?뺤씤?쒕떎.
     def _preview_to_sql_prompt(self, space_nm: Any, sql_id: Any, last_error: Any = None) -> dict[str, Any]:
 
         job = self._load_job(space_nm, sql_id)
@@ -432,7 +411,6 @@ class SqlConversionCommandTool(Component):
             "rag_rule_count": rag_rule_count,
         }
 
-    # action="preview_bind_sql_prompt": LLM ?몄텧 ?놁씠 BIND SQL prompt瑜?誘몃━ ?뺤씤?쒕떎.
     def _preview_bind_sql_prompt(self, space_nm: Any, sql_id: Any, to_sql: Any = None, last_error: Any = None) -> dict[str, Any]:
         job = self._load_job(space_nm, sql_id)
         if not job:
@@ -446,7 +424,6 @@ class SqlConversionCommandTool(Component):
         prompt = self._build_bind_sql_prompt(job, final_to_sql, mapping_schema_text, last_error)
         return {"ok": True, "action": "preview_bind_sql_prompt", "space_nm": space_nm, "sql_id": sql_id, "prompt_kind": "bind", "prompt_length": len(prompt), "prompt": prompt, "db_updated": False, "llm_called": False, "fr_tables": fr_tables, "map_ids": map_ids, "rag_rule_count": rag_rule_count}
 
-    # action="preview_test_sql_prompt": LLM ?몄텧 ?놁씠 TEST SQL prompt瑜?誘몃━ ?뺤씤?쒕떎.
     def _preview_test_sql_prompt(self, space_nm: Any, sql_id: Any, to_sql: Any = None, bind_sql: Any = None, bind_set: Any = None, last_error: Any = None) -> dict[str, Any]:
         job = self._load_job(space_nm, sql_id)
         if not job:
@@ -465,25 +442,20 @@ class SqlConversionCommandTool(Component):
         return {"ok": True, "action": "preview_test_sql_prompt", "space_nm": space_nm, "sql_id": sql_id, "prompt_kind": "test", "prompt_length": len(prompt), "prompt": prompt, "db_updated": False, "llm_called": False, "fr_tables": fr_tables, "map_ids": map_ids, "rag_rule_count": rag_rule_count}
 
 
-    # action="run_sql_conversion_job": TO_SQL ?앹꽦, BIND_SQL ?ㅽ뻾, TEST_SQL 寃利앷퉴吏 SQL Conversion ?꾩껜 ?묒뾽???섑뻾?쒕떎.
     def run_sql_conversion_job(self, sql_id: str, space_nm: str, command: dict[str, Any]) -> dict[str, Any]:
 
-        #=====_run_sql_conversion_job? ?ъ슜?먭? 梨꾪똿?쇰줈 ?몄텧???섎룄 ?덇린 ?뚮Ц???ъ슜?먭? ?붿껌??job???ㅽ뻾 媛?ν븳吏 寃利앺븳??=====
         if (sql_id is None or str(sql_id).strip() == "") or (space_nm is None or str(space_nm).strip() == ""):
             return {"ok": False, "error": "sql_id and space_nm are required for run_sql_conversion_job"}
         sql_id = str(sql_id or "").strip()
         space_nm = str(space_nm or "").strip()
 
-        # job ?ㅽ뻾??嫄몃┛ ?쒓컙 痢≪젙 : ??肄붾뱶 湲곗? - 理쒖쥌 PASS/FAIL ?곹깭 ?????elapsed_seconds 怨꾩궛
         started = time.perf_counter()
         max_attempts = max(1, int(command.get("max_attempts") or 3))
 
-        # job??DB?먯꽌 議고쉶?섍퀬, STATUS_CONVERSION??NULL?몄???_load_job?먯꽌 ?뺤씤
         job = self._load_job(space_nm, sql_id)
         if not job:
             return {"ok": False, "space_nm": space_nm, "sql_id": sql_id, "error": "job not found"}
 
-        # SQL Conversion ?묒뾽 ??곸? STATUS_CONVERSION??NULL??row留??덉슜?쒕떎.
         current_status = str(job.get("status_conversion") or "").strip().upper()
         if current_status:
             return {"ok": False, "space_nm": space_nm, "sql_id": sql_id, "status": current_status, "error": "run_sql_conversion_job is allowed only when STATUS_CONVERSION is NULL."}
@@ -496,14 +468,11 @@ class SqlConversionCommandTool(Component):
         last_retry_count = 0
 
         try:
-            # mapping_schema_text??TO_SQL/TEST_SQL prompt??怨듯넻?쇰줈 ?ㅼ뼱媛??留ㅽ븨猷??ㅻ챸?대떎.
             mapping_schema_text, map_ids, fr_tables, rag_rule_count = self._build_mapping_schema_text(job)
             last_failure: dict[str, Any] = {}
             to_sql_executed = False
             bind_sql_executed = False
             test_sql_executed = False
-            # ===========================SQL Conversion ?④퀎蹂??ㅽ뻾 ===========================
-            # attempt??1遺???쒖옉?섍퀬, retry_count/ATTEMPT_NO??濡쒓렇 湲곗??쇰줈 0遺???쒖옉?쒕떎.
             for attempt in range(1, max_attempts + 1):
                 retry_count = attempt - 1
                 last_retry_count = retry_count
@@ -511,16 +480,13 @@ class SqlConversionCommandTool(Component):
                 user_edited = str(job.get("user_edited") or "").strip().upper() == "Y"
                 tag_kind = str(job.get("tag_kind") or "").strip().upper()
 
-                # [TO_SQL ?④퀎: USER_EDITED=Y?대㈃ DB????λ맂 TO_SQL??洹몃?濡??곌퀬, ?꾨땲硫?LLM?쇰줈 ?앹꽦?쒕떎.]
                 if not to_sql_executed:
-                    # user_edited媛 Y?대㈃ ?ъ슜?먭? ??ν븳 TO_SQL??洹몃?濡??ъ슜?쒕떎.
                     if user_edited:
                         to_sql = str(job.get("to_sql") or "").strip()
                         if not to_sql:
                             raise ValueError("USER_EDITED=Y but TO_SQL is empty")
                         last_to_sql = to_sql
                         steps.append({"step": "generate_to_sql", "attempt": attempt, "status": "SUCCESS-TOBE", "message": "USER_EDITED=Y. Existing TO_SQL was used."})
-                    # user_edited媛 N?대㈃ LLM?쇰줈 TO_SQL???덈줈 ?앹꽦?쒕떎.
                     else:
                         try:
                             to_sql_result = self._generate_to_sql(space_nm, sql_id, last_error=last_failure.get("error", ""))
@@ -536,11 +502,9 @@ class SqlConversionCommandTool(Component):
                                 continue
                             break
                         last_to_sql = str(to_sql_result.get("to_sql") or "").strip()
-                    # TO_SQL ?앹꽦???깃났?섎㈃ ?ㅽ뻾 ?꾨즺 ?쒖떆瑜??④린怨? ?ㅼ쓬 ?ъ떆?꾩뿉?쒕뒗 TO_SQL ?ъ깮?깆쓣 嫄대꼫?대떎.
                     to_sql_executed = True
                     self._write_log(sql_id, space_nm, "TO_SQL", "PASS", "GENERATE_TO_SQL", "TO_SQL generated", retry_count, last_to_sql, int(time.perf_counter() - started), "TO_SQL_PROMPT")
 
-                # SELECT媛 ?꾨땲硫?BIND/TEST ?놁씠 TO_SQL ?깃났留뚯쑝濡?Conversion???꾨즺?쒕떎.
                 if tag_kind != "SELECT":
                     elapsed = int(time.perf_counter() - started)
                     self._save_final_sql(sql_id, space_nm, last_to_sql, last_bind_sql, last_bind_set, last_test_sql)
@@ -548,7 +512,6 @@ class SqlConversionCommandTool(Component):
                     self._write_log(sql_id, space_nm, "TO_SQL", "PASS", "FINAL", "SQL Conversion completed without BIND/TEST because TAG_KIND is not SELECT", retry_count, last_to_sql, elapsed)
                     return {"ok": True, "space_nm": space_nm, "sql_id": sql_id, "status": "PASS-CONVERSION", "status_tuning": "READY", "elapsed_seconds": elapsed, "retry_count": retry_count, "steps": steps, "to_sql": last_to_sql, "map_ids": map_ids, "fr_tables": fr_tables, "rag_rule_count": rag_rule_count}
 
-                # BIND_SQL ?④퀎: FR_SQL 湲곗??쇰줈 bind 媛믪쓣 戮묐뒗 SELECT瑜?留뚮뱾怨??ㅽ뻾 寃곌낵瑜?BIND_SET JSON?쇰줈 蹂닿??쒕떎.
                 if not bind_sql_executed:
                     try:
                         bind_result = self._generate_bind_sql(space_nm, sql_id, last_to_sql, last_failure.get("error", ""))
@@ -589,7 +552,6 @@ class SqlConversionCommandTool(Component):
                             continue
                         break
 
-                # TEST_SQL ?④퀎: TO_SQL怨?BIND_SET??湲곗??쇰줈 FROM_COUNT/TO_COUNT 鍮꾧탳 SQL??留뚮뱾怨??ㅽ뻾?쒕떎.
                 if not test_sql_executed:
                     try:
                         test_result = self._generate_test_sql(space_nm, sql_id, last_to_sql, last_bind_sql, last_bind_set, last_failure.get("error", ""))
@@ -647,7 +609,6 @@ class SqlConversionCommandTool(Component):
                             continue
                         break
 
-            # 紐⑤뱺 ?ъ떆?꾧? PASS ?놁씠 ?앸굹硫?留덉?留??ㅽ뙣 ?곹깭? ?앹꽦??SQL????ν븳??
             final_status = str(last_failure.get("status") or self._fallback_conversion_failure_status(last_to_sql, last_bind_sql, last_bind_set, last_test_sql))
             elapsed = int(time.perf_counter() - started)
             self._save_final_sql(sql_id, space_nm, last_to_sql, last_bind_sql, last_bind_set, last_test_sql)
@@ -655,7 +616,6 @@ class SqlConversionCommandTool(Component):
             self._write_log(sql_id, space_nm, "ERROR", "FAIL", "FINAL", str(last_failure.get("error") or "Max attempts reached")[:3900], last_retry_count, last_test_sql or last_bind_sql or last_to_sql, elapsed)
             return {"ok": False, "space_nm": space_nm, "sql_id": sql_id, "status": final_status, "error": last_failure.get("error") or "Max attempts reached", "elapsed_seconds": elapsed, "retry_count": last_retry_count, "steps": steps}
         except Exception as exc:
-            # ?덉긽?섏? 紐삵븳 ?덉쇅??理쒖쥌 ?ㅽ뙣濡???ν븯怨? ?꾩옱源뚯? ?앹꽦??SQL???④퍡 ?④릿??
             elapsed = int(time.perf_counter() - started)
             final_status = self._fallback_conversion_failure_status(last_to_sql, last_bind_sql, last_bind_set, last_test_sql)
             self._save_final_sql(sql_id, space_nm, last_to_sql, last_bind_sql, last_bind_set, last_test_sql)
@@ -664,9 +624,7 @@ class SqlConversionCommandTool(Component):
             return {"ok": False, "space_nm": space_nm, "sql_id": sql_id, "status": final_status, "error": str(exc), "elapsed_seconds": elapsed, "retry_count": last_retry_count, "steps": steps}
 
     # ======================================================================
-    # 怨듯넻 肄붾뱶
     # ======================================================================
-    # command_json??dict濡?蹂?섑븯怨?action/space_nm/sql_id 媛숈? ?ㅽ뻾 媛믪쓣 ?댁꽍?쒕떎.
     def _parse_command(self) -> dict[str, Any]:
 
 
@@ -678,7 +636,6 @@ class SqlConversionCommandTool(Component):
             raise ValueError("command_json is required")
         return json.loads(text)
 
-    # DB ?낅젰媛믪쓣 Oracle SQLAlchemy connection string?쇰줈 議곕┰?쒕떎.
     def _connection_string(self) -> str:
         host = str(self.db_host or "").strip()
         port = int(self.db_port or 1521)
@@ -693,8 +650,6 @@ class SqlConversionCommandTool(Component):
             raise ValueError("Username is required")
         return f"oracle+oracledb://{quote_plus(username)}:{quote_plus(password)}@{host}:{port}/{service_name}"
 
-    # 媛숈? DB ?묒냽 ?뺣낫??_db_cache?먯꽌 ?ъ궗?⑺븳??
-    # ??뵆濡쒖슦?먯꽌 SQLDatabase.from_uri 瑜??ъ슜?섍린 ?꾪빐 ?곕줈 怨듯넻?⑥닔濡?類?
     def _get_db(self):
         self._ensure_runtime_dependencies()
         from langchain_community.utilities import SQLDatabase
@@ -712,7 +667,6 @@ class SqlConversionCommandTool(Component):
         self.db = self._db_cache[cache_key]
         return self.db
 
-    # DB ?곌껐???꾩슂???뚯씠???⑦궎吏媛 import 媛?ν븳吏 ?뺤씤?쒕떎.
     def _ensure_runtime_dependencies(self) -> None:
         missing_packages: list[str] = []
         try:
@@ -730,19 +684,12 @@ class SqlConversionCommandTool(Component):
 
         if not missing_packages:
             return
-        if not self._as_bool(getattr(self, "auto_install_packages", False)):
-            raise ModuleNotFoundError(
-                "Missing packages: "
-                + ", ".join(missing_packages)
-                + ". Enable Auto Install Missing Packages or install them in the Langflow runtime."
-            )
         for package in missing_packages:
             self._pip_install(package)
 
     def _pip_install(self, package: str) -> None:
         subprocess.check_call([sys.executable, "-m", "pip", "install", package])
 
-    # OpenAI ?명솚 LLM API??JSON ?붿껌??蹂대궡怨??묐떟 dict瑜?諛섑솚?쒕떎.
     def _post_json(self, url: str, payload: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
         body = json.dumps(payload).encode("utf-8")
         req_headers = {"Content-Type": "application/json", **headers}
@@ -766,7 +713,6 @@ class SqlConversionCommandTool(Component):
             time.sleep(min(8, 2 ** (attempt - 1)))
         raise last_error or RuntimeError("LLM request failed")
 
-    # SQLDatabase ?대? engine?먯꽌 DB connection??爰쇰궡 cursor ?묒뾽???ъ슜?쒕떎.
     @contextmanager
     def _connect(self):
         db = self._get_db()
@@ -774,7 +720,6 @@ class SqlConversionCommandTool(Component):
             raw = conn.connection
             yield raw
 
-    # NEXT_SQL_INFO?먯꽌 space_nm/sql_id???대떦?섎뒗 ?묒뾽 row瑜?議고쉶?쒕떎.
     def _load_job(self, space_nm: Any, sql_id: Any) -> dict[str, Any] | None:
         table = self._qualify_table("NEXT_SQL_INFO", self.system_schema)
         space_nm = str(space_nm or "").strip()
@@ -826,7 +771,6 @@ class SqlConversionCommandTool(Component):
         }
 
 
-    # TARGET_TABLE??FR_TABLE 紐⑸줉??湲곗??쇰줈 migration map/rag ?뺣낫瑜?留뚮뱺??
     def _build_mapping_schema_text(self, job: dict[str, Any]) -> tuple[str, list[int], list[str], int]:
 
         fr_tables = self._extract_target_fr_tables(job.get("target_table"))
@@ -908,15 +852,12 @@ class SqlConversionCommandTool(Component):
                 sections.append(
                     f"  - map_id={map_id}; map_type={map_type}; from={fr_table}.{fr_col or '*'}; to={to_table}.{to_col or '*'}; condition={condition}"
                 )
-        # NEXT_MIG_RAG_INFO?먯꽌 CATEGORY=SQL_CONVERSION?닿퀬 SOURCE_TABLES媛 FR_TABLE怨?媛숈? rule??理쒕? 3媛쒖뵫 媛?몄???guidance瑜?蹂댁뿬以??
-        # ?먮옒???꾨쿋??湲곕컲 RAG濡??곕젮怨??덈뒗???곗꽑 FR_TABLE 湲곗??쇰줈 媛꾨떒?섍쾶 RAG瑜?蹂댁뿬二쇰뒗 寃껋쑝濡?援ы쁽?쒕떎.
         sections.append("\n[SQL_CONVERSION_RAG_GUIDANCE]")
         rag_lines = self._load_conversion_rag_rules(fr_tables)
         sections.extend(rag_lines)
         rag_rule_count = len([line for line in rag_lines if line.strip().startswith("- {")])
         return "\n".join(sections), map_ids, fr_tables, rag_rule_count
 
-    # NEXT_MIG_RAG_INFO?먯꽌 CATEGORY=SQL_CONVERSION?닿퀬 SOURCE_TABLES媛 FR_TABLE怨?媛숈? rule??理쒕? 3媛쒖뵫 媛?몄삩??
     def _load_conversion_rag_rules(self, fr_tables: list[str]) -> list[str]:
         table = self._qualify_table("NEXT_MIG_RAG_INFO", self.system_schema)
         if not fr_tables:
@@ -957,7 +898,6 @@ class SqlConversionCommandTool(Component):
             return ["  - No SQL_CONVERSION RAG rules loaded."]
         return lines or ["  - No SQL_CONVERSION RAG rules found for FR_TABLE hints."]
 
-    # to_sql_prompt???먮━?쒖떆?먮? ?ㅼ젣 媛믪쑝濡?移섑솚?쒕떎.
     def _render_to_sql_prompt(
         self,
         from_sql: str,
@@ -980,7 +920,6 @@ class SqlConversionCommandTool(Component):
             template = template.replace("{" + key + "}", str(value))
         return template
 
-    # bind_sql_prompt???먮━?쒖떆?먮? ?ㅼ젣 媛믪쑝濡?移섑솚?쒕떎.
     def _render_bind_sql_prompt(
         self,
         from_sql: str,
@@ -998,7 +937,6 @@ class SqlConversionCommandTool(Component):
             template = template.replace("{" + key + "}", str(value))
         return template
 
-    # test_sql_prompt???먮━?쒖떆?먮? ?ㅼ젣 媛믪쑝濡?移섑솚?쒕떎.
     def _render_test_sql_prompt(
         self,
         from_sql: str,
@@ -1018,7 +956,6 @@ class SqlConversionCommandTool(Component):
             template = template.replace("{" + key + "}", str(value))
         return template
 
-    # OpenAI ?명솚 chat/completions 寃쎈줈濡?LLM???몄텧?쒕떎.
     def _call_llm(self, prompt: str) -> str:
         api_key = str(self.llm_api_key or "").strip()
         model = str(self.llm_model or "").strip()
@@ -1038,7 +975,6 @@ class SqlConversionCommandTool(Component):
         data = self._post_json(url, payload, {"Authorization": f"Bearer {api_key}"})
         return str(data["choices"][0]["message"].get("content", ""))
 
-    # LLM ?묐떟?먯꽌 留덊겕?ㅼ슫 肄붾뱶 釉붾줉怨?留덉?留??몃?肄쒕줎???쒓굅?쒕떎.
     def _sanitize_to_sql(self, value: str) -> str:
         text = str(value or "").strip()
         if text.startswith("```"):
@@ -1050,7 +986,6 @@ class SqlConversionCommandTool(Component):
             raise ValueError("LLM returned empty SQL")
         return text
 
-    # BIND_SQL ?앹꽦怨?preview媛 媛숈? prompt瑜??곕룄濡?prompt 援ъ꽦留???怨녹뿉 紐⑥???
     def _build_bind_sql_prompt(self, job: dict[str, Any], to_sql: str, mapping_schema_text: str, last_error: Any = None) -> str:
         edit_fr_sql = str(job.get("edit_fr_sql") or "").strip()
         fr_sql = str(job.get("fr_sql") or "").strip()
@@ -1076,7 +1011,6 @@ class SqlConversionCommandTool(Component):
             last_error=str(last_error or "None"),
         )
 
-    # TEST_SQL ?앹꽦怨?preview媛 媛숈? prompt瑜??곕룄濡?prompt 援ъ꽦留???怨녹뿉 紐⑥???
     def _build_test_sql_prompt(self, job: dict[str, Any], to_sql: str, bind_sql: str, bind_set: str, mapping_schema_text: str, last_error: Any = None) -> str:
         edit_fr_sql = str(job.get("edit_fr_sql") or "").strip()
         fr_sql = str(job.get("fr_sql") or "").strip()
@@ -1095,7 +1029,6 @@ class SqlConversionCommandTool(Component):
             last_error=str(last_error or "None"),
         )
 
-    # 理쒖쥌 ?깃났/?ㅽ뙣 ?쒖젏???앹꽦??SQL?ㅼ쓣 NEXT_SQL_INFO????ν븳??
     def _save_final_sql(self, sql_id: str, space_nm: str, to_sql: str, bind_sql: str, bind_set: str, test_sql: str) -> None:
         assignments = []
         params: list[Any] = []
@@ -1122,7 +1055,6 @@ class SqlConversionCommandTool(Component):
             )
             conn.commit()
 
-    # 理쒖쥌 STATUS_CONVERSION/STATUS_TUNING, retry, batch count瑜?NEXT_SQL_INFO????ν븳??
     def _update_job_status(self, sql_id: str, space_nm: str, status_conversion: str, elapsed_seconds: int, retry_count: int, status_tuning: str | None = None) -> None:
         assignments = ["STATUS_CONVERSION = :1", "RETRY_COUNT = :2", "BATCH_CNT = NVL(BATCH_CNT, 0) + 1", "LOG = :3", "UPD_TS = CURRENT_TIMESTAMP"]
         params: list[Any] = [status_conversion, retry_count, f"STATUS_CONVERSION={status_conversion}; elapsed={elapsed_seconds}s; retry={retry_count}"]
@@ -1144,7 +1076,6 @@ class SqlConversionCommandTool(Component):
             )
             conn.commit()
 
-    # SQL Conversion ?④퀎蹂??대젰??NEXT_SQL_LOG??湲곕줉?쒕떎.
     def _write_log(self, sql_id: str, space_nm: str, sql_kind: str, status: str, stage_name: str, message: str, retry_count: int = 0, sql_content: str | None = None, elapsed_seconds: int | None = None, prompt_name: str | None = None) -> None:
         table = self._qualify_table("NEXT_SQL_LOG", self.system_schema)
         try:
@@ -1180,7 +1111,6 @@ class SqlConversionCommandTool(Component):
         except Exception:
             pass
 
-    # ?ㅽ뻾??SQL?먯꽌 MyBatis ?쒓렇瑜?留됯퀬 LIMIT/FETCH 臾몃쾿??Oracle ?뺥깭濡??뺣━?쒕떎.
     def _prepare_runtime_sql(self, sql_text: str, stage: str) -> str:
         clean_sql = self._sanitize_to_sql(sql_text)
         lowered = clean_sql.lower()
@@ -1199,7 +1129,6 @@ class SqlConversionCommandTool(Component):
             clean_sql = f"SELECT * FROM ({inner}) WHERE ROWNUM <= {limit}"
         return clean_sql
 
-    # dict row?먯꽌 而щ읆 ??뚮Ц??李⑥씠瑜?臾댁떆?섍퀬 媛믪쓣 爰쇰궦??
     def _get_row_value(self, row: dict[str, Any], key: str) -> Any:
         if key in row:
             return row[key]
@@ -1209,7 +1138,6 @@ class SqlConversionCommandTool(Component):
                 return value
         return None
 
-    # DB 媛믪쓣 JSON?쇰줈 蹂??媛?ν븳 媛믪쑝濡?諛붽씔??
     def _json_value(self, value: Any) -> Any:
         if value is None:
             return None
@@ -1221,7 +1149,6 @@ class SqlConversionCommandTool(Component):
             return value
         return str(value)
 
-    # action step ?붿빟?먮뒗 ??SQL 蹂몃Ц???쒖쇅?섍퀬 ?묒? 媛믩쭔 ?④릿??
     def _summary_result(self, result: dict[str, Any]) -> dict[str, Any]:
         summary = {"ok": bool(result.get("ok")), "status": result.get("status")}
         for key in ["message", "error", "row_count", "elapsed_seconds", "retry_count"]:
@@ -1229,7 +1156,6 @@ class SqlConversionCommandTool(Component):
                 summary[key] = result.get(key)
         return summary
 
-    # TARGET_TABLE JSON 諛곗뿴?먯꽌 FR_TABLE 紐⑸줉??爰쇰궦??
     def _fallback_conversion_failure_status(self, to_sql: str, bind_sql: str, bind_set: str, test_sql: str) -> str:
         if not self._to_text(to_sql).strip():
             return "FAIL-TOBE"
@@ -1251,14 +1177,12 @@ class SqlConversionCommandTool(Component):
                 names.append(clean_table)
         return names[:50]
 
-    # schema媛 遺숈? ?뚯씠釉붾챸? 留덉?留??뚯씠釉붾챸留??④꺼 鍮꾧탳 湲곗??쇰줈 ?ъ슜?쒕떎.
     def _normalize_table_name(self, value: Any) -> str:
         text = self._to_text(value).strip().strip('"').upper()
         if "." in text:
             text = text.split(".")[-1]
         return text
 
-    # schema ?낅젰媛믪씠 ?덉쑝硫??뚯씠釉붾챸 ?욎뿉 schema瑜?遺숈씤??
     def _qualify_table(self, table_name: str, schema: str | None) -> str:
         clean = str(table_name or "").strip()
         clean_schema = str(schema or "").strip().upper()
@@ -1270,7 +1194,6 @@ class SqlConversionCommandTool(Component):
             raise ValueError(f"Invalid schema: {clean_schema}")
         return f"{clean_schema}.{clean}"
 
-    # CLOB/bytes/None 媛믪쓣 ?덉쟾?섍쾶 臾몄옄?대줈 蹂?섑븳??
     def _to_text(self, value: Any) -> str:
         if value is None:
             return ""

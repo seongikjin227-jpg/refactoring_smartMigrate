@@ -14,7 +14,7 @@ from urllib.parse import quote_plus
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
-from lfx.io import BoolInput, IntInput, MessageTextInput, SecretStrInput, StrInput, Output
+from lfx.io import IntInput, MessageTextInput, SecretStrInput, StrInput, Output
 from lfx.schema.data import Data
 
 class MigrationCommandTool(Component):
@@ -25,7 +25,6 @@ class MigrationCommandTool(Component):
 
     _db_cache: dict[str, Any] = {}
 
-    # ==================== ?낅젰 ?뺤쓽: DB/LLM ?곌껐 ?뺣낫? command JSON???낅젰諛쏅뒗?? ====================
     inputs = [
         MessageTextInput(
             name="command_json",
@@ -129,22 +128,13 @@ class MigrationCommandTool(Component):
             value=3,
             required=False,
         ),
-        BoolInput(
-            name="auto_install_packages",
-            display_name="Auto Install Missing Packages",
-            value=True,
-            required=False,
-            info="If true, installs missing runtime packages with pip before DB connection.",
-        ),
     ]
 
-    # ==================== 異쒕젰 ?뺤쓽: action 泥섎━ 寃곌낵瑜?result JSON?쇰줈 諛섑솚?쒕떎. ====================
     outputs = [
         Output(display_name="Result", name="result", method="run_command"),
     ]
 
     # ==================== ?≪뀡 肄붾뱶 ====================
-    # Langflow?먯꽌 諛쏆? action 媛믪쓣 if/elif濡?遺꾧린?쒕떎.
     def run_command(self) -> Data:
         try:
             command = self._parse_command()
@@ -185,7 +175,6 @@ class MigrationCommandTool(Component):
             self.status = result
             return Data(data=result)
 
-    # action="test_connection": DB? LLM ?곌껐 ?곹깭瑜??뺤씤?쒕떎.
     def _test_connection(self) -> dict[str, Any]:
         try:
             rows = self._normalize_query_rows(self._get_db().run("SELECT 1 AS OK FROM DUAL", include_columns=True))
@@ -225,7 +214,6 @@ class MigrationCommandTool(Component):
             "llm": llm_result,
         }
 
-    # action="status": map_id 湲곗? master/detail ?곹깭瑜?議고쉶?쒕떎.
     def _status(self, map_id: Any) -> dict[str, Any]:
         if map_id is None or str(map_id).strip() == "":
             raise ValueError("map_id is required")
@@ -236,7 +224,6 @@ class MigrationCommandTool(Component):
         details = self._load_details(map_id)
         return {"ok": True, "job": job, "details": details}
 
-    # action="list_pending": ?ㅽ뻾 媛?ν븳 migration ?꾨낫瑜?議고쉶?쒕떎.
     def _list_pending(self, limit: Any) -> dict[str, Any]:
         safe_limit = max(1, min(int(limit or 10), 50))
         map_table = self._qualify_table("NEXT_MIG_INFO", self.system_schema)
@@ -273,7 +260,6 @@ class MigrationCommandTool(Component):
         ]
         return {"ok": True, "count": len(jobs), "jobs": jobs}
 
-    # action="get_table_ddl": Oracle 而щ읆 硫뷀??곗씠?곕? 議고쉶?쒕떎.
     def _get_table_ddl(self, table_name: Any, schema: Any = None) -> dict[str, Any]:
         clean_table = str(table_name or "").strip().upper()
         clean_schema = str(schema or "").strip().upper()
@@ -332,7 +318,6 @@ class MigrationCommandTool(Component):
             "columns": columns,
         }
 
-    # action="generate_mig_sql": MIG_SQL???앹꽦?댁꽌 梨꾪똿 ?묐떟?쇰줈 諛섑솚?쒕떎.
     def _generate_mig_sql(self, map_id: Any, command: dict[str, Any]) -> dict[str, Any]:
         if map_id is None or str(map_id).strip() == "":
             raise ValueError("map_id is required")
@@ -354,7 +339,6 @@ class MigrationCommandTool(Component):
                     "mig_sql": existing_mig_sql,
                 }
             return {"ok": False, "map_id": map_id, "error": "USER_EDITED=Y but MIG_SQL is empty"}
-        # PRIOR_MAP_ID? 媛숈? target ?곗꽑?쒖쐞 議곌굔??癒쇱? ?뺤씤?쒕떎.
         dep = self._check_dependencies(job)
         if not dep["ok"]:
             return {"ok": False, "map_id": map_id, "status": dep["status"], "message": dep["message"]}
@@ -389,7 +373,6 @@ class MigrationCommandTool(Component):
             "mig_sql": mig_sql,
         }
 
-    # action="generate_verify_sql": VERIFY_SQL???앹꽦?댁꽌 梨꾪똿 ?묐떟?쇰줈 諛섑솚?쒕떎.
     def _generate_verify_sql(self, map_id: Any, command: dict[str, Any]) -> dict[str, Any]:
         if map_id is None or str(map_id).strip() == "":
             raise ValueError("map_id is required")
@@ -448,7 +431,6 @@ class MigrationCommandTool(Component):
             "verify_sql": verify_sql,
         }
 
-    # action="preview_mig_prompt" / "preview_verify_prompt": 移섑솚??prompt瑜?諛섑솚?쒕떎.
     def _preview_sql_prompt(self, map_id: Any, command: dict[str, Any], prompt_kind: str) -> dict[str, Any]:
         if map_id is None or str(map_id).strip() == "":
             raise ValueError("map_id is required")
@@ -495,7 +477,6 @@ class MigrationCommandTool(Component):
             "llm_called": False,
         }
 
-    # action="reset": ?ъ떎?됱쓣 ?꾪빐 ?곹깭 媛믪쓣 珥덇린?뷀븳??
     def _reset(self, map_id: Any, command: dict[str, Any]) -> dict[str, Any]:
         if map_id is None or str(map_id).strip() == "":
             raise ValueError("map_id is required")
@@ -524,7 +505,6 @@ class MigrationCommandTool(Component):
         self._write_log(map_id, "RESET", "INFO", "RESET", "PASS", "Job reset. SQL values preserved.")
         return {"ok": rowcount > 0, "map_id": map_id, "updated_rows": rowcount}
 
-    # action="save_user_sql": ?ъ슜?먭? ?섏젙??SQL????ν븯怨?USER_EDITED=Y濡??쒖떆?쒕떎.
     def _save_user_sql(self, map_id: Any, command: dict[str, Any]) -> dict[str, Any]:
         if map_id is None or str(map_id).strip() == "":
             raise ValueError("map_id is required")
@@ -561,7 +541,6 @@ class MigrationCommandTool(Component):
         self._write_log(map_id, "SAVE_USER_SQL", "INFO", "USER_SQL", "PASS", "User SQL saved", generate_sql=str(mig_sql))
         return {"ok": rowcount > 0, "map_id": map_id, "updated_rows": rowcount}
 
-    # action="analyze_failure": 理쒖떊 ?ㅽ뙣 濡쒓렇? ???SQL??議고쉶?쒕떎.
     def _analyze_failure(self, map_id: Any) -> dict[str, Any]:
         if map_id is None or str(map_id).strip() == "":
             raise ValueError("map_id is required")
@@ -634,15 +613,12 @@ class MigrationCommandTool(Component):
             "recent_logs": recent_logs,
         }
 
-    # action="run_migration_job": SQL ?앹꽦, ?ㅽ뻾, 寃利앷퉴吏 ?꾩껜 ?ъ씠?댁쓣 ?섑뻾?쒕떎.
     def _run_migration_job(self, map_id: Any, command: dict[str, Any]) -> dict[str, Any]:
 
-        # =====_run_migration_job? ?ъ슜?먭? 梨꾪똿?쇰줈 ?몄텧???섎룄 ?덇린 ?뚮Ц???ъ슜?먭? ?붿껌??job???ㅽ뻾 媛?ν븳吏 寃利앺븳??=====
         if map_id is None or str(map_id).strip() == "":
             raise ValueError("map_id is required")
         map_id = int(map_id)
 
-        # started??理쒖쥌 PASS/FAIL ?곹깭 ?????elapsed_seconds 怨꾩궛???ъ슜?쒕떎.
         started = time.perf_counter()
         max_attempts = max(1, int(command.get("max_attempts") or self.default_max_attempts or 1))
 
@@ -650,11 +626,9 @@ class MigrationCommandTool(Component):
         if not job:
             return {"ok": False, "map_id": map_id, "error": "job not found"}
 
-        # USE_YN??Y媛 ?꾨땲硫??ㅽ뻾 ??곸씠 ?꾨땲誘濡??ㅼ젣 SQL ?앹꽦/?ㅽ뻾?쇰줈 ?섏뼱媛吏 ?딅뒗??
         if str(job.get("use_yn") or "").upper() != "Y":
             return {"ok": False, "map_id": map_id, "status": "SKIP", "error": "USE_YN is not Y"}
 
-        # ?대? ?꾨즺?섏뿀嫄곕굹 ?ㅽ뙣 ?곹깭媛 ?⑥븘 ?덈뒗 ?묒뾽? run_migration_job?먯꽌 諛붾줈 ?ъ떎?됲븯吏 ?딅뒗??
         current_status = str(job.get("status") or "").strip().upper()
         if current_status == "PASS":
             return {"ok": True, "map_id": map_id, "status": "PASS", "message": "Job already passed"}
@@ -672,27 +646,20 @@ class MigrationCommandTool(Component):
             self._write_log(map_id, "DEPENDENCY", "WARN", "DEP_CHECK", final_status, dep["message"])
             return {"ok": True, "map_id": map_id, "status": final_status, "message": dep["message"]}
 
-        # steps?먮뒗 SQL ?앹꽦/?ㅽ뻾/寃利?媛??④퀎???붿빟 寃곌낵瑜??쒖꽌?濡??꾩쟻?쒕떎.
         steps: list[dict[str, Any]] = []
 
-        # 理쒖쥌 PASS/FAIL ?쒖젏??DB????ν븷 留덉?留?MIG_SQL/VERIFY_SQL 媛믪쓣 ?ㅺ퀬 媛꾨떎.
         last_mig_sql = str(job.get("mig_sql") or "")
         last_verify_sql = str(job.get("verify_sql") or "")
 
         try:
-            # ?ㅽ뻾 吏곸쟾???묒뾽???ㅼ떆 ?쎌뼱 ?ъ슜???섏젙 SQL?대굹 理쒖떊 ?곹깭瑜?諛섏쁺?쒕떎.
             job = self._load_job(map_id) or job
             user_edited = str(job.get("user_edited") or "").upper() == "Y"
 
-            # last_failure???ㅼ쓬 retry prompt???ｌ쓣 ?먮윭? ?ㅽ뙣 status瑜?蹂닿??쒕떎.
             last_failure: dict[str, Any] = {}
-            # mig_executed????踰?MIG_SQL ?ㅽ뻾???깃났?섎㈃ 媛숈? run ?덉뿉???ㅼ떆 insert?섏? ?딅룄濡??쒕떎.
             mig_executed = False
-            # verify_sql_executed??VERIFY_SQL 寃利앹씠 ?깃났???ㅼ뿉??寃利??④퀎瑜??ㅼ떆 ?吏 ?딅룄濡??쒖떆?쒕떎.
             verify_sql_executed = False
             last_retry_count = 0
 
-            # attempt??1遺???쒖옉?섍퀬, retry_count??DB/濡쒓렇 湲곗??쇰줈 0遺???쒖옉?쒕떎.
             for attempt in range(1, max_attempts + 1):
                 retry_count = attempt - 1
                 last_retry_count = retry_count
@@ -700,9 +667,7 @@ class MigrationCommandTool(Component):
                 job = self._load_job(map_id) or job
                 user_edited = str(job.get("user_edited") or "").upper() == "Y"
 
-                # MIG_SQL ?ㅽ뻾? ??踰??깃났?섎㈃ 媛숈? run ?덉뿉???ㅼ떆 insert?섏? ?딅뒗??
                 if not mig_executed:
-                    # USER_EDITED=Y?대㈃ LLM ?앹꽦 ???DB????λ맂 MIG_SQL??洹몃?濡??ъ슜?쒕떎.
                     if user_edited:
                         mig_sql = str(job.get("mig_sql") or "").strip()
                         if not mig_sql:
@@ -710,7 +675,6 @@ class MigrationCommandTool(Component):
                         last_mig_sql = mig_sql
                         steps.append({"step": "generate_mig_sql", "attempt": attempt, "status": "SKIPPED_USER_EDITED"})
                     else:
-                        # MIG_SQL ?앹꽦 ?⑥닔?먮뒗 ?댁쟾 ?ㅽ뙣 ?먮윭? SQL???섍꺼 retry prompt??諛섏쁺?쒕떎.
                         mig_command = {
                             "retry_count": retry_count,
                             "last_error": last_failure.get("error", ""),
@@ -718,7 +682,6 @@ class MigrationCommandTool(Component):
                         }
                         mig_result = self._generate_mig_sql(map_id, mig_command)
                         steps.append({"step": "generate_mig_sql", "attempt": attempt, **self._summary_result(mig_result)})
-                        # MIG_SQL ?앹꽦 ?ㅽ뙣??FAIL-INSERT ?꾨낫濡?湲곕줉?섍퀬 ?⑥? attempt媛 ?덉쑝硫??ъ떆?꾪븳??
                         if not mig_result.get("ok"):
                             last_failure = {"status": "FAIL-INSERT", "error": mig_result.get("error") or "MIG_SQL generation failed"}
                             self._write_log(map_id, "ROW_ERROR", "WARN", "RETRY" if retry_count > 0 else "GENERATE_MIG_SQL", "FAIL-INSERT", str(last_failure["error"])[:3900], retry_count)
@@ -726,7 +689,6 @@ class MigrationCommandTool(Component):
                                 continue
                             break
 
-                        # ?앹꽦???깃났??MIG_SQL? 理쒖쥌 ????꾨낫濡?蹂닿??섍퀬 ?앹꽦 濡쒓렇瑜??④릿??
                         last_mig_sql = str(mig_result.get("mig_sql") or "")
                         self._write_log(
                             map_id,
@@ -740,7 +702,6 @@ class MigrationCommandTool(Component):
                         )
 
                     try:
-                        # ?ㅽ뻾 ?⑥닔??job dict ?덉쓽 mig_sql???쎌쑝誘濡?理쒖떊 SQL??蹂묓빀?댁꽌 ?섍릿??
                         job = {**job, "mig_sql": last_mig_sql}
                         mig_sql = self._sanitize_migration_sql(str(job.get("mig_sql") or ""))
                         if str(job.get("trunc_yn") or "").upper() == "Y":
@@ -760,7 +721,6 @@ class MigrationCommandTool(Component):
                         steps.append({"step": "execute_mig_sql", "attempt": attempt, **self._summary_result(mig_exec_result)})
                         mig_executed = True
                     except Exception as exc:
-                        # INSERT ?ㅽ뻾 ?ㅽ뙣???ㅼ쓬 attempt?먯꽌 MIG_SQL???ъ깮?깊븷 ???덈룄濡?last_failure???ｋ뒗??
                         last_failure = {"status": "FAIL-INSERT", "error": str(exc)}
                         steps.append({"step": "execute_mig_sql", "attempt": attempt, "ok": False, **last_failure})
                         self._write_log(map_id, "ROW_ERROR", "WARN", "RETRY" if retry_count > 0 else "SQL_EXEC", "FAIL-INSERT", str(exc)[:3900], retry_count, str(job.get("mig_sql") or ""))
@@ -768,19 +728,15 @@ class MigrationCommandTool(Component):
                             continue
                         break
 
-                # VERIFY_SQL 寃利앸룄 ?④퀎 ?꾨즺 ?щ?瑜?蹂?섎줈 ?먯뼱 MIG_SQL/BIND_SQL ?먮쫫怨?留욎텣??
                 if not verify_sql_executed:
                     job = self._load_job(map_id) or job
                     user_edited = str(job.get("user_edited") or "").upper() == "Y"
-                    # VERIFY_SQL? MIG_SQL ?ㅽ뻾 ?댄썑??理쒖떊 DB row瑜??ㅼ떆 ?쎌? ??寃곗젙?쒕떎.
                     verify_sql = str(job.get("verify_sql") or "").strip()
 
-                    # ?ъ슜???섏젙 VERIFY_SQL???덉쑝硫?LLM ?앹꽦??嫄대꼫?곌퀬 ??λ맂 SQL???ъ슜?쒕떎.
                     if user_edited and verify_sql:
                         last_verify_sql = verify_sql
                         steps.append({"step": "generate_verify_sql", "attempt": attempt, "status": "SKIPPED_USER_EDITED"})
                     else:
-                        # VERIFY_SQL ?앹꽦???댁쟾 ?ㅽ뙣 ?뺣낫瑜?媛숈씠 ?섍꺼 retry prompt ?덉쭏???믪씤??
                         verify_command = {
                             "retry_count": retry_count,
                             "last_error": last_failure.get("error", ""),
@@ -789,7 +745,6 @@ class MigrationCommandTool(Component):
                         verify_result = self._generate_verify_sql(map_id, verify_command)
                         steps.append({"step": "generate_verify_sql", "attempt": attempt, **self._summary_result(verify_result)})
 
-                        # VERIFY_SQL ?앹꽦 ?ㅽ뙣??寃利??ㅽ뙣 ?④퀎濡?蹂닿퀬 ?⑥? attempt媛 ?덉쑝硫??ъ떆?꾪븳??
                         if not verify_result.get("ok"):
                             last_failure = {"status": "FAIL-TEST", "error": verify_result.get("error") or "VERIFY_SQL generation failed"}
                             self._write_log(map_id, "ROW_ERROR", "WARN", "RETRY" if retry_count > 0 else "GENERATE_VERIFY_SQL", "FAIL-TEST", str(last_failure["error"])[:3900], retry_count)
@@ -797,7 +752,6 @@ class MigrationCommandTool(Component):
                                 continue
                             break
 
-                        # ?앹꽦???깃났??VERIFY_SQL? 理쒖쥌 ????꾨낫濡?蹂닿??섍퀬 ?앹꽦 濡쒓렇瑜??④릿??
                         last_verify_sql = str(verify_result.get("verify_sql") or "")
                         self._write_log(
                             map_id,
@@ -811,7 +765,6 @@ class MigrationCommandTool(Component):
                         )
 
                     try:
-                        # 寃利??ㅽ뻾 ?⑥닔??job dict ?덉쓽 verify_sql???쎌쑝誘濡?理쒖떊 SQL??蹂묓빀?댁꽌 ?섍릿??
                         job = {**job, "verify_sql": last_verify_sql}
                         verify_sql = self._sanitize_verify_sql(str(job.get("verify_sql") or ""))
                         verify_ok, verify_message, rows = self._execute_verify_sql_with_rows(verify_sql)
@@ -825,7 +778,6 @@ class MigrationCommandTool(Component):
                         }
                         steps.append({"step": "execute_verify_sql", "attempt": attempt, **self._summary_result(verify_exec_result)})
 
-                        # 寃利앹씠 ?듦낵?섎㈃ 理쒖쥌 SQL怨?PASS ?곹깭瑜???ν븯怨?利됱떆 ?깃났 諛섑솚?쒕떎.
                         if verify_exec_result.get("ok"):
                             verify_sql_executed = True
                             elapsed = int(time.perf_counter() - started)
@@ -842,14 +794,12 @@ class MigrationCommandTool(Component):
                                 "steps": steps,
                             }
 
-                        # 寃利?寃곌낵媛 ok=False?대㈃ FAIL-TEST ?꾨낫濡?湲곕줉?섍퀬 ?⑥? attempt媛 ?덉쑝硫??ъ떆?꾪븳??
                         last_failure = {"status": "FAIL-TEST", "error": verify_exec_result.get("message") or "Verification failed"}
                         self._write_log(map_id, "ROW_ERROR", "WARN", "RETRY" if retry_count > 0 else "VERIFY", "FAIL-TEST", str(last_failure["error"])[:3900], retry_count, verify_exec_result.get("verify_sql"))
                         if attempt < max_attempts:
                             continue
                         break
                     except Exception as exc:
-                        # 寃利?SQL ?ㅽ뻾 ?먯껜媛 ?덉쇅瑜??대룄 FAIL-TEST ?꾨낫濡?湲곕줉?쒕떎.
                         last_failure = {"status": "FAIL-TEST", "error": str(exc)}
                         steps.append({"step": "execute_verify_sql", "attempt": attempt, "ok": False, **last_failure})
                         self._write_log(map_id, "ROW_ERROR", "WARN", "RETRY" if retry_count > 0 else "VERIFY", "FAIL-TEST", str(exc)[:3900], retry_count, str(job.get("verify_sql") or ""))
@@ -857,7 +807,6 @@ class MigrationCommandTool(Component):
                             continue
                         break
 
-            # 紐⑤뱺 attempt媛 ?앸궗?붾뜲 PASS媛 ?꾨땲硫?留덉?留??ㅽ뙣 status濡?理쒖쥌 ?곹깭瑜???ν븳??
             final_status = str(last_failure.get("status") or "FAIL")
             elapsed = int(time.perf_counter() - started)
 
@@ -883,7 +832,6 @@ class MigrationCommandTool(Component):
                 "steps": steps,
             }
         except Exception as exc:
-            # ?덉긽?섏? 紐삵븳 ?덉쇅??理쒖쥌 FAIL濡???ν븯怨? 留덉?留?SQL???덉쑝硫?媛숈씠 ?④릿??
             elapsed = int(time.perf_counter() - started)
             self._save_final_sql(map_id, last_mig_sql, last_verify_sql)
             self._update_job_status(map_id, "FAIL", elapsed, int(job.get("retry_count") or 0))
@@ -898,9 +846,7 @@ class MigrationCommandTool(Component):
             }
 
     # ======================================================================
-    # 怨듯넻 肄붾뱶
     # ======================================================================
-    # command_json??dict濡?蹂?섑븯怨?action/map_id 媛숈? ?ㅽ뻾 ?뚮씪誘명꽣瑜??댁꽍?쒕떎.
     def _parse_command(self) -> dict[str, Any]:
         raw = self.command_json
         if isinstance(raw, dict):
@@ -910,7 +856,6 @@ class MigrationCommandTool(Component):
             raise ValueError("command_json is required")
         return json.loads(text)
 
-    # DB ?낅젰媛믪쓣 SQLDatabase?먯꽌 ?ъ슜??Oracle connection string?쇰줈 留뚮뱺??
     def _connection_string(self) -> str:
         host = str(self.db_host or "").strip()
         port = int(self.db_port or 1521)
@@ -925,7 +870,6 @@ class MigrationCommandTool(Component):
             raise ValueError("Username is required")
         return f"oracle+oracledb://{quote_plus(username)}:{quote_plus(password)}@{host}:{port}/{service_name}"
 
-    # 媛숈? DB ?묒냽 ?뺣낫??_db_cache????ν빐?먭퀬 ?ъ궗?⑺븳??
     def _get_db(self):
         self._ensure_runtime_dependencies()
         from langchain_community.utilities import SQLDatabase
@@ -942,7 +886,6 @@ class MigrationCommandTool(Component):
         self.db = self._db_cache[cache_key]
         return self.db
 
-    # DB ?곌껐???꾩슂???고????⑦궎吏媛 import 媛?ν븳吏 ?뺤씤?쒕떎.
     def _ensure_runtime_dependencies(self) -> None:
         missing_packages: list[str] = []
         try:
@@ -960,19 +903,12 @@ class MigrationCommandTool(Component):
 
         if not missing_packages:
             return
-        if not self._as_bool(getattr(self, "auto_install_packages", False)):
-            raise ModuleNotFoundError(
-                "Missing packages: "
-                + ", ".join(missing_packages)
-                + ". Enable Auto Install Missing Packages or install them in the Langflow runtime."
-            )
         for package in missing_packages:
             self._pip_install(package)
 
     def _pip_install(self, package: str) -> None:
         subprocess.check_call([sys.executable, "-m", "pip", "install", package])
 
-    # LLM API濡?JSON POST ?붿껌??蹂대궡怨??묐떟 JSON??dict濡?諛섑솚?쒕떎.
     def _post_json(self, url: str, payload: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
         body = json.dumps(payload).encode("utf-8")
         req_headers = {"Content-Type": "application/json", **headers}
@@ -996,7 +932,6 @@ class MigrationCommandTool(Component):
             time.sleep(min(8, 2 ** (attempt - 1)))
         raise last_error or RuntimeError("LLM request failed")
 
-    # SQLDatabase.run 寃곌낵瑜?Langflow ?묐떟?먯꽌 蹂닿린 醫뗭? list[dict] ?뺥깭濡?留욎텣??
     def _normalize_query_rows(self, raw: Any) -> list[dict[str, Any]]:
         if raw is None or raw == "":
             return []
@@ -1019,7 +954,6 @@ class MigrationCommandTool(Component):
             return self._normalize_query_rows(parsed)
         return [{"value": raw}]
 
-    # SQLDatabase??raw connection???닿퀬 ?ъ슜 ??諛섎뱶???ル뒗??
     @contextmanager
     def _connect(self):
         db = self._get_db()
@@ -1032,7 +966,6 @@ class MigrationCommandTool(Component):
         finally:
             conn.close()
 
-    # job/detail/command 媛믪쓣 prompt template placeholder??移섑솚?쒕떎.
     def _render_sql_prompt(
         self,
         template: str,
@@ -1067,7 +1000,6 @@ class MigrationCommandTool(Component):
             rendered = rendered.replace("{" + key + "}", str(value))
         return rendered
 
-    # ?ъ떆?꾪븷 ???댁쟾 ?먮윭? SQL??prompt???ｌ쓣 臾몄옄?대줈 留뚮뱺??
     def _build_retry_context(self, last_error: str, last_sql: str, retry_count: Any = None) -> str:
         if not last_error and not last_sql:
             return ""
@@ -1084,7 +1016,6 @@ class MigrationCommandTool(Component):
             "When applying the source filter condition, add WHERE only if the condition text does not already start with WHERE."
         )
 
-    # NEXT_MIG_INFO_DTL??而щ읆 留ㅽ븨 紐⑸줉??prompt???ｌ쓣 臾몄옄?대줈 留뚮뱺??
     def _format_mapping_info(self, details: list[dict[str, Any]]) -> str:
         lines = []
         for detail in details:
@@ -1096,7 +1027,6 @@ class MigrationCommandTool(Component):
                 lines.append(f"  - {fr_col} -> <skip target column; source expression may be used only as part of another mapped expression>")
         return "\n".join(lines) if lines else "  - No mapping details"
 
-    # FROM/TO ?뚯씠釉?而щ읆 ?뺣낫瑜?議고쉶?댁꽌 prompt??DDL ?뺣낫 釉붾줉??留뚮뱺??
     def _build_ddl_info_block(self, from_table: str, to_table: str) -> str:
         blocks = ["[DDL information]"]
         for label, table_name in [("Source", from_table), ("Target", to_table)]:
@@ -1107,11 +1037,9 @@ class MigrationCommandTool(Component):
             blocks.append(f"- {label} {table_name}:\n{columns}")
         return "\n".join(blocks)
 
-    # FR_TABLE怨?MAP_TYPE??湲곗??쇰줈 prompt???ㅼ뼱媛?source context瑜?留뚮뱺??
     def _build_source_context(self, job: dict[str, Any]) -> dict[str, str]:
         map_type = str(job.get("map_type") or "").strip().upper()
         raw_source = str(job.get("fr_table") or "").strip()
-        # source_schema媛 ?덉쑝硫?FR_TABLE ?덉쓽 臾쇰━ source table ?욎뿉 schema瑜?遺숈씤??
         qualified_source = raw_source
         source_schema = str(self.source_schema or "").strip().upper()
         if source_schema:
@@ -1152,7 +1080,6 @@ class MigrationCommandTool(Component):
             "complex_source_note": "",
         }
 
-    # ?⑥씪 ?뚯씠釉붿씠硫?而щ읆 硫뷀??곗씠?곕? 議고쉶?섍퀬, 蹂듯빀 source硫??덈궡 臾멸뎄瑜?諛섑솚?쒕떎.
     def _table_columns_for_prompt(self, table_name: str) -> str:
         clean = str(table_name or "").strip()
         if not clean or any(token in clean.upper() for token in [" JOIN ", " SELECT ", " WITH "]):
@@ -1172,7 +1099,6 @@ class MigrationCommandTool(Component):
             for col in columns[:200]
         )
 
-    # ?꾩옱 LLM ?ㅼ젙?쇰줈 chat/completions瑜??몄텧?섍퀬 message content瑜?諛섑솚?쒕떎.
     def _call_llm(self, prompt: str) -> str:
         api_key = str(self.llm_api_key or "").strip()
         model = str(self.llm_model or "").strip()
@@ -1194,7 +1120,6 @@ class MigrationCommandTool(Component):
         data = self._post_json(url, payload, {"Authorization": f"Bearer {api_key}"})
         return str(data["choices"][0]["message"].get("content", ""))
 
-    # LLM ?묐떟?먯꽌 SQL 肄붾뱶釉붾줉 ?먮뒗 JSON key 媛믪쓣 爰쇰궡怨?湲곕? SQL 醫낅쪟瑜?寃利앺븳??
     def _extract_sql(self, value: Any, expected: str, key: str | None = None) -> str:
         text = str(value or "").strip()
         if not text:
@@ -1212,7 +1137,6 @@ class MigrationCommandTool(Component):
             raise ValueError(f"Expected {expected.upper()} SQL but got: {first_word or text[:40]}")
         return text
 
-    # LLM ?묐떟 臾몄옄?댁뿉??JSON object瑜??뚯떛?쒕떎.
     def _parse_llm_json(self, text: str) -> dict[str, Any]:
         clean = str(text or "").strip()
         fence = re.search(r"```(?:json)?\s*(.*?)```", clean, flags=re.I | re.S)
@@ -1229,7 +1153,6 @@ class MigrationCommandTool(Component):
             raise ValueError("LLM JSON response must be an object")
         return parsed
 
-    # MIG_SQL???⑥씪 INSERT?몄? ?뺤씤?섍퀬 ?꾪뿕??DML/DDL ?ㅼ썙?쒕? 留됰뒗??
     def _sanitize_migration_sql(self, sql: str) -> str:
         cleaned = str(sql or "").strip().rstrip(";").strip()
         if not cleaned:
@@ -1247,7 +1170,6 @@ class MigrationCommandTool(Component):
             raise ValueError("MIG_SQL must start with INSERT")
         return statement
 
-    # VERIFY_SQL???⑥씪 SELECT/WITH?몄? ?뺤씤?섍퀬 蹂寃?SQL ?ㅼ썙?쒕? 留됰뒗??
     def _sanitize_verify_sql(self, sql: str) -> str:
         cleaned = str(sql or "").strip().rstrip(";").strip()
         if not cleaned:
@@ -1266,7 +1188,6 @@ class MigrationCommandTool(Component):
             raise ValueError("VERIFY_SQL must start with SELECT or WITH")
         return statement
 
-    # NEXT_MIG_INFO ?④굔 議고쉶 寃곌낵瑜?Python dict濡?蹂?섑븳??
     def _load_job(self, map_id: int) -> dict[str, Any] | None:
         map_table = self._qualify_table("NEXT_MIG_INFO", self.system_schema)
         with self._connect() as conn:
@@ -1306,7 +1227,6 @@ class MigrationCommandTool(Component):
             "upd_ts": self._to_text(row[17]),
         }
 
-    # NEXT_MIG_INFO_DTL??FR_COL -> TO_COL 紐⑸줉??MAP_DTL ?쒖꽌濡?媛?몄삩??
     def _load_details(self, map_id: int) -> list[dict[str, Any]]:
         detail_table = self._qualify_table("NEXT_MIG_INFO_DTL", self.system_schema)
         with self._connect() as conn:
@@ -1326,7 +1246,6 @@ class MigrationCommandTool(Component):
             for r in rows
         ]
 
-    # PRIOR_MAP_ID? 媛숈? TO_TABLE ???곗꽑?쒖쐞瑜??뺤씤?댁꽌 ?ㅽ뻾 媛???щ?瑜?諛섑솚?쒕떎.
     def _check_dependencies(self, job: dict[str, Any]) -> dict[str, Any]:
         prior_map_id = job.get("prior_map_id")
         try:
@@ -1352,7 +1271,6 @@ class MigrationCommandTool(Component):
 
         return {"ok": True, "message": "Dependencies passed"}
 
-    # 媛숈? TO_TABLE ?덉뿉?쒕뒗 PRIORITY ?レ옄媛 ???묒? ?묒뾽??癒쇱? PASS?ъ빞 ?쒕떎.
     def _check_same_target_priority_dependencies(self, job: dict[str, Any]) -> dict[str, Any]:
         to_table = str(job.get("to_table") or "").strip()
         priority = job.get("priority")
@@ -1399,7 +1317,6 @@ class MigrationCommandTool(Component):
                 }
         return {"ok": True, "message": "Same-target priority dependencies passed"}
 
-    # 理쒖쥌 PASS/FAIL ?쒖젏???⑥? MIG_SQL/VERIFY_SQL??NEXT_MIG_INFO????ν븳??
     def _save_final_sql(self, map_id: int, mig_sql: str, verify_sql: str) -> None:
         assignments = []
         params: list[Any] = []
@@ -1429,7 +1346,6 @@ class MigrationCommandTool(Component):
             )
             conn.commit()
 
-    # steps???ｌ쓣 ???덈룄濡?action 寃곌낵?먯꽌 ?듭떖 ?꾨뱶留?異붾┛??
     def _summary_result(self, result: dict[str, Any]) -> dict[str, Any]:
         summary = {
             "ok": bool(result.get("ok")),
@@ -1440,7 +1356,6 @@ class MigrationCommandTool(Component):
                 summary[key] = result.get(key)
         return summary
 
-    # TRUNC_YN=Y???묒뾽?먯꽌 target table??鍮꾩슫??
     def _truncate_target(self, job: dict[str, Any]) -> None:
         target = self._qualify_table(job["to_table"], self.target_schema)
         with self._connect() as conn:
@@ -1448,7 +1363,6 @@ class MigrationCommandTool(Component):
             cur.execute(f"TRUNCATE TABLE {target}")
             conn.commit()
 
-    # MIG_SQL script瑜?statement ?⑥쐞濡??ㅽ뻾?섍퀬 ?꾩껜 泥섎━ row ?섎? ?⑹궛?쒕떎.
     def _execute_sql_script(self, sql_script: str) -> int:
         statements = self._split_sql_script(sql_script)
         total_rowcount = 0
@@ -1463,10 +1377,7 @@ class MigrationCommandTool(Component):
             conn.commit()
         return total_rowcount
 
-    # VERIFY_SQL ?ㅽ뻾 寃곌낵 row??紐⑤뱺 媛믪씠 0?몄? ?뺤씤?쒕떎.
     def _execute_verify_sql_with_rows(self, verify_sql: str) -> tuple[bool, str, list[dict[str, Any]]]:
-        # VERIFY_SQL? ?レ옄 李⑥씠媛믪쓣 諛섑솚?섎뒗 SQL?대씪怨?蹂닿퀬 寃利앺븳??
-        # 諛섑솚??紐⑤뱺 媛믪씠 0?댁뼱??PASS?닿퀬, 0???꾨땲嫄곕굹 鍮?媛믪씠硫??ㅽ뙣濡?蹂몃떎.
         statements = self._split_sql_script(verify_sql)
         if not statements:
             return False, "verify_sql is empty", []
@@ -1501,7 +1412,6 @@ class MigrationCommandTool(Component):
                     return False, f"Mismatch found: {row}", result_rows
         return True, "All Verification Passed", result_rows
 
-    # 理쒖쥌 ?곹깭, elapsed_seconds, retry_count, batch_count瑜?NEXT_MIG_INFO????ν븳??
     def _update_job_status(self, map_id: int, status: str, elapsed_seconds: int, retry_count: int) -> None:
         map_table = self._qualify_table("NEXT_MIG_INFO", self.system_schema)
         with self._connect() as conn:
@@ -1520,7 +1430,6 @@ class MigrationCommandTool(Component):
             )
             conn.commit()
 
-    # NEXT_MIG_LOG insert 而щ읆 ?쒖꽌???댁쁺 ?뚯씠釉?湲곗???留욎떠 ?좎??쒕떎.
     def _write_log(
         self,
         map_id: int,
@@ -1553,7 +1462,6 @@ class MigrationCommandTool(Component):
         except Exception:
             pass
 
-    # ?곗샂???덉쓽 ?몃?肄쒕줎? ?좎??섎㈃??SQL script瑜?statement 紐⑸줉?쇰줈 ?섎늿??
     def _split_sql_script(self, sql_script: str) -> list[str]:
         text = str(sql_script or "")
         statements: list[str] = []
@@ -1577,7 +1485,6 @@ class MigrationCommandTool(Component):
             statements.append(tail)
         return statements
 
-    # command JSON?먯꽌 諛쏆? 臾몄옄???レ옄 媛믪쓣 bool濡??댁꽍?쒕떎.
     def _as_bool(self, value: Any) -> bool:
         if isinstance(value, bool):
             return value
@@ -1585,7 +1492,6 @@ class MigrationCommandTool(Component):
             return False
         return str(value).strip().lower() in {"1", "true", "y", "yes", "on"}
 
-    # schema ?낅젰媛믪씠 ?덉쑝硫??뚯씠釉붾챸 ?욎뿉 schema瑜?遺숈씠怨?identifier瑜?寃利앺븳??
     def _qualify_table(self, table_name: str, schema: str | None) -> str:
         clean = str(table_name or "").strip()
         clean_schema = str(schema or "").strip().upper()
@@ -1597,7 +1503,6 @@ class MigrationCommandTool(Component):
             raise ValueError(f"Invalid schema: {clean_schema}")
         return f"{clean_schema}.{clean}"
 
-    # DB?먯꽌 媛?몄삩 CLOB/bytes/None 媛믪쓣 ?쇰컲 臾몄옄?대줈 蹂?섑븳??
     def _to_text(self, value: Any) -> str:
         if value is None:
             return ""

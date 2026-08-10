@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import quote_plus
 
 from lfx.custom.custom_component.component import Component
-from lfx.io import BoolInput, IntInput, MessageTextInput, SecretStrInput, StrInput, Output
+from lfx.io import IntInput, MessageTextInput, SecretStrInput, StrInput, Output
 from lfx.schema.data import Data
 
 
@@ -41,13 +41,6 @@ class DashboardCommandTool(Component):
             info="Schema containing NEXT_MIG_INFO/NEXT_SQL_INFO. Leave blank for current user.",
         ),
         IntInput(name="list_limit", display_name="Default List Limit", value=5, required=False),
-        BoolInput(
-            name="auto_install_packages",
-            display_name="Auto Install Missing Packages",
-            value=True,
-            required=False,
-            info="If true, installs missing runtime packages with pip before DB connection.",
-        ),
     ]
 
     outputs = [
@@ -245,7 +238,7 @@ class DashboardCommandTool(Component):
                 {
                     "agent": summary.get("agent"),
                     "target_count": count,
-                    "reason": f"{summary.get('agent')} ?묒뾽 ??곸씠 {count}嫄??덉뒿?덈떎.",
+                    "reason": f"{summary.get('agent')} 작업 대상이 {count}건 있습니다.",
                     "first_job": (summary.get("next_jobs") or [None])[0],
                 }
             )
@@ -307,12 +300,6 @@ class DashboardCommandTool(Component):
 
         if not missing_packages:
             return
-        if not self._as_bool(getattr(self, "auto_install_packages", False)):
-            raise ModuleNotFoundError(
-                "Missing packages: "
-                + ", ".join(missing_packages)
-                + ". Enable Auto Install Missing Packages or install them in the Langflow runtime."
-            )
         for package in missing_packages:
             self._pip_install(package)
 

@@ -19,7 +19,7 @@ from typing import Any
 from urllib.parse import quote_plus
 
 from lfx.custom.custom_component.component import Component
-from lfx.io import BoolInput, IntInput, MessageTextInput, SecretStrInput, StrInput, Output
+from lfx.io import IntInput, MessageTextInput, SecretStrInput, StrInput, Output
 from lfx.schema.data import Data
 
 _ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -44,6 +44,8 @@ DEFAULT_LLM_CONFIG = {
     "llm_max_tokens": 4096,
     "llm_timeout_seconds": 900,
 }
+
+AUTO_INSTALL_MISSING_PACKAGES = True
 
 SUPERVISOR_SYSTEM_PROMPT = """
 You are the SmartMigrate background Supervisor Agent.
@@ -727,7 +729,6 @@ class BatchAgentCommandTool(Component):
             "sql_conversion_max_attempts": max(1, int(getattr(self, "sql_conversion_max_attempts", None) or 3)),
             "no_job_sleep_seconds": 10,
             "error_sleep_seconds": max(1, int(getattr(self, "error_sleep_seconds", None) or 60)),
-            "auto_install_packages": True,
         }
 
     def _parse_command(self) -> dict[str, Any]:
@@ -738,39 +739,7 @@ class BatchAgentCommandTool(Component):
             return {"action": "stop"}
         if raw in {"STATUS", "S"}:
             return {"action": "status"}
-        lowered = raw.lower()
-        if lowered in {"start", "resume", "batch start", "batch resume"} or raw in {
-            "배치 시작",
-            "배치 재개",
-            "백그라운드 실행",
-            "백그라운드 배치 실행",
-            "배치 에이전트 시작",
-        }:
-            return {"action": "start"}
-        if lowered in {"stop", "batch stop"} or raw in {
-            "배치 중지",
-            "배치 멈춰",
-            "백그라운드 중지",
-            "배치 에이전트 중지",
-        }:
-            return {"action": "stop"}
-        if lowered in {"status", "batch status"} or raw in {
-            "배치 상태",
-            "상태 확인",
-            "백그라운드 상태",
-            "배치 에이전트 상태",
-        }:
-            return {"action": "status"}
-        if raw in {"백그라운드 실행", "백그라운드 에이전트 실행", "배치 에이전트 시작", "배치 시작"}:
-            return {"action": "start"}
-        if raw in {"배치 멈춰", "배치 중지", "백그라운드 중지"}:
-            return {"action": "stop"}
-        if raw in {"배치 상태", "백그라운드 상태"}:
-            return {"action": "status"}
-        parsed = json.loads(raw)
-        if not isinstance(parsed, dict):
-            raise ValueError("command_json must be a JSON object")
-        return parsed
+        raise ValueError("Run YN must be Y, N, or STATUS.")
 
     def _connect(self, config: dict[str, Any]):
         self._ensure_runtime_dependencies(config)
@@ -808,12 +777,8 @@ class BatchAgentCommandTool(Component):
 
         if not missing_packages:
             return
-        if not self._as_bool(config.get("auto_install_packages")):
-            raise ModuleNotFoundError(
-                "Missing packages: "
-                + ", ".join(missing_packages)
-                + ". Enable Auto Install Missing Packages or install them in the Langflow runtime."
-            )
+        if not AUTO_INSTALL_MISSING_PACKAGES:
+            raise ModuleNotFoundError("Missing packages: " + ", ".join(missing_packages))
         for package in missing_packages:
             self._pip_install(package)
 
@@ -1428,12 +1393,8 @@ class BatchAgentCommandTool(Component):
 
         if not missing_packages:
             return
-        if not self._mig__as_bool(getattr(self, "auto_install_packages", False)):
-            raise ModuleNotFoundError(
-                "Missing packages: "
-                + ", ".join(missing_packages)
-                + ". Enable Auto Install Missing Packages or install them in the Langflow runtime."
-            )
+        if not AUTO_INSTALL_MISSING_PACKAGES:
+            raise ModuleNotFoundError("Missing packages: " + ", ".join(missing_packages))
         for package in missing_packages:
             self._mig__pip_install(package)
 
@@ -2462,12 +2423,8 @@ class BatchAgentCommandTool(Component):
 
         if not missing_packages:
             return
-        if not self._sql__as_bool(getattr(self, "auto_install_packages", False)):
-            raise ModuleNotFoundError(
-                "Missing packages: "
-                + ", ".join(missing_packages)
-                + ". Enable Auto Install Missing Packages or install them in the Langflow runtime."
-            )
+        if not AUTO_INSTALL_MISSING_PACKAGES:
+            raise ModuleNotFoundError("Missing packages: " + ", ".join(missing_packages))
         for package in missing_packages:
             self._sql__pip_install(package)
 
@@ -3069,7 +3026,6 @@ def build_service_config() -> dict[str, Any]:
         "sql_conversion_max_attempts": _env_int("SMARTMIGRATE_SQL_CONVERSION_MAX_ATTEMPTS", 3),
         "no_job_sleep_seconds": 10,
         "error_sleep_seconds": _env_int("SMARTMIGRATE_ERROR_SLEEP_SECONDS", 60),
-        "auto_install_packages": _env_bool("SMARTMIGRATE_AUTO_INSTALL_PACKAGES", True),
     }
     config.update(file_config)
     config["no_job_sleep_seconds"] = 10
