@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 import logging
+import os
 import re
 import subprocess
 import sys
@@ -13,6 +14,7 @@ import urllib.request
 from contextlib import contextmanager
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus
 
@@ -23,6 +25,15 @@ from lfx.schema.data import Data
 _ROOT_DIR = Path(__file__).resolve().parents[2]
 _RUNTIME_DIR = _ROOT_DIR / "runtime"
 _LOG_FILE = _RUNTIME_DIR / "agent.log"
+
+DEFAULT_DB_CONFIG = {
+    "db_host": "10.0.0.1",
+    "db_port": 1521,
+    "db_service_name": "ORCL",
+    "db_username": "SMARTMIGRATE",
+    "db_password": "password",
+    "system_schema": "SMARTMIGRATE",
+}
 
 
 def _setup_logger() -> logging.Logger:
@@ -199,7 +210,7 @@ class BatchAgentCommandTool(Component):
             "requested_running": True,
             "run_id": run_id,
             "mode": "db_control",
-            "message": "Batch supervisor service will run the loop while NEXT_BATCH_CONTROL is RUNNING.",
+            "message": "Batch monitor will stay alive and write pending NEXT_MIG_INFO counts to NEXT_BATCH_LOG every 10 seconds.",
         }
 
     def _stop(self, config: dict[str, Any]) -> dict[str, Any]:
@@ -621,63 +632,45 @@ class BatchAgentCommandTool(Component):
 
                 started = time.perf_counter()
                 helper._console(f"cycle {loop_no} started")
-                helper._update_control_heartbeat(config, run_id, loop_no, "LOOP_START", message="Batch loop started.")
-                helper._write_batch_log_safe(config, run_id, loop_no, "LOOP_START", message="Batch loop started.")
                 if not helper._is_control_running(config, run_id):
                     break
 
                 try:
-                    result = helper._run_batch_supervisor_cycle(config)
+                    pending_count = helper._count_pending_migration_jobs(config)
                     elapsed = round(time.perf_counter() - started, 3)
-                    event_type = "JOB_SUCCESS" if result.get("job_executed") else "NO_JOB"
-                    if str(result.get("status") or "").strip().upper() == "STOPPED":
-                        event_type = "JOB_STOPPED"
-                    elif result.get("job_executed") and not result.get("ok"):
-                        event_type = "JOB_FAIL"
+                    event_type = "HEARTBEAT"
+                    sleep_seconds = 10
+                    message = f"작업대상이 {pending_count}건 있습니다."
 
                     cls._state["last_event"] = event_type
-                    cls._state["last_agent"] = result.get("agent")
-                    cls._state["last_job_id"] = result.get("job_id")
-                    cls._state["last_job_status"] = result.get("status")
-                    cls._state["last_error"] = result.get("error")
+                    cls._state["last_agent"] = "BATCH_MONITOR"
+                    cls._state["last_job_id"] = None
+                    cls._state["last_job_status"] = str(pending_count)
+                    cls._state["last_error"] = None
                     cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
 
-                    sleep_seconds = 0 if result.get("job_executed") else int(config["no_job_sleep_seconds"])
                     helper._update_control_heartbeat(
                         config,
                         run_id,
                         loop_no,
                         event_type,
-                        agent_name=result.get("agent"),
-                        job_id=result.get("job_id"),
-                        job_status=result.get("status"),
-                        last_error=result.get("error"),
-                        message=result.get("message"),
+                        agent_name="BATCH_MONITOR",
+                        job_status=str(pending_count),
+                        message=message,
                     )
                     helper._write_batch_log_safe(
                         config,
                         run_id,
                         loop_no,
                         event_type,
-                        agent_name=result.get("agent"),
-                        job_id=result.get("job_id"),
-                        job_status=result.get("status"),
-                        message=result.get("message"),
-                        error_message=result.get("error"),
+                        agent_name="BATCH_MONITOR",
+                        job_status=str(pending_count),
+                        message=message,
                         sleep_seconds=sleep_seconds,
                         elapsed_seconds=elapsed,
                     )
-                    helper._console(
-                        f"cycle {loop_no} {event_type}: "
-                        f"agent={result.get('agent') or '-'} "
-                        f"job_id={result.get('job_id') or '-'} "
-                        f"status={result.get('status') or '-'} "
-                        f"message={result.get('message') or '-'}"
-                    )
-                    if event_type == "JOB_STOPPED":
-                        break
-                    if sleep_seconds > 0:
-                        helper._interruptible_sleep(sleep_seconds, config, run_id)
+                    helper._console(f"cycle {loop_no} {event_type}: {message}")
+                    helper._interruptible_sleep(sleep_seconds, config, run_id)
 
                 except InterruptedError as exc:
                     elapsed = round(time.perf_counter() - started, 3)
@@ -748,6 +741,18 @@ class BatchAgentCommandTool(Component):
         The supervisor prompt decides the route, while the route function applies
         a minimal existence guard so an impossible route cannot execute.
         """
+        pending_count = self._count_pending_migration_jobs(config)
+        return {
+            "job_executed": False,
+            "ok": True,
+            "agent": "BATCH_MONITOR",
+            "job_id": None,
+            "status": str(pending_count),
+            "message": f"작업대상이 {pending_count}건 있습니다.",
+            "error": None,
+            "supervisor_tool": "count_pending_migration_jobs",
+        }
+
         from typing import TypedDict
 
         from langchain_core.messages import HumanMessage, SystemMessage
@@ -1003,6 +1008,19 @@ class BatchAgentCommandTool(Component):
         if not rows:
             return None
         return {"map_id": rows[0][0], "priority": rows[0][1]}
+
+    def _count_pending_migration_jobs(self, config: dict[str, Any]) -> int:
+        table = self._qualify_table("NEXT_MIG_INFO", config["system_schema"])
+        sql = f"""
+            SELECT COUNT(*)
+            FROM {table}
+            WHERE UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
+              AND STATUS IS NULL
+        """
+        rows = self._query(config, sql)
+        if not rows:
+            return 0
+        return int(rows[0][0] or 0)
 
     def _poll_next_sql_conversion_job(self, config: dict[str, Any]) -> dict[str, Any] | None:
         table = self._qualify_table("NEXT_SQL_INFO", config["system_schema"])
@@ -3323,4 +3341,86 @@ class BatchAgentCommandTool(Component):
         return str(value).strip().lower() in {"1", "true", "t", "y", "yes", "on"}
 
 
+def _env(name: str, default: str = "") -> str:
+    return os.getenv(name, default).strip()
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = _env(name)
+    try:
+        return int(raw) if raw else default
+    except ValueError:
+        return default
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = _env(name)
+    if not raw:
+        return default
+    return raw.upper() in {"1", "Y", "YES", "TRUE", "ON"}
+
+
+def _read_text_env(name: str, file_name: str) -> str:
+    direct_value = os.getenv(name)
+    if direct_value:
+        return direct_value
+    file_path = _env(file_name)
+    if not file_path:
+        return ""
+    return Path(file_path).read_text(encoding="utf-8")
+
+
+def _load_service_config_file() -> dict[str, Any]:
+    path = _env("SMARTMIGRATE_MONITOR_CONFIG")
+    if not path:
+        return {}
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def build_service_config() -> dict[str, Any]:
+    """Build background monitor config from env so no Langflow input is required."""
+    file_config = _load_service_config_file()
+    config = {
+        "db_host": _env("SMARTMIGRATE_DB_HOST", str(DEFAULT_DB_CONFIG["db_host"])),
+        "db_port": _env_int("SMARTMIGRATE_DB_PORT", int(DEFAULT_DB_CONFIG["db_port"])),
+        "db_service_name": _env("SMARTMIGRATE_DB_SERVICE_NAME", str(DEFAULT_DB_CONFIG["db_service_name"])),
+        "db_username": _env("SMARTMIGRATE_DB_USERNAME", str(DEFAULT_DB_CONFIG["db_username"])),
+        "db_password": os.getenv("SMARTMIGRATE_DB_PASSWORD", str(DEFAULT_DB_CONFIG["db_password"])),
+        "llm_base_url": _env("SMARTMIGRATE_LLM_BASE_URL"),
+        "llm_api_key": os.getenv("SMARTMIGRATE_LLM_API_KEY", ""),
+        "llm_model": _env("SMARTMIGRATE_LLM_MODEL", "claude-haiku-4-5-20251001"),
+        "llm_max_tokens": _env_int("SMARTMIGRATE_LLM_MAX_TOKENS", 4096),
+        "llm_timeout_seconds": _env_int("SMARTMIGRATE_LLM_TIMEOUT_SECONDS", 900),
+        "mig_sql_prompt": _read_text_env("SMARTMIGRATE_MIG_SQL_PROMPT", "SMARTMIGRATE_MIG_SQL_PROMPT_FILE"),
+        "verify_sql_prompt": _read_text_env("SMARTMIGRATE_VERIFY_SQL_PROMPT", "SMARTMIGRATE_VERIFY_SQL_PROMPT_FILE"),
+        "to_sql_prompt": _read_text_env("SMARTMIGRATE_TO_SQL_PROMPT", "SMARTMIGRATE_TO_SQL_PROMPT_FILE"),
+        "bind_sql_prompt": _read_text_env("SMARTMIGRATE_BIND_SQL_PROMPT", "SMARTMIGRATE_BIND_SQL_PROMPT_FILE"),
+        "test_sql_prompt": _read_text_env("SMARTMIGRATE_TEST_SQL_PROMPT", "SMARTMIGRATE_TEST_SQL_PROMPT_FILE"),
+        "system_schema": _env("SMARTMIGRATE_SYSTEM_SCHEMA", str(DEFAULT_DB_CONFIG["system_schema"])),
+        "source_schema": _env("SMARTMIGRATE_SOURCE_SCHEMA"),
+        "target_schema": _env("SMARTMIGRATE_TARGET_SCHEMA"),
+        "migration_max_attempts": _env_int("SMARTMIGRATE_MIGRATION_MAX_ATTEMPTS", 3),
+        "sql_conversion_max_attempts": _env_int("SMARTMIGRATE_SQL_CONVERSION_MAX_ATTEMPTS", 3),
+        "no_job_sleep_seconds": 10,
+        "error_sleep_seconds": _env_int("SMARTMIGRATE_ERROR_SLEEP_SECONDS", 60),
+        "status_log_alive_grace_seconds": _env_int("SMARTMIGRATE_STATUS_ALIVE_GRACE_SECONDS", 1800),
+        "auto_install_packages": _env_bool("SMARTMIGRATE_AUTO_INSTALL_PACKAGES", False),
+    }
+    config.update(file_config)
+    config["no_job_sleep_seconds"] = 10
+    return config
+
+
+def main() -> None:
+    config = build_service_config()
+    auto_start = _env_bool("SMARTMIGRATE_MONITOR_AUTO_START", True)
+    BatchAgentCommandTool.serve_forever(
+        config,
+        auto_start_on_boot=auto_start,
+        idle_sleep_seconds=10,
+    )
+
+
+if __name__ == "__main__":
+    main()
 
