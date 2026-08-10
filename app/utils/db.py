@@ -9,12 +9,12 @@ load_dotenv(_ROOT / ".env")
 
 oracledb.defaults.fetch_lobs = False
 
-DB_USER = os.getenv("DB_USER", "scott")
-DB_PASS = os.getenv("DB_PASS", "tiger")
-DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_PORT = os.getenv("DB_PORT", "1521")
-DB_SID  = os.getenv("DB_SID", "xe")
-ORACLE_CLIENT_PATH = os.getenv("ORACLE_CLIENT_PATH", "")
+DB_USER = (os.getenv("DB_USER") or "").strip()
+DB_PASS = os.getenv("DB_PASS") or ""
+DB_HOST = (os.getenv("DB_HOST") or "localhost").strip()
+DB_PORT = (os.getenv("DB_PORT") or "1521").strip()
+DB_SID = (os.getenv("DB_SID") or "xe").strip()
+ORACLE_CLIENT_PATH = (os.getenv("ORACLE_CLIENT_PATH") or "").strip()
 
 MIG_TABLE    = os.getenv("MAPPING_RULE_TABLE", "NEXT_MIG_INFO")
 MIG_DTL_TABLE = os.getenv("MAPPING_RULE_DETAIL_TABLE", "NEXT_MIG_INFO_DTL").strip()
@@ -38,6 +38,19 @@ def _sql_in(values: tuple[str, ...]) -> str:
 
 def get_connection():
     global _thick_done
+    missing = [
+        name
+        for name, value in (
+            ("DB_USER", DB_USER),
+            ("DB_PASS", DB_PASS),
+            ("DB_HOST", DB_HOST),
+            ("DB_PORT", DB_PORT),
+            ("DB_SID", DB_SID),
+        )
+        if not value
+    ]
+    if missing:
+        raise RuntimeError(".env DB 설정 누락: " + ", ".join(missing))
     if ORACLE_CLIENT_PATH and os.path.exists(ORACLE_CLIENT_PATH) and not _thick_done:
         try:
             oracledb.init_oracle_client(lib_dir=ORACLE_CLIENT_PATH)
@@ -45,7 +58,15 @@ def get_connection():
             pass
         _thick_done = True
     dsn = DB_HOST if ("/" in DB_HOST or "(" in DB_HOST) else f"{DB_HOST}:{DB_PORT}/{DB_SID}"
-    conn = oracledb.connect(user=DB_USER, password=DB_PASS, dsn=dsn)
+    try:
+        conn = oracledb.connect(user=DB_USER, password=DB_PASS, dsn=dsn)
+    except oracledb.Error as exc:
+        raise RuntimeError(
+            "Oracle DB 연결 실패. "
+            f"dsn={dsn}, user={DB_USER}. "
+            "DB_HOST/DB_PORT/DB_SID, VPN/방화벽, 리스너 상태, 계정 정보를 확인하세요. "
+            f"원본 오류: {exc}"
+        ) from exc
     with conn.cursor() as cur:
         cur.execute("ALTER SESSION SET NLS_DATE_FORMAT='YYYY-MM-DD HH24:MI:SS'")
     return conn

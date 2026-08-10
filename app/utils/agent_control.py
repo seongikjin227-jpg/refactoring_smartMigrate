@@ -1,22 +1,28 @@
-"""Agent 프로세스 제어 유틸 (Start / Stop / Pause / Resume)."""
+"""Agent process control helpers used by the Streamlit UI."""
+
+from __future__ import annotations
+
+import json
 import os
-import sys
 import signal
 import subprocess
-import json
+import sys
 from pathlib import Path
 
-_ROOT       = Path(__file__).resolve().parent.parent.parent
-_SRC_DIR    = _ROOT / "src"
-_RUNTIME    = _ROOT / "runtime"
-_PID_FILE   = _RUNTIME / "agent.pid"
+_ROOT = Path(__file__).resolve().parent.parent.parent
+_SRC_DIR = _ROOT / "src"
+_RUNTIME = _ROOT / "runtime"
+_PID_FILE = _RUNTIME / "agent.pid"
 _PAUSE_FILE = _RUNTIME / "agent.pause"
 _ACTIVE_JOB_FILE = _RUNTIME / "active_job.json"
-_LOG_FILE   = _RUNTIME / "agent.log"
-_MAIN_PY    = _ROOT / "main.py"
+_LOG_FILE = _RUNTIME / "agent.log"
+_ENTRYPOINT_CODE = (
+    "import sys; "
+    f"sys.path.insert(0, {str(_SRC_DIR)!r}); "
+    "from smart_migrate.runtime.RuntimeEntrypoint import main; "
+    "main()"
+)
 
-
-# ── 상태 조회 ─────────────────────────────────────────────────────────────────
 
 def _read_pid() -> int | None:
     try:
@@ -52,42 +58,54 @@ def _read_active_job() -> dict | None:
     }
 
 
+def _last_log_line() -> str:
+    try:
+        lines = _LOG_FILE.read_text(encoding="utf-8").strip().splitlines()
+    except Exception:
+        return ""
+    failures = [line.strip() for line in lines if "[FAIL]" in line]
+    if failures:
+        return failures[0]
+    return lines[-1].strip() if lines else ""
+
+
 def get_status() -> dict:
-    """현재 에이전트 상태를 반환."""
+    """Return current agent process status."""
     pid = _read_pid()
     running = pid is not None and _pid_alive(pid)
     if not running and _PID_FILE.exists():
-        _PID_FILE.unlink(missing_ok=True)   # 좀비 PID 파일 정리
-    paused  = running and _PAUSE_FILE.exists()
+        _PID_FILE.unlink(missing_ok=True)
+    paused = running and _PAUSE_FILE.exists()
     active_job = _read_active_job() if running else None
     return {
         "running": running,
-        "paused":  paused,
-        "pid":     pid if running else None,
-        "label":   ("🟡 일시정지 중" if paused else "🟢 실행 중") if running else "🔴 중지됨",
+        "paused": paused,
+        "pid": pid if running else None,
+        "label": ("일시정지 중" if paused else "실행 중") if running else "중지됨",
         "active_job": active_job,
     }
 
-
-# ── 제어 함수 ─────────────────────────────────────────────────────────────────
 
 def start() -> str:
     st = get_status()
     if st["running"]:
         return "이미 실행 중입니다."
+
     _RUNTIME.mkdir(exist_ok=True)
     _PAUSE_FILE.unlink(missing_ok=True)
     _ACTIVE_JOB_FILE.unlink(missing_ok=True)
     _LOG_FILE.write_text("", encoding="utf-8")
+
     env = os.environ.copy()
     existing_pythonpath = env.get("PYTHONPATH", "")
     pythonpath_parts = [str(_SRC_DIR)]
     if existing_pythonpath:
         pythonpath_parts.append(existing_pythonpath)
     env["PYTHONPATH"] = os.pathsep.join(pythonpath_parts)
+
     with _LOG_FILE.open("a", encoding="utf-8") as log_file:
         process = subprocess.Popen(
-            [sys.executable, str(_MAIN_PY)],
+            [sys.executable, "-c", _ENTRYPOINT_CODE],
             cwd=str(_ROOT),
             env=env,
             stdout=log_file,
@@ -95,6 +113,7 @@ def start() -> str:
             text=True,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
         )
+
     try:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
@@ -102,10 +121,7 @@ def start() -> str:
         return "에이전트를 시작했습니다."
 
     _PID_FILE.unlink(missing_ok=True)
-    try:
-        message = _LOG_FILE.read_text(encoding="utf-8").strip().splitlines()[-1]
-    except Exception:
-        message = ""
+    message = _last_log_line()
     return f"에이전트 시작 실패: {message or f'exit code {process.returncode}'}"
 
 
@@ -116,16 +132,19 @@ def stop() -> str:
     pid = st["pid"]
     try:
         if os.name == "nt":
-            subprocess.call(["taskkill", "/F", "/PID", str(pid)],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.call(
+                ["taskkill", "/F", "/PID", str(pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
         else:
             os.kill(pid, signal.SIGTERM)
         _PID_FILE.unlink(missing_ok=True)
         _PAUSE_FILE.unlink(missing_ok=True)
         _ACTIVE_JOB_FILE.unlink(missing_ok=True)
         return f"에이전트(PID {pid})를 중지했습니다."
-    except Exception as e:
-        return f"중지 실패: {e}"
+    except Exception as exc:
+        return f"중지 실패: {exc}"
 
 
 def pause() -> str:
