@@ -20,7 +20,10 @@ TEST SQL Prompt
 ```
 
 `Y` starts the supervisor loop. `N` requests stop. `STATUS` returns current
-runtime/control status.
+in-memory runtime status.
+
+`Y` runs a blocking while loop directly in the component execution. It does not
+spawn a worker thread.
 
 ## Runtime Behavior
 

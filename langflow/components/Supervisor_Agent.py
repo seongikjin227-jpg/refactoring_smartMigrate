@@ -7,7 +7,6 @@ import os
 import re
 import subprocess
 import sys
-import threading
 import time
 import traceback
 import urllib.error
@@ -106,7 +105,6 @@ class BatchAgentCommandTool(Component):
     icon = "Bot"
 
     _db_cache: dict[str, Any] = {}
-    _worker_thread: threading.Thread | None = None
 
     _state: dict[str, Any] = {
         "running": False,
@@ -164,416 +162,100 @@ class BatchAgentCommandTool(Component):
 
     def _start(self, config: dict[str, Any]) -> dict[str, Any]:
         run_id = datetime.now().strftime("%Y%m%d%H%M%S%f")
-        control_result = self._start_control(config, run_id)
-        if not control_result.get("acquired"):
-            existing_run_id = control_result.get("run_id")
-            self.__class__._ensure_worker_thread(config, str(existing_run_id or run_id))
+        if self.__class__._state.get("running"):
+            state = dict(self.__class__._state)
             self._write_batch_log_safe(
                 config,
-                existing_run_id,
-                0,
+                state.get("run_id") or run_id,
+                int(state.get("loop_no") or 0),
                 "ALREADY_RUNNING",
-                message=str(control_result.get("message") or "Batch supervisor is already running."),
+                message="Batch supervisor is already running.",
             )
-            control_status = str(control_result.get("control_status") or "").upper()
             return {
                 "ok": True,
-                "status": control_result.get("status") or "already_running",
-                "running": control_status == "RUNNING" and bool(control_result.get("heartbeat_alive")),
-                "requested_running": control_status == "RUNNING",
-                "mode": "db_control",
-                "worker_thread_alive": self.__class__._is_worker_thread_alive(),
-                **control_result,
+                "status": "already_running",
+                "running": True,
+                "requested_running": True,
+                "run_id": state.get("run_id") or run_id,
+                "mode": "blocking_loop",
+                "message": "Batch supervisor is already running.",
             }
         self._write_batch_log_safe(config, run_id, 0, "START", message="Batch agent started.")
-        self.__class__._ensure_worker_thread(config, run_id)
+        self._worker_loop(config, run_id)
+        state = dict(self.__class__._state)
         return {
             "ok": True,
-            "status": "running",
-            "running": True,
-            "requested_running": True,
+            "status": state.get("last_event") or "stopped",
+            "running": False,
+            "requested_running": self._should_continue_running(config),
             "run_id": run_id,
-            "mode": "component_thread",
-            "worker_thread_alive": self.__class__._is_worker_thread_alive(),
-            "message": "Batch Supervisor Agent started. It will poll jobs and execute one selected tool route per cycle.",
+            "mode": "blocking_loop",
+            "message": "Batch Supervisor Agent loop finished.",
         }
 
     def _stop(self, config: dict[str, Any]) -> dict[str, Any]:
         state = self._status(config)
-        control_result = self._request_stop_control(config)
-        run_id = control_result.get("run_id") or state.get("run_id") or self._find_latest_active_run_id(config)
+        run_id = state.get("run_id") or datetime.now().strftime("%Y%m%d%H%M%S%f")
         loop_no = int(state.get("loop_no") or 0)
         self._write_batch_log_safe(config, run_id, loop_no, "STOP_REQUESTED", message="Stop requested.")
-        return {"ok": True, "status": "stop_requested", "running": False, "run_id": run_id, "control": control_result}
+        self.__class__._state["running"] = False
+        self.__class__._state["last_event"] = "STOP_REQUESTED"
+        self.__class__._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
+        return {
+            "ok": True,
+            "status": "stop_requested",
+            "running": False,
+            "requested_running": False,
+            "run_id": run_id,
+            "message": "Run YN is N. The blocking loop will not start.",
+        }
 
     def _status(self, config: dict[str, Any] | None = None) -> dict[str, Any]:
         state = dict(self.__class__._state)
-        control_status = self._get_control_status(config) if config else {}
-        requested_running = (
-            str(control_status.get("status") or "").upper() == "RUNNING"
-            and not bool(control_status.get("stop_requested"))
-        )
-        control_running = (
-            requested_running
-            and bool(control_status.get("heartbeat_alive"))
-            and str(control_status.get("last_event") or "").upper() != "START"
-        )
-        state["running"] = bool(control_running)
-        if self.__class__._is_worker_thread_alive():
-            state["running"] = True
-        state["requested_running"] = bool(requested_running)
-        state["worker_thread_alive"] = self.__class__._is_worker_thread_alive()
-        state["status_source"] = "batch_control" if control_status else "none"
-        state["control"] = control_status
-        if control_status:
-            state["run_id"] = control_status.get("run_id") or state.get("run_id")
-            state["loop_no"] = control_status.get("loop_no") or state.get("loop_no")
-            state["last_event"] = control_status.get("last_event") or state.get("last_event")
-            state["last_agent"] = control_status.get("last_agent") or state.get("last_agent")
-            state["last_job_id"] = control_status.get("last_job_id") or state.get("last_job_id")
-            state["last_job_status"] = control_status.get("last_job_status") or state.get("last_job_status")
-            state["last_error"] = control_status.get("last_error") or state.get("last_error")
+        state["running"] = bool(self.__class__._state.get("running"))
+        state["requested_running"] = self._should_continue_running(config) if config else None
+        state["status_source"] = "memory"
+        state["stop_requested"] = not bool(state["requested_running"])
         return {"ok": True, **state}
 
     @staticmethod
     def _console(message: str) -> None:
         logger.info(f"[BatchSupervisor] {message}")
 
-    @classmethod
-    def _is_worker_thread_alive(cls) -> bool:
-        return bool(cls._worker_thread and cls._worker_thread.is_alive())
-
-    @classmethod
-    def _ensure_worker_thread(cls, config: dict[str, Any], run_id: str) -> None:
-        if cls._is_worker_thread_alive():
-            return
-        thread = threading.Thread(
-            target=cls._worker_loop,
-            args=(dict(config), str(run_id)),
-            name="SmartMigrateBatchMonitor",
-            daemon=True,
-        )
-        cls._worker_thread = thread
-        thread.start()
-        logger.info(f"[BatchSupervisor] background monitor thread started run_id={run_id}")
-
-    def _start_control(self, config: dict[str, Any], run_id: str) -> dict[str, Any]:
-        table = self._qualify_table("NEXT_BATCH_CONTROL", config["system_schema"])
-        grace_seconds = max(1, int(config.get("status_log_alive_grace_seconds") or 1800))
-        with self._connect(config) as conn:
-            cur = conn.cursor()
-            cur.execute(
-                f"""
-                SELECT STATUS, RUN_ID, STOP_REQUESTED_YN, LOOP_NO,
-                       CASE
-                         WHEN HEARTBEAT_AT >= LOCALTIMESTAMP - NUMTODSINTERVAL(:1, 'SECOND')
-                         THEN 1 ELSE 0
-                       END AS HEARTBEAT_ALIVE
-                FROM {table}
-                WHERE CONTROL_NAME = 'BATCH_AGENT'
-                FOR UPDATE
-                """,
-                [grace_seconds],
-            )
-            row = cur.fetchone()
-            if not row:
-                raise ValueError("NEXT_BATCH_CONTROL row BATCH_AGENT is required. Initialize one row before starting the batch agent.")
-
-            status = self._to_text(row[0]).strip().upper()
-            existing_run_id = self._to_text(row[1])
-            heartbeat_alive = bool(row[4])
-            if status == "RUNNING" and heartbeat_alive:
-                conn.rollback()
-                return {
-                    "acquired": False,
-                    "status": "already_running",
-                    "control_status": status,
-                    "run_id": existing_run_id,
-                    "heartbeat_alive": heartbeat_alive,
-                    "message": f"Batch control is {status} for RUN_ID={existing_run_id}.",
-                }
-            if status == "STOP_REQUESTED" and heartbeat_alive:
-                conn.rollback()
-                return {
-                    "acquired": False,
-                    "status": "stop_requested",
-                    "control_status": status,
-                    "run_id": existing_run_id,
-                    "heartbeat_alive": heartbeat_alive,
-                    "message": "Batch stop is still being processed. Start again after status becomes STOPPED.",
-                }
-
-            cur.execute(
-                f"""
-                UPDATE {table}
-                SET STATUS = 'RUNNING',
-                    RUN_ID = :1,
-                    STOP_REQUESTED_YN = 'N',
-                    LOOP_NO = 0,
-                    STARTED_AT = CURRENT_TIMESTAMP,
-                    STOP_REQUESTED_AT = NULL,
-                    STOPPED_AT = NULL,
-                    HEARTBEAT_AT = CURRENT_TIMESTAMP,
-                    UPDATED_AT = CURRENT_TIMESTAMP,
-                    LAST_EVENT = 'START',
-                    LAST_AGENT = NULL,
-                    LAST_JOB_ID = NULL,
-                    LAST_JOB_STATUS = NULL,
-                    LAST_ERROR = NULL,
-                    MESSAGE = :2
-                WHERE CONTROL_NAME = 'BATCH_AGENT'
-                """,
-                [run_id, f"Batch agent started. RUN_ID={run_id}"],
-            )
-            conn.commit()
-        return {"acquired": True, "status": "started", "run_id": run_id, "heartbeat_alive": True}
-
-    def _request_stop_control(self, config: dict[str, Any]) -> dict[str, Any]:
-        table = self._qualify_table("NEXT_BATCH_CONTROL", config["system_schema"])
-        with self._connect(config) as conn:
-            cur = conn.cursor()
-            cur.execute(
-                f"""
-                SELECT STATUS, RUN_ID, LOOP_NO
-                FROM {table}
-                WHERE CONTROL_NAME = 'BATCH_AGENT'
-                FOR UPDATE
-                """
-            )
-            row = cur.fetchone()
-            if not row:
-                raise ValueError("NEXT_BATCH_CONTROL row BATCH_AGENT is required.")
-            status = self._to_text(row[0]).strip().upper()
-            run_id = self._to_text(row[1])
-            loop_no = int(row[2] or 0)
-            cur.execute(
-                f"""
-                UPDATE {table}
-                SET STATUS = CASE
-                        WHEN STATUS = 'RUNNING' THEN 'STOP_REQUESTED'
-                        ELSE STATUS
-                    END,
-                    STOP_REQUESTED_YN = 'Y',
-                    STOP_REQUESTED_AT = CURRENT_TIMESTAMP,
-                    UPDATED_AT = CURRENT_TIMESTAMP,
-                    LAST_EVENT = 'STOP_REQUESTED',
-                    MESSAGE = 'Stop requested by batch agent action.'
-                WHERE CONTROL_NAME = 'BATCH_AGENT'
-                """
-            )
-            conn.commit()
-        return {"ok": True, "previous_status": status, "status": "STOP_REQUESTED", "run_id": run_id, "loop_no": loop_no}
-
-    def _get_control_status(self, config: dict[str, Any]) -> dict[str, Any]:
-        table = self._qualify_table("NEXT_BATCH_CONTROL", config["system_schema"])
-        grace_seconds = max(1, int(config.get("status_log_alive_grace_seconds") or 1800))
-        sql = f"""
-            SELECT STATUS, RUN_ID, STOP_REQUESTED_YN, LOOP_NO,
-                   LAST_EVENT, LAST_AGENT, LAST_JOB_ID, LAST_JOB_STATUS, LAST_ERROR, MESSAGE,
-                   TO_CHAR(STARTED_AT, 'YYYY-MM-DD HH24:MI:SS') AS STARTED_AT_TEXT,
-                   TO_CHAR(HEARTBEAT_AT, 'YYYY-MM-DD HH24:MI:SS') AS HEARTBEAT_AT_TEXT,
-                   TO_CHAR(STOP_REQUESTED_AT, 'YYYY-MM-DD HH24:MI:SS') AS STOP_REQUESTED_AT_TEXT,
-                   TO_CHAR(STOPPED_AT, 'YYYY-MM-DD HH24:MI:SS') AS STOPPED_AT_TEXT,
-                   TO_CHAR(UPDATED_AT, 'YYYY-MM-DD HH24:MI:SS') AS UPDATED_AT_TEXT,
-                   CASE
-                     WHEN HEARTBEAT_AT >= LOCALTIMESTAMP - NUMTODSINTERVAL(:1, 'SECOND')
-                     THEN 1 ELSE 0
-                   END AS HEARTBEAT_ALIVE
-            FROM {table}
-            WHERE CONTROL_NAME = 'BATCH_AGENT'
-        """
-        try:
-            rows = self._query(config, sql, [grace_seconds])
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
-        if not rows:
-            return {"ok": False, "error": "NEXT_BATCH_CONTROL row BATCH_AGENT not found"}
-        row = rows[0]
-        return {
-            "ok": True,
-            "status": self._to_text(row[0]),
-            "run_id": self._to_text(row[1]),
-            "stop_requested": self._to_text(row[2]).strip().upper() == "Y",
-            "loop_no": row[3],
-            "last_event": self._to_text(row[4]),
-            "last_agent": self._to_text(row[5]),
-            "last_job_id": self._to_text(row[6]),
-            "last_job_status": self._to_text(row[7]),
-            "last_error": self._to_text(row[8]),
-            "message": self._to_text(row[9]),
-            "started_at": self._to_text(row[10]),
-            "heartbeat_at": self._to_text(row[11]),
-            "stop_requested_at": self._to_text(row[12]),
-            "stopped_at": self._to_text(row[13]),
-            "updated_at": self._to_text(row[14]),
-            "heartbeat_alive": bool(row[15]),
-            "grace_seconds": grace_seconds,
-        }
-
-    def _update_control_heartbeat(
-        self,
-        config: dict[str, Any],
-        run_id: str,
-        loop_no: int,
-        last_event: str,
-        agent_name: Any = None,
-        job_id: Any = None,
-        job_status: Any = None,
-        last_error: Any = None,
-        message: Any = None,
-    ) -> None:
-        table = self._qualify_table("NEXT_BATCH_CONTROL", config["system_schema"])
-        try:
-            with self._connect(config) as conn:
-                cur = conn.cursor()
-                cur.execute(
-                    f"""
-                    UPDATE {table}
-                    SET LOOP_NO = :1,
-                        HEARTBEAT_AT = CURRENT_TIMESTAMP,
-                        UPDATED_AT = CURRENT_TIMESTAMP,
-                        LAST_EVENT = :2,
-                        LAST_AGENT = :3,
-                        LAST_JOB_ID = :4,
-                        LAST_JOB_STATUS = :5,
-                        LAST_ERROR = :6,
-                        MESSAGE = :7
-                    WHERE CONTROL_NAME = 'BATCH_AGENT'
-                      AND STATUS = 'RUNNING'
-                      AND NVL(STOP_REQUESTED_YN, 'N') = 'N'
-                    """,
-                    [
-                        int(loop_no or 0),
-                        str(last_event or "")[:50],
-                        str(agent_name or "")[:50] if agent_name else None,
-                        str(job_id or "")[:200] if job_id else None,
-                        str(job_status or "")[:50] if job_status else None,
-                        str(last_error or "")[:3900] if last_error else None,
-                        str(message or "")[:1000] if message else None,
-                    ],
-                )
-                if cur.rowcount == 0:
-                    raise InterruptedError("Batch control is not RUNNING.")
-                conn.commit()
-        except Exception as exc:
-            if isinstance(exc, InterruptedError):
-                raise
-            raise ConnectionError(f"Failed to update NEXT_BATCH_CONTROL heartbeat: {exc}") from exc
-
-    def _finish_control(self, config: dict[str, Any], run_id: str, message: str) -> None:
-        table = self._qualify_table("NEXT_BATCH_CONTROL", config["system_schema"])
-        try:
-            with self._connect(config) as conn:
-                cur = conn.cursor()
-                cur.execute(
-                    f"""
-                    UPDATE {table}
-                    SET STATUS = 'STOPPED',
-                        STOP_REQUESTED_YN = 'N',
-                        STOPPED_AT = CURRENT_TIMESTAMP,
-                        HEARTBEAT_AT = CURRENT_TIMESTAMP,
-                        UPDATED_AT = CURRENT_TIMESTAMP,
-                        LAST_EVENT = 'STOPPED',
-                        MESSAGE = :1
-                    WHERE CONTROL_NAME = 'BATCH_AGENT'
-                      AND STATUS = 'STOP_REQUESTED'
-                    """,
-                    [message],
-                )
-                conn.commit()
-        except Exception:
-            pass
-
-    def _find_latest_active_run_id(self, config: dict[str, Any]) -> str | None:
-        control_status = self._get_control_status(config)
-        return self._to_text(control_status.get("run_id")) or None
-
-    def _is_db_stop_requested(self, config: dict[str, Any], run_id: str | None = None) -> bool:
-        table = self._qualify_table("NEXT_BATCH_CONTROL", config["system_schema"])
-        sql = f"""
-            SELECT COUNT(*)
-            FROM {table}
-            WHERE CONTROL_NAME = 'BATCH_AGENT'
-              AND (
-                    STOP_REQUESTED_YN = 'Y'
-                 OR STATUS = 'STOP_REQUESTED'
-              )
-        """
-        try:
-            rows = self._query(config, sql)
-        except Exception as exc:
-            raise ConnectionError(f"Failed to read NEXT_BATCH_CONTROL stop state: {exc}") from exc
-        if not rows:
-            return False
-        return int(rows[0][0] or 0) > 0
-
-    def _is_control_running(self, config: dict[str, Any], run_id: str | None = None) -> bool:
-        table = self._qualify_table("NEXT_BATCH_CONTROL", config["system_schema"])
-        sql = f"""
-            SELECT COUNT(*)
-            FROM {table}
-            WHERE CONTROL_NAME = 'BATCH_AGENT'
-              AND STATUS = 'RUNNING'
-              AND NVL(STOP_REQUESTED_YN, 'N') = 'N'
-        """
-        try:
-            rows = self._query(config, sql)
-        except Exception as exc:
-            raise ConnectionError(f"Failed to read NEXT_BATCH_CONTROL running state: {exc}") from exc
-        if not rows:
-            return False
-        return int(rows[0][0] or 0) > 0
-
     def _raise_if_batch_stop_requested(self) -> None:
-        config = getattr(self, "_batch_runtime_config", None)
-        if config and not self._is_control_running(config):
-            raise InterruptedError("Batch control is not RUNNING.")
-        if config and self._is_db_stop_requested(config):
+        if not self._should_continue_running(getattr(self, "_batch_runtime_config", None)):
             raise InterruptedError("Batch stop requested.")
+
+    def _should_continue_running(self, config: dict[str, Any] | None = None) -> bool:
+        value = getattr(self, "run_yn", None)
+        if value is None and config:
+            value = config.get("run_yn")
+        text = str(value if value is not None else "Y").strip().upper()
+        return text in {"Y", "YES", "TRUE", "1", "ON", "START", "RUN"}
 
     @classmethod
     def serve_forever(cls, config: dict[str, Any], auto_start_on_boot: bool = True, idle_sleep_seconds: int = 10) -> None:
-        """Run the real always-on supervisor loop without a Langflow chat thread.
+        """Run the real always-on supervisor loop without spawning a worker thread.
 
-        The chat-facing tool only changes NEXT_BATCH_CONTROL. This service owns
-        the blocking while loop and can be started by the Langflow/server startup
-        command so it survives normal flow request boundaries.
+        This service owns the blocking while loop and can be started by the
+        Langflow/server startup command so it survives normal flow request
+        boundaries.
         """
         helper = object.__new__(cls)
-        boot_start_attempted = False
         idle_sleep_seconds = max(1, int(idle_sleep_seconds or 10))
 
         while True:
             try:
-                status = helper._get_control_status(config)
-                control_status = str(status.get("status") or "").upper()
-                stop_requested = bool(status.get("stop_requested"))
-
-                if auto_start_on_boot and not boot_start_attempted and control_status != "RUNNING":
+                if auto_start_on_boot:
                     run_id = datetime.now().strftime("%Y%m%d%H%M%S%f")
-                    start_result = helper._start_control(config, run_id)
-                    boot_start_attempted = True
-                    if start_result.get("acquired"):
-                        helper._write_batch_log_safe(
-                            config,
-                            run_id,
-                            0,
-                            "AUTO_START",
-                            message="Batch supervisor auto-started on service boot.",
-                        )
-                        cls._worker_loop(config, run_id)
-                        continue
-
-                if control_status == "RUNNING" and not stop_requested:
-                    run_id = str(status.get("run_id") or datetime.now().strftime("%Y%m%d%H%M%S%f"))
                     helper._write_batch_log_safe(
                         config,
                         run_id,
-                        int(status.get("loop_no") or 0),
-                        "SERVICE_ATTACH",
-                        message="Batch supervisor service attached to RUNNING control.",
+                        0,
+                        "AUTO_START",
+                        message="Batch supervisor auto-started on service boot.",
                     )
-                    cls._worker_loop(config, run_id)
+                    helper._worker_loop(config, run_id)
                     continue
 
                 time.sleep(idle_sleep_seconds)
@@ -593,11 +275,10 @@ class BatchAgentCommandTool(Component):
                     pass
                 time.sleep(max(1, int(config.get("error_sleep_seconds") or 60)))
 
-    @classmethod
-    def _worker_loop(cls, config: dict[str, Any], run_id: str) -> None:
-        helper = object.__new__(cls)
+    def _worker_loop(self, config: dict[str, Any], run_id: str) -> None:
+        cls = self.__class__
         config = {**config, "batch_run_id": run_id}
-        helper._batch_runtime_config = config
+        self._batch_runtime_config = config
         cls._state.update(
             {
                 "running": True,
@@ -613,36 +294,19 @@ class BatchAgentCommandTool(Component):
             }
         )
         try:
-            while True:
-                try:
-                    if not helper._is_control_running(config, run_id):
-                        break
-                except ConnectionError as exc:
-                    cls._state["running"] = False
-                    cls._state["last_event"] = "FATAL_ERROR"
-                    cls._state["last_error"] = str(exc)
-                    cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
-                    helper._write_batch_log_safe(
-                        config,
-                        run_id,
-                        int(cls._state.get("loop_no") or 0),
-                        "FATAL_ERROR",
-                        message="Batch worker stopped because control DB access failed.",
-                        error_message=str(exc),
-                    )
-                    break
+            while self._should_continue_running(config):
                 cls._state["loop_no"] = int(cls._state.get("loop_no") or 0) + 1
                 loop_no = int(cls._state["loop_no"])
                 cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
                 cls._state["last_event"] = "LOOP_START"
 
                 started = time.perf_counter()
-                helper._console(f"cycle {loop_no} started")
-                if not helper._is_control_running(config, run_id):
+                self._console(f"cycle {loop_no} started")
+                if not self._should_continue_running(config):
                     break
 
                 try:
-                    result = helper._run_batch_supervisor_cycle(config)
+                    result = self._run_batch_supervisor_cycle(config)
                     elapsed = round(time.perf_counter() - started, 3)
                     event_type = "JOB_SUCCESS" if result.get("job_executed") else "NO_JOB"
                     if str(result.get("status") or "").strip().upper() == "STOPPED":
@@ -663,18 +327,7 @@ class BatchAgentCommandTool(Component):
                     cls._state["last_error"] = error_message
                     cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
 
-                    helper._update_control_heartbeat(
-                        config,
-                        run_id,
-                        loop_no,
-                        event_type,
-                        agent_name=agent_name,
-                        job_id=job_id,
-                        job_status=job_status,
-                        last_error=error_message,
-                        message=message,
-                    )
-                    helper._write_batch_log_safe(
+                    self._write_batch_log_safe(
                         config,
                         run_id,
                         loop_no,
@@ -687,7 +340,7 @@ class BatchAgentCommandTool(Component):
                         sleep_seconds=sleep_seconds,
                         elapsed_seconds=elapsed,
                     )
-                    helper._console(
+                    self._console(
                         f"cycle {loop_no} {event_type}: "
                         f"agent={agent_name or '-'} job_id={job_id or '-'} "
                         f"status={job_status or '-'} message={message or '-'}"
@@ -695,15 +348,14 @@ class BatchAgentCommandTool(Component):
                     if event_type == "JOB_STOPPED":
                         break
                     if sleep_seconds > 0:
-                        helper._interruptible_sleep(sleep_seconds, config, run_id)
+                        self._interruptible_sleep(sleep_seconds, config, run_id)
 
                 except InterruptedError as exc:
                     elapsed = round(time.perf_counter() - started, 3)
                     cls._state["last_event"] = "JOB_STOPPED"
                     cls._state["last_error"] = str(exc)
                     cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
-                    helper._update_control_heartbeat(config, run_id, loop_no, "JOB_STOPPED", last_error=str(exc), message=str(exc))
-                    helper._write_batch_log_safe(
+                    self._write_batch_log_safe(
                         config,
                         run_id,
                         loop_no,
@@ -711,7 +363,7 @@ class BatchAgentCommandTool(Component):
                         message=str(exc),
                         elapsed_seconds=elapsed,
                     )
-                    helper._console(f"cycle {loop_no} JOB_STOPPED: {exc}")
+                    self._console(f"cycle {loop_no} JOB_STOPPED: {exc}")
                     break
 
                 except ConnectionError as exc:
@@ -720,16 +372,16 @@ class BatchAgentCommandTool(Component):
                     cls._state["last_event"] = "FATAL_ERROR"
                     cls._state["last_error"] = str(exc)
                     cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
-                    helper._write_batch_log_safe(
+                    self._write_batch_log_safe(
                         config,
                         run_id,
                         loop_no,
                         "FATAL_ERROR",
-                        message="Batch worker stopped because control DB access failed.",
+                        message="Batch worker stopped because DB access failed.",
                         error_message=str(exc),
                         elapsed_seconds=elapsed,
                     )
-                    helper._console(f"cycle {loop_no} FATAL_ERROR: {exc}")
+                    self._console(f"cycle {loop_no} FATAL_ERROR: {exc}")
                     break
 
                 except Exception as exc:
@@ -738,8 +390,7 @@ class BatchAgentCommandTool(Component):
                     cls._state["last_event"] = "LOOP_ERROR"
                     cls._state["last_error"] = str(exc)
                     cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
-                    helper._update_control_heartbeat(config, run_id, loop_no, "LOOP_ERROR", last_error=str(exc), message="Unexpected batch loop error.")
-                    helper._write_batch_log_safe(
+                    self._write_batch_log_safe(
                         config,
                         run_id,
                         loop_no,
@@ -749,14 +400,13 @@ class BatchAgentCommandTool(Component):
                         sleep_seconds=int(config["error_sleep_seconds"]),
                         elapsed_seconds=elapsed,
                     )
-                    helper._console(f"cycle {loop_no} LOOP_ERROR: {exc}")
-                    helper._interruptible_sleep(int(config["error_sleep_seconds"]), config, run_id)
+                    self._console(f"cycle {loop_no} LOOP_ERROR: {exc}")
+                    self._interruptible_sleep(int(config["error_sleep_seconds"]), config, run_id)
         finally:
             cls._state["running"] = False
             cls._state["last_event"] = "STOPPED"
             cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
-            helper._finish_control(config, run_id, "Batch agent stopped.")
-            helper._write_batch_log_safe(config, run_id, int(cls._state.get("loop_no") or 0), "STOPPED", message="Batch agent stopped.")
+            self._write_batch_log_safe(config, run_id, int(cls._state.get("loop_no") or 0), "STOPPED", message="Batch agent stopped.")
 
     def _run_batch_supervisor_cycle(self, config: dict[str, Any]) -> dict[str, Any]:
         """Run one LangGraph supervisor cycle with an LLM supervisor decision.
@@ -1054,6 +704,7 @@ class BatchAgentCommandTool(Component):
         self.default_max_attempts = config["migration_max_attempts"]
     def _snapshot_config(self) -> dict[str, Any]:
         return {
+            "run_yn": str(getattr(self, "run_yn", "Y") or "Y").strip().upper(),
             "db_host": str(getattr(self, "db_host", "") or DEFAULT_DB_CONFIG["db_host"]).strip(),
             "db_port": int(getattr(self, "db_port", None) or DEFAULT_DB_CONFIG["db_port"]),
             "db_service_name": str(getattr(self, "db_service_name", "") or DEFAULT_DB_CONFIG["db_service_name"]).strip(),
@@ -1076,7 +727,6 @@ class BatchAgentCommandTool(Component):
             "sql_conversion_max_attempts": max(1, int(getattr(self, "sql_conversion_max_attempts", None) or 3)),
             "no_job_sleep_seconds": 10,
             "error_sleep_seconds": max(1, int(getattr(self, "error_sleep_seconds", None) or 60)),
-            "status_log_alive_grace_seconds": max(1, int(getattr(self, "status_log_alive_grace_seconds", None) or 1800)),
             "auto_install_packages": True,
         }
 
@@ -1252,9 +902,7 @@ class BatchAgentCommandTool(Component):
     def _interruptible_sleep(self, seconds: int, config: dict[str, Any] | None = None, run_id: str | None = None) -> None:
         deadline = time.time() + max(0, int(seconds))
         while time.time() < deadline:
-            if config and not self._is_control_running(config, run_id):
-                break
-            if config and self._is_db_stop_requested(config, run_id):
+            if not self._should_continue_running(config):
                 break
             time.sleep(min(1.0, max(0.0, deadline - time.time())))
 
@@ -3398,6 +3046,7 @@ def build_service_config() -> dict[str, Any]:
     """Build background monitor config from env so no Langflow input is required."""
     file_config = _load_service_config_file()
     config = {
+        "run_yn": _env("SMARTMIGRATE_RUN_YN", "Y"),
         "db_host": _env("SMARTMIGRATE_DB_HOST", str(DEFAULT_DB_CONFIG["db_host"])),
         "db_port": _env_int("SMARTMIGRATE_DB_PORT", int(DEFAULT_DB_CONFIG["db_port"])),
         "db_service_name": _env("SMARTMIGRATE_DB_SERVICE_NAME", str(DEFAULT_DB_CONFIG["db_service_name"])),
@@ -3420,7 +3069,6 @@ def build_service_config() -> dict[str, Any]:
         "sql_conversion_max_attempts": _env_int("SMARTMIGRATE_SQL_CONVERSION_MAX_ATTEMPTS", 3),
         "no_job_sleep_seconds": 10,
         "error_sleep_seconds": _env_int("SMARTMIGRATE_ERROR_SLEEP_SECONDS", 60),
-        "status_log_alive_grace_seconds": _env_int("SMARTMIGRATE_STATUS_ALIVE_GRACE_SECONDS", 1800),
         "auto_install_packages": _env_bool("SMARTMIGRATE_AUTO_INSTALL_PACKAGES", True),
     }
     config.update(file_config)
