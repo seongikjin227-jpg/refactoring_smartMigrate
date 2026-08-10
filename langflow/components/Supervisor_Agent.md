@@ -7,10 +7,16 @@ supervisor. It does not require chat input.
 
 ## Langflow Input
 
-Only one text input is exposed:
+The component does not require chat input. It exposes one run switch plus SQL
+generation prompts:
 
 ```text
 Run YN = Y
+MIG SQL Prompt
+VERIFY SQL Prompt
+TO SQL Prompt
+BIND SQL Prompt
+TEST SQL Prompt
 ```
 
 `Y` starts the supervisor loop. `N` requests stop. `STATUS` returns current
@@ -67,3 +73,23 @@ python langflow/components/Supervisor_Agent.py
 ```
 
 No separate background service file is used.
+
+## Default Config
+
+DB and LLM defaults are edited in the Python file:
+
+```python
+DEFAULT_DB_CONFIG = {...}
+DEFAULT_LLM_CONFIG = {...}
+```
+
+Schema is fixed in `DEFAULT_DB_CONFIG`:
+
+```text
+system_schema = SFAADM
+source_schema = SFAMIG
+target_schema = SFAADM
+```
+
+Prompt values are received from Langflow inputs. Environment/file prompt values
+are still used by the standalone startup process.
