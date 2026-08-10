@@ -1,0 +1,2 @@
+"""SQL formatting pipeline."""
+

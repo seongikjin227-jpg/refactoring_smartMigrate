@@ -1,0 +1,2 @@
+"""SmartMigrate backend package."""
+

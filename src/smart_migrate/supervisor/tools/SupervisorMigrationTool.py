@@ -1,0 +1,37 @@
+from langchain_core.tools import tool
+
+from smart_migrate.supervisor.SupervisorJobRegistry import (
+    callbacks,
+    clear_active_job,
+    claim_job_execution,
+    migration_job_display_id,
+    mig_registry,
+    refresh_jobs_after_tool,
+    set_active_job,
+)
+
+
+@tool
+def run_data_migration(map_id: int) -> str:
+    """Run one DB migration job selected by map_id."""
+    job = mig_registry.get(map_id)
+    logger = callbacks.get("logger")
+
+    if job is None:
+        return f"ERROR: map_id={map_id} was not found in the current registry."
+
+    try:
+        if not claim_job_execution():
+            return "SKIP: another job already ran in this supervisor cycle."
+        set_active_job("DB Migration", migration_job_display_id(job, map_id), "RUN")
+        final_status = callbacks["mig_proc"](job)
+        if logger:
+            logger.info(f"[DataMigrationTool] map_id={map_id} completed")
+        return f"DataMigration map_id={map_id} completed"
+    except Exception as exc:
+        if logger:
+            logger.error(f"[DataMigrationTool] map_id={map_id} error: {exc}")
+        return f"ERROR: map_id={map_id} failed: {exc}"
+    finally:
+        clear_active_job()
+        refresh_jobs_after_tool()
