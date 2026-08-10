@@ -7,10 +7,12 @@ import json
 from pathlib import Path
 
 _ROOT       = Path(__file__).resolve().parent.parent.parent
+_SRC_DIR    = _ROOT / "src"
 _RUNTIME    = _ROOT / "runtime"
 _PID_FILE   = _RUNTIME / "agent.pid"
 _PAUSE_FILE = _RUNTIME / "agent.pause"
 _ACTIVE_JOB_FILE = _RUNTIME / "active_job.json"
+_LOG_FILE   = _RUNTIME / "agent.log"
 _MAIN_PY    = _ROOT / "main.py"
 
 
@@ -76,13 +78,35 @@ def start() -> str:
     _RUNTIME.mkdir(exist_ok=True)
     _PAUSE_FILE.unlink(missing_ok=True)
     _ACTIVE_JOB_FILE.unlink(missing_ok=True)
-    process = subprocess.Popen(
-        [sys.executable, str(_MAIN_PY)],
-        cwd=str(_ROOT),
-        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
-    )
-    _PID_FILE.write_text(str(process.pid), encoding="utf-8")
-    return "에이전트를 시작했습니다."
+    _LOG_FILE.write_text("", encoding="utf-8")
+    env = os.environ.copy()
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    pythonpath_parts = [str(_SRC_DIR)]
+    if existing_pythonpath:
+        pythonpath_parts.append(existing_pythonpath)
+    env["PYTHONPATH"] = os.pathsep.join(pythonpath_parts)
+    with _LOG_FILE.open("a", encoding="utf-8") as log_file:
+        process = subprocess.Popen(
+            [sys.executable, str(_MAIN_PY)],
+            cwd=str(_ROOT),
+            env=env,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+        )
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        _PID_FILE.write_text(str(process.pid), encoding="utf-8")
+        return "에이전트를 시작했습니다."
+
+    _PID_FILE.unlink(missing_ok=True)
+    try:
+        message = _LOG_FILE.read_text(encoding="utf-8").strip().splitlines()[-1]
+    except Exception:
+        message = ""
+    return f"에이전트 시작 실패: {message or f'exit code {process.returncode}'}"
 
 
 def stop() -> str:
