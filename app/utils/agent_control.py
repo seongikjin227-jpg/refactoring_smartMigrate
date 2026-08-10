@@ -10,18 +10,11 @@ import sys
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent.parent
-_SRC_DIR = _ROOT / "src"
 _RUNTIME = _ROOT / "runtime"
 _PID_FILE = _RUNTIME / "agent.pid"
 _PAUSE_FILE = _RUNTIME / "agent.pause"
 _ACTIVE_JOB_FILE = _RUNTIME / "active_job.json"
-_LOG_FILE = _RUNTIME / "agent.log"
-_ENTRYPOINT_CODE = (
-    "import sys; "
-    f"sys.path.insert(0, {str(_SRC_DIR)!r}); "
-    "from smart_migrate.runtime.RuntimeEntrypoint import main; "
-    "main()"
-)
+_MAIN_PY = _ROOT / "main.py"
 
 
 def _read_pid() -> int | None:
@@ -58,17 +51,6 @@ def _read_active_job() -> dict | None:
     }
 
 
-def _last_log_line() -> str:
-    try:
-        lines = _LOG_FILE.read_text(encoding="utf-8").strip().splitlines()
-    except Exception:
-        return ""
-    failures = [line.strip() for line in lines if "[FAIL]" in line]
-    if failures:
-        return failures[0]
-    return lines[-1].strip() if lines else ""
-
-
 def get_status() -> dict:
     """Return current agent process status."""
     pid = _read_pid()
@@ -90,39 +72,16 @@ def start() -> str:
     st = get_status()
     if st["running"]:
         return "이미 실행 중입니다."
-
     _RUNTIME.mkdir(exist_ok=True)
     _PAUSE_FILE.unlink(missing_ok=True)
     _ACTIVE_JOB_FILE.unlink(missing_ok=True)
-    _LOG_FILE.write_text("", encoding="utf-8")
-
-    env = os.environ.copy()
-    existing_pythonpath = env.get("PYTHONPATH", "")
-    pythonpath_parts = [str(_SRC_DIR)]
-    if existing_pythonpath:
-        pythonpath_parts.append(existing_pythonpath)
-    env["PYTHONPATH"] = os.pathsep.join(pythonpath_parts)
-
-    with _LOG_FILE.open("a", encoding="utf-8") as log_file:
-        process = subprocess.Popen(
-            [sys.executable, "-c", _ENTRYPOINT_CODE],
-            cwd=str(_ROOT),
-            env=env,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            text=True,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
-        )
-
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        _PID_FILE.write_text(str(process.pid), encoding="utf-8")
-        return "에이전트를 시작했습니다."
-
-    _PID_FILE.unlink(missing_ok=True)
-    message = _last_log_line()
-    return f"에이전트 시작 실패: {message or f'exit code {process.returncode}'}"
+    process = subprocess.Popen(
+        [sys.executable, str(_MAIN_PY)],
+        cwd=str(_ROOT),
+        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+    )
+    _PID_FILE.write_text(str(process.pid), encoding="utf-8")
+    return "에이전트를 시작했습니다."
 
 
 def stop() -> str:
