@@ -84,7 +84,7 @@ langflow/components/
   dashboard_command_tool.py
   migration_command_tool.py
   sql_conversion_command_tool.py
-  batch_agent_command_tool.py
+  Supervisor_Agent.py
 ```
 
 각 파일은 LangFlow Custom Component 하나에 대응한다.
@@ -668,7 +668,7 @@ generic한 `FAIL-CONVERSION`은 상태 체계와 맞지 않으므로 제거했�
 
 ## Batch Agent Command Tool 내부 구조
 
-`batch_agent_command_tool.py`는 단순 command tool이 아니라 background worker를 포함한다.
+`Supervisor_Agent.py`는 단순 command tool이 아니라 background worker를 포함한다.
 
 함수 그룹:
 

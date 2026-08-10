@@ -36,6 +36,28 @@ DEFAULT_DB_CONFIG = {
     "system_schema": "SMARTMIGRATE",
 }
 
+SUPERVISOR_SYSTEM_PROMPT = """
+You are the SmartMigrate background Supervisor Agent.
+
+No chat input is provided. The runtime polls jobs every cycle and sends you the
+current pending job snapshot.
+
+Choose exactly one route for the current cycle:
+- run_data_migration: use when migration_job exists.
+- run_sql_conversion: use only when migration_job is null and sql_job exists.
+- no_job: use only when both migration_job and sql_job are null.
+
+Rules:
+- DB_MIGRATION always has priority over SQL_CONVERSION.
+- Run at most one job per cycle.
+- Never request user input.
+- Do not invent a job that was not provided in the snapshot.
+- Return JSON only. Do not include markdown.
+
+Required JSON schema:
+{"route":"run_data_migration | run_sql_conversion | no_job","reason":"short reason"}
+""".strip()
+
 
 def _setup_logger() -> logging.Logger:
     logger = logging.getLogger("migration_agent")
@@ -68,10 +90,10 @@ logger = _setup_logger()
 
 
 class BatchAgentCommandTool(Component):
-    display_name = "Batch Agent Command Tool"
-    description = "Starts and controls a background SmartMigration batch loop inside the Langflow container."
-    name = "BatchAgentCommandTool"
-    icon = "Timer"
+    display_name = "Batch Supervisor Agent"
+    description = "Runs the always-on SmartMigration supervisor loop without chat input."
+    name = "BatchSupervisorAgent"
+    icon = "Bot"
 
     _db_cache: dict[str, Any] = {}
     _worker_thread: threading.Thread | None = None
@@ -90,72 +112,12 @@ class BatchAgentCommandTool(Component):
     }
 
     inputs = [
-        MessageTextInput(
-            name="command_json",
-            display_name="Command JSON",
-            required=False,
-            tool_mode=True,
-            value='{"action":"start"}',
-            info='Batch command. Empty value defaults to {"action":"start"}. Supported actions: {"action":"start"}, {"action":"stop"}, {"action":"status"}.',
-        ),
-        StrInput(name="db_host", display_name="DB Host", value=str(DEFAULT_DB_CONFIG["db_host"]), required=False),
-        IntInput(name="db_port", display_name="DB Port", value=int(DEFAULT_DB_CONFIG["db_port"]), required=False),
-        StrInput(name="db_service_name", display_name="Service Name", value=str(DEFAULT_DB_CONFIG["db_service_name"]), required=False),
-        StrInput(name="db_username", display_name="Username", value=str(DEFAULT_DB_CONFIG["db_username"]), required=False),
-        SecretStrInput(name="db_password", display_name="Password", value=str(DEFAULT_DB_CONFIG["db_password"]), required=False),
         StrInput(
-            name="llm_base_url",
-            display_name="LLM Base URL",
+            name="run_yn",
+            display_name="Run YN",
+            value="Y",
             required=False,
-            info="OpenAI-compatible LLM gateway base URL.",
-        ),
-        SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=False),
-        StrInput(name="llm_model", display_name="LLM Model", value="claude-haiku-4-5-20251001", required=False),
-        IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=4096, required=False),
-        IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=900, required=False),
-        MessageTextInput(name="mig_sql_prompt", display_name="MIG SQL Prompt", required=False),
-        MessageTextInput(name="verify_sql_prompt", display_name="VERIFY SQL Prompt", required=False),
-        MessageTextInput(name="to_sql_prompt", display_name="TO SQL Prompt", required=False),
-        MessageTextInput(name="bind_sql_prompt", display_name="BIND SQL Prompt", required=False),
-        MessageTextInput(name="test_sql_prompt", display_name="TEST SQL Prompt", required=False),
-        StrInput(
-            name="system_schema",
-            display_name="System Schema",
-            value=str(DEFAULT_DB_CONFIG["system_schema"]),
-            required=False,
-            info="Schema containing SmartMigration metadata/log tables. Leave blank for current user.",
-        ),
-        StrInput(name="source_schema", display_name="Source Schema", required=False),
-        StrInput(name="target_schema", display_name="Target Schema", required=False),
-        IntInput(name="migration_max_attempts", display_name="Migration Max Attempts", value=3, required=False),
-        IntInput(name="sql_conversion_max_attempts", display_name="SQL Conversion Max Attempts", value=3, required=False),
-        IntInput(
-            name="no_job_sleep_seconds",
-            display_name="No Job Sleep Seconds",
-            value=600,
-            required=False,
-            info="Sleep interval after a loop finds no executable job. Default: 600 seconds.",
-        ),
-        IntInput(
-            name="error_sleep_seconds",
-            display_name="Error Sleep Seconds",
-            value=60,
-            required=False,
-            info="Sleep interval after an unexpected loop error. Default: 60 seconds.",
-        ),
-        IntInput(
-            name="status_log_alive_grace_seconds",
-            display_name="Status Log Alive Grace Seconds",
-            value=1800,
-            required=False,
-            info="Control heartbeat grace seconds. RUNNING/STOP_REQUESTED is treated as alive only when NEXT_BATCH_CONTROL.HEARTBEAT_AT is newer than this value.",
-        ),
-        BoolInput(
-            name="auto_install_packages",
-            display_name="Auto Install Missing Packages",
-            value=True,
-            required=False,
-            info="If true, installs missing runtime packages with pip before DB connection.",
+            info="Set Y to start the background supervisor loop. Set N to request stop.",
         ),
     ]
 
@@ -218,7 +180,7 @@ class BatchAgentCommandTool(Component):
             "run_id": run_id,
             "mode": "component_thread",
             "worker_thread_alive": self.__class__._is_worker_thread_alive(),
-            "message": "Batch monitor will stay alive and write pending NEXT_MIG_INFO counts to NEXT_BATCH_LOG every 10 seconds.",
+            "message": "Batch Supervisor Agent started. It will poll jobs and execute one selected tool route per cycle.",
         }
 
     def _stop(self, config: dict[str, Any]) -> dict[str, Any]:
@@ -665,17 +627,25 @@ class BatchAgentCommandTool(Component):
                     break
 
                 try:
-                    pending_count = helper._count_pending_migration_jobs(config)
+                    result = helper._run_batch_supervisor_cycle(config)
                     elapsed = round(time.perf_counter() - started, 3)
-                    event_type = "HEARTBEAT"
-                    sleep_seconds = 10
-                    message = f"작업대상이 {pending_count}건 있습니다."
+                    event_type = "JOB_SUCCESS" if result.get("job_executed") else "NO_JOB"
+                    if str(result.get("status") or "").strip().upper() == "STOPPED":
+                        event_type = "JOB_STOPPED"
+                    elif result.get("job_executed") and not result.get("ok"):
+                        event_type = "JOB_FAIL"
+                    sleep_seconds = 0 if result.get("job_executed") else int(config["no_job_sleep_seconds"])
+                    message = str(result.get("message") or "")
+                    error_message = result.get("error")
+                    agent_name = result.get("agent")
+                    job_id = result.get("job_id")
+                    job_status = result.get("status")
 
                     cls._state["last_event"] = event_type
-                    cls._state["last_agent"] = "BATCH_MONITOR"
-                    cls._state["last_job_id"] = None
-                    cls._state["last_job_status"] = str(pending_count)
-                    cls._state["last_error"] = None
+                    cls._state["last_agent"] = agent_name
+                    cls._state["last_job_id"] = job_id
+                    cls._state["last_job_status"] = job_status
+                    cls._state["last_error"] = error_message
                     cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
 
                     helper._update_control_heartbeat(
@@ -683,8 +653,10 @@ class BatchAgentCommandTool(Component):
                         run_id,
                         loop_no,
                         event_type,
-                        agent_name="BATCH_MONITOR",
-                        job_status=str(pending_count),
+                        agent_name=agent_name,
+                        job_id=job_id,
+                        job_status=job_status,
+                        last_error=error_message,
                         message=message,
                     )
                     helper._write_batch_log_safe(
@@ -692,14 +664,23 @@ class BatchAgentCommandTool(Component):
                         run_id,
                         loop_no,
                         event_type,
-                        agent_name="BATCH_MONITOR",
-                        job_status=str(pending_count),
+                        agent_name=agent_name,
+                        job_id=job_id,
+                        job_status=job_status,
                         message=message,
+                        error_message=error_message,
                         sleep_seconds=sleep_seconds,
                         elapsed_seconds=elapsed,
                     )
-                    helper._console(f"cycle {loop_no} {event_type}: {message}")
-                    helper._interruptible_sleep(sleep_seconds, config, run_id)
+                    helper._console(
+                        f"cycle {loop_no} {event_type}: "
+                        f"agent={agent_name or '-'} job_id={job_id or '-'} "
+                        f"status={job_status or '-'} message={message or '-'}"
+                    )
+                    if event_type == "JOB_STOPPED":
+                        break
+                    if sleep_seconds > 0:
+                        helper._interruptible_sleep(sleep_seconds, config, run_id)
 
                 except InterruptedError as exc:
                     elapsed = round(time.perf_counter() - started, 3)
@@ -770,17 +751,7 @@ class BatchAgentCommandTool(Component):
         The supervisor prompt decides the route, while the route function applies
         a minimal existence guard so an impossible route cannot execute.
         """
-        pending_count = self._count_pending_migration_jobs(config)
-        return {
-            "job_executed": False,
-            "ok": True,
-            "agent": "BATCH_MONITOR",
-            "job_id": None,
-            "status": str(pending_count),
-            "message": f"작업대상이 {pending_count}건 있습니다.",
-            "error": None,
-            "supervisor_tool": "count_pending_migration_jobs",
-        }
+        self._ensure_runtime_dependencies(config)
 
         from typing import TypedDict
 
@@ -827,13 +798,7 @@ class BatchAgentCommandTool(Component):
                 },
             }
             messages = [
-                SystemMessage(
-                    content=(
-                        "You are the SmartMigration batch supervisor. "
-                        "Decide which route the current LangGraph cycle should take. "
-                        "Return JSON only. Do not include markdown."
-                    )
-                ),
+                SystemMessage(content=SUPERVISOR_SYSTEM_PROMPT),
                 HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
             ]
             llm_kwargs: dict[str, Any] = {
@@ -1074,36 +1039,40 @@ class BatchAgentCommandTool(Component):
         self.default_max_attempts = config["migration_max_attempts"]
     def _snapshot_config(self) -> dict[str, Any]:
         return {
-            "db_host": str(self.db_host or DEFAULT_DB_CONFIG["db_host"]).strip(),
-            "db_port": int(self.db_port or DEFAULT_DB_CONFIG["db_port"]),
-            "db_service_name": str(self.db_service_name or DEFAULT_DB_CONFIG["db_service_name"]).strip(),
-            "db_username": str(self.db_username or DEFAULT_DB_CONFIG["db_username"]).strip(),
-            "db_password": self._secret_to_str(self.db_password) or str(DEFAULT_DB_CONFIG["db_password"]),
-            "llm_base_url": str(self.llm_base_url or "").strip(),
-            "llm_api_key": self._secret_to_str(self.llm_api_key),
-            "llm_model": str(self.llm_model or "").strip(),
-            "llm_max_tokens": int(self.llm_max_tokens or 4096),
-            "llm_timeout_seconds": int(self.llm_timeout_seconds or 900),
-            "mig_sql_prompt": str(self.mig_sql_prompt or ""),
-            "verify_sql_prompt": str(self.verify_sql_prompt or ""),
-            "to_sql_prompt": str(self.to_sql_prompt or ""),
-            "bind_sql_prompt": str(self.bind_sql_prompt or ""),
-            "test_sql_prompt": str(self.test_sql_prompt or ""),
-            "system_schema": str(self.system_schema or DEFAULT_DB_CONFIG["system_schema"]).strip(),
-            "source_schema": str(self.source_schema or "").strip(),
-            "target_schema": str(self.target_schema or "").strip(),
-            "migration_max_attempts": max(1, int(self.migration_max_attempts or 3)),
-            "sql_conversion_max_attempts": max(1, int(self.sql_conversion_max_attempts or 3)),
+            "db_host": str(getattr(self, "db_host", "") or DEFAULT_DB_CONFIG["db_host"]).strip(),
+            "db_port": int(getattr(self, "db_port", None) or DEFAULT_DB_CONFIG["db_port"]),
+            "db_service_name": str(getattr(self, "db_service_name", "") or DEFAULT_DB_CONFIG["db_service_name"]).strip(),
+            "db_username": str(getattr(self, "db_username", "") or DEFAULT_DB_CONFIG["db_username"]).strip(),
+            "db_password": self._secret_to_str(getattr(self, "db_password", None)) or str(DEFAULT_DB_CONFIG["db_password"]),
+            "llm_base_url": str(getattr(self, "llm_base_url", "") or os.getenv("SMARTMIGRATE_LLM_BASE_URL", "")).strip(),
+            "llm_api_key": self._secret_to_str(getattr(self, "llm_api_key", None)) or os.getenv("SMARTMIGRATE_LLM_API_KEY", ""),
+            "llm_model": str(getattr(self, "llm_model", "") or os.getenv("SMARTMIGRATE_LLM_MODEL", "claude-haiku-4-5-20251001")).strip(),
+            "llm_max_tokens": int(getattr(self, "llm_max_tokens", None) or os.getenv("SMARTMIGRATE_LLM_MAX_TOKENS", "4096")),
+            "llm_timeout_seconds": int(getattr(self, "llm_timeout_seconds", None) or os.getenv("SMARTMIGRATE_LLM_TIMEOUT_SECONDS", "900")),
+            "mig_sql_prompt": str(getattr(self, "mig_sql_prompt", "") or os.getenv("SMARTMIGRATE_MIG_SQL_PROMPT", "")),
+            "verify_sql_prompt": str(getattr(self, "verify_sql_prompt", "") or os.getenv("SMARTMIGRATE_VERIFY_SQL_PROMPT", "")),
+            "to_sql_prompt": str(getattr(self, "to_sql_prompt", "") or os.getenv("SMARTMIGRATE_TO_SQL_PROMPT", "")),
+            "bind_sql_prompt": str(getattr(self, "bind_sql_prompt", "") or os.getenv("SMARTMIGRATE_BIND_SQL_PROMPT", "")),
+            "test_sql_prompt": str(getattr(self, "test_sql_prompt", "") or os.getenv("SMARTMIGRATE_TEST_SQL_PROMPT", "")),
+            "system_schema": str(getattr(self, "system_schema", "") or DEFAULT_DB_CONFIG["system_schema"]).strip(),
+            "source_schema": str(getattr(self, "source_schema", "") or os.getenv("SMARTMIGRATE_SOURCE_SCHEMA", "")).strip(),
+            "target_schema": str(getattr(self, "target_schema", "") or os.getenv("SMARTMIGRATE_TARGET_SCHEMA", "")).strip(),
+            "migration_max_attempts": max(1, int(getattr(self, "migration_max_attempts", None) or 3)),
+            "sql_conversion_max_attempts": max(1, int(getattr(self, "sql_conversion_max_attempts", None) or 3)),
             "no_job_sleep_seconds": 10,
-            "error_sleep_seconds": max(1, int(self.error_sleep_seconds or 60)),
-            "status_log_alive_grace_seconds": max(1, int(self.status_log_alive_grace_seconds or 1800)),
-            "auto_install_packages": self._as_bool(self.auto_install_packages),
+            "error_sleep_seconds": max(1, int(getattr(self, "error_sleep_seconds", None) or 60)),
+            "status_log_alive_grace_seconds": max(1, int(getattr(self, "status_log_alive_grace_seconds", None) or 1800)),
+            "auto_install_packages": True,
         }
 
     def _parse_command(self) -> dict[str, Any]:
-        raw = str(self.command_json or "").strip()
-        if not raw:
+        raw = str(getattr(self, "run_yn", "Y") or "").strip().upper()
+        if raw in {"Y", "YES", "TRUE", "1", "ON", "START", "RUN"}:
             return {"action": "start"}
+        if raw in {"N", "NO", "FALSE", "0", "OFF", "STOP"}:
+            return {"action": "stop"}
+        if raw in {"STATUS", "S"}:
+            return {"action": "status"}
         lowered = raw.lower()
         if lowered in {"start", "resume", "batch start", "batch resume"} or raw in {
             "배치 시작",
@@ -1159,6 +1128,10 @@ class BatchAgentCommandTool(Component):
             import langchain_community
         except ModuleNotFoundError:
             missing_packages.append("langchain-community")
+        try:
+            import langgraph
+        except ModuleNotFoundError:
+            missing_packages.append("langgraph")
         try:
             import sqlalchemy
         except ModuleNotFoundError:
