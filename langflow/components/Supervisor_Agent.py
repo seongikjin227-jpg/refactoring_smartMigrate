@@ -26,6 +26,7 @@ _ROOT_DIR = Path(__file__).resolve().parents[2]
 _RUNTIME_DIR = _ROOT_DIR / "runtime"
 _LOG_FILE = _RUNTIME_DIR / "agent.log"
 _COMMAND_FILE = _RUNTIME_DIR / "chat_command.json"
+_PID_FILE = _RUNTIME_DIR / "supervisor_agent.pid"
 
 DEFAULT_DB_CONFIG = {
     "db_host": "10.0.0.1",
@@ -152,7 +153,7 @@ class BatchAgentCommandTool(Component):
             config = self._snapshot_config()
 
             if self._run_yn_equals_y(config):
-                result = self._start(config)
+                result = self._start_background(config)
             else:
                 result = {
                     "ok": False,
@@ -168,6 +169,66 @@ class BatchAgentCommandTool(Component):
             result = {"ok": False, "error": str(exc)}
             self.status = result
             return Data(data=result)
+
+    def _start_background(self, config: dict[str, Any]) -> dict[str, Any]:
+        """Start the blocking supervisor loop in a separate Python process.
+
+        This mirrors the original Streamlit agent_control.py behavior. Langflow
+        receives a quick response, while the child process owns Supervisor_loop().
+        """
+        _RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        chat_command = str(config.get("chat_input") or "").strip()
+
+        if self._is_background_supervisor_running(config):
+            command_queued = False
+            if chat_command:
+                self._write_chat_command_file(chat_command)
+                config["chat_input"] = ""
+                command_queued = True
+            control = self._read_batch_control(config)
+            return {
+                "ok": True,
+                "status": "already_running",
+                "running": True,
+                "requested_running": True,
+                "run_id": control.get("run_id"),
+                "pid": self._read_pid(),
+                "mode": "background_process",
+                "command_queued": command_queued,
+                "message": (
+                    "Batch supervisor is already running. "
+                    "Chat input was queued for the next cycle." if command_queued
+                    else "Batch supervisor is already running."
+                ),
+            }
+
+        run_id = datetime.now().strftime("%Y%m%d%H%M%S%f")
+        config_file = _RUNTIME_DIR / f"supervisor_config_{run_id}.json"
+        config_file.write_text(
+            json.dumps(config, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        env = os.environ.copy()
+        env["SMARTMIGRATE_MONITOR_CONFIG"] = str(config_file)
+        env["SMARTMIGRATE_RUN_YN"] = "Y"
+
+        process = subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve())],
+            cwd=str(_ROOT_DIR),
+            env=env,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+        )
+        _PID_FILE.write_text(str(process.pid), encoding="utf-8")
+        return {
+            "ok": True,
+            "status": "started",
+            "running": True,
+            "requested_running": True,
+            "pid": process.pid,
+            "mode": "background_process",
+            "config_file": str(config_file),
+            "message": "Batch supervisor process started.",
+        }
 
     def _start(self, config: dict[str, Any]) -> dict[str, Any]:
         run_id = datetime.now().strftime("%Y%m%d%H%M%S%f")
@@ -210,6 +271,7 @@ class BatchAgentCommandTool(Component):
                 "message": "Batch supervisor is already running in NEXT_BATCH_CONTROL.",
             }
 
+        _PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
         self._write_batch_log_safe(config, run_id, 0, "START", message="Batch agent started.")
         self.Supervisor_loop(config, run_id)
         state = dict(self.__class__._state)
@@ -254,9 +316,63 @@ class BatchAgentCommandTool(Component):
             state["control"] = control
             state["stop_requested"] = str(control.get("stop_requested_yn") or "").upper() == "Y"
             state["status_source"] = "memory+NEXT_BATCH_CONTROL"
+            state["background_pid"] = self._read_pid()
+            state["background_running"] = self._is_background_supervisor_running(config)
         else:
             state["stop_requested"] = not bool(state["requested_running"])
         return {"ok": True, **state}
+
+    def _read_pid(self) -> int | None:
+        try:
+            return int(_PID_FILE.read_text(encoding="utf-8").strip())
+        except Exception:
+            return None
+
+    def _pid_alive(self, pid: int | None) -> bool:
+        if not pid:
+            return False
+        try:
+            os.kill(int(pid), 0)
+            return True
+        except OSError:
+            return False
+
+    def _is_batch_control_running(self, config: dict[str, Any]) -> bool:
+        table = self._batch_control_table(config)
+        rows = self._query(
+            config,
+            f"""
+            SELECT COUNT(*)
+              FROM {table}
+             WHERE CONTROL_NAME = 'BATCH_AGENT'
+               AND UPPER(TRIM(STATUS)) = 'RUNNING'
+               AND UPPER(TRIM(NVL(STOP_REQUESTED_YN, 'N'))) = 'N'
+               AND HEARTBEAT_AT IS NOT NULL
+               AND HEARTBEAT_AT >= CURRENT_TIMESTAMP - NUMTODSINTERVAL(:1, 'SECOND')
+            """,
+            [300],
+        )
+        return bool(rows and int(rows[0][0] or 0) > 0)
+
+    def _is_background_supervisor_running(self, config: dict[str, Any]) -> bool:
+        try:
+            if self._is_batch_control_running(config):
+                return True
+        except Exception:
+            logger.exception("[BatchSupervisor] failed to inspect NEXT_BATCH_CONTROL running state")
+
+        pid = self._read_pid()
+        running = self._pid_alive(pid)
+        if not running and _PID_FILE.exists():
+            _PID_FILE.unlink(missing_ok=True)
+        return running
+
+    def _write_chat_command_file(self, command: str) -> None:
+        _RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        _COMMAND_FILE.write_text(
+            json.dumps({"command": str(command or "").strip()}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
     @staticmethod
     def _console(message: str) -> None:
@@ -428,6 +544,8 @@ class BatchAgentCommandTool(Component):
             cls._state["last_event"] = "STOPPED"
             cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
             self._mark_batch_control_stopped(config, run_id)
+            if self._read_pid() == os.getpid():
+                _PID_FILE.unlink(missing_ok=True)
             self._write_batch_log_safe(config, run_id, int(cls._state.get("loop_no") or 0), "STOPPED", message="Batch agent stopped.")
 
     def _run_batch_supervisor_cycle(self, config: dict[str, Any]) -> dict[str, Any]:
