@@ -125,9 +125,7 @@ class BatchAgentCommandTool(Component):
         MessageTextInput(
             name="run_yn",
             display_name="Run YN",
-            value="Y",
             required=False,
-            tool_mode=True,
             info="Set Y to start the background supervisor loop. Set N to request stop.",
         ),
         MessageTextInput(name="mig_sql_prompt", display_name="MIG SQL Prompt", required=False),
@@ -233,7 +231,7 @@ class BatchAgentCommandTool(Component):
         value = getattr(self, "run_yn", None)
         if value is None and config:
             value = config.get("run_yn")
-        text = str(value if value is not None else "Y").strip().upper()
+        text = str(value if value is not None else "").strip().upper()
         return text in {"Y", "YES", "TRUE", "1", "ON", "START", "RUN"}
 
     @classmethod
@@ -250,6 +248,10 @@ class BatchAgentCommandTool(Component):
         while True:
             try:
                 if auto_start_on_boot:
+                    helper._apply_config(config)
+                    if not helper._should_continue_running(config):
+                        time.sleep(idle_sleep_seconds)
+                        continue
                     run_id = datetime.now().strftime("%Y%m%d%H%M%S%f")
                     helper._write_batch_log_safe(
                         config,
@@ -707,7 +709,7 @@ class BatchAgentCommandTool(Component):
         self.default_max_attempts = config["migration_max_attempts"]
     def _snapshot_config(self) -> dict[str, Any]:
         return {
-            "run_yn": str(getattr(self, "run_yn", "Y") or "Y").strip().upper(),
+            "run_yn": str(getattr(self, "run_yn", "") or "").strip().upper(),
             "db_host": str(getattr(self, "db_host", "") or DEFAULT_DB_CONFIG["db_host"]).strip(),
             "db_port": int(getattr(self, "db_port", None) or DEFAULT_DB_CONFIG["db_port"]),
             "db_service_name": str(getattr(self, "db_service_name", "") or DEFAULT_DB_CONFIG["db_service_name"]).strip(),
@@ -733,7 +735,7 @@ class BatchAgentCommandTool(Component):
         }
 
     def _parse_command(self) -> dict[str, Any]:
-        raw = str(getattr(self, "run_yn", "Y") or "").strip().upper()
+        raw = str(getattr(self, "run_yn", "") or "").strip().upper()
         if raw in {"Y", "YES", "TRUE", "1", "ON", "START", "RUN"}:
             return {"action": "start"}
         if raw in {"N", "NO", "FALSE", "0", "OFF", "STOP"}:
@@ -3004,7 +3006,7 @@ def build_service_config() -> dict[str, Any]:
     """Build background monitor config from env so no Langflow input is required."""
     file_config = _load_service_config_file()
     config = {
-        "run_yn": _env("SMARTMIGRATE_RUN_YN", "Y"),
+        "run_yn": _env("SMARTMIGRATE_RUN_YN", ""),
         "db_host": _env("SMARTMIGRATE_DB_HOST", str(DEFAULT_DB_CONFIG["db_host"])),
         "db_port": _env_int("SMARTMIGRATE_DB_PORT", int(DEFAULT_DB_CONFIG["db_port"])),
         "db_service_name": _env("SMARTMIGRATE_DB_SERVICE_NAME", str(DEFAULT_DB_CONFIG["db_service_name"])),

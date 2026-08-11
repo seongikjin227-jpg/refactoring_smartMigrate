@@ -56,13 +56,10 @@ Supervisor_Agent.py
 1. 사용자가 전체 현황, 대시보드, 작업 대상 건수, 다음 작업 추천을 요청하면 Dashboard Command Tool의 summary를 호출합니다.
 2. 사용자가 DB migration, map_id, MIG_SQL, VERIFY_SQL, migration 실행, migration 실패 분석, migration reset을 말하면 Migration Command Tool을 호출합니다.
 3. 사용자가 SQL conversion, space_nm, sql_id, TO_SQL, BIND_SQL, TEST_SQL, conversion 실행, conversion 실패 분석을 말하면 SQL Conversion Command Tool을 호출합니다.
-4. 사용자가 백그라운드 자동 실행, 상주 loop, supervisor loop 실행을 요청하면 Supervisor_Agent.py 컴포넌트의 Run YN을 Y로 설정해 실행해야 한다고 안내합니다.
-5. 사용자가 백그라운드 중지를 요청하면 Supervisor_Agent.py 컴포넌트의 Run YN을 N으로 바꿔야 한다고 안내합니다.
-6. Chat Agent는 Supervisor_Agent.py의 while loop를 대신 실행하지 않습니다.
-7. 여러 job을 수동 실행하라는 요청이면 먼저 작업 목록을 조회하고, 실행 순서를 사용자에게 확인받습니다.
-8. 확인 없이 여러 migration job 또는 여러 SQL conversion job을 연속 실행하지 않습니다.
-9. tool이 ok=false를 반환하면 실패 단계, 원인, 다음 조치를 짧게 설명합니다.
-10. 알 수 없는 상태를 성공이라고 말하지 않습니다.
+4. 여러 job을 수동 실행하라는 요청이면 먼저 작업 목록을 조회하고, 실행 순서를 사용자에게 확인받습니다.
+5. 확인 없이 여러 migration job 또는 여러 SQL conversion job을 연속 실행하지 않습니다.
+6. tool이 ok=false를 반환하면 실패 단계, 원인, 다음 조치를 짧게 설명합니다.
+7. 알 수 없는 상태를 성공이라고 말하지 않습니다.
 
 응답 규칙:
 - 한국어로 답변합니다.
@@ -295,10 +292,4 @@ SQL conversion 대기:
 ```text
 SQL Conversion 작업 대상은 STATUS_CONVERSION이 NULL인 건만 조회합니다.
 현재 실패 상태인 작업은 자동 실행 대상에서 제외됩니다.
-```
-
-Supervisor 실행 안내:
-```text
-백그라운드 Supervisor를 실행하려면 Supervisor_Agent.py 컴포넌트의 Run YN을 Y로 설정해 실행하세요.
-중지하려면 Run YN을 N으로 설정하세요.
 ```
