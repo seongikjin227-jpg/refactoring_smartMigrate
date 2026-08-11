@@ -14,7 +14,6 @@ class ChatAgent(Component):
     description = "Routes user chat into an answer and an optional Supervisor command."
     name = "SmartMigrateChatAgent"
     icon = "MessagesSquare"
-    group_outputs = True
 
     inputs = [
         MessageTextInput(
@@ -26,9 +25,9 @@ class ChatAgent(Component):
     ]
 
     outputs = [
-        Output(display_name="Answer", name="answer", method="answer_text"),
-        Output(display_name="Supervisor Command", name="supervisor_command", method="supervisor_command"),
-        Output(display_name="Result JSON", name="result", method="route_chat"),
+        Output(display_name="Answer", name="answer", method="answer_text", group_outputs=True),
+        Output(display_name="Supervisor Command", name="supervisor_command", method="supervisor_command", group_outputs=True),
+        Output(display_name="Result JSON", name="result", method="route_chat", group_outputs=True),
     ]
 
     def route_chat(self) -> Data:
