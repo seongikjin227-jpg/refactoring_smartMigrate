@@ -143,9 +143,9 @@ class BatchAgentCommandTool(Component):
         try:
             config = self._snapshot_config()
 
-            if self._run_yn_is_y(config):
+            if self._run_yn_equals_y(config):
                 result = self._start(config)
-            elif self._run_yn_is_n(config):
+            elif self._run_yn_equals_n(config):
                 result = self._stop(config)
             else:
                 result = {
@@ -184,13 +184,13 @@ class BatchAgentCommandTool(Component):
                 "message": "Batch supervisor is already running.",
             }
         self._write_batch_log_safe(config, run_id, 0, "START", message="Batch agent started.")
-        self._worker_loop(config, run_id)
+        self.Supervisor_loop(config, run_id)
         state = dict(self.__class__._state)
         return {
             "ok": True,
             "status": state.get("last_event") or "stopped",
             "running": False,
-            "requested_running": self._run_yn_is_y(config),
+            "requested_running": self._run_yn_equals_y(config),
             "run_id": run_id,
             "mode": "blocking_loop",
             "message": "Batch Supervisor Agent loop finished.",
@@ -216,7 +216,7 @@ class BatchAgentCommandTool(Component):
     def _status(self, config: dict[str, Any] | None = None) -> dict[str, Any]:
         state = dict(self.__class__._state)
         state["running"] = bool(self.__class__._state.get("running"))
-        state["requested_running"] = self._run_yn_is_y(config) if config else None
+        state["requested_running"] = self._run_yn_equals_y(config) if config else None
         state["status_source"] = "memory"
         state["stop_requested"] = not bool(state["requested_running"])
         return {"ok": True, **state}
@@ -226,7 +226,7 @@ class BatchAgentCommandTool(Component):
         logger.info(f"[BatchSupervisor] {message}")
 
     def _raise_if_batch_stop_requested(self) -> None:
-        if not self._run_yn_is_y(getattr(self, "_batch_runtime_config", None)) or not bool(self.__class__._state.get("running")):
+        if not self._run_yn_equals_y(getattr(self, "_batch_runtime_config", None)):
             raise InterruptedError("Batch stop requested.")
 
     def _run_yn_value(self, config: dict[str, Any] | None = None) -> str:
@@ -235,59 +235,13 @@ class BatchAgentCommandTool(Component):
             value = config.get("run_yn")
         return str(value if value is not None else "").strip().upper()
 
-    def _run_yn_is_y(self, config: dict[str, Any] | None = None) -> bool:
-        return self._run_yn_value(config) in {"Y", "YES", "TRUE", "1", "ON", "START", "RUN"}
+    def _run_yn_equals_y(self, config: dict[str, Any] | None = None) -> bool:
+        return self._run_yn_value(config) == "Y"
 
-    def _run_yn_is_n(self, config: dict[str, Any] | None = None) -> bool:
-        return self._run_yn_value(config) in {"N", "NO", "FALSE", "0", "OFF", "STOP"}
+    def _run_yn_equals_n(self, config: dict[str, Any] | None = None) -> bool:
+        return self._run_yn_value(config) == "N"
 
-    @classmethod
-    def serve_forever(cls, config: dict[str, Any], auto_start_on_boot: bool = True, idle_sleep_seconds: int = 10) -> None:
-        """Run the real always-on supervisor loop without spawning a worker thread.
-
-        This service owns the blocking while loop and can be started by the
-        Langflow/server startup command so it survives normal flow request
-        boundaries.
-        """
-        helper = object.__new__(cls)
-        idle_sleep_seconds = max(1, int(idle_sleep_seconds or 10))
-
-        while True:
-            try:
-                if auto_start_on_boot:
-                    helper._apply_config(config)
-                    if not helper._run_yn_is_y(config):
-                        time.sleep(idle_sleep_seconds)
-                        continue
-                    run_id = datetime.now().strftime("%Y%m%d%H%M%S%f")
-                    helper._write_batch_log_safe(
-                        config,
-                        run_id,
-                        0,
-                        "AUTO_START",
-                        message="Batch supervisor auto-started on service boot.",
-                    )
-                    helper._worker_loop(config, run_id)
-                    continue
-
-                time.sleep(idle_sleep_seconds)
-            except KeyboardInterrupt:
-                raise
-            except Exception as exc:
-                try:
-                    helper._write_batch_log_safe(
-                        config,
-                        None,
-                        0,
-                        "SERVICE_ERROR",
-                        message="Batch supervisor service error.",
-                        error_message=str(exc),
-                    )
-                except Exception:
-                    pass
-                time.sleep(max(1, int(config.get("error_sleep_seconds") or 60)))
-
-    def _worker_loop(self, config: dict[str, Any], run_id: str) -> None:
+    def Supervisor_loop(self, config: dict[str, Any], run_id: str) -> None:
         cls = self.__class__
         config = {**config, "batch_run_id": run_id}
         self._batch_runtime_config = config
@@ -306,7 +260,7 @@ class BatchAgentCommandTool(Component):
             }
         )
         try:
-            while self._run_yn_is_y(config):
+            while self._run_yn_value(config) == "Y":
                 cls._state["loop_no"] = int(cls._state.get("loop_no") or 0) + 1
                 loop_no = int(cls._state["loop_no"])
                 cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
@@ -314,7 +268,7 @@ class BatchAgentCommandTool(Component):
 
                 started = time.perf_counter()
                 self._console(f"cycle {loop_no} started")
-                if not self._run_yn_is_y(config):
+                if self._run_yn_value(config) != "Y":
                     break
 
                 try:
@@ -867,7 +821,7 @@ class BatchAgentCommandTool(Component):
     def _interruptible_sleep(self, seconds: int, config: dict[str, Any] | None = None, run_id: str | None = None) -> None:
         deadline = time.time() + max(0, int(seconds))
         while time.time() < deadline:
-            if not self._run_yn_is_y(config) or not bool(self.__class__._state.get("running")):
+            if self._run_yn_value(config) != "Y":
                 break
             time.sleep(min(1.0, max(0.0, deadline - time.time())))
 
@@ -3003,7 +2957,7 @@ def build_service_config() -> dict[str, Any]:
     """Build background monitor config from env so no Langflow input is required."""
     file_config = _load_service_config_file()
     config = {
-        "run_yn": _env("SMARTMIGRATE_RUN_YN", ""),
+        "run_yn": _env("SMARTMIGRATE_RUN_YN", "Y"),
         "db_host": _env("SMARTMIGRATE_DB_HOST", str(DEFAULT_DB_CONFIG["db_host"])),
         "db_port": _env_int("SMARTMIGRATE_DB_PORT", int(DEFAULT_DB_CONFIG["db_port"])),
         "db_service_name": _env("SMARTMIGRATE_DB_SERVICE_NAME", str(DEFAULT_DB_CONFIG["db_service_name"])),
@@ -3034,12 +2988,28 @@ def build_service_config() -> dict[str, Any]:
 
 def main() -> None:
     config = build_service_config()
-    auto_start = _env_bool("SMARTMIGRATE_MONITOR_AUTO_START", True)
-    BatchAgentCommandTool.serve_forever(
+    supervisor = object.__new__(BatchAgentCommandTool)
+    supervisor._apply_config(config)
+
+    if not supervisor._run_yn_equals_y(config):
+        supervisor._write_batch_log_safe(
+            config,
+            None,
+            0,
+            "NOT_STARTED",
+            message="Batch supervisor was not started because Run YN is not Y.",
+        )
+        return
+
+    run_id = datetime.now().strftime("%Y%m%d%H%M%S%f")
+    supervisor._write_batch_log_safe(
         config,
-        auto_start_on_boot=auto_start,
-        idle_sleep_seconds=10,
+        run_id,
+        0,
+        "AUTO_START",
+        message="Batch supervisor auto-started from main.",
     )
+    supervisor.Supervisor_loop(config, run_id)
 
 
 if __name__ == "__main__":
