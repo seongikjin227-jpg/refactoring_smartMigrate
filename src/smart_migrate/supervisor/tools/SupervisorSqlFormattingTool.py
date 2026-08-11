@@ -13,7 +13,12 @@ from smart_migrate.supervisor.SupervisorJobRegistry import (
 
 @tool
 def run_sql_formatting(row_ids: list) -> str:
-    """Run SQL formatting jobs for the given NEXT_SQL_INFO row IDs."""
+    """Run the SQL Formatting Agent for selected NEXT_SQL_INFO row IDs.
+
+    This is a LangChain tool wrapper around SqlFormattingAgent.process_job().
+    Formatting generation and persistence are handled by the formatting
+    workflow, not in the supervisor.
+    """
     results = []
     logger = callbacks.get("logger")
 
@@ -30,6 +35,8 @@ def run_sql_formatting(row_ids: list) -> str:
             row_key = str(row_id)
             set_active_job("SQL Formatting", job_label, "FORMATTING")
             callbacks["sql_inc"](row_key)
+            # format_proc is SqlFormattingAgent.process_job(job). Its workflow
+            # owns formatting generation and result persistence.
             final_status = callbacks["format_proc"](job)
             results.append(f"{job_label} completed")
         except Exception as exc:

@@ -25,6 +25,7 @@ from lfx.schema.data import Data
 _ROOT_DIR = Path(__file__).resolve().parents[2]
 _RUNTIME_DIR = _ROOT_DIR / "runtime"
 _LOG_FILE = _RUNTIME_DIR / "agent.log"
+_COMMAND_FILE = _RUNTIME_DIR / "chat_command.json"
 
 DEFAULT_DB_CONFIG = {
     "db_host": "10.0.0.1",
@@ -60,6 +61,7 @@ Choose exactly one route for the current cycle:
 
 Rules:
 - DB_MIGRATION always has priority over SQL_CONVERSION.
+- If a user request is provided, reflect it for this cycle only.
 - Run at most one job per cycle.
 - Never request user input.
 - Do not invent a job that was not provided in the snapshot.
@@ -128,6 +130,12 @@ class BatchAgentCommandTool(Component):
             required=False,
             info="Set Y to start the background supervisor loop. Set N to request stop.",
         ),
+        MessageTextInput(
+            name="chat_input",
+            display_name="Chat Input",
+            required=False,
+            info="Optional user command. Example: run migration map_id=101 or run sql_id=SEL_001 space_nm=userMapper.",
+        ),
         MessageTextInput(name="mig_sql_prompt", display_name="MIG SQL Prompt", required=False),
         MessageTextInput(name="verify_sql_prompt", display_name="VERIFY SQL Prompt", required=False),
         MessageTextInput(name="to_sql_prompt", display_name="TO SQL Prompt", required=False),
@@ -145,15 +153,13 @@ class BatchAgentCommandTool(Component):
 
             if self._run_yn_equals_y(config):
                 result = self._start(config)
-            elif self._run_yn_equals_n(config):
-                result = self._stop(config)
             else:
                 result = {
                     "ok": False,
                     "status": "ignored",
                     "running": bool(self.__class__._state.get("running")),
                     "requested_running": False,
-                    "message": "Run YN input must be Y to start or N to stop.",
+                    "message": "Run YN input must be Y to start. Stop is requested by Chat Agent through NEXT_BATCH_CONTROL.",
                 }
 
             self.status = result
@@ -183,6 +189,27 @@ class BatchAgentCommandTool(Component):
                 "mode": "blocking_loop",
                 "message": "Batch supervisor is already running.",
             }
+
+        acquired = self._try_acquire_batch_control(config, run_id)
+        if not acquired:
+            control = self._read_batch_control(config)
+            self._write_batch_log_safe(
+                config,
+                control.get("run_id") or run_id,
+                int(control.get("loop_no") or 0),
+                "ALREADY_RUNNING",
+                message="Batch supervisor is already running in NEXT_BATCH_CONTROL.",
+            )
+            return {
+                "ok": True,
+                "status": "already_running",
+                "running": True,
+                "requested_running": True,
+                "run_id": control.get("run_id") or run_id,
+                "mode": "blocking_loop",
+                "message": "Batch supervisor is already running in NEXT_BATCH_CONTROL.",
+            }
+
         self._write_batch_log_safe(config, run_id, 0, "START", message="Batch agent started.")
         self.Supervisor_loop(config, run_id)
         state = dict(self.__class__._state)
@@ -197,9 +224,13 @@ class BatchAgentCommandTool(Component):
         }
 
     def _stop(self, config: dict[str, Any]) -> dict[str, Any]:
+        # Stop is normally requested by Chat Agent through NEXT_BATCH_CONTROL.
+        # This method remains as a local helper for compatibility, but RunYN=N
+        # no longer calls it.
         state = self._status(config)
         run_id = state.get("run_id") or datetime.now().strftime("%Y%m%d%H%M%S%f")
         loop_no = int(state.get("loop_no") or 0)
+        self._request_batch_stop(config)
         self._write_batch_log_safe(config, run_id, loop_no, "STOP_REQUESTED", message="Stop requested.")
         self.__class__._state["running"] = False
         self.__class__._state["last_event"] = "STOP_REQUESTED"
@@ -218,7 +249,13 @@ class BatchAgentCommandTool(Component):
         state["running"] = bool(self.__class__._state.get("running"))
         state["requested_running"] = self._run_yn_equals_y(config) if config else None
         state["status_source"] = "memory"
-        state["stop_requested"] = not bool(state["requested_running"])
+        if config:
+            control = self._read_batch_control(config)
+            state["control"] = control
+            state["stop_requested"] = str(control.get("stop_requested_yn") or "").upper() == "Y"
+            state["status_source"] = "memory+NEXT_BATCH_CONTROL"
+        else:
+            state["stop_requested"] = not bool(state["requested_running"])
         return {"ok": True, **state}
 
     @staticmethod
@@ -226,8 +263,15 @@ class BatchAgentCommandTool(Component):
         logger.info(f"[BatchSupervisor] {message}")
 
     def _raise_if_batch_stop_requested(self) -> None:
-        if not self._run_yn_equals_y(getattr(self, "_batch_runtime_config", None)):
-            raise InterruptedError("Batch stop requested.")
+        config = getattr(self, "_batch_runtime_config", None)
+        run_id = str((config or {}).get("batch_run_id") or "")
+        if not config:
+            if not self._run_yn_equals_y(config):
+                raise InterruptedError("Batch stop requested.")
+            return
+        should_continue, reason = self._batch_should_continue(config, run_id)
+        if not should_continue:
+            raise InterruptedError(reason)
 
     def _run_yn_value(self, config: dict[str, Any] | None = None) -> str:
         value = getattr(self, "run_yn", None)
@@ -245,6 +289,7 @@ class BatchAgentCommandTool(Component):
         cls = self.__class__
         config = {**config, "batch_run_id": run_id}
         self._batch_runtime_config = config
+        self._console(f"Supervisor_loop entered run_id={run_id} run_yn={self._run_yn_value(config)}")
         cls._state.update(
             {
                 "running": True,
@@ -260,16 +305,15 @@ class BatchAgentCommandTool(Component):
             }
         )
         try:
-            while self._run_yn_value(config) == "Y":
+            while self._batch_should_continue(config, run_id)[0]:
                 cls._state["loop_no"] = int(cls._state.get("loop_no") or 0) + 1
                 loop_no = int(cls._state["loop_no"])
                 cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
                 cls._state["last_event"] = "LOOP_START"
+                self._update_batch_control_heartbeat(config, run_id, loop_no, "LOOP_START")
 
                 started = time.perf_counter()
                 self._console(f"cycle {loop_no} started")
-                if self._run_yn_value(config) != "Y":
-                    break
 
                 try:
                     result = self._run_batch_supervisor_cycle(config)
@@ -292,6 +336,17 @@ class BatchAgentCommandTool(Component):
                     cls._state["last_job_status"] = job_status
                     cls._state["last_error"] = error_message
                     cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
+                    self._update_batch_control_heartbeat(
+                        config,
+                        run_id,
+                        loop_no,
+                        event_type,
+                        agent_name=agent_name,
+                        job_id=job_id,
+                        job_status=job_status,
+                        error_message=error_message,
+                        message=message,
+                    )
 
                     self._write_batch_log_safe(
                         config,
@@ -372,6 +427,7 @@ class BatchAgentCommandTool(Component):
             cls._state["running"] = False
             cls._state["last_event"] = "STOPPED"
             cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
+            self._mark_batch_control_stopped(config, run_id)
             self._write_batch_log_safe(config, run_id, int(cls._state.get("loop_no") or 0), "STOPPED", message="Batch agent stopped.")
 
     def _run_batch_supervisor_cycle(self, config: dict[str, Any]) -> dict[str, Any]:
@@ -393,29 +449,57 @@ class BatchAgentCommandTool(Component):
         class BatchSupervisorState(TypedDict, total=False):
             migration_job: dict[str, Any] | None
             sql_job: dict[str, Any] | None
+            chat_command: str
+            chat_target: dict[str, Any]
             decision: dict[str, Any]
             result: dict[str, Any]
 
         self._batch_runtime_config = config
         self._raise_if_batch_stop_requested()
+        chat_command = self._consume_chat_command(config)
+        chat_target = self._parse_chat_target(chat_command)
+        if chat_command:
+            logger.info(f"[Supervisor] 채팅 명령 수신: {chat_command}")
 
         def poll_jobs(_: BatchSupervisorState) -> BatchSupervisorState:
             self._raise_if_batch_stop_requested()
-            migration_job = self._poll_next_migration_job(config)
-            sql_job = None if migration_job else self._poll_next_sql_conversion_job(config)
+            migration_job = None
+            sql_job = None
+            if chat_target.get("map_id") is not None:
+                migration_job = self._poll_next_migration_job(config, map_id=int(chat_target["map_id"]))
+            elif chat_target.get("sql_id"):
+                sql_job = self._poll_next_sql_conversion_job(
+                    config,
+                    sql_id=str(chat_target["sql_id"]),
+                    space_nm=str(chat_target.get("space_nm") or "") or None,
+                )
+            else:
+                migration_job = self._poll_next_migration_job(config)
+                sql_job = None if migration_job else self._poll_next_sql_conversion_job(config)
             self._console(
                 "poll result: "
+                f"chat_target={chat_target or '-'} "
                 f"migration_job={migration_job or '-'} "
                 f"sql_job={sql_job or '-'}"
             )
-            return {"migration_job": migration_job, "sql_job": sql_job}
+            return {
+                "migration_job": migration_job,
+                "sql_job": sql_job,
+                "chat_command": chat_command,
+                "chat_target": chat_target,
+            }
 
         def supervisor_decide(state: BatchSupervisorState) -> BatchSupervisorState:
             self._raise_if_batch_stop_requested()
             payload = {
+                "chat_command": state.get("chat_command") or "",
+                "chat_target": state.get("chat_target") or {},
                 "migration_job": state.get("migration_job"),
                 "sql_job": state.get("sql_job"),
                 "policy": [
+                    "If chat_command is present, reflect it in this cycle.",
+                    "When chat_target contains map_id, run only that migration job if it is runnable.",
+                    "When chat_target contains sql_id, run only that SQL conversion job if it is runnable.",
                     "Choose exactly one route for this supervisor cycle.",
                     "Available routes: run_data_migration, run_sql_conversion, no_job.",
                     "Run at most one job per cycle.",
@@ -616,8 +700,68 @@ class BatchAgentCommandTool(Component):
             "reason": str(parsed.get("reason") or "").strip(),
         }
 
-    def _poll_next_migration_job(self, config: dict[str, Any]) -> dict[str, Any] | None:
+    def _consume_chat_command(self, config: dict[str, Any]) -> str:
+        """Consume one user command for this supervisor cycle.
+
+        This mirrors the original SupervisorAgent behavior:
+        runtime/chat_command.json is read once and deleted. Langflow chat_input
+        is also treated as a one-cycle seed command, then cleared from the
+        runtime config so it does not force the same job every loop.
+        """
+        inline_command = str(config.get("chat_input") or "").strip()
+        if inline_command:
+            config["chat_input"] = ""
+            return inline_command
+        return self._read_chat_command_file()
+
+    def _read_chat_command_file(self) -> str:
+        if not _COMMAND_FILE.exists():
+            return ""
+        try:
+            data = json.loads(_COMMAND_FILE.read_text(encoding="utf-8"))
+            _COMMAND_FILE.unlink(missing_ok=True)
+            return str(data.get("command") or "").strip()
+        except Exception:
+            logger.exception(f"[Supervisor] failed to read chat command file: {_COMMAND_FILE}")
+            return ""
+
+    def _parse_chat_target(self, chat_command: str) -> dict[str, Any]:
+        text = str(chat_command or "").strip()
+        if not text:
+            return {}
+
+        target: dict[str, Any] = {}
+        map_match = re.search(r"\bmap[\s_-]*id\s*[:=]?\s*(\d+)\b", text, flags=re.IGNORECASE)
+        if not map_match:
+            map_match = re.search(r"\bmap\s*[:=]?\s*(\d+)\b", text, flags=re.IGNORECASE)
+        if map_match:
+            target["map_id"] = int(map_match.group(1))
+
+        sql_match = re.search(
+            r"\bsql[\s_-]*id\s*[:=]?\s*([A-Za-z0-9_$#.\-]+)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if sql_match:
+            target["sql_id"] = sql_match.group(1)
+
+        space_match = re.search(
+            r"\b(?:space[\s_-]*nm|namespace)\s*[:=]?\s*([A-Za-z0-9_$#.\-/]+)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if space_match:
+            target["space_nm"] = space_match.group(1)
+
+        return target
+
+    def _poll_next_migration_job(self, config: dict[str, Any], map_id: int | None = None) -> dict[str, Any] | None:
         table = self._qualify_table("NEXT_MIG_INFO", config["system_schema"])
+        params: list[Any] = []
+        map_filter = ""
+        if map_id is not None:
+            map_filter = "AND MAP_ID = :1"
+            params.append(int(map_id))
         sql = f"""
             SELECT MAP_ID, PRIORITY
             FROM (
@@ -625,11 +769,12 @@ class BatchAgentCommandTool(Component):
                 FROM {table}
                 WHERE UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
                   AND STATUS IS NULL
+                  {map_filter}
                 ORDER BY PRIORITY ASC, MAP_ID ASC
             )
             WHERE ROWNUM <= 1
         """
-        rows = self._query(config, sql)
+        rows = self._query(config, sql, params)
         if not rows:
             return None
         return {"map_id": rows[0][0], "priority": rows[0][1]}
@@ -647,19 +792,33 @@ class BatchAgentCommandTool(Component):
             return 0
         return int(rows[0][0] or 0)
 
-    def _poll_next_sql_conversion_job(self, config: dict[str, Any]) -> dict[str, Any] | None:
+    def _poll_next_sql_conversion_job(
+        self,
+        config: dict[str, Any],
+        sql_id: str | None = None,
+        space_nm: str | None = None,
+    ) -> dict[str, Any] | None:
         table = self._qualify_table("NEXT_SQL_INFO", config["system_schema"])
+        params: list[Any] = []
+        filters = ["STATUS_CONVERSION IS NULL"]
+        if sql_id:
+            params.append(str(sql_id))
+            filters.append(f"SQL_ID = :{len(params)}")
+        if space_nm:
+            params.append(str(space_nm))
+            filters.append(f"SPACE_NM = :{len(params)}")
+        where_clause = "\n                  AND ".join(filters)
         sql = f"""
             SELECT SPACE_NM, SQL_ID, PRIORITY
             FROM (
                 SELECT SPACE_NM, SQL_ID, PRIORITY
                 FROM {table}
-                WHERE STATUS_CONVERSION IS NULL
+                WHERE {where_clause}
                 ORDER BY PRIORITY ASC NULLS LAST, UPD_TS NULLS FIRST, SPACE_NM, SQL_ID
             )
             WHERE ROWNUM <= 1
         """
-        rows = self._query(config, sql)
+        rows = self._query(config, sql, params)
         if not rows:
             return None
         return {"space_nm": self._to_text(rows[0][0]), "sql_id": self._to_text(rows[0][1]), "priority": rows[0][2]}
@@ -681,6 +840,7 @@ class BatchAgentCommandTool(Component):
             "llm_model": str(getattr(self, "llm_model", "") or os.getenv("SMARTMIGRATE_LLM_MODEL", str(DEFAULT_LLM_CONFIG["llm_model"]))).strip(),
             "llm_max_tokens": int(getattr(self, "llm_max_tokens", None) or os.getenv("SMARTMIGRATE_LLM_MAX_TOKENS", str(DEFAULT_LLM_CONFIG["llm_max_tokens"]))),
             "llm_timeout_seconds": int(getattr(self, "llm_timeout_seconds", None) or os.getenv("SMARTMIGRATE_LLM_TIMEOUT_SECONDS", str(DEFAULT_LLM_CONFIG["llm_timeout_seconds"]))),
+            "chat_input": str(getattr(self, "chat_input", "") or os.getenv("SMARTMIGRATE_CHAT_INPUT", "")),
             "mig_sql_prompt": str(getattr(self, "mig_sql_prompt", "") or os.getenv("SMARTMIGRATE_MIG_SQL_PROMPT", "")),
             "verify_sql_prompt": str(getattr(self, "verify_sql_prompt", "") or os.getenv("SMARTMIGRATE_VERIFY_SQL_PROMPT", "")),
             "to_sql_prompt": str(getattr(self, "to_sql_prompt", "") or os.getenv("SMARTMIGRATE_TO_SQL_PROMPT", "")),
@@ -745,6 +905,182 @@ class BatchAgentCommandTool(Component):
             cur.execute(sql, params or [])
             return cur.fetchall()
 
+    def _batch_control_table(self, config: dict[str, Any]) -> str:
+        return self._qualify_table("NEXT_BATCH_CONTROL", config["system_schema"])
+
+    def _try_acquire_batch_control(self, config: dict[str, Any], run_id: str) -> bool:
+        """Acquire the single DB control row before entering the blocking loop.
+
+        Memory state prevents duplicate starts inside one Langflow worker. This
+        DB update is the real cross-process lock. If another worker is already
+        RUNNING and its heartbeat is fresh, rowcount is 0 and this caller must
+        not enter Supervisor_loop().
+        """
+        table = self._batch_control_table(config)
+        heartbeat_timeout_seconds = 300
+        with self._connect(config) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                UPDATE {table}
+                   SET STATUS = 'RUNNING',
+                       STOP_REQUESTED_YN = 'N',
+                       RUN_ID = :1,
+                       LOOP_NO = 0,
+                       STARTED_AT = CURRENT_TIMESTAMP,
+                       HEARTBEAT_AT = CURRENT_TIMESTAMP,
+                       STOP_REQUESTED_AT = NULL,
+                       STOPPED_AT = NULL,
+                       UPDATED_AT = CURRENT_TIMESTAMP,
+                       LAST_EVENT = 'START',
+                       LAST_AGENT = NULL,
+                       LAST_JOB_ID = NULL,
+                       LAST_JOB_STATUS = NULL,
+                       LAST_ERROR = NULL,
+                       MESSAGE = 'Batch supervisor started.'
+                 WHERE CONTROL_NAME = 'BATCH_AGENT'
+                   AND (
+                        UPPER(TRIM(STATUS)) <> 'RUNNING'
+                        OR UPPER(TRIM(NVL(STOP_REQUESTED_YN, 'N'))) = 'Y'
+                        OR HEARTBEAT_AT IS NULL
+                        OR HEARTBEAT_AT < CURRENT_TIMESTAMP - NUMTODSINTERVAL(:2, 'SECOND')
+                   )
+                """,
+                [run_id, heartbeat_timeout_seconds],
+            )
+            acquired = cur.rowcount == 1
+            conn.commit()
+        return acquired
+
+    def _request_batch_stop(self, config: dict[str, Any]) -> None:
+        table = self._batch_control_table(config)
+        with self._connect(config) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                UPDATE {table}
+                   SET STATUS = 'STOP_REQUESTED',
+                       STOP_REQUESTED_YN = 'Y',
+                       STOP_REQUESTED_AT = CURRENT_TIMESTAMP,
+                       UPDATED_AT = CURRENT_TIMESTAMP,
+                       LAST_EVENT = 'STOP_REQUESTED',
+                       MESSAGE = 'Stop requested.'
+                 WHERE CONTROL_NAME = 'BATCH_AGENT'
+                """
+            )
+            conn.commit()
+
+    def _read_batch_control(self, config: dict[str, Any]) -> dict[str, Any]:
+        table = self._batch_control_table(config)
+        rows = self._query(
+            config,
+            f"""
+            SELECT STATUS, RUN_ID, STOP_REQUESTED_YN, LOOP_NO, STARTED_AT,
+                   HEARTBEAT_AT, STOP_REQUESTED_AT, STOPPED_AT, UPDATED_AT,
+                   LAST_EVENT, LAST_AGENT, LAST_JOB_ID, LAST_JOB_STATUS, MESSAGE
+              FROM {table}
+             WHERE CONTROL_NAME = 'BATCH_AGENT'
+            """,
+        )
+        if not rows:
+            return {"exists": False}
+        row = rows[0]
+        return {
+            "exists": True,
+            "status": self._to_text(row[0]).upper(),
+            "run_id": self._to_text(row[1]),
+            "stop_requested_yn": self._to_text(row[2]).upper(),
+            "loop_no": int(row[3] or 0),
+            "started_at": row[4],
+            "heartbeat_at": row[5],
+            "stop_requested_at": row[6],
+            "stopped_at": row[7],
+            "updated_at": row[8],
+            "last_event": self._to_text(row[9]),
+            "last_agent": self._to_text(row[10]),
+            "last_job_id": self._to_text(row[11]),
+            "last_job_status": self._to_text(row[12]),
+            "message": self._to_text(row[13]),
+        }
+
+    def _batch_should_continue(self, config: dict[str, Any], run_id: str) -> tuple[bool, str]:
+        control = self._read_batch_control(config)
+        if not control.get("exists"):
+            return False, "NEXT_BATCH_CONTROL row BATCH_AGENT does not exist."
+        status = str(control.get("status") or "").upper()
+        stop_requested = str(control.get("stop_requested_yn") or "").upper() == "Y"
+        current_run_id = str(control.get("run_id") or "")
+        if stop_requested or status == "STOP_REQUESTED":
+            return False, "Batch stop requested in NEXT_BATCH_CONTROL."
+        if status != "RUNNING":
+            return False, f"Batch control status is {status or 'NULL'}."
+        if current_run_id and run_id and current_run_id != run_id:
+            return False, "Batch control ownership moved to another run_id."
+        return True, "running"
+
+    def _update_batch_control_heartbeat(
+        self,
+        config: dict[str, Any],
+        run_id: str,
+        loop_no: int,
+        event_type: str,
+        agent_name: Any = None,
+        job_id: Any = None,
+        job_status: Any = None,
+        error_message: Any = None,
+        message: Any = None,
+    ) -> None:
+        table = self._batch_control_table(config)
+        with self._connect(config) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                UPDATE {table}
+                   SET LOOP_NO = :1,
+                       HEARTBEAT_AT = CURRENT_TIMESTAMP,
+                       UPDATED_AT = CURRENT_TIMESTAMP,
+                       LAST_EVENT = :2,
+                       LAST_AGENT = :3,
+                       LAST_JOB_ID = :4,
+                       LAST_JOB_STATUS = :5,
+                       LAST_ERROR = :6,
+                       MESSAGE = :7
+                 WHERE CONTROL_NAME = 'BATCH_AGENT'
+                   AND RUN_ID = :8
+                """,
+                [
+                    int(loop_no or 0),
+                    str(event_type or "")[:50],
+                    str(agent_name or "")[:50] if agent_name else None,
+                    str(job_id or "")[:200] if job_id else None,
+                    str(job_status or "")[:50] if job_status else None,
+                    str(error_message or "") if error_message else None,
+                    str(message or "")[:1000] if message else None,
+                    run_id,
+                ],
+            )
+            conn.commit()
+
+    def _mark_batch_control_stopped(self, config: dict[str, Any], run_id: str) -> None:
+        table = self._batch_control_table(config)
+        with self._connect(config) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                UPDATE {table}
+                   SET STATUS = 'STOPPED',
+                       STOP_REQUESTED_YN = 'N',
+                       STOPPED_AT = CURRENT_TIMESTAMP,
+                       UPDATED_AT = CURRENT_TIMESTAMP,
+                       LAST_EVENT = 'STOPPED',
+                       MESSAGE = 'Batch supervisor stopped.'
+                 WHERE CONTROL_NAME = 'BATCH_AGENT'
+                   AND RUN_ID = :1
+                """,
+                [run_id],
+            )
+            conn.commit()
+
     def _write_batch_log_safe(
         self,
         config: dict[str, Any],
@@ -774,7 +1110,10 @@ class BatchAgentCommandTool(Component):
                 elapsed_seconds=elapsed_seconds,
             )
         except Exception:
-            pass
+            logger.exception(
+                "[BatchSupervisor] failed to write NEXT_BATCH_LOG "
+                f"event_type={event_type} run_id={run_id} loop_no={loop_no}"
+            )
 
     def _write_batch_log(
         self,
@@ -821,7 +1160,11 @@ class BatchAgentCommandTool(Component):
     def _interruptible_sleep(self, seconds: int, config: dict[str, Any] | None = None, run_id: str | None = None) -> None:
         deadline = time.time() + max(0, int(seconds))
         while time.time() < deadline:
-            if self._run_yn_value(config) != "Y":
+            if config and run_id:
+                should_continue, reason = self._batch_should_continue(config, run_id)
+                if not should_continue:
+                    raise InterruptedError(reason)
+            elif self._run_yn_value(config) != "Y":
                 break
             time.sleep(min(1.0, max(0.0, deadline - time.time())))
 
@@ -2968,6 +3311,7 @@ def build_service_config() -> dict[str, Any]:
         "llm_model": _env("SMARTMIGRATE_LLM_MODEL", str(DEFAULT_LLM_CONFIG["llm_model"])),
         "llm_max_tokens": _env_int("SMARTMIGRATE_LLM_MAX_TOKENS", int(DEFAULT_LLM_CONFIG["llm_max_tokens"])),
         "llm_timeout_seconds": _env_int("SMARTMIGRATE_LLM_TIMEOUT_SECONDS", int(DEFAULT_LLM_CONFIG["llm_timeout_seconds"])),
+        "chat_input": _env("SMARTMIGRATE_CHAT_INPUT", ""),
         "mig_sql_prompt": _read_text_env("SMARTMIGRATE_MIG_SQL_PROMPT", "SMARTMIGRATE_MIG_SQL_PROMPT_FILE"),
         "verify_sql_prompt": _read_text_env("SMARTMIGRATE_VERIFY_SQL_PROMPT", "SMARTMIGRATE_VERIFY_SQL_PROMPT_FILE"),
         "to_sql_prompt": _read_text_env("SMARTMIGRATE_TO_SQL_PROMPT", "SMARTMIGRATE_TO_SQL_PROMPT_FILE"),
@@ -2990,6 +3334,12 @@ def main() -> None:
     config = build_service_config()
     supervisor = object.__new__(BatchAgentCommandTool)
     supervisor._apply_config(config)
+    supervisor._console(
+        "main entered "
+        f"run_yn={supervisor._run_yn_value(config)} "
+        f"db={config.get('db_host')}:{config.get('db_port')}/{config.get('db_service_name')} "
+        f"schema={config.get('system_schema')}"
+    )
 
     if not supervisor._run_yn_equals_y(config):
         supervisor._write_batch_log_safe(
@@ -3001,15 +3351,8 @@ def main() -> None:
         )
         return
 
-    run_id = datetime.now().strftime("%Y%m%d%H%M%S%f")
-    supervisor._write_batch_log_safe(
-        config,
-        run_id,
-        0,
-        "AUTO_START",
-        message="Batch supervisor auto-started from main.",
-    )
-    supervisor.Supervisor_loop(config, run_id)
+    result = supervisor._start(config)
+    supervisor._console(f"main finished status={result.get('status')} message={result.get('message')}")
 
 
 if __name__ == "__main__":

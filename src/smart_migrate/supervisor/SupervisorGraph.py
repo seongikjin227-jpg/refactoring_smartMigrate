@@ -1,19 +1,23 @@
-"""Supervisor LangGraph — LLM 기반 ReAct 루프.
+"""Supervisor LangGraph.
 
-수퍼바이저 LLM이 poll_jobs → 실행 도구들 → request_wait
-순서로 도구를 호출하여 한 사이클을 처리합니다.
-사이클 반복은 SupervisorAgent.run()의 외부 while 루프가 담당합니다.
+The cycle shape is fixed in code:
+
+    poll_jobs -> supervisor_tool_call -> tools or wait -> END
+
+Code always runs poll_jobs first. The LLM receives the already-polled registry
+snapshot and chooses one agent tool wrapper. ToolNode executes that wrapper,
+which then calls the real Agent.process_job() callback.
 """
 
 from __future__ import annotations
 
 import json
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
+from langgraph.prebuilt import ToolNode
 
-from smart_migrate.supervisor.SupervisorState import SupervisorState
 from smart_migrate.config.AppSettings import (
     LLM_API_KEY,
     LLM_BASE_URL,
@@ -25,16 +29,6 @@ from smart_migrate.integrations.llm.LlmFallback import (
     model_candidates,
     set_active_model,
 )
-from smart_migrate.supervisor.SupervisorJobRegistry import (
-    _stop_event,
-    formatting_registry,
-    init_callbacks,
-    mig_registry,
-    sql_registry,
-    tuning_registry,
-)
-from smart_migrate.supervisor.tools.SupervisorCycleTool import request_wait
-from smart_migrate.supervisor.tools.SupervisorMigrationTool import run_data_migration
 from smart_migrate.supervisor.SupervisorJobPolling import (
     MIGRATION_JOB_BATCH_SIZE,
     SQL_CONVERSION_JOB_BATCH_SIZE,
@@ -44,9 +38,21 @@ from smart_migrate.supervisor.SupervisorJobPolling import (
     build_poll_jobs_tool,
     priority_gate_jobs,
 )
+from smart_migrate.supervisor.SupervisorJobRegistry import (
+    _stop_event,
+    formatting_registry,
+    init_callbacks,
+    mig_registry,
+    sql_registry,
+    tuning_registry,
+)
+from smart_migrate.supervisor.SupervisorState import SupervisorState
+from smart_migrate.supervisor.tools.SupervisorCycleTool import request_wait
+from smart_migrate.supervisor.tools.SupervisorMigrationTool import run_data_migration
 from smart_migrate.supervisor.tools.SupervisorSqlConversionTool import run_sql_conversion
 from smart_migrate.supervisor.tools.SupervisorSqlFormattingTool import run_sql_formatting
 from smart_migrate.supervisor.tools.SupervisorSqlTuningTool import run_sql_tuning
+
 
 def _build_llm(model_name: str) -> ChatOpenAI:
     kwargs: dict = {
@@ -59,25 +65,10 @@ def _build_llm(model_name: str) -> ChatOpenAI:
     return ChatOpenAI(**kwargs)
 
 
-def _parse_decision(raw_decision: str) -> dict:
-    text = str(raw_decision or "").strip()
-    try:
-        parsed = json.loads(text)
-    except Exception:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start < 0 or end <= start:
-            return {"route": "", "reason": "decision JSON parse failed"}
-        try:
-            parsed = json.loads(text[start : end + 1])
-        except Exception:
-            return {"route": "", "reason": "decision JSON object parse failed"}
-    if not isinstance(parsed, dict):
-        return {"route": "", "reason": "decision is not an object"}
-    return {
-        "route": str(parsed.get("route") or "").strip(),
-        "reason": str(parsed.get("reason") or "").strip(),
-    }
+def _tool_call_name(call) -> str | None:
+    if isinstance(call, dict):
+        return call.get("name")
+    return getattr(call, "name", None)
 
 
 def build_supervisor_graph(
@@ -162,61 +153,93 @@ def build_supervisor_graph(
         get_formatting_jobs,
     )
 
+    # These are LangChain tool wrappers around actual agents. The LLM chooses
+    # one wrapper, then the wrapper calls the registered Agent.process_job()
+    # callback. Retry/validation lives inside each agent graph/workflow.
+    agent_tools = [
+        run_data_migration,
+        run_sql_conversion,
+        run_sql_tuning,
+        run_sql_formatting,
+    ]
+    tool_node = ToolNode(agent_tools)
+
     def poll_jobs_node(state: SupervisorState) -> dict:
         if _stop_event.is_set() or state.get("stop_requested"):
             return {"stop_requested": True}
+
         result = poll_jobs.invoke({})
         logger.info("[SupervisorGraph] poll_jobs completed")
         return {"poll_result": result}
 
-    def supervisor_decide_node(state: SupervisorState) -> dict:
+    def supervisor_tool_call_node(state: SupervisorState) -> dict:
         if _stop_event.is_set() or state.get("stop_requested"):
             return {"stop_requested": True}
+
+        poll_result = state.get("poll_result") or "{}"
         payload = {
-            "poll_result": state.get("poll_result") or "{}",
-            "available_routes": [
-                "run_data_migration",
-                "run_sql_conversion",
-                "run_sql_tuning",
-                "run_sql_formatting",
-                "no_job",
+            "poll_result": poll_result,
+            "available_agent_tools": [
+                {
+                    "name": "run_data_migration",
+                    "args": {"map_id": "one key from mig_registry"},
+                    "agent": "DB Migration Agent",
+                    "when": "Use only when migration jobs exist. This has highest priority.",
+                },
+                {
+                    "name": "run_sql_conversion",
+                    "args": {"row_id": "one key from sql_registry"},
+                    "agent": "SQL Conversion Agent",
+                    "when": "Use only when no migration job exists and SQL conversion jobs exist.",
+                },
+                {
+                    "name": "run_sql_tuning",
+                    "args": {"row_ids": ["one key from tuning_registry"]},
+                    "agent": "SQL Tuning Agent",
+                    "when": "Use only when migration and conversion jobs are empty and tuning jobs exist.",
+                },
+                {
+                    "name": "run_sql_formatting",
+                    "args": {"row_ids": ["one key from formatting_registry"]},
+                    "agent": "SQL Formatting Agent",
+                    "when": "Use only when migration, conversion, and tuning jobs are empty and formatting jobs exist.",
+                },
             ],
             "policy": [
-                "Choose exactly one route for this cycle.",
-                "DB migration has priority, then SQL conversion, SQL tuning, SQL formatting.",
-                "Choose no_job only when all job lists are empty.",
-                "Return JSON only with route and reason.",
+                "poll_jobs has already run. Do not request poll_jobs.",
+                "Call exactly one agent tool wrapper when a runnable job exists.",
+                "Call no tool when all registries are empty.",
+                "Never call more than one agent tool wrapper in this cycle.",
+                "Respect priority: migration, conversion, tuning, formatting.",
+                "Use only IDs that appear in poll_result.",
+                "The selected wrapper will call the actual agent. Do not reason about internal retries here.",
             ],
-            "required_json_schema": {
-                "route": "run_data_migration | run_sql_conversion | run_sql_tuning | run_sql_formatting | no_job",
-                "reason": "short reason",
-            },
         }
         messages = [
             SystemMessage(
                 content=(
                     "You are the SmartMigrate batch supervisor. "
-                    "Decide the single route for this already-polled cycle. "
-                    "Return JSON only. Do not call tools."
+                    "The job registry has already been polled. "
+                    "Choose exactly one agent tool call if work exists. "
+                    "If no work exists, return a short response with no tool calls."
                 )
             ),
             HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
         ]
+
         candidates = model_candidates(LLM_MODEL)
         last_exc: Exception | None = None
-
         for idx, candidate_model in enumerate(candidates):
             try:
-                response = _build_llm(candidate_model).invoke(messages)
+                response = _build_llm(candidate_model).bind_tools(agent_tools).invoke(messages)
                 set_active_model(candidate_model)
-                raw_decision = str(getattr(response, "content", "") or "")
-                decision = _parse_decision(raw_decision)
+                tool_calls = getattr(response, "tool_calls", None) or []
+                tool_names = [_tool_call_name(call) for call in tool_calls]
                 logger.info(
-                    "[SupervisorGraph] decision "
-                    f"route={decision.get('route') or '-'} "
-                    f"reason={decision.get('reason') or '-'}"
+                    "[SupervisorGraph] supervisor tool choice "
+                    f"tools={','.join(name or '-' for name in tool_names) or '-'}"
                 )
-                return {"decision": decision}
+                return {"messages": [response]}
             except Exception as exc:
                 message = str(exc)
                 if idx < len(candidates) - 1 and is_model_fallback_error(message):
@@ -232,82 +255,51 @@ def build_supervisor_graph(
             raise last_exc
         raise RuntimeError("No supervisor LLM model candidates are configured.")
 
-    def route_after_decision(state: SupervisorState) -> str:
+    def route_after_tool_choice(state: SupervisorState) -> str:
         if _stop_event.is_set() or state.get("stop_requested"):
             return END
-        requested = str((state.get("decision") or {}).get("route") or "").strip()
-        if requested == "run_data_migration" and mig_registry:
-            return "run_action"
-        if requested == "run_sql_conversion" and not mig_registry and sql_registry:
-            return "run_action"
-        if requested == "run_sql_tuning" and not mig_registry and not sql_registry and tuning_registry:
-            return "run_action"
-        if requested == "run_sql_formatting" and not mig_registry and not sql_registry and not tuning_registry and formatting_registry:
-            return "run_action"
-        if requested == "no_job" and not any((mig_registry, sql_registry, tuning_registry, formatting_registry)):
+
+        messages = state.get("messages") or []
+        if not messages:
             return "wait"
 
-        corrected = _select_route_from_registries()
-        if corrected != requested:
+        last = messages[-1]
+        tool_calls = getattr(last, "tool_calls", None) or []
+        if not tool_calls:
+            return "wait"
+
+        first_tool_name = _tool_call_name(tool_calls[0])
+        if len(tool_calls) > 1:
             logger.warning(
-                "[SupervisorGraph] corrected invalid decision route "
-                f"requested={requested or '-'} corrected={corrected}"
+                "[SupervisorGraph] LLM requested multiple tools; ToolNode will run them, "
+                "but job tools enforce one execution per cycle. "
+                f"first={first_tool_name or '-'} count={len(tool_calls)}"
             )
-        if corrected == "no_job":
-            return "wait"
-        return "run_action"
-
-    def _select_route_from_registries() -> str:
-        if mig_registry:
-            return "run_data_migration"
-        if sql_registry:
-            return "run_sql_conversion"
-        if tuning_registry:
-            return "run_sql_tuning"
-        if formatting_registry:
-            return "run_sql_formatting"
-        return "no_job"
-
-    def run_action_node(state: SupervisorState) -> dict:
-        route = _select_route_from_registries()
-        if route == "run_data_migration":
-            map_id = next(iter(mig_registry.keys()))
-            logger.info(f"[SupervisorGraph] run_data_migration map_id={map_id}")
-            return {"action_result": run_data_migration.invoke({"map_id": map_id})}
-        if route == "run_sql_conversion":
-            row_id = next(iter(sql_registry.keys()))
-            logger.info(f"[SupervisorGraph] run_sql_conversion row_id={row_id}")
-            return {"action_result": run_sql_conversion.invoke({"row_id": row_id})}
-        if route == "run_sql_tuning":
-            row_id = next(iter(tuning_registry.keys()))
-            logger.info(f"[SupervisorGraph] run_sql_tuning row_id={row_id}")
-            return {"action_result": run_sql_tuning.invoke({"row_ids": [row_id]})}
-        if route == "run_sql_formatting":
-            row_id = next(iter(formatting_registry.keys()))
-            logger.info(f"[SupervisorGraph] run_sql_formatting row_id={row_id}")
-            return {"action_result": run_sql_formatting.invoke({"row_ids": [row_id]})}
-        return {"action_result": "No job selected."}
+        return "tools"
 
     def wait_node(state: SupervisorState) -> dict:
-        seconds = 1 if state.get("action_result") else 30
+        messages = state.get("messages") or []
+        last = messages[-1] if messages else None
+        had_tool_result = isinstance(last, ToolMessage) if last else False
+        seconds = 1 if had_tool_result else 30
         result = request_wait.invoke({"seconds": seconds})
         logger.info(f"[SupervisorGraph] cycle wait finished: {result}")
         return {"wait_result": result}
 
     workflow = StateGraph(SupervisorState)
     workflow.add_node("poll_jobs", poll_jobs_node)
-    workflow.add_node("supervisor_decide", supervisor_decide_node)
-    workflow.add_node("run_action", run_action_node)
+    workflow.add_node("supervisor_tool_call", supervisor_tool_call_node)
+    workflow.add_node("tools", tool_node)
     workflow.add_node("wait", wait_node)
 
     workflow.set_entry_point("poll_jobs")
-    workflow.add_edge("poll_jobs", "supervisor_decide")
+    workflow.add_edge("poll_jobs", "supervisor_tool_call")
     workflow.add_conditional_edges(
-        "supervisor_decide",
-        route_after_decision,
-        {"run_action": "run_action", "wait": "wait", END: END},
+        "supervisor_tool_call",
+        route_after_tool_choice,
+        {"tools": "tools", "wait": "wait", END: END},
     )
-    workflow.add_edge("run_action", "wait")
+    workflow.add_edge("tools", "wait")
     workflow.add_edge("wait", END)
 
     return workflow.compile()

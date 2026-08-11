@@ -1,3 +1,12 @@
+"""SQL agent continuation helpers.
+
+This module is not related to LangChain chains. It continues the SQL pipeline
+for the same NEXT_SQL_INFO row:
+
+    conversion PASS -> tuning
+    tuning PASS -> formatting
+"""
+
 from smart_migrate.repositories.SqlJobRepository import get_sql_job_by_row_id
 from smart_migrate.shared.SqlStatuses import is_tuning_pass
 from smart_migrate.supervisor.SupervisorJobRegistry import callbacks, set_active_job, sql_job_display_id
@@ -26,10 +35,10 @@ def run_tuning_continuation(row_id: str, logger=None) -> list[str]:
         sql_inc(row_key)
         final_status = tune_proc(job)
         if logger:
-            logger.info(f"[SqlChain] {job_label} tuning completed (status={final_status})")
+            logger.info(f"[SqlContinuation] {job_label} tuning completed (status={final_status})")
     except Exception as exc:
         if logger:
-            logger.error(f"[SqlChain] {job_label} tuning error: {exc}")
+            logger.error(f"[SqlContinuation] {job_label} tuning error: {exc}")
         return [f"tuning failed: {exc}"]
 
     results = [f"tuning={final_status}"]
@@ -60,9 +69,9 @@ def run_formatting_continuation(row_id: str, logger=None) -> list[str]:
         sql_inc(row_key)
         final_status = format_proc(job)
         if logger:
-            logger.info(f"[SqlChain] {job_label} formatting completed (status={final_status})")
+            logger.info(f"[SqlContinuation] {job_label} formatting completed (status={final_status})")
         return [f"formatting={final_status}"]
     except Exception as exc:
         if logger:
-            logger.error(f"[SqlChain] {job_label} formatting error: {exc}")
+            logger.error(f"[SqlContinuation] {job_label} formatting error: {exc}")
         return [f"formatting failed: {exc}"]

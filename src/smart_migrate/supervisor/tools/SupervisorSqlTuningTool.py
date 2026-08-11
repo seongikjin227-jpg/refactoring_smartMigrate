@@ -1,7 +1,7 @@
 from langchain_core.tools import tool
 
 from smart_migrate.shared.SqlStatuses import is_tuning_pass
-from smart_migrate.supervisor.tools.SupervisorSqlChain import run_formatting_continuation
+from smart_migrate.supervisor.tools.SupervisorSqlContinuation import run_formatting_continuation
 from smart_migrate.supervisor.SupervisorJobRegistry import (
     callbacks,
     clear_active_job,
@@ -15,7 +15,12 @@ from smart_migrate.supervisor.SupervisorJobRegistry import (
 
 @tool
 def run_sql_tuning(row_ids: list) -> str:
-    """Run SQL tuning jobs for the given NEXT_SQL_INFO row IDs."""
+    """Run the SQL Tuning Agent for selected NEXT_SQL_INFO row IDs.
+
+    This is a LangChain tool wrapper around SqlTuningAgent.process_job().
+    Tuning rule retrieval, tuned SQL generation, and tuned test validation are
+    handled by the tuning workflow/runner.
+    """
     results = []
     logger = callbacks.get("logger")
 
@@ -32,6 +37,8 @@ def run_sql_tuning(row_ids: list) -> str:
             row_key = str(row_id)
             set_active_job("SQL Tuning", job_label, "TUNING")
             callbacks["sql_inc"](row_key)
+            # tune_proc is SqlTuningAgent.process_job(job). Its workflow owns
+            # tuning generation, validation, and retry-like tuning attempts.
             final_status = callbacks["tune_proc"](job)
             results.append(f"{job_label} completed status={final_status}")
             if is_tuning_pass(final_status):

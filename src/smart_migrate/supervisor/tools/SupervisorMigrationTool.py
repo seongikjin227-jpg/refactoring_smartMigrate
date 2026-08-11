@@ -13,7 +13,13 @@ from smart_migrate.supervisor.SupervisorJobRegistry import (
 
 @tool
 def run_data_migration(map_id: int) -> str:
-    """Run one DB migration job selected by map_id."""
+    """Run the DB Migration Agent for one selected job.
+
+    This is a LangChain tool wrapper, not the agent itself. ToolNode calls this
+    wrapper, then the wrapper calls the registered MigrationOrchestrator
+    callback. Retry, SQL regeneration, execution, and verification are handled
+    inside MigrationGraph.
+    """
     job = mig_registry.get(map_id)
     logger = callbacks.get("logger")
 
@@ -24,6 +30,8 @@ def run_data_migration(map_id: int) -> str:
         if not claim_job_execution():
             return "SKIP: another job already ran in this supervisor cycle."
         set_active_job("DB Migration", migration_job_display_id(job, map_id), "RUN")
+        # mig_proc is MigrationOrchestrator.process_job(job). It invokes
+        # MigrationGraph, where the DB migration retry logic lives.
         final_status = callbacks["mig_proc"](job)
         if logger:
             logger.info(f"[DataMigrationTool] map_id={map_id} completed")
