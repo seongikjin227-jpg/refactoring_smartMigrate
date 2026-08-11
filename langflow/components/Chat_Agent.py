@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import urllib.error
+import urllib.request
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
-from lfx.io import MessageTextInput, Output
+from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
 from lfx.schema.data import Data
+from lfx.schema.message import Message
 
 
 class ChatAgent(Component):
@@ -22,11 +26,40 @@ class ChatAgent(Component):
             required=True,
             info="User chat message from Langflow Chat Input.",
         ),
+        StrInput(
+            name="llm_base_url",
+            display_name="LLM Base URL",
+            required=False,
+            info="OpenAI-compatible base URL. Leave blank to use OPENAI_BASE_URL/LLM_BASE_URL or OpenAI default.",
+        ),
+        SecretStrInput(
+            name="llm_api_key",
+            display_name="LLM API Key",
+            required=False,
+        ),
+        StrInput(
+            name="llm_model",
+            display_name="LLM Model",
+            value="claude-haiku-4-5-20251001",
+            required=False,
+        ),
+        IntInput(
+            name="llm_max_tokens",
+            display_name="LLM Max Tokens",
+            value=1024,
+            required=False,
+        ),
+        IntInput(
+            name="llm_timeout_seconds",
+            display_name="LLM Timeout Seconds",
+            value=60,
+            required=False,
+        ),
     ]
 
     outputs = [
-        Output(display_name="Answer", name="answer", method="answer_text", group_outputs=True),
-        Output(display_name="Supervisor Command", name="supervisor_command", method="supervisor_command", group_outputs=True),
+        Output(display_name="Answer", name="answer", method="answer_text", types=["Message"], group_outputs=True),
+        Output(display_name="Supervisor Command", name="supervisor_command", method="supervisor_command", types=["Message"], group_outputs=True),
         Output(display_name="Result JSON", name="result", method="route_chat", group_outputs=True),
     ]
 
@@ -35,11 +68,11 @@ class ChatAgent(Component):
         self.status = result
         return Data(data=result)
 
-    def answer_text(self) -> str:
-        return str(self._route().get("answer_text") or "")
+    def answer_text(self) -> Message:
+        return Message(text=str(self._route().get("answer_text") or ""))
 
-    def supervisor_command(self) -> str:
-        return str(self._route().get("supervisor_command") or "")
+    def supervisor_command(self) -> Message:
+        return Message(text=str(self._route().get("supervisor_command") or ""))
 
     def _route(self) -> dict[str, Any]:
         text = str(getattr(self, "chat_text", "") or "").strip()
@@ -55,6 +88,10 @@ class ChatAgent(Component):
         parsed_json = self._parse_json(text)
         if parsed_json:
             return self._route_json(parsed_json, text)
+
+        llm_result = self._route_with_llm(text)
+        if llm_result:
+            return llm_result
 
         target = self._extract_target(text)
         wants_run = self._looks_like_run_request(text)
@@ -126,6 +163,97 @@ class ChatAgent(Component):
             "target": target,
             "reason": "no_runnable_target",
         }
+
+    def _route_with_llm(self, text: str) -> dict[str, Any] | None:
+        api_key = self._secret_to_str(getattr(self, "llm_api_key", None)) or os.getenv("OPENAI_API_KEY") or os.getenv("LLM_API_KEY")
+        model = str(getattr(self, "llm_model", "") or os.getenv("LLM_MODEL", "")).strip()
+        if not api_key or not model:
+            return None
+
+        base_url = str(getattr(self, "llm_base_url", "") or os.getenv("OPENAI_BASE_URL") or os.getenv("LLM_BASE_URL") or "https://api.openai.com/v1").strip()
+        endpoint = base_url.rstrip("/") + "/chat/completions"
+        payload = {
+            "model": model,
+            "temperature": 0,
+            "max_tokens": max(128, int(getattr(self, "llm_max_tokens", None) or 1024)),
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You route SmartMigrate user chat. Return JSON only. "
+                        "Use intent=answer_only for questions/status/analysis. "
+                        "Use intent=supervisor_command only when the user clearly asks to run/retry/execute a job. "
+                        "Allowed supervisor commands are only: "
+                        "run_data_migration map_id=<number>, "
+                        "run_sql_conversion sql_id=<id> [space_nm=<namespace>]. "
+                        "Do not emit tuning or formatting commands. "
+                        "Schema: {\"intent\":\"answer_only|supervisor_command\","
+                        "\"answer_text\":\"short Korean response\","
+                        "\"supervisor_command\":\"\" or command string,"
+                        "\"reason\":\"short reason\"}."
+                    ),
+                },
+                {"role": "user", "content": text},
+            ],
+        }
+        request = urllib.request.Request(
+            endpoint,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=max(5, int(getattr(self, "llm_timeout_seconds", None) or 60)),
+            ) as response:
+                raw = response.read().decode("utf-8", errors="replace")
+            data = json.loads(raw)
+            content = str(data["choices"][0]["message"].get("content") or "").strip()
+            parsed = self._parse_json(content)
+            if not parsed:
+                return None
+            routed = self._normalize_llm_route(parsed)
+            routed["source"] = "llm"
+            return routed
+        except (urllib.error.URLError, TimeoutError, KeyError, json.JSONDecodeError, ValueError):
+            return None
+
+    def _normalize_llm_route(self, parsed: dict[str, Any]) -> dict[str, Any]:
+        intent = str(parsed.get("intent") or "answer_only").strip()
+        command = str(parsed.get("supervisor_command") or "").strip()
+        answer = str(parsed.get("answer_text") or "").strip()
+        reason = str(parsed.get("reason") or "").strip()
+
+        if intent == "supervisor_command" and self._is_allowed_supervisor_command(command):
+            return {
+                "ok": True,
+                "intent": "supervisor_command",
+                "answer_text": answer or "Supervisor 실행 요청을 전달했습니다.",
+                "supervisor_command": command,
+                "reason": reason or "llm_supervisor_command",
+            }
+
+        return {
+            "ok": True,
+            "intent": "answer_only",
+            "answer_text": answer or "Supervisor 실행 명령은 없습니다.",
+            "supervisor_command": "",
+            "reason": reason or "llm_answer_only",
+        }
+
+    def _is_allowed_supervisor_command(self, command: str) -> bool:
+        return bool(
+            re.fullmatch(r"run_data_migration\s+map_id=\d+", command.strip(), flags=re.IGNORECASE)
+            or re.fullmatch(
+                r"run_sql_conversion\s+sql_id=[A-Za-z0-9_$#.\-]+(?:\s+space_nm=[A-Za-z0-9_$#.\-/]+)?",
+                command.strip(),
+                flags=re.IGNORECASE,
+            )
+        )
 
     def _route_json(self, command: dict[str, Any], original_text: str) -> dict[str, Any]:
         action = str(command.get("action") or command.get("command") or "").strip()
@@ -271,3 +399,10 @@ class ChatAgent(Component):
         if "포맷" in lowered or "formatting" in lowered or "format" in lowered:
             return "run_sql_formatting"
         return "run_sql_conversion"
+
+    def _secret_to_str(self, value: Any) -> str:
+        if value is None:
+            return ""
+        if hasattr(value, "get_secret_value"):
+            return str(value.get_secret_value())
+        return str(value)
