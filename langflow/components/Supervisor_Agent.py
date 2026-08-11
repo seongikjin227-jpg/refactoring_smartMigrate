@@ -1127,13 +1127,10 @@ class BatchAgentCommandTool(Component):
             return False, "NEXT_BATCH_CONTROL row BATCH_AGENT does not exist."
         status = str(control.get("status") or "").upper()
         stop_requested = str(control.get("stop_requested_yn") or "").upper() == "Y"
-        current_run_id = str(control.get("run_id") or "")
         if stop_requested or status == "STOP_REQUESTED":
             return False, "Batch stop requested in NEXT_BATCH_CONTROL."
         if status != "RUNNING":
             return False, f"Batch control status is {status or 'NULL'}."
-        if current_run_id and run_id and current_run_id != run_id:
-            return False, "Batch control ownership moved to another run_id."
         return True, "running"
 
     def _update_batch_control_heartbeat(
@@ -1164,7 +1161,6 @@ class BatchAgentCommandTool(Component):
                        LAST_ERROR = :6,
                        MESSAGE = :7
                  WHERE CONTROL_NAME = 'BATCH_AGENT'
-                   AND RUN_ID = :8
                 """,
                 [
                     int(loop_no or 0),
@@ -1174,7 +1170,6 @@ class BatchAgentCommandTool(Component):
                     str(job_status or "")[:50] if job_status else None,
                     str(error_message or "") if error_message else None,
                     str(message or "")[:1000] if message else None,
-                    run_id,
                 ],
             )
             conn.commit()
@@ -1193,9 +1188,7 @@ class BatchAgentCommandTool(Component):
                        LAST_EVENT = 'STOPPED',
                        MESSAGE = 'Batch supervisor stopped.'
                  WHERE CONTROL_NAME = 'BATCH_AGENT'
-                   AND RUN_ID = :1
                 """,
-                [run_id],
             )
             conn.commit()
 
