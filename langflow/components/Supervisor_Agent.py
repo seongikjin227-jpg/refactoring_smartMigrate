@@ -136,23 +136,25 @@ class BatchAgentCommandTool(Component):
     ]
 
     outputs = [
-        Output(display_name="Result", name="result", method="run_command"),
+        Output(display_name="Result", name="result", method="run_supervisor"),
     ]
 
-    def run_command(self) -> Data:
+    def run_supervisor(self) -> Data:
         try:
-            command = self._parse_command()
-            action = str(command.get("action") or "").strip().lower()
             config = self._snapshot_config()
 
-            if action == "start":
+            if self._run_yn_is_y(config):
                 result = self._start(config)
-            elif action == "stop":
+            elif self._run_yn_is_n(config):
                 result = self._stop(config)
-            elif action == "status":
-                result = self._status(config)
             else:
-                result = {"ok": False, "error": f"Unsupported action: {action}"}
+                result = {
+                    "ok": False,
+                    "status": "ignored",
+                    "running": bool(self.__class__._state.get("running")),
+                    "requested_running": False,
+                    "message": "Run YN input must be Y to start or N to stop.",
+                }
 
             self.status = result
             return Data(data=result)
@@ -188,7 +190,7 @@ class BatchAgentCommandTool(Component):
             "ok": True,
             "status": state.get("last_event") or "stopped",
             "running": False,
-            "requested_running": self._should_continue_running(config),
+            "requested_running": self._run_yn_is_y(config),
             "run_id": run_id,
             "mode": "blocking_loop",
             "message": "Batch Supervisor Agent loop finished.",
@@ -214,7 +216,7 @@ class BatchAgentCommandTool(Component):
     def _status(self, config: dict[str, Any] | None = None) -> dict[str, Any]:
         state = dict(self.__class__._state)
         state["running"] = bool(self.__class__._state.get("running"))
-        state["requested_running"] = self._should_continue_running(config) if config else None
+        state["requested_running"] = self._run_yn_is_y(config) if config else None
         state["status_source"] = "memory"
         state["stop_requested"] = not bool(state["requested_running"])
         return {"ok": True, **state}
@@ -224,15 +226,20 @@ class BatchAgentCommandTool(Component):
         logger.info(f"[BatchSupervisor] {message}")
 
     def _raise_if_batch_stop_requested(self) -> None:
-        if not self._should_continue_running(getattr(self, "_batch_runtime_config", None)):
+        if not self._run_yn_is_y(getattr(self, "_batch_runtime_config", None)) or not bool(self.__class__._state.get("running")):
             raise InterruptedError("Batch stop requested.")
 
-    def _should_continue_running(self, config: dict[str, Any] | None = None) -> bool:
+    def _run_yn_value(self, config: dict[str, Any] | None = None) -> str:
         value = getattr(self, "run_yn", None)
         if value is None and config:
             value = config.get("run_yn")
-        text = str(value if value is not None else "").strip().upper()
-        return text in {"Y", "YES", "TRUE", "1", "ON", "START", "RUN"}
+        return str(value if value is not None else "").strip().upper()
+
+    def _run_yn_is_y(self, config: dict[str, Any] | None = None) -> bool:
+        return self._run_yn_value(config) in {"Y", "YES", "TRUE", "1", "ON", "START", "RUN"}
+
+    def _run_yn_is_n(self, config: dict[str, Any] | None = None) -> bool:
+        return self._run_yn_value(config) in {"N", "NO", "FALSE", "0", "OFF", "STOP"}
 
     @classmethod
     def serve_forever(cls, config: dict[str, Any], auto_start_on_boot: bool = True, idle_sleep_seconds: int = 10) -> None:
@@ -249,7 +256,7 @@ class BatchAgentCommandTool(Component):
             try:
                 if auto_start_on_boot:
                     helper._apply_config(config)
-                    if not helper._should_continue_running(config):
+                    if not helper._run_yn_is_y(config):
                         time.sleep(idle_sleep_seconds)
                         continue
                     run_id = datetime.now().strftime("%Y%m%d%H%M%S%f")
@@ -299,7 +306,7 @@ class BatchAgentCommandTool(Component):
             }
         )
         try:
-            while self._should_continue_running(config):
+            while self._run_yn_is_y(config):
                 cls._state["loop_no"] = int(cls._state.get("loop_no") or 0) + 1
                 loop_no = int(cls._state["loop_no"])
                 cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
@@ -307,7 +314,7 @@ class BatchAgentCommandTool(Component):
 
                 started = time.perf_counter()
                 self._console(f"cycle {loop_no} started")
-                if not self._should_continue_running(config):
+                if not self._run_yn_is_y(config):
                     break
 
                 try:
@@ -734,16 +741,6 @@ class BatchAgentCommandTool(Component):
             "error_sleep_seconds": max(1, int(getattr(self, "error_sleep_seconds", None) or 60)),
         }
 
-    def _parse_command(self) -> dict[str, Any]:
-        raw = str(getattr(self, "run_yn", "") or "").strip().upper()
-        if raw in {"Y", "YES", "TRUE", "1", "ON", "START", "RUN"}:
-            return {"action": "start"}
-        if raw in {"N", "NO", "FALSE", "0", "OFF", "STOP"}:
-            return {"action": "stop"}
-        if raw in {"STATUS", "S"}:
-            return {"action": "status"}
-        raise ValueError("Run YN must be Y, N, or STATUS.")
-
     def _connect(self, config: dict[str, Any]):
         self._ensure_runtime_dependencies(config)
         import oracledb
@@ -870,7 +867,7 @@ class BatchAgentCommandTool(Component):
     def _interruptible_sleep(self, seconds: int, config: dict[str, Any] | None = None, run_id: str | None = None) -> None:
         deadline = time.time() + max(0, int(seconds))
         while time.time() < deadline:
-            if not self._should_continue_running(config):
+            if not self._run_yn_is_y(config) or not bool(self.__class__._state.get("running")):
                 break
             time.sleep(min(1.0, max(0.0, deadline - time.time())))
 
