@@ -25,7 +25,6 @@ from lfx.schema.data import Data
 _ROOT_DIR = Path(__file__).resolve().parents[2]
 _RUNTIME_DIR = _ROOT_DIR / "runtime"
 _LOG_FILE = _RUNTIME_DIR / "agent.log"
-_PID_FILE = _RUNTIME_DIR / "supervisor_agent.pid"
 
 DEFAULT_DB_CONFIG = {
     "db_host": "10.0.0.1",
@@ -179,7 +178,6 @@ class BatchAgentCommandTool(Component):
                 "running": True,
                 "requested_running": True,
                 "run_id": control.get("run_id"),
-                "pid": self._read_pid(),
                 "mode": "background_process",
                 "message": "Batch supervisor is already running.",
             }
@@ -200,13 +198,11 @@ class BatchAgentCommandTool(Component):
             env=env,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
         )
-        _PID_FILE.write_text(str(process.pid), encoding="utf-8")
         return {
             "ok": True,
             "status": "started",
             "running": True,
             "requested_running": True,
-            "pid": process.pid,
             "mode": "background_process",
             "config_file": str(config_file),
             "message": "Batch supervisor process started.",
@@ -253,7 +249,6 @@ class BatchAgentCommandTool(Component):
                 "message": "Batch supervisor is already running in NEXT_BATCH_CONTROL.",
             }
 
-        _PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
         self._write_batch_log_safe(config, run_id, 0, "START", message="Batch agent started.")
         self.Supervisor_loop(config, run_id)
         state = dict(self.__class__._state)
@@ -298,26 +293,10 @@ class BatchAgentCommandTool(Component):
             state["control"] = control
             state["stop_requested"] = str(control.get("stop_requested_yn") or "").upper() == "Y"
             state["status_source"] = "memory+NEXT_BATCH_CONTROL"
-            state["background_pid"] = self._read_pid()
             state["background_running"] = self._is_background_supervisor_running(config)
         else:
             state["stop_requested"] = not bool(state["requested_running"])
         return {"ok": True, **state}
-
-    def _read_pid(self) -> int | None:
-        try:
-            return int(_PID_FILE.read_text(encoding="utf-8").strip())
-        except Exception:
-            return None
-
-    def _pid_alive(self, pid: int | None) -> bool:
-        if not pid:
-            return False
-        try:
-            os.kill(int(pid), 0)
-            return True
-        except OSError:
-            return False
 
     def _is_batch_control_running(self, config: dict[str, Any]) -> bool:
         table = self._batch_control_table(config)
@@ -332,22 +311,16 @@ class BatchAgentCommandTool(Component):
                AND HEARTBEAT_AT IS NOT NULL
                AND HEARTBEAT_AT >= CURRENT_TIMESTAMP - NUMTODSINTERVAL(:1, 'SECOND')
             """,
-            [300],
+            [600],
         )
         return bool(rows and int(rows[0][0] or 0) > 0)
 
     def _is_background_supervisor_running(self, config: dict[str, Any]) -> bool:
         try:
-            if self._is_batch_control_running(config):
-                return True
+            return self._is_batch_control_running(config)
         except Exception:
             logger.exception("[BatchSupervisor] failed to inspect NEXT_BATCH_CONTROL running state")
-
-        pid = self._read_pid()
-        running = self._pid_alive(pid)
-        if not running and _PID_FILE.exists():
-            _PID_FILE.unlink(missing_ok=True)
-        return running
+            return False
 
     @staticmethod
     def _console(message: str) -> None:
@@ -519,8 +492,6 @@ class BatchAgentCommandTool(Component):
             cls._state["last_event"] = "STOPPED"
             cls._state["updated_at"] = datetime.now().isoformat(timespec="seconds")
             self._mark_batch_control_stopped(config, run_id)
-            if self._read_pid() == os.getpid():
-                _PID_FILE.unlink(missing_ok=True)
             self._write_batch_log_safe(config, run_id, int(cls._state.get("loop_no") or 0), "STOPPED", message="Batch agent stopped.")
 
     def _run_batch_supervisor_cycle(self, config: dict[str, Any]) -> dict[str, Any]:
@@ -1103,7 +1074,7 @@ class BatchAgentCommandTool(Component):
         not enter Supervisor_loop().
         """
         table = self._batch_control_table(config)
-        heartbeat_timeout_seconds = 300
+        heartbeat_timeout_seconds = 600
         with self._connect(config) as conn:
             cur = conn.cursor()
             cur.execute(
