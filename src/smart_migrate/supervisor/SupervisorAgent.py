@@ -11,12 +11,10 @@
   Tool 6: request_wait        — 다음 사이클 전 대기
 """
 
-import json
 import logging
 import os
 import signal
 from datetime import datetime
-from pathlib import Path
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -26,20 +24,6 @@ from smart_migrate.supervisor.SupervisorState import SupervisorState
 from smart_migrate.config.AppSettings import SUPERVISOR_RECURSION_LIMIT
 import smart_migrate.supervisor.SupervisorJobRegistry as supervisor_tools
 from smart_migrate.supervisor.SupervisorJobRegistry import is_stop_requested, request_stop
-
-_COMMAND_FILE = Path(__file__).resolve().parent.parent.parent.parent / "runtime" / "chat_command.json"
-
-
-def _read_chat_command() -> str | None:
-    """채팅에서 전달된 수퍼바이저 명령을 읽고 파일을 삭제한다."""
-    if not _COMMAND_FILE.exists():
-        return None
-    try:
-        data = json.loads(_COMMAND_FILE.read_text(encoding="utf-8"))
-        _COMMAND_FILE.unlink(missing_ok=True)
-        return data.get("command")
-    except Exception:
-        return None
 
 logger = logging.getLogger("migration_agent")
 
@@ -111,10 +95,6 @@ class SupervisorAgent:
                     f"사이클 {cycle}을 시작합니다. "
                     "poll_jobs()를 호출하여 현황을 파악하고 작업을 처리하세요."
                 )
-                chat_command = _read_chat_command()
-                if chat_command:
-                    human_content += f"\n\n[사용자 요청] {chat_command}\n위 요청을 이번 사이클에 반영하세요."
-                    logger.info(f"[Supervisor] 채팅 명령 수신: {chat_command}")
 
                 initial_state: SupervisorState = {
                     "messages": [

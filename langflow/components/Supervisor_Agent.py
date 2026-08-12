@@ -25,7 +25,6 @@ from lfx.schema.data import Data
 _ROOT_DIR = Path(__file__).resolve().parents[2]
 _RUNTIME_DIR = _ROOT_DIR / "runtime"
 _LOG_FILE = _RUNTIME_DIR / "agent.log"
-_COMMAND_FILE = _RUNTIME_DIR / "chat_command.json"
 _PID_FILE = _RUNTIME_DIR / "supervisor_agent.pid"
 
 DEFAULT_DB_CONFIG = {
@@ -62,7 +61,7 @@ Choose exactly one route for the current cycle:
 
 Rules:
 - DB_MIGRATION always has priority over SQL_CONVERSION.
-- If a user request is provided, reflect it for this cycle only.
+- If a DB command is provided, reflect it for this cycle only.
 - Run at most one job per cycle.
 - Never request user input.
 - Do not invent a job that was not provided in the snapshot.
@@ -131,12 +130,6 @@ class BatchAgentCommandTool(Component):
             required=False,
             info="Set Y to start the background supervisor loop. Set N to request stop.",
         ),
-        MessageTextInput(
-            name="chat_input",
-            display_name="Chat Input",
-            required=False,
-            info="Optional user command. Example: run migration map_id=101 or run sql_id=SEL_001 space_nm=userMapper.",
-        ),
         MessageTextInput(name="mig_sql_prompt", display_name="MIG SQL Prompt", required=False),
         MessageTextInput(name="verify_sql_prompt", display_name="VERIFY SQL Prompt", required=False),
         MessageTextInput(name="to_sql_prompt", display_name="TO SQL Prompt", required=False),
@@ -160,7 +153,7 @@ class BatchAgentCommandTool(Component):
                     "status": "ignored",
                     "running": bool(self.__class__._state.get("running")),
                     "requested_running": False,
-                    "message": "Run YN input must be Y to start. Stop is requested by Chat Agent through NEXT_BATCH_CONTROL.",
+                    "message": "Run YN input must be Y to start. Stop is requested through NEXT_BATCH_CONTROL.",
                 }
 
             self.status = result
@@ -177,14 +170,8 @@ class BatchAgentCommandTool(Component):
         receives a quick response, while the child process owns Supervisor_loop().
         """
         _RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-        chat_command = str(config.get("chat_input") or "").strip()
 
         if self._is_background_supervisor_running(config):
-            command_queued = False
-            if chat_command:
-                self._write_chat_command_file(chat_command)
-                config["chat_input"] = ""
-                command_queued = True
             control = self._read_batch_control(config)
             return {
                 "ok": True,
@@ -194,12 +181,7 @@ class BatchAgentCommandTool(Component):
                 "run_id": control.get("run_id"),
                 "pid": self._read_pid(),
                 "mode": "background_process",
-                "command_queued": command_queued,
-                "message": (
-                    "Batch supervisor is already running. "
-                    "Chat input was queued for the next cycle." if command_queued
-                    else "Batch supervisor is already running."
-                ),
+                "message": "Batch supervisor is already running.",
             }
 
         run_id = datetime.now().strftime("%Y%m%d%H%M%S%f")
@@ -366,13 +348,6 @@ class BatchAgentCommandTool(Component):
         if not running and _PID_FILE.exists():
             _PID_FILE.unlink(missing_ok=True)
         return running
-
-    def _write_chat_command_file(self, command: str) -> None:
-        _RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-        _COMMAND_FILE.write_text(
-            json.dumps({"command": str(command or "").strip()}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
 
     @staticmethod
     def _console(message: str) -> None:
@@ -567,57 +542,64 @@ class BatchAgentCommandTool(Component):
         class BatchSupervisorState(TypedDict, total=False):
             migration_job: dict[str, Any] | None
             sql_job: dict[str, Any] | None
-            chat_command: str
-            chat_target: dict[str, Any]
+            command_text: str
+            command_target: dict[str, Any]
+            command_id: int | None
             decision: dict[str, Any]
             result: dict[str, Any]
 
         self._batch_runtime_config = config
         self._raise_if_batch_stop_requested()
-        chat_command = self._consume_chat_command(config)
-        chat_target = self._parse_chat_target(chat_command)
-        if chat_command:
-            logger.info(f"[Supervisor] 채팅 명령 수신: {chat_command}")
+        db_command = self._claim_batch_command(config)
+        command_id = int(db_command["command_id"]) if db_command else None
+        command_text = self._command_to_text(db_command)
+        command_target = self._parse_command_target(db_command)
+        if db_command:
+            logger.info(
+                "[Supervisor] DB 명령 수신: "
+                f"command_id={command_id} command_type={db_command.get('command_type') or '-'}"
+            )
 
         def poll_jobs(_: BatchSupervisorState) -> BatchSupervisorState:
             self._raise_if_batch_stop_requested()
             migration_job = None
             sql_job = None
-            if chat_target.get("map_id") is not None:
-                migration_job = self._poll_next_migration_job(config, map_id=int(chat_target["map_id"]))
-            elif chat_target.get("sql_id"):
+            if command_target.get("map_id") is not None:
+                migration_job = self._poll_next_migration_job(config, map_id=int(command_target["map_id"]))
+            elif command_target.get("sql_id"):
                 sql_job = self._poll_next_sql_conversion_job(
                     config,
-                    sql_id=str(chat_target["sql_id"]),
-                    space_nm=str(chat_target.get("space_nm") or "") or None,
+                    sql_id=str(command_target["sql_id"]),
+                    space_nm=str(command_target.get("space_nm") or "") or None,
                 )
             else:
                 migration_job = self._poll_next_migration_job(config)
                 sql_job = None if migration_job else self._poll_next_sql_conversion_job(config)
             self._console(
                 "poll result: "
-                f"chat_target={chat_target or '-'} "
+                f"command_target={command_target or '-'} "
                 f"migration_job={migration_job or '-'} "
                 f"sql_job={sql_job or '-'}"
             )
             return {
                 "migration_job": migration_job,
                 "sql_job": sql_job,
-                "chat_command": chat_command,
-                "chat_target": chat_target,
+                "command_text": command_text,
+                "command_target": command_target,
+                "command_id": command_id,
             }
 
         def supervisor_decide(state: BatchSupervisorState) -> BatchSupervisorState:
             self._raise_if_batch_stop_requested()
             payload = {
-                "chat_command": state.get("chat_command") or "",
-                "chat_target": state.get("chat_target") or {},
+                "db_command": state.get("command_text") or "",
+                "command_target": state.get("command_target") or {},
                 "migration_job": state.get("migration_job"),
                 "sql_job": state.get("sql_job"),
                 "policy": [
-                    "If chat_command is present, reflect it in this cycle.",
-                    "When chat_target contains map_id, run only that migration job if it is runnable.",
-                    "When chat_target contains sql_id, run only that SQL conversion job if it is runnable.",
+                    "If db_command is present, reflect it in this cycle.",
+                    "When command_target contains map_id, run only that migration job if it is runnable.",
+                    "When command_target contains sql_id, run only that SQL conversion job if it is runnable.",
                     "Choose exactly one route for this supervisor cycle.",
                     "Available routes: run_data_migration, run_sql_conversion, no_job.",
                     "Run at most one job per cycle.",
@@ -758,11 +740,18 @@ class BatchAgentCommandTool(Component):
         workflow.add_edge("run_sql_conversion", END)
         workflow.add_edge("no_job", END)
 
-        final_state = workflow.compile().invoke({})
-        result = final_state.get("result")
-        if not result:
-            raise RuntimeError("Batch supervisor graph finished without a result.")
-        return result
+        try:
+            final_state = workflow.compile().invoke({})
+            result = final_state.get("result")
+            if not result:
+                raise RuntimeError("Batch supervisor graph finished without a result.")
+            if command_id is not None:
+                self._complete_batch_command(config, command_id, "DONE")
+            return result
+        except Exception as exc:
+            if command_id is not None:
+                self._complete_batch_command(config, command_id, "FAILED", str(exc))
+            raise
 
 
     def _run_migration_job(self, config: dict[str, Any], map_id: int) -> dict[str, Any]:
@@ -818,33 +807,21 @@ class BatchAgentCommandTool(Component):
             "reason": str(parsed.get("reason") or "").strip(),
         }
 
-    def _consume_chat_command(self, config: dict[str, Any]) -> str:
-        """Consume one user command for this supervisor cycle.
+    def _parse_command_target(self, command: dict[str, Any] | None) -> dict[str, Any]:
+        payload = self._command_json(command)
+        target: dict[str, Any] = {}
+        if isinstance(payload, dict):
+            if payload.get("map_id") is not None:
+                target["map_id"] = int(payload["map_id"])
+            if payload.get("sql_id"):
+                target["sql_id"] = str(payload["sql_id"]).strip()
+            if payload.get("space_nm"):
+                target["space_nm"] = str(payload["space_nm"]).strip()
+        target.update(self._parse_command_text_target(self._command_to_text(command)))
+        return target
 
-        This mirrors the original SupervisorAgent behavior:
-        runtime/chat_command.json is read once and deleted. Langflow chat_input
-        is also treated as a one-cycle seed command, then cleared from the
-        runtime config so it does not force the same job every loop.
-        """
-        inline_command = str(config.get("chat_input") or "").strip()
-        if inline_command:
-            config["chat_input"] = ""
-            return inline_command
-        return self._read_chat_command_file()
-
-    def _read_chat_command_file(self) -> str:
-        if not _COMMAND_FILE.exists():
-            return ""
-        try:
-            data = json.loads(_COMMAND_FILE.read_text(encoding="utf-8"))
-            _COMMAND_FILE.unlink(missing_ok=True)
-            return str(data.get("command") or "").strip()
-        except Exception:
-            logger.exception(f"[Supervisor] failed to read chat command file: {_COMMAND_FILE}")
-            return ""
-
-    def _parse_chat_target(self, chat_command: str) -> dict[str, Any]:
-        text = str(chat_command or "").strip()
+    def _parse_command_text_target(self, command_text: str) -> dict[str, Any]:
+        text = str(command_text or "").strip()
         if not text:
             return {}
 
@@ -958,7 +935,6 @@ class BatchAgentCommandTool(Component):
             "llm_model": str(getattr(self, "llm_model", "") or os.getenv("SMARTMIGRATE_LLM_MODEL", str(DEFAULT_LLM_CONFIG["llm_model"]))).strip(),
             "llm_max_tokens": int(getattr(self, "llm_max_tokens", None) or os.getenv("SMARTMIGRATE_LLM_MAX_TOKENS", str(DEFAULT_LLM_CONFIG["llm_max_tokens"]))),
             "llm_timeout_seconds": int(getattr(self, "llm_timeout_seconds", None) or os.getenv("SMARTMIGRATE_LLM_TIMEOUT_SECONDS", str(DEFAULT_LLM_CONFIG["llm_timeout_seconds"]))),
-            "chat_input": str(getattr(self, "chat_input", "") or os.getenv("SMARTMIGRATE_CHAT_INPUT", "")),
             "mig_sql_prompt": str(getattr(self, "mig_sql_prompt", "") or os.getenv("SMARTMIGRATE_MIG_SQL_PROMPT", "")),
             "verify_sql_prompt": str(getattr(self, "verify_sql_prompt", "") or os.getenv("SMARTMIGRATE_VERIFY_SQL_PROMPT", "")),
             "to_sql_prompt": str(getattr(self, "to_sql_prompt", "") or os.getenv("SMARTMIGRATE_TO_SQL_PROMPT", "")),
@@ -1025,6 +1001,98 @@ class BatchAgentCommandTool(Component):
 
     def _batch_control_table(self, config: dict[str, Any]) -> str:
         return self._qualify_table("NEXT_BATCH_CONTROL", config["system_schema"])
+
+    def _batch_command_table(self, config: dict[str, Any]) -> str:
+        return self._qualify_table("NEXT_BATCH_COMMAND", config["system_schema"])
+
+    def _claim_batch_command(self, config: dict[str, Any]) -> dict[str, Any] | None:
+        table = self._batch_command_table(config)
+        try:
+            with self._connect(config) as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    f"""
+                    SELECT COMMAND_ID, COMMAND_TYPE, COMMAND_TEXT, COMMAND_JSON
+                      FROM {table}
+                     WHERE CONTROL_NAME = 'BATCH_AGENT'
+                       AND UPPER(TRIM(COMMAND_STATUS)) = 'PENDING'
+                     ORDER BY REQUESTED_AT ASC, COMMAND_ID ASC
+                     FOR UPDATE SKIP LOCKED
+                    """
+                )
+                row = cur.fetchone()
+                if not row:
+                    conn.commit()
+                    return None
+                command_id = int(row[0])
+                cur.execute(
+                    f"""
+                    UPDATE {table}
+                       SET COMMAND_STATUS = 'CLAIMED',
+                           CLAIMED_AT = CURRENT_TIMESTAMP
+                     WHERE COMMAND_ID = :1
+                    """,
+                    [command_id],
+                )
+                conn.commit()
+                return {
+                    "command_id": command_id,
+                    "command_type": self._to_text(row[1]).upper(),
+                    "command_text": self._to_text(row[2]),
+                    "command_json": self._to_text(row[3]),
+                }
+        except Exception:
+            logger.exception("[BatchSupervisor] failed to claim NEXT_BATCH_COMMAND")
+            return None
+
+    def _complete_batch_command(
+        self,
+        config: dict[str, Any],
+        command_id: int,
+        status: str,
+        error_message: str | None = None,
+    ) -> None:
+        table = self._batch_command_table(config)
+        final_status = "DONE" if str(status or "").upper() == "DONE" else "FAILED"
+        try:
+            with self._connect(config) as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    f"""
+                    UPDATE {table}
+                       SET COMMAND_STATUS = :1,
+                           COMPLETED_AT = CURRENT_TIMESTAMP,
+                           ERROR_MESSAGE = :2
+                     WHERE COMMAND_ID = :3
+                    """,
+                    [final_status, str(error_message or "") if error_message else None, int(command_id)],
+                )
+                conn.commit()
+        except Exception:
+            logger.exception(f"[BatchSupervisor] failed to complete NEXT_BATCH_COMMAND command_id={command_id}")
+
+    def _command_json(self, command: dict[str, Any] | None) -> dict[str, Any]:
+        if not command:
+            return {}
+        raw = str(command.get("command_json") or "").strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            logger.warning(f"[BatchSupervisor] invalid COMMAND_JSON command_id={command.get('command_id')}")
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    def _command_to_text(self, command: dict[str, Any] | None) -> str:
+        if not command:
+            return ""
+        payload = self._command_json(command)
+        text = str(command.get("command_text") or "").strip()
+        if payload:
+            payload_text = json.dumps(payload, ensure_ascii=False, default=str)
+            return f"{text}\n{payload_text}".strip()
+        return text
 
     def _try_acquire_batch_control(self, config: dict[str, Any], run_id: str) -> bool:
         """Acquire the single DB control row before entering the blocking loop.
@@ -3422,7 +3490,6 @@ def build_service_config() -> dict[str, Any]:
         "llm_model": _env("SMARTMIGRATE_LLM_MODEL", str(DEFAULT_LLM_CONFIG["llm_model"])),
         "llm_max_tokens": _env_int("SMARTMIGRATE_LLM_MAX_TOKENS", int(DEFAULT_LLM_CONFIG["llm_max_tokens"])),
         "llm_timeout_seconds": _env_int("SMARTMIGRATE_LLM_TIMEOUT_SECONDS", int(DEFAULT_LLM_CONFIG["llm_timeout_seconds"])),
-        "chat_input": _env("SMARTMIGRATE_CHAT_INPUT", ""),
         "mig_sql_prompt": _read_text_env("SMARTMIGRATE_MIG_SQL_PROMPT", "SMARTMIGRATE_MIG_SQL_PROMPT_FILE"),
         "verify_sql_prompt": _read_text_env("SMARTMIGRATE_VERIFY_SQL_PROMPT", "SMARTMIGRATE_VERIFY_SQL_PROMPT_FILE"),
         "to_sql_prompt": _read_text_env("SMARTMIGRATE_TO_SQL_PROMPT", "SMARTMIGRATE_TO_SQL_PROMPT_FILE"),

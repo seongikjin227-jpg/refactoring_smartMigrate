@@ -81,13 +81,14 @@ LangFlow 쪽 핵심 파일은 다음과 같다.
 
 ```text
 langflow/components/
-  dashboard_command_tool.py
-  migration_command_tool.py
-  sql_conversion_command_tool.py
+  Chat_Agent.py
   Supervisor_Agent.py
+  chat_agent_tools/Chat_Command_Tool.py
+  unused/
 ```
 
-각 파일은 LangFlow Custom Component 하나에 대응한다.
+`Chat_Agent.py`, `chat_agent_tools/Chat_Command_Tool.py`, `Supervisor_Agent.py`만 현재 LangFlow Custom Component로 사용한다.
+기존 command tool 파일은 `unused/`에 참고용으로 보관한다.
 
 ```text
 DashboardCommandTool
@@ -562,9 +563,10 @@ LangFlow에 맞게 조정한 부분:
 - component 내부에서 runtime package auto install 옵션 지원
 - CLOB 값은 `.read()`로 전체 원문을 읽어서 prompt에 넣음
 
-## Migration Command Tool 내부 구조
+## Unused Migration Command Tool 내부 구조
 
-`migration_command_tool.py`는 migration 업무를 수동/채팅형으로 실행하기 위한 component다.
+`unused/migration_command_tool.py`는 migration 업무를 수동/채팅형으로 실행하던 component다.
+현재 흐름에서는 직접 사용하지 않는다.
 
 대표 action:
 
@@ -621,9 +623,10 @@ attempt 2
 
 retry에 필요한 `last_error`, `last_sql`, `retry_count`를 LangFlow edge로 넘기지 않고 함수 내부에서 유지한다.
 
-## SQL Conversion Command Tool 내부 구조
+## Unused SQL Conversion Command Tool 내부 구조
 
-`sql_conversion_command_tool.py`는 SQL conversion 업무를 수동/채팅형으로 실행하기 위한 component다.
+`unused/sql_conversion_command_tool.py`는 SQL conversion 업무를 수동/채팅형으로 실행하던 component다.
+현재 흐름에서는 직접 사용하지 않는다.
 
 대표 action:
 

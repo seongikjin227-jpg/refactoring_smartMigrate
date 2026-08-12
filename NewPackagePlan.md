@@ -29,7 +29,7 @@ src/smart_migrate/
 │  ├─ sql_tuning/              # TUNED_TO_SQL 생성 agent
 │  └─ sql_formatting/          # FORMATTED_SQL 생성 agent
 ├─ repositories/               # Oracle table SELECT/DML
-├─ integrations/               # Oracle, LLM, LangFlow 외부 연결
+├─ integrations/               # Oracle, LLM 외부 연결
 ├─ utilities/                  # XML import/export 같은 운영 보조 기능
 ├─ config/                     # 환경 설정
 └─ shared/                     # 공통 status, type, exception, logging

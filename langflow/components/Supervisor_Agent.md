@@ -3,14 +3,17 @@
 파일: `langflow/components/Supervisor_Agent.py`
 
 `Supervisor_Agent.py`는 SmartMigrate 백그라운드 배치 처리를 담당하는 Langflow 커스텀 컴포넌트다.
-사용자 채팅 입력을 받지 않고, `Run YN` 값이 `Y`일 때 직접 while loop를 실행한다.
+사용자 채팅 입력을 받지 않고, `Run YN` 값이 `Y`일 때 background supervisor loop를 시작한다.
+실행 이후 제어는 DB의 `NEXT_BATCH_CONTROL`, 1회성 작업 지정은 `NEXT_BATCH_COMMAND`에서 받는다.
 
 ## 핵심 구조
 
 ```text
 Run YN=Y
-  -> blocking while loop 시작
+  -> background supervisor process 시작
+  -> NEXT_BATCH_CONTROL RUNNING 획득
   -> poll_jobs
+  -> NEXT_BATCH_COMMAND PENDING 1건 claim
   -> supervisor_decide
   -> run_data_migration | run_sql_conversion | no_job
   -> NEXT_BATCH_LOG 저장
@@ -19,8 +22,9 @@ Run YN=Y
 
 중요한 운영 기준:
 - worker thread를 만들지 않는다.
-- `NEXT_BATCH_CONTROL`을 사용하지 않는다.
-- `Run YN=Y`이면 컴포넌트 실행 요청 안에서 blocking loop가 직접 돈다.
+- `NEXT_BATCH_CONTROL`로 running/stop/heartbeat 상태를 관리한다.
+- `NEXT_BATCH_COMMAND`로 map_id/sql_id 같은 1회성 명령을 받는다.
+- `Run YN=Y`이면 별도 background process를 시작한다.
 - `Run YN=N`이면 loop를 시작하지 않는다.
 - cycle 결과는 `NEXT_BATCH_LOG`에 저장한다.
 - DB migration 상세 로그는 `NEXT_MIG_LOG`에 저장한다.
@@ -66,8 +70,8 @@ Agent에 Tool로 연결할 때 Agent가 전달할 수 있는 값은 `Run YN`뿐�
 Tool 호출 예:
 
 ```text
-Run YN = Y       Supervisor loop 실행
-Run YN = N       Supervisor loop 미실행/중지 요청
+Run YN = Y       Supervisor loop 시작
+Run YN = N       Supervisor loop 시작 안 함
 Run YN = STATUS  현재 상태 조회
 ```
 
@@ -165,7 +169,10 @@ START
 ```
 
 `poll_jobs`:
-- `NEXT_MIG_INFO`에서 DB migration 대상 1건 조회
+- `NEXT_BATCH_COMMAND`에서 `PENDING` 명령 1건을 `CLAIMED`로 가져옴
+- command에 `map_id`가 있으면 해당 DB migration 대상 1건 조회
+- command에 `sql_id`가 있으면 해당 SQL conversion 대상 1건 조회
+- command가 없으면 `NEXT_MIG_INFO`에서 DB migration 대상 1건 조회
 - DB migration 대상이 없으면 `NEXT_SQL_INFO`에서 SQL conversion 대상 1건 조회
 
 `supervisor_decide`:
@@ -187,7 +194,7 @@ route 보정:
 Supervisor system prompt는 `SUPERVISOR_SYSTEM_PROMPT`에 정의되어 있다.
 
 목적:
-- 채팅 없이 현재 job snapshot만 보고 route 결정
+- 채팅 없이 DB command와 현재 job snapshot만 보고 route 결정
 - DB_MIGRATION 우선
 - cycle당 1건만 실행
 - JSON만 반환
@@ -259,6 +266,21 @@ SERVICE_ERROR
 
 `RUN_ID`는 제어용이 아니라 로그 묶음 식별자다.
 
+## NEXT_BATCH_COMMAND
+
+Supervisor는 각 cycle 시작 시 `NEXT_BATCH_COMMAND`에서 `CONTROL_NAME='BATCH_AGENT'`이고
+`COMMAND_STATUS='PENDING'`인 row 1건을 `CLAIMED`로 가져온다.
+
+지원하는 payload:
+
+```json
+{"map_id": 101}
+{"sql_id": "SEL_001", "space_nm": "userMapper"}
+```
+
+`COMMAND_TEXT`에 `map_id=101`, `sql_id=SEL_001 space_nm=userMapper` 형식으로 넣어도 된다.
+cycle이 정상 종료되면 `DONE`, 오류가 발생하면 `FAILED`로 갱신한다.
+
 ## Standalone 실행
 
 서버 startup에서 같은 파일을 직접 실행할 수 있다.
@@ -300,9 +322,7 @@ SMARTMIGRATE_TEST_SQL_PROMPT_FILE
 
 ## 주의사항
 
-- `Run YN=Y`는 blocking loop이므로 Langflow 실행 요청이 계속 점유될 수 있다.
-- worker thread 방식이 아니므로 별도 background thread 상태는 없다.
-- `NEXT_BATCH_CONTROL` 기반 start/stop/heartbeat 제어는 사용하지 않는다.
-- 중복 실행 방지는 현재 프로세스 메모리 상태 기준이다.
-- 여러 서버 replica에서 동시에 실행하면 중복 실행 방지 장치가 부족할 수 있다.
-- 실제 운영에서 replica가 여러 개라면 DB lock 또는 별도 scheduler 제어가 필요하다.
+- `Run YN=Y`는 background process를 시작하고 빠르게 응답한다.
+- worker thread 방식이 아니라 별도 process 방식이다.
+- `NEXT_BATCH_CONTROL` heartbeat가 살아 있으면 중복 start를 막는다.
+- stop 요청은 `NEXT_BATCH_CONTROL.STOP_REQUESTED_YN='Y'` 또는 `STATUS='STOP_REQUESTED'`로 전달한다.

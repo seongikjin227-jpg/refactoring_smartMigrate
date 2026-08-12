@@ -35,10 +35,9 @@ src/smart_migrate/
 │  ├─ sql_tuning/            # SQL tuning agent
 │  └─ sql_formatting/        # SQL formatting agent
 ├─ repositories/             # Oracle table SELECT/DML
-├─ integrations/             # Oracle, LLM, LangFlow 연동
+├─ integrations/             # Oracle, LLM 연동
 │  ├─ oracle/
-│  ├─ llm/
-│  └─ langflow/
+│  └─ llm/
 ├─ utilities/                # XML import/export 같은 운영 보조 기능
 │  └─ xml/
 ├─ config/                   # 환경 설정
@@ -60,7 +59,6 @@ src/smart_migrate/
 | LLM client/fallback/prompt loader | `src/smart_migrate/integrations/llm/` |
 | migration/sql domain models/statuses/exceptions/logging | `src/smart_migrate/shared/` |
 | XML parser/import/export helper | `src/smart_migrate/utilities/xml/` |
-| LangFlow API helper | `src/smart_migrate/integrations/langflow/` |
 
 ## 백그라운드 배치 동작
 

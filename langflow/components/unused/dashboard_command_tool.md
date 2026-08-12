@@ -1,6 +1,6 @@
 # Dashboard Command Tool 사용법
 
-파일: `langflow/components/dashboard_command_tool.py`
+파일: `langflow/components/unused/dashboard_command_tool.py`
 
 Langflow 웹 UI에서 Custom Python Component를 만든 뒤, 이 파일의 코드를 붙여 넣는다.
 
