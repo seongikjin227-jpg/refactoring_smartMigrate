@@ -1,9 +1,8 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import ast
 import json
 import logging
-import os
 import re
 import subprocess
 import sys
@@ -26,29 +25,10 @@ _ROOT_DIR = Path(__file__).resolve().parents[2]
 _RUNTIME_DIR = _ROOT_DIR / "runtime"
 _LOG_FILE = _RUNTIME_DIR / "agent.log"
 
-DEFAULT_DB_CONFIG = {
-    "db_host": "10.0.0.1",
-    "db_port": 1521,
-    "db_service_name": "ORCL",
-    "db_username": "SMARTMIGRATE",
-    "db_password": "password",
-    "system_schema": "SFAADM",
-    "source_schema": "SFAMIG",
-    "target_schema": "SFAADM",
-}
-
-DEFAULT_LLM_CONFIG = {
-    "llm_base_url": "",
-    "llm_api_key": "",
-    "llm_model": "claude-haiku-4-5-20251001",
-    "llm_max_tokens": 4096,
-    "llm_timeout_seconds": 900,
-}
-
 AUTO_INSTALL_MISSING_PACKAGES = True
 
 SUPERVISOR_SYSTEM_PROMPT = """
-You are the SmartMigrate background Supervisor Agent.
+You are the SmartMigrate Supervisor Agent.
 
 No chat input is provided. The runtime polls jobs every cycle and sends you the
 current pending job snapshot.
@@ -69,36 +49,6 @@ Rules:
 Required JSON schema:
 {"route":"run_data_migration | run_sql_conversion | no_job","reason":"short reason"}
 """.strip()
-
-
-def _setup_logger() -> logging.Logger:
-    logger = logging.getLogger("migration_agent")
-    if not logger.handlers:
-        logger.setLevel(logging.DEBUG)
-        try:
-            import io
-
-            sys.stdout = io.TextIOWrapper(sys.stdout.detach(), encoding="utf-8", line_buffering=True)
-        except Exception:
-            pass
-        formatter = logging.Formatter("%(asctime)s - [%(name)s] [%(levelname)s] - %(message)s")
-        stream_handler = logging.StreamHandler(sys.stdout)
-        stream_handler.setLevel(logging.DEBUG)
-        stream_handler.setFormatter(formatter)
-        logger.addHandler(stream_handler)
-        try:
-            _RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-            file_handler = logging.FileHandler(_LOG_FILE, encoding="utf-8")
-            file_handler.setLevel(logging.DEBUG)
-            file_handler.setFormatter(formatter)
-            logger.addHandler(file_handler)
-        except Exception:
-            pass
-        logger.propagate = False
-    return logger
-
-
-logger = _setup_logger()
 
 
 class BatchAgentCommandTool(Component):
@@ -122,13 +72,83 @@ class BatchAgentCommandTool(Component):
         "last_error": None,
     }
 
+    @classmethod
+    def _logger(cls) -> logging.Logger:
+        logger = logging.getLogger("migration_agent")
+        if not logger.handlers:
+            logger.setLevel(logging.DEBUG)
+            try:
+                import io
+
+                sys.stdout = io.TextIOWrapper(sys.stdout.detach(), encoding="utf-8", line_buffering=True)
+            except Exception:
+                pass
+            formatter = logging.Formatter("%(asctime)s - [%(name)s] [%(levelname)s] - %(message)s")
+            stream_handler = logging.StreamHandler(sys.stdout)
+            stream_handler.setLevel(logging.DEBUG)
+            stream_handler.setFormatter(formatter)
+            logger.addHandler(stream_handler)
+            try:
+                _RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+                file_handler = logging.FileHandler(_LOG_FILE, encoding="utf-8")
+                file_handler.setLevel(logging.DEBUG)
+                file_handler.setFormatter(formatter)
+                logger.addHandler(file_handler)
+            except Exception:
+                pass
+            logger.propagate = False
+        return logger
+
     inputs = [
         MessageTextInput(
             name="run_yn",
             display_name="Run YN",
+            value="Y",
             required=False,
-            info="Set Y to start the background supervisor loop. Set N to request stop.",
+            info="Set Y to start the supervisor loop. Set N to skip start.",
         ),
+        StrInput(
+            name="db_host",
+            display_name="DB Host",
+            required=True,
+            info="Oracle host or scan address.",
+        ),
+        IntInput(
+            name="db_port",
+            display_name="DB Port",
+            value=1521,
+            required=True,
+            info="Oracle listener port.",
+        ),
+        StrInput(
+            name="db_service_name",
+            display_name="Service Name",
+            required=True,
+            info="Oracle service name.",
+        ),
+        StrInput(name="db_username", display_name="Username", required=True),
+        SecretStrInput(name="db_password", display_name="Password", required=True),
+        StrInput(
+            name="llm_base_url",
+            display_name="LLM Base URL",
+            required=False,
+            info="OpenAI-compatible LLM gateway base URL.",
+        ),
+        SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=False),
+        StrInput(
+            name="llm_model",
+            display_name="LLM Model",
+            value="claude-haiku-4-5-20251001",
+            required=False,
+        ),
+        IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=4096, required=False),
+        IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=900, required=False),
+        StrInput(name="system_schema", display_name="System Schema", required=True),
+        StrInput(name="source_schema", display_name="Source Schema", required=True),
+        StrInput(name="target_schema", display_name="Target Schema", required=True),
+        IntInput(name="migration_max_attempts", display_name="Migration Max Attempts", value=3, required=False),
+        IntInput(name="sql_conversion_max_attempts", display_name="SQL Conversion Max Attempts", value=3, required=False),
+        IntInput(name="error_sleep_seconds", display_name="Error Sleep Seconds", value=60, required=False),
         MessageTextInput(name="mig_sql_prompt", display_name="MIG SQL Prompt", required=False),
         MessageTextInput(name="verify_sql_prompt", display_name="VERIFY SQL Prompt", required=False),
         MessageTextInput(name="to_sql_prompt", display_name="TO SQL Prompt", required=False),
@@ -145,7 +165,7 @@ class BatchAgentCommandTool(Component):
             config = self._snapshot_config()
 
             if self._run_yn_equals_y(config):
-                result = self._start_background(config)
+                result = self._start(config)
             else:
                 result = {
                     "ok": False,
@@ -161,52 +181,6 @@ class BatchAgentCommandTool(Component):
             result = {"ok": False, "error": str(exc)}
             self.status = result
             return Data(data=result)
-
-    def _start_background(self, config: dict[str, Any]) -> dict[str, Any]:
-        """Start the blocking supervisor loop in a separate Python process.
-
-        This mirrors the original Streamlit agent_control.py behavior. Langflow
-        receives a quick response, while the child process owns Supervisor_loop().
-        """
-        _RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
-
-        if self._is_background_supervisor_running(config):
-            control = self._read_batch_control(config)
-            return {
-                "ok": True,
-                "status": "already_running",
-                "running": True,
-                "requested_running": True,
-                "run_id": control.get("run_id"),
-                "mode": "background_process",
-                "message": "Batch supervisor is already running.",
-            }
-
-        run_id = datetime.now().strftime("%Y%m%d%H%M%S%f")
-        config_file = _RUNTIME_DIR / f"supervisor_config_{run_id}.json"
-        config_file.write_text(
-            json.dumps(config, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        env = os.environ.copy()
-        env["SMARTMIGRATE_MONITOR_CONFIG"] = str(config_file)
-        env["SMARTMIGRATE_RUN_YN"] = "Y"
-
-        process = subprocess.Popen(
-            [sys.executable, str(Path(__file__).resolve())],
-            cwd=str(_ROOT_DIR),
-            env=env,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
-        )
-        return {
-            "ok": True,
-            "status": "started",
-            "running": True,
-            "requested_running": True,
-            "mode": "background_process",
-            "config_file": str(config_file),
-            "message": "Batch supervisor process started.",
-        }
 
     def _start(self, config: dict[str, Any]) -> dict[str, Any]:
         run_id = datetime.now().strftime("%Y%m%d%H%M%S%f")
@@ -293,7 +267,7 @@ class BatchAgentCommandTool(Component):
             state["control"] = control
             state["stop_requested"] = str(control.get("stop_requested_yn") or "").upper() == "Y"
             state["status_source"] = "memory+NEXT_BATCH_CONTROL"
-            state["background_running"] = self._is_background_supervisor_running(config)
+            state["control_running"] = self._is_supervisor_running(config)
         else:
             state["stop_requested"] = not bool(state["requested_running"])
         return {"ok": True, **state}
@@ -315,16 +289,15 @@ class BatchAgentCommandTool(Component):
         )
         return bool(rows and int(rows[0][0] or 0) > 0)
 
-    def _is_background_supervisor_running(self, config: dict[str, Any]) -> bool:
+    def _is_supervisor_running(self, config: dict[str, Any]) -> bool:
         try:
             return self._is_batch_control_running(config)
         except Exception:
-            logger.exception("[BatchSupervisor] failed to inspect NEXT_BATCH_CONTROL running state")
+            self._logger().exception("[BatchSupervisor] failed to inspect NEXT_BATCH_CONTROL running state")
             return False
 
-    @staticmethod
-    def _console(message: str) -> None:
-        logger.info(f"[BatchSupervisor] {message}")
+    def _console(self, message: str) -> None:
+        self._logger().info(f"[BatchSupervisor] {message}")
 
     def _raise_if_batch_stop_requested(self) -> None:
         config = getattr(self, "_batch_runtime_config", None)
@@ -526,7 +499,7 @@ class BatchAgentCommandTool(Component):
         command_text = self._command_to_text(db_command)
         command_target = self._parse_command_target(db_command)
         if db_command:
-            logger.info(
+            self._logger().info(
                 "[Supervisor] DB 명령 수신: "
                 f"command_id={command_id} command_type={db_command.get('command_type') or '-'}"
             )
@@ -618,19 +591,19 @@ class BatchAgentCommandTool(Component):
             if route == "no_job" and not migration_job and not sql_job:
                 return "no_job"
             if migration_job:
-                logger.warning(
+                self._logger().warning(
                     "[SupervisorDecision] invalid route corrected to run_data_migration "
                     f"(requested={route or '-'})"
                 )
                 return "run_data_migration"
             if sql_job:
-                logger.warning(
+                self._logger().warning(
                     "[SupervisorDecision] invalid route corrected to run_sql_conversion "
                     f"(requested={route or '-'})"
                 )
                 return "run_sql_conversion"
             if route and route != "no_job":
-                logger.warning(
+                self._logger().warning(
                     "[SupervisorDecision] invalid route corrected to no_job "
                     f"(requested={route})"
                 )
@@ -753,7 +726,7 @@ class BatchAgentCommandTool(Component):
     def _parse_supervisor_decision(self, raw_decision: str) -> dict[str, Any]:
         text = str(raw_decision or "").strip()
         if not text:
-            logger.warning("[SupervisorDecision] empty LLM response")
+            self._logger().warning("[SupervisorDecision] empty LLM response")
             return {"route": "", "reason": "empty LLM response"}
         if text.startswith("```"):
             text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
@@ -763,15 +736,15 @@ class BatchAgentCommandTool(Component):
         except Exception:
             match = re.search(r"\{.*\}", text, flags=re.DOTALL)
             if not match:
-                logger.warning(f"[SupervisorDecision] failed to parse JSON: {raw_decision[:500]}")
+                self._logger().warning(f"[SupervisorDecision] failed to parse JSON: {raw_decision[:500]}")
                 return {"route": "", "reason": "failed to parse JSON"}
             try:
                 parsed = json.loads(match.group(0))
             except Exception:
-                logger.warning(f"[SupervisorDecision] failed to parse JSON object: {raw_decision[:500]}")
+                self._logger().warning(f"[SupervisorDecision] failed to parse JSON object: {raw_decision[:500]}")
                 return {"route": "", "reason": "failed to parse JSON object"}
         if not isinstance(parsed, dict):
-            logger.warning(f"[SupervisorDecision] JSON is not an object: {raw_decision[:500]}")
+            self._logger().warning(f"[SupervisorDecision] JSON is not an object: {raw_decision[:500]}")
             return {"route": "", "reason": "JSON is not an object"}
         return {
             "route": str(parsed.get("route") or "").strip(),
@@ -895,25 +868,25 @@ class BatchAgentCommandTool(Component):
         self.default_max_attempts = config["migration_max_attempts"]
     def _snapshot_config(self) -> dict[str, Any]:
         return {
-            "run_yn": str(getattr(self, "run_yn", "") or "").strip().upper(),
-            "db_host": str(getattr(self, "db_host", "") or DEFAULT_DB_CONFIG["db_host"]).strip(),
-            "db_port": int(getattr(self, "db_port", None) or DEFAULT_DB_CONFIG["db_port"]),
-            "db_service_name": str(getattr(self, "db_service_name", "") or DEFAULT_DB_CONFIG["db_service_name"]).strip(),
-            "db_username": str(getattr(self, "db_username", "") or DEFAULT_DB_CONFIG["db_username"]).strip(),
-            "db_password": self._secret_to_str(getattr(self, "db_password", None)) or str(DEFAULT_DB_CONFIG["db_password"]),
-            "llm_base_url": str(getattr(self, "llm_base_url", "") or os.getenv("SMARTMIGRATE_LLM_BASE_URL", DEFAULT_LLM_CONFIG["llm_base_url"])).strip(),
-            "llm_api_key": self._secret_to_str(getattr(self, "llm_api_key", None)) or os.getenv("SMARTMIGRATE_LLM_API_KEY", str(DEFAULT_LLM_CONFIG["llm_api_key"])),
-            "llm_model": str(getattr(self, "llm_model", "") or os.getenv("SMARTMIGRATE_LLM_MODEL", str(DEFAULT_LLM_CONFIG["llm_model"]))).strip(),
-            "llm_max_tokens": int(getattr(self, "llm_max_tokens", None) or os.getenv("SMARTMIGRATE_LLM_MAX_TOKENS", str(DEFAULT_LLM_CONFIG["llm_max_tokens"]))),
-            "llm_timeout_seconds": int(getattr(self, "llm_timeout_seconds", None) or os.getenv("SMARTMIGRATE_LLM_TIMEOUT_SECONDS", str(DEFAULT_LLM_CONFIG["llm_timeout_seconds"]))),
-            "mig_sql_prompt": str(getattr(self, "mig_sql_prompt", "") or os.getenv("SMARTMIGRATE_MIG_SQL_PROMPT", "")),
-            "verify_sql_prompt": str(getattr(self, "verify_sql_prompt", "") or os.getenv("SMARTMIGRATE_VERIFY_SQL_PROMPT", "")),
-            "to_sql_prompt": str(getattr(self, "to_sql_prompt", "") or os.getenv("SMARTMIGRATE_TO_SQL_PROMPT", "")),
-            "bind_sql_prompt": str(getattr(self, "bind_sql_prompt", "") or os.getenv("SMARTMIGRATE_BIND_SQL_PROMPT", "")),
-            "test_sql_prompt": str(getattr(self, "test_sql_prompt", "") or os.getenv("SMARTMIGRATE_TEST_SQL_PROMPT", "")),
-            "system_schema": str(DEFAULT_DB_CONFIG["system_schema"]).strip(),
-            "source_schema": str(DEFAULT_DB_CONFIG["source_schema"]).strip(),
-            "target_schema": str(DEFAULT_DB_CONFIG["target_schema"]).strip(),
+            "run_yn": str(getattr(self, "run_yn", "") or "Y").strip().upper(),
+            "db_host": str(getattr(self, "db_host", "") or "").strip(),
+            "db_port": int(getattr(self, "db_port", None) or 1521),
+            "db_service_name": str(getattr(self, "db_service_name", "") or "").strip(),
+            "db_username": str(getattr(self, "db_username", "") or "").strip(),
+            "db_password": self._secret_to_str(getattr(self, "db_password", None)),
+            "llm_base_url": str(getattr(self, "llm_base_url", "") or "").strip(),
+            "llm_api_key": self._secret_to_str(getattr(self, "llm_api_key", None)),
+            "llm_model": str(getattr(self, "llm_model", "") or "").strip(),
+            "llm_max_tokens": int(getattr(self, "llm_max_tokens", None) or 4096),
+            "llm_timeout_seconds": int(getattr(self, "llm_timeout_seconds", None) or 900),
+            "mig_sql_prompt": str(getattr(self, "mig_sql_prompt", "") or ""),
+            "verify_sql_prompt": str(getattr(self, "verify_sql_prompt", "") or ""),
+            "to_sql_prompt": str(getattr(self, "to_sql_prompt", "") or ""),
+            "bind_sql_prompt": str(getattr(self, "bind_sql_prompt", "") or ""),
+            "test_sql_prompt": str(getattr(self, "test_sql_prompt", "") or ""),
+            "system_schema": str(getattr(self, "system_schema", "") or "").strip(),
+            "source_schema": str(getattr(self, "source_schema", "") or "").strip(),
+            "target_schema": str(getattr(self, "target_schema", "") or "").strip(),
             "migration_max_attempts": max(1, int(getattr(self, "migration_max_attempts", None) or 3)),
             "sql_conversion_max_attempts": max(1, int(getattr(self, "sql_conversion_max_attempts", None) or 3)),
             "no_job_sleep_seconds": 10,
@@ -1013,7 +986,7 @@ class BatchAgentCommandTool(Component):
                     "command_json": self._to_text(row[3]),
                 }
         except Exception:
-            logger.exception("[BatchSupervisor] failed to claim NEXT_BATCH_COMMAND")
+            self._logger().exception("[BatchSupervisor] failed to claim NEXT_BATCH_COMMAND")
             return None
 
     def _complete_batch_command(
@@ -1040,7 +1013,7 @@ class BatchAgentCommandTool(Component):
                 )
                 conn.commit()
         except Exception:
-            logger.exception(f"[BatchSupervisor] failed to complete NEXT_BATCH_COMMAND command_id={command_id}")
+            self._logger().exception(f"[BatchSupervisor] failed to complete NEXT_BATCH_COMMAND command_id={command_id}")
 
     def _command_json(self, command: dict[str, Any] | None) -> dict[str, Any]:
         if not command:
@@ -1051,7 +1024,7 @@ class BatchAgentCommandTool(Component):
         try:
             parsed = json.loads(raw)
         except Exception:
-            logger.warning(f"[BatchSupervisor] invalid COMMAND_JSON command_id={command.get('command_id')}")
+            self._logger().warning(f"[BatchSupervisor] invalid COMMAND_JSON command_id={command.get('command_id')}")
             return {}
         return parsed if isinstance(parsed, dict) else {}
 
@@ -1069,7 +1042,7 @@ class BatchAgentCommandTool(Component):
         """Acquire the single DB control row before entering the blocking loop.
 
         Memory state prevents duplicate starts inside one Langflow worker. This
-        DB update is the real cross-process lock. If another worker is already
+        DB update is the execution ownership check. If another worker is already
         RUNNING and its heartbeat is fresh, rowcount is 0 and this caller must
         not enter Supervisor_loop().
         """
@@ -1260,7 +1233,7 @@ class BatchAgentCommandTool(Component):
                 elapsed_seconds=elapsed_seconds,
             )
         except Exception:
-            logger.exception(
+            self._logger().exception(
                 "[BatchSupervisor] failed to write NEXT_BATCH_LOG "
                 f"event_type={event_type} run_id={run_id} loop_no={loop_no}"
             )
@@ -3410,100 +3383,4 @@ class BatchAgentCommandTool(Component):
         return str(value).strip().lower() in {"1", "true", "t", "y", "yes", "on"}
 
 
-def _env(name: str, default: str = "") -> str:
-    return os.getenv(name, default).strip()
-
-
-def _env_int(name: str, default: int) -> int:
-    raw = _env(name)
-    try:
-        return int(raw) if raw else default
-    except ValueError:
-        return default
-
-
-def _env_bool(name: str, default: bool = False) -> bool:
-    raw = _env(name)
-    if not raw:
-        return default
-    return raw.upper() in {"1", "Y", "YES", "TRUE", "ON"}
-
-
-def _read_text_env(name: str, file_name: str) -> str:
-    direct_value = os.getenv(name)
-    if direct_value:
-        return direct_value
-    file_path = _env(file_name)
-    if not file_path:
-        return ""
-    return Path(file_path).read_text(encoding="utf-8")
-
-
-def _load_service_config_file() -> dict[str, Any]:
-    path = _env("SMARTMIGRATE_MONITOR_CONFIG")
-    if not path:
-        return {}
-    return json.loads(Path(path).read_text(encoding="utf-8"))
-
-
-def build_service_config() -> dict[str, Any]:
-    """Build background monitor config from env so no Langflow input is required."""
-    file_config = _load_service_config_file()
-    config = {
-        "run_yn": _env("SMARTMIGRATE_RUN_YN", "Y"),
-        "db_host": _env("SMARTMIGRATE_DB_HOST", str(DEFAULT_DB_CONFIG["db_host"])),
-        "db_port": _env_int("SMARTMIGRATE_DB_PORT", int(DEFAULT_DB_CONFIG["db_port"])),
-        "db_service_name": _env("SMARTMIGRATE_DB_SERVICE_NAME", str(DEFAULT_DB_CONFIG["db_service_name"])),
-        "db_username": _env("SMARTMIGRATE_DB_USERNAME", str(DEFAULT_DB_CONFIG["db_username"])),
-        "db_password": os.getenv("SMARTMIGRATE_DB_PASSWORD", str(DEFAULT_DB_CONFIG["db_password"])),
-        "llm_base_url": _env("SMARTMIGRATE_LLM_BASE_URL", str(DEFAULT_LLM_CONFIG["llm_base_url"])),
-        "llm_api_key": os.getenv("SMARTMIGRATE_LLM_API_KEY", str(DEFAULT_LLM_CONFIG["llm_api_key"])),
-        "llm_model": _env("SMARTMIGRATE_LLM_MODEL", str(DEFAULT_LLM_CONFIG["llm_model"])),
-        "llm_max_tokens": _env_int("SMARTMIGRATE_LLM_MAX_TOKENS", int(DEFAULT_LLM_CONFIG["llm_max_tokens"])),
-        "llm_timeout_seconds": _env_int("SMARTMIGRATE_LLM_TIMEOUT_SECONDS", int(DEFAULT_LLM_CONFIG["llm_timeout_seconds"])),
-        "mig_sql_prompt": _read_text_env("SMARTMIGRATE_MIG_SQL_PROMPT", "SMARTMIGRATE_MIG_SQL_PROMPT_FILE"),
-        "verify_sql_prompt": _read_text_env("SMARTMIGRATE_VERIFY_SQL_PROMPT", "SMARTMIGRATE_VERIFY_SQL_PROMPT_FILE"),
-        "to_sql_prompt": _read_text_env("SMARTMIGRATE_TO_SQL_PROMPT", "SMARTMIGRATE_TO_SQL_PROMPT_FILE"),
-        "bind_sql_prompt": _read_text_env("SMARTMIGRATE_BIND_SQL_PROMPT", "SMARTMIGRATE_BIND_SQL_PROMPT_FILE"),
-        "test_sql_prompt": _read_text_env("SMARTMIGRATE_TEST_SQL_PROMPT", "SMARTMIGRATE_TEST_SQL_PROMPT_FILE"),
-        "system_schema": str(DEFAULT_DB_CONFIG["system_schema"]),
-        "source_schema": str(DEFAULT_DB_CONFIG["source_schema"]),
-        "target_schema": str(DEFAULT_DB_CONFIG["target_schema"]),
-        "migration_max_attempts": _env_int("SMARTMIGRATE_MIGRATION_MAX_ATTEMPTS", 3),
-        "sql_conversion_max_attempts": _env_int("SMARTMIGRATE_SQL_CONVERSION_MAX_ATTEMPTS", 3),
-        "no_job_sleep_seconds": 10,
-        "error_sleep_seconds": _env_int("SMARTMIGRATE_ERROR_SLEEP_SECONDS", 60),
-    }
-    config.update(file_config)
-    config["no_job_sleep_seconds"] = 10
-    return config
-
-
-def main() -> None:
-    config = build_service_config()
-    supervisor = object.__new__(BatchAgentCommandTool)
-    supervisor._apply_config(config)
-    supervisor._console(
-        "main entered "
-        f"run_yn={supervisor._run_yn_value(config)} "
-        f"db={config.get('db_host')}:{config.get('db_port')}/{config.get('db_service_name')} "
-        f"schema={config.get('system_schema')}"
-    )
-
-    if not supervisor._run_yn_equals_y(config):
-        supervisor._write_batch_log_safe(
-            config,
-            None,
-            0,
-            "NOT_STARTED",
-            message="Batch supervisor was not started because Run YN is not Y.",
-        )
-        return
-
-    result = supervisor._start(config)
-    supervisor._console(f"main finished status={result.get('status')} message={result.get('message')}")
-
-
-if __name__ == "__main__":
-    main()
 

@@ -3,14 +3,14 @@
 파일: `langflow/components/Supervisor_Agent.py`
 
 `Supervisor_Agent.py`는 SmartMigrate 백그라운드 배치 처리를 담당하는 Langflow 커스텀 컴포넌트다.
-사용자 채팅 입력을 받지 않고, `Run YN` 값이 `Y`일 때 background supervisor loop를 시작한다.
+사용자 채팅 입력을 받지 않고, `Run YN` 값이 `Y`일 때 컴포넌트 실행 안에서 supervisor loop를 시작한다.
 실행 이후 제어는 DB의 `NEXT_BATCH_CONTROL`, 1회성 작업 지정은 `NEXT_BATCH_COMMAND`에서 받는다.
 
 ## 핵심 구조
 
 ```text
 Run YN=Y
-  -> background supervisor process 시작
+  -> supervisor loop 시작
   -> NEXT_BATCH_CONTROL RUNNING 획득
   -> poll_jobs
   -> NEXT_BATCH_COMMAND PENDING 1건 claim
@@ -24,7 +24,7 @@ Run YN=Y
 - worker thread를 만들지 않는다.
 - `NEXT_BATCH_CONTROL`로 running/stop/heartbeat 상태를 관리한다.
 - `NEXT_BATCH_COMMAND`로 map_id/sql_id 같은 1회성 명령을 받는다.
-- `Run YN=Y`이면 별도 background process를 시작한다.
+- `Run YN=Y`이면 컴포넌트 실행 안에서 loop가 돈다.
 - `Run YN=N`이면 loop를 시작하지 않는다.
 - cycle 결과는 `NEXT_BATCH_LOG`에 저장한다.
 - DB migration 상세 로그는 `NEXT_MIG_LOG`에 저장한다.
@@ -36,6 +36,22 @@ Run YN=Y
 
 ```text
 Run YN
+DB Host
+DB Port
+Service Name
+Username
+Password
+LLM Base URL
+LLM API Key
+LLM Model
+LLM Max Tokens
+LLM Timeout Seconds
+System Schema
+Source Schema
+Target Schema
+Migration Max Attempts
+SQL Conversion Max Attempts
+Error Sleep Seconds
 MIG SQL Prompt
 VERIFY SQL Prompt
 TO SQL Prompt
@@ -58,59 +74,24 @@ STATUS  현재 메모리 상태 조회
 - `BIND SQL Prompt`: SQL conversion BIND_SQL 생성용
 - `TEST SQL Prompt`: SQL conversion TEST_SQL 생성용
 
-DB 접속 정보, LLM 설정, schema는 input으로 받지 않는다.
+DB 접속 정보, LLM 설정, schema는 모두 input으로 받는다.
 
 ## Tool Mode
 
-`Run YN` input은 `MessageTextInput(tool_mode=True)`로 설정되어 있다.
-
-Agent에 Tool로 연결할 때 Agent가 전달할 수 있는 값은 `Run YN`뿐이다.
-프롬프트 5개는 Tool Mode input이 아니므로 Agent가 임의로 변경하지 않는다.
+DB/LLM/schema input은 Langflow 화면에서 명시적으로 설정한다.
+Chat Agent는 실행 명령을 `NEXT_BATCH_COMMAND`에 넣고, Supervisor Agent input을 직접 변경하지 않는다.
 
 Tool 호출 예:
 
 ```text
 Run YN = Y       Supervisor loop 시작
 Run YN = N       Supervisor loop 시작 안 함
-Run YN = STATUS  현재 상태 조회
 ```
 
 ## 기본 설정
 
-DB 기본값은 Python 파일의 `DEFAULT_DB_CONFIG`에서 관리한다.
-
-```python
-DEFAULT_DB_CONFIG = {
-    "db_host": "10.0.0.1",
-    "db_port": 1521,
-    "db_service_name": "ORCL",
-    "db_username": "SMARTMIGRATE",
-    "db_password": "password",
-    "system_schema": "SFAADM",
-    "source_schema": "SFAMIG",
-    "target_schema": "SFAADM",
-}
-```
-
-LLM 기본값은 `DEFAULT_LLM_CONFIG`에서 관리한다.
-
-```python
-DEFAULT_LLM_CONFIG = {
-    "llm_base_url": "",
-    "llm_api_key": "",
-    "llm_model": "claude-haiku-4-5-20251001",
-    "llm_max_tokens": 4096,
-    "llm_timeout_seconds": 900,
-}
-```
-
-schema 고정값:
-
-```text
-system_schema = SFAADM
-source_schema = SFAMIG
-target_schema = SFAADM
-```
+DB 접속 정보, LLM 설정, schema는 Python 파일의 기본값이나 환경변수에서 읽지 않는다.
+Langflow 컴포넌트 input에 명시적으로 입력한 값만 사용한다.
 
 ## 자동 패키지 설치
 
@@ -281,48 +262,9 @@ Supervisor는 각 cycle 시작 시 `NEXT_BATCH_COMMAND`에서 `CONTROL_NAME='BAT
 `COMMAND_TEXT`에 `map_id=101`, `sql_id=SEL_001 space_nm=userMapper` 형식으로 넣어도 된다.
 cycle이 정상 종료되면 `DONE`, 오류가 발생하면 `FAILED`로 갱신한다.
 
-## Standalone 실행
-
-서버 startup에서 같은 파일을 직접 실행할 수 있다.
-
-```bash
-python langflow/components/Supervisor_Agent.py
-```
-
-standalone 실행 시 환경변수를 사용할 수 있다.
-
-대표 환경변수:
-
-```text
-SMARTMIGRATE_RUN_YN
-SMARTMIGRATE_DB_HOST
-SMARTMIGRATE_DB_PORT
-SMARTMIGRATE_DB_SERVICE_NAME
-SMARTMIGRATE_DB_USERNAME
-SMARTMIGRATE_DB_PASSWORD
-SMARTMIGRATE_LLM_BASE_URL
-SMARTMIGRATE_LLM_API_KEY
-SMARTMIGRATE_LLM_MODEL
-SMARTMIGRATE_MIG_SQL_PROMPT
-SMARTMIGRATE_VERIFY_SQL_PROMPT
-SMARTMIGRATE_TO_SQL_PROMPT
-SMARTMIGRATE_BIND_SQL_PROMPT
-SMARTMIGRATE_TEST_SQL_PROMPT
-```
-
-프롬프트는 환경변수 본문 또는 파일 경로 방식으로 전달할 수 있다.
-
-```text
-SMARTMIGRATE_MIG_SQL_PROMPT_FILE
-SMARTMIGRATE_VERIFY_SQL_PROMPT_FILE
-SMARTMIGRATE_TO_SQL_PROMPT_FILE
-SMARTMIGRATE_BIND_SQL_PROMPT_FILE
-SMARTMIGRATE_TEST_SQL_PROMPT_FILE
-```
-
 ## 주의사항
 
-- `Run YN=Y`는 background process를 시작하고 빠르게 응답한다.
-- worker thread 방식이 아니라 별도 process 방식이다.
+- `Run YN=Y`는 loop 실행 동안 컴포넌트 실행을 점유한다.
+- worker thread/process 방식이 아니다.
 - `NEXT_BATCH_CONTROL` heartbeat가 살아 있으면 중복 start를 막는다.
 - stop 요청은 `NEXT_BATCH_CONTROL.STOP_REQUESTED_YN='Y'` 또는 `STATUS='STOP_REQUESTED'`로 전달한다.

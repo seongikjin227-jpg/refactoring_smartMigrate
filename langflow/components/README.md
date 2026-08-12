@@ -27,11 +27,12 @@ chat_agent_tools/Chat_Command_Tool.py
 - `failure_summary`: FAIL summary 조회
 
 Chat Agent는 migration/sql conversion을 직접 실행하지 않는다. 실행 요청은 DB command queue에 등록하고,
-실제 처리는 `Supervisor_Agent.py`의 background loop가 수행한다.
+실제 처리는 `Supervisor_Agent.py`의 supervisor loop가 수행한다.
 
 ## Supervisor Agent
 
-`Supervisor_Agent.py`는 `Run YN=Y`로 background supervisor process를 시작한다.
+`Supervisor_Agent.py`는 `Run YN=Y`로 컴포넌트 실행 안에서 supervisor loop를 시작한다.
+DB 접속 정보, LLM 설정, schema는 모두 Langflow input으로 받는다.
 
 실행 중에는 다음 DB 테이블을 사용한다.
 
