@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from contextlib import contextmanager
 from typing import Any
 
@@ -52,7 +53,13 @@ class FailAnalysisCommandTool(Component):
         text = str(raw or "").strip()
         if not text:
             return {"action": "query_failure_log"}
-        return json.loads(text)
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+            text = re.sub(r"\s*```$", "", text)
+        parsed = json.loads(text)
+        if not isinstance(parsed, dict):
+            raise ValueError("command_json must be a JSON object")
+        return parsed
 
     def _query_failure_log(self, cmd: dict[str, Any]) -> dict[str, Any]:
         """Retrieve failure logs for a specific migration or SQL.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from contextlib import contextmanager
 from typing import Any
 
@@ -56,8 +57,12 @@ class DashboardCommandTool(Component):
         if not text:
             return {"action": "overview"}
         if text.startswith("```"):
-            text = text.strip("`\n ")
-        return json.loads(text)
+            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+            text = re.sub(r"\s*```$", "", text)
+        parsed = json.loads(text)
+        if not isinstance(parsed, dict):
+            raise ValueError("command_json must be a JSON object")
+        return parsed
 
     def _overview(self, cmd: dict[str, Any]) -> dict[str, Any]:
         """Return a high-level overview of the system.

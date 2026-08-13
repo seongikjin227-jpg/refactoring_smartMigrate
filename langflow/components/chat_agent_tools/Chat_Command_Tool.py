@@ -118,13 +118,16 @@ class ChatCommandTool(Component):
         raise ValueError(f"Unsupported action: {action}")
 
     def _parse_command(self) -> dict[str, Any]:
-        raw = str(getattr(self, "command_json", "") or "").strip()
-        if raw.startswith("```"):
-            raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
-            raw = re.sub(r"\s*```$", "", raw)
-        if not raw:
+        raw = getattr(self, "command_json", "")
+        if isinstance(raw, dict):
+            return raw
+        text = str(raw or "").strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+            text = re.sub(r"\s*```$", "", text)
+        if not text:
             raise ValueError("command_json is required")
-        parsed = json.loads(raw)
+        parsed = json.loads(text)
         if not isinstance(parsed, dict):
             raise ValueError("command_json must be a JSON object")
         return parsed

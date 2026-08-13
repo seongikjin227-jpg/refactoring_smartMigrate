@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from contextlib import contextmanager
 from typing import Any
 
@@ -36,15 +37,21 @@ class RerunCommandTool(Component):
             confirm = bool(cmd.get("confirm"))
             if action == "rerun_migration":
                 if not confirm:
-                    return {"ok": True, "action": action, "confirmation_required": True, "details": {"map_id": int(cmd.get("map_id"))}}
+                    res = {"ok": True, "action": action, "confirmation_required": True, "details": {"map_id": int(cmd.get("map_id"))}}
+                    self.status = res
+                    return Data(data=res)
                 res = self._rerun_migration(int(cmd.get("map_id")))
             elif action == "rerun_sql_conversion":
                 if not confirm:
-                    return {"ok": True, "action": action, "confirmation_required": True, "details": {"sql_id": str(cmd.get("sql_id")), "space_nm": cmd.get("space_nm")}}
+                    res = {"ok": True, "action": action, "confirmation_required": True, "details": {"sql_id": str(cmd.get("sql_id")), "space_nm": cmd.get("space_nm")}}
+                    self.status = res
+                    return Data(data=res)
                 res = self._rerun_sql_conversion(str(cmd.get("sql_id")), cmd.get("space_nm"))
             elif action == "rerun_sql_tuning":
                 if not confirm:
-                    return {"ok": True, "action": action, "confirmation_required": True, "details": {"sql_id": str(cmd.get("sql_id")), "space_nm": cmd.get("space_nm")}}
+                    res = {"ok": True, "action": action, "confirmation_required": True, "details": {"sql_id": str(cmd.get("sql_id")), "space_nm": cmd.get("space_nm")}}
+                    self.status = res
+                    return Data(data=res)
                 res = self._rerun_sql_tuning(str(cmd.get("sql_id")), cmd.get("space_nm"))
             else:
                 raise ValueError(f"Unsupported action: {action}")
@@ -62,7 +69,13 @@ class RerunCommandTool(Component):
         text = str(raw or "").strip()
         if not text:
             return {}
-        return json.loads(text)
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+            text = re.sub(r"\s*```$", "", text)
+        parsed = json.loads(text)
+        if not isinstance(parsed, dict):
+            raise ValueError("command_json must be a JSON object")
+        return parsed
 
     def _enqueue_command(self, command_text: str, command_json: dict[str, Any]) -> int:
         table = self._qualify("NEXT_BATCH_COMMAND")

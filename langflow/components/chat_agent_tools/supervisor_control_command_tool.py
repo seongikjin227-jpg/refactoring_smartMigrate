@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import re
 from contextlib import contextmanager
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
-from lfx.io import MessageTextInput, SecretStrInput, StrInput, Output
+from lfx.io import IntInput, MessageTextInput, SecretStrInput, StrInput, Output
 from lfx.schema.data import Data
 
 
@@ -40,20 +41,23 @@ class SupervisorControlCommandTool(Component):
         Output: action-specific result dict.
         """
         try:
-            raw = getattr(self, "command_json", "")
-            cmd = raw if isinstance(raw, dict) else ({} if not str(raw or "").strip() else json.loads(str(raw)))
+            cmd = self._parse_command()
             action = str(cmd.get("action") or "status").strip().lower()
             confirm = bool(cmd.get("confirm"))
             if action == "status":
                 res = self._status()
             elif action == "stop":
                 if not confirm:
-                    return {"ok": True, "action": "stop", "confirmation_required": True}
+                    res = {"ok": True, "action": "stop", "confirmation_required": True}
+                    self.status = res
+                    return Data(data=res)
                 self._request_stop()
                 res = {"ok": True, "action": "stop", "result": "Stop requested"}
             elif action == "start":
                 if not confirm:
-                    return {"ok": True, "action": "start", "confirmation_required": True}
+                    res = {"ok": True, "action": "start", "confirmation_required": True}
+                    self.status = res
+                    return Data(data=res)
                 self._start()
                 res = {"ok": True, "action": "start", "result": "Start requested"}
             else:
@@ -64,6 +68,21 @@ class SupervisorControlCommandTool(Component):
             res = {"ok": False, "error": str(exc)}
             self.status = res
             return Data(data=res)
+
+    def _parse_command(self) -> dict[str, Any]:
+        raw = getattr(self, "command_json", "")
+        if isinstance(raw, dict):
+            return raw
+        text = str(raw or "").strip()
+        if not text:
+            return {"action": "status"}
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+            text = re.sub(r"\s*```$", "", text)
+        parsed = json.loads(text)
+        if not isinstance(parsed, dict):
+            raise ValueError("command_json must be a JSON object")
+        return parsed
 
     def _status(self) -> dict[str, Any]:
         """Return the current NEXT_BATCH_CONTROL row for BATCH_AGENT.

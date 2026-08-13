@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
@@ -47,8 +49,7 @@ class RagRuleCommandTool(Component):
         try:
             # Ensure dependencies used by app.utils.rag_db (e.g., oracledb) are available
             self._ensure_runtime_dependencies()
-            raw = getattr(self, "command_json", "")
-            cmd = raw if isinstance(raw, dict) else ({} if not str(raw or "").strip() else __import__("json").loads(str(raw)))
+            cmd = self._parse_command()
             action = str(cmd.get("action") or "top_rules").strip().lower()
             if action == "top_rules":
                 limit = int(cmd.get("limit") or 5)
@@ -74,6 +75,21 @@ class RagRuleCommandTool(Component):
             res = {"ok": False, "error": str(exc)}
             self.status = res
             return Data(data=res)
+
+    def _parse_command(self) -> dict[str, Any]:
+        raw = getattr(self, "command_json", "")
+        if isinstance(raw, dict):
+            return raw
+        text = str(raw or "").strip()
+        if not text:
+            return {"action": "top_rules"}
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+            text = re.sub(r"\s*```$", "", text)
+        parsed = json.loads(text)
+        if not isinstance(parsed, dict):
+            raise ValueError("command_json must be a JSON object")
+        return parsed
 
     def _ensure_runtime_dependencies(self) -> None:
         AUTO_INSTALL_MISSING_PACKAGES = True
