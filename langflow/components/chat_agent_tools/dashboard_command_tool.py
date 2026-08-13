@@ -13,12 +13,18 @@ from lfx.schema.data import Data
 
 class DashboardCommandTool(Component):
     display_name = "Dashboard Command Tool"
-    description = "Dashboard queries: overview, current_jobs, stats"
+    description = "Summarizes SmartMigration agent job queues and recommends the next agent action."
     name = "DashboardCommandTool"
     icon = "LayoutDashboard"
 
     inputs = [
-        MessageTextInput(name="command_json", display_name="Command JSON", required=True, tool_mode=True),
+        MessageTextInput(
+            name="command_json",
+            display_name="Command JSON",
+            required=True,
+            tool_mode=True,
+            info='JSON command. Example: {"action":"summary"}',
+        ),
         StrInput(name="db_host", display_name="DB Host", required=False),
         IntInput(name="db_port", display_name="DB Port", required=False),
         StrInput(name="db_service_name", display_name="DB Service Name", required=False),
@@ -33,13 +39,9 @@ class DashboardCommandTool(Component):
     def run_command(self) -> Data:
         try:
             cmd = self._parse_command()
-            action = str(cmd.get("action") or "overview").strip().lower()
-            if action == "overview":
-                res = self._overview(cmd)
-            elif action == "current_jobs":
-                res = self._current_jobs(cmd)
-            elif action == "stats":
-                res = self._stats(cmd)
+            action = str(cmd.get("action") or "summary").strip().lower()
+            if action == "summary":
+                res = self._summary(cmd)
             else:
                 raise ValueError(f"Unsupported action: {action}")
             self.status = res
@@ -55,7 +57,7 @@ class DashboardCommandTool(Component):
             return raw
         text = str(raw or "").strip()
         if not text:
-            return {"action": "overview"}
+            return {"action": "summary"}
         if text.startswith("```"):
             text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
             text = re.sub(r"\s*```$", "", text)
@@ -64,43 +66,162 @@ class DashboardCommandTool(Component):
             raise ValueError("command_json must be a JSON object")
         return parsed
 
-    def _overview(self, cmd: dict[str, Any]) -> dict[str, Any]:
-        """Return a high-level overview of the system.
+    def _summary(self, cmd: dict[str, Any]) -> dict[str, Any]:
+        limit = max(1, min(int(cmd.get("limit") or self.list_limit or 5), 20))
+        agents = {
+            "db_migration": self._migration_summary(limit),
+            "sql_conversion": self._sql_conversion_summary(limit),
+            "sql_tuning": self._sql_tuning_summary(limit),
+            "sql_formatting": self._sql_formatting_summary(limit),
+        }
+        return {
+            "ok": True,
+            "action": "summary",
+            "recommendations": self._recommend_next_actions(agents),
+            "agents": agents,
+        }
 
-        Input: command dict (ignored)
-        Output: dict containing supervisor/control summary, pending commands and top-level counts.
-        """
-        summary = self._status_summary()
-        return {"ok": True, "action": "overview", "result": summary}
-
-    def _current_jobs(self, cmd: dict[str, Any]) -> dict[str, Any]:
-        """List recent/current job heartbeat entries from NEXT_BATCH_LOG.
-
-        Input: {"limit": int}
-        Output: list of running job summaries (run_id, loop_no, event, agent, job_id, message)
-        """
-        limit = int(cmd.get("limit") or self.list_limit or 5)
-        # Minimal: list running jobs from NEXT_BATCH_LOG heartbeat
-        rows = self._query(
-            f"SELECT RUN_ID, LOOP_NO, EVENT_TYPE, AGENT_NAME, JOB_ID, MESSAGE FROM {self._qualify('NEXT_BATCH_LOG')} WHERE ROWNUM <= :1",
-            [max(1, limit)],
+    def _migration_summary(self, limit: int) -> dict[str, Any]:
+        table = self._qualify("NEXT_MIG_INFO")
+        status_counts = self._status_counts(table, "STATUS", "UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'")
+        target_count = self._count(table, "UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y' AND STATUS IS NULL")
+        next_jobs = self._query_rows(
+            f"""
+            SELECT *
+              FROM (
+                    SELECT MAP_ID, MAP_TYPE, FR_TABLE, TO_TABLE, PRIORITY, STATUS, BATCH_CNT, RETRY_COUNT, UPD_TS
+                      FROM {table}
+                     WHERE UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
+                       AND STATUS IS NULL
+                     ORDER BY PRIORITY ASC, MAP_ID ASC
+                   )
+             WHERE ROWNUM <= :1
+            """,
+            [limit],
+            ["map_id", "map_type", "fr_table", "to_table", "priority", "status", "batch_cnt", "retry_count", "upd_ts"],
         )
-        jobs = [
-            {"run_id": r[0], "loop_no": r[1], "event": r[2], "agent": r[3], "job_id": r[4], "message": self._text(r[5])}
-            for r in rows
-        ]
-        return {"ok": True, "action": "current_jobs", "result": jobs}
+        return {
+            "agent": "DB_MIGRATION",
+            "table": table,
+            "target_count": target_count,
+            "target_condition": "USE_YN='Y' AND STATUS IS NULL",
+            "status_counts": status_counts,
+            "next_jobs": next_jobs,
+        }
 
-    def _stats(self, cmd: dict[str, Any]) -> dict[str, Any]:
-        """Return aggregated counts by status for migration, sql conversion, and tuning.
+    def _sql_conversion_summary(self, limit: int) -> dict[str, Any]:
+        table = self._qualify("NEXT_SQL_INFO")
+        status_counts = self._status_counts(table, "STATUS_CONVERSION")
+        target_count = self._count(table, "STATUS_CONVERSION IS NULL")
+        next_jobs = self._query_rows(
+            f"""
+            SELECT *
+              FROM (
+                    SELECT TAG_KIND, SPACE_NM, SQL_ID, STATUS_CONVERSION, PRIORITY, BATCH_CNT, UPD_TS
+                      FROM {table}
+                     WHERE STATUS_CONVERSION IS NULL
+                     ORDER BY PRIORITY ASC NULLS LAST, UPD_TS NULLS FIRST, SPACE_NM, SQL_ID
+                   )
+             WHERE ROWNUM <= :1
+            """,
+            [limit],
+            ["tag_kind", "space_nm", "sql_id", "status_conversion", "priority", "batch_cnt", "upd_ts"],
+        )
+        return {
+            "agent": "SQL_CONVERSION",
+            "table": table,
+            "target_count": target_count,
+            "target_condition": "STATUS_CONVERSION IS NULL",
+            "status_counts": status_counts,
+            "next_jobs": next_jobs,
+        }
 
-        Input: command dict (ignored)
-        Output: dict containing status count maps for each agent.
-        """
-        migration = self._count_by_status("NEXT_MIG_INFO", "STATUS")
-        sql_conv = self._count_by_status("NEXT_SQL_INFO", "STATUS_CONVERSION")
-        sql_tune = self._count_by_status("NEXT_SQL_INFO", "STATUS_TUNING")
-        return {"ok": True, "action": "stats", "result": {"migration": migration, "sql_conversion": sql_conv, "sql_tuning": sql_tune}}
+    def _sql_tuning_summary(self, limit: int) -> dict[str, Any]:
+        table = self._qualify("NEXT_SQL_INFO")
+        columns = self._available_columns("NEXT_SQL_INFO")
+        if "STATUS_TUNING" not in columns:
+            return self._unavailable("SQL_TUNING", table, "STATUS_TUNING column not found")
+        if "TO_SQL" not in columns:
+            return self._unavailable("SQL_TUNING", table, "TO_SQL column not found")
+        status_counts = self._status_counts(table, "STATUS_TUNING")
+        where_clause = (
+            "UPPER(TRIM(STATUS_TUNING)) IN ('READY', 'URGENT', 'FAIL', 'FAIL-TUNED', 'FAIL-BIND', 'FAIL-TEST') "
+            "AND TO_SQL IS NOT NULL "
+            "AND UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS-CONVERSION', 'PASS')"
+        )
+        target_count = self._count(table, where_clause)
+        next_jobs = self._query_rows(
+            f"""
+            SELECT *
+              FROM (
+                    SELECT TAG_KIND, SPACE_NM, SQL_ID, STATUS_CONVERSION, STATUS_TUNING, PRIORITY, BATCH_CNT, UPD_TS
+                      FROM {table}
+                     WHERE {where_clause}
+                     ORDER BY PRIORITY ASC NULLS LAST, UPD_TS NULLS FIRST, SPACE_NM, SQL_ID
+                   )
+             WHERE ROWNUM <= :1
+            """,
+            [limit],
+            ["tag_kind", "space_nm", "sql_id", "status_conversion", "status_tuning", "priority", "batch_cnt", "upd_ts"],
+        )
+        return {
+            "agent": "SQL_TUNING",
+            "table": table,
+            "target_count": target_count,
+            "target_condition": "STATUS_TUNING in retryable states, TO_SQL exists, conversion passed",
+            "status_counts": status_counts,
+            "next_jobs": next_jobs,
+        }
+
+    def _sql_formatting_summary(self, limit: int) -> dict[str, Any]:
+        table = self._qualify("NEXT_SQL_INFO")
+        columns = self._available_columns("NEXT_SQL_INFO")
+        if "FORMATTED_SQL" not in columns:
+            return self._unavailable("SQL_FORMATTING", table, "FORMATTED_SQL column not found")
+        where_clause = (
+            "UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING') "
+            "AND (FORMATTED_SQL IS NULL OR NVL(DBMS_LOB.GETLENGTH(FORMATTED_SQL), 0) = 0)"
+        )
+        target_count = self._count(table, where_clause)
+        next_jobs = self._query_rows(
+            f"""
+            SELECT *
+              FROM (
+                    SELECT TAG_KIND, SPACE_NM, SQL_ID, STATUS_CONVERSION, STATUS_TUNING, PRIORITY, BATCH_CNT, UPD_TS
+                      FROM {table}
+                     WHERE {where_clause}
+                     ORDER BY PRIORITY ASC NULLS LAST, UPD_TS NULLS FIRST, SPACE_NM, SQL_ID
+                   )
+             WHERE ROWNUM <= :1
+            """,
+            [limit],
+            ["tag_kind", "space_nm", "sql_id", "status_conversion", "status_tuning", "priority", "batch_cnt", "upd_ts"],
+        )
+        return {
+            "agent": "SQL_FORMATTING",
+            "table": table,
+            "target_count": target_count,
+            "target_condition": "STATUS_TUNING PASS and FORMATTED_SQL empty",
+            "status_counts": {"FORMATTED_SQL_EMPTY": target_count},
+            "next_jobs": next_jobs,
+        }
+
+    def _recommend_next_actions(self, agents: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+        recommendations = []
+        for key in ["db_migration", "sql_conversion", "sql_tuning", "sql_formatting"]:
+            summary = agents.get(key, {})
+            count = int(summary.get("target_count") or 0)
+            if count <= 0:
+                continue
+            recommendations.append(
+                {
+                    "agent": summary.get("agent"),
+                    "target_count": count,
+                    "reason": f"{summary.get('agent')} target count is {count}.",
+                    "first_job": (summary.get("next_jobs") or [None])[0],
+                }
+            )
+        return recommendations
 
     # --- helpers (lightweight copy from ChatCommandTool) ---
     @contextmanager
@@ -169,6 +290,67 @@ class DashboardCommandTool(Component):
         if hasattr(value, "get_secret_value"):
             return str(value.get_secret_value())
         return str(value)
+
+    def _count(self, table: str, where_clause: str) -> int:
+        rows = self._query(f"SELECT COUNT(*) FROM {table} WHERE {where_clause}")
+        return int(rows[0][0] or 0) if rows else 0
+
+    def _status_counts(self, table: str, column: str, where_clause: str = "1 = 1") -> dict[str, int]:
+        rows = self._query(
+            f"""
+            SELECT NVL(TO_CHAR({column}), 'NULL') AS STATUS_VALUE, COUNT(*)
+              FROM {table}
+             WHERE {where_clause}
+             GROUP BY NVL(TO_CHAR({column}), 'NULL')
+             ORDER BY STATUS_VALUE
+            """
+        )
+        return {str(row[0] or "NULL"): int(row[1] or 0) for row in rows}
+
+    def _query_rows(self, query: str, params: list[Any], columns: list[str]) -> list[dict[str, Any]]:
+        rows = self._query(query, params)
+        return [
+            {
+                columns[index]: self._text(value) if not isinstance(value, (int, float)) else value
+                for index, value in enumerate(row)
+            }
+            for row in rows
+        ]
+
+    def _available_columns(self, table_name: str) -> set[str]:
+        schema = str(getattr(self, "system_schema", "") or "").strip().upper()
+        clean_table = str(table_name or "").strip().upper()
+        if schema:
+            rows = self._query(
+                """
+                SELECT COLUMN_NAME
+                  FROM ALL_TAB_COLUMNS
+                 WHERE OWNER = :1
+                   AND TABLE_NAME = :2
+                """,
+                [schema, clean_table],
+            )
+        else:
+            rows = self._query(
+                """
+                SELECT COLUMN_NAME
+                  FROM USER_TAB_COLUMNS
+                 WHERE TABLE_NAME = :1
+                """,
+                [clean_table],
+            )
+        return {str(row[0]).upper() for row in rows}
+
+    def _unavailable(self, agent: str, table: str, reason: str) -> dict[str, Any]:
+        return {
+            "agent": agent,
+            "table": table,
+            "available": False,
+            "target_count": 0,
+            "reason": reason,
+            "status_counts": {},
+            "next_jobs": [],
+        }
 
     def _count_by_status(self, table_name: str, status_column: str) -> dict[str, int]:
         table = self._qualify(table_name)
