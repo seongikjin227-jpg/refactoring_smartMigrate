@@ -154,6 +154,13 @@ class BatchAgentCommandTool(Component):
         MessageTextInput(name="to_sql_prompt", display_name="TO SQL Prompt", required=False),
         MessageTextInput(name="bind_sql_prompt", display_name="BIND SQL Prompt", required=False),
         MessageTextInput(name="test_sql_prompt", display_name="TEST SQL Prompt", required=False),
+        MessageTextInput(
+            name="supervisor_system_prompt",
+            display_name="Supervisor System Prompt",
+            required=False,
+            value=SUPERVISOR_SYSTEM_PROMPT,
+            info="Optional override for the supervisor system prompt (LLM system message).",
+        ),
     ]
 
     outputs = [
@@ -161,6 +168,11 @@ class BatchAgentCommandTool(Component):
     ]
 
     def run_supervisor(self) -> Data:
+        """Entry point for the Batch Supervisor component.
+
+        Reads inputs, starts the blocking supervisor loop if requested and
+        returns a `Data` object with the final status.
+        """
         try:
             config = self._snapshot_config()
 
@@ -183,6 +195,11 @@ class BatchAgentCommandTool(Component):
             return Data(data=result)
 
     def _start(self, config: dict[str, Any]) -> dict[str, Any]:
+        """Acquire control and start the blocking Supervisor loop.
+
+        Returns a dict status describing whether the loop was started or
+        if another worker already owns the control row.
+        """
         run_id = datetime.now().strftime("%Y%m%d%H%M%S%f")
         if self.__class__._state.get("running"):
             state = dict(self.__class__._state)
@@ -237,9 +254,11 @@ class BatchAgentCommandTool(Component):
         }
 
     def _stop(self, config: dict[str, Any]) -> dict[str, Any]:
-        # Stop is normally requested by Chat Agent through NEXT_BATCH_CONTROL.
-        # This method remains as a local helper for compatibility, but RunYN=N
-        # no longer calls it.
+        """Request a graceful stop of the batch supervisor via DB control.
+
+        This helper updates internal state and NEXT_BATCH_CONTROL to indicate
+        a stop was requested.
+        """
         state = self._status(config)
         run_id = state.get("run_id") or datetime.now().strftime("%Y%m%d%H%M%S%f")
         loop_no = int(state.get("loop_no") or 0)
@@ -258,6 +277,11 @@ class BatchAgentCommandTool(Component):
         }
 
     def _status(self, config: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Return a snapshot of the current in-memory and DB-backed state.
+
+        If `config` is provided, also reads NEXT_BATCH_CONTROL for DB-backed
+        control information.
+        """
         state = dict(self.__class__._state)
         state["running"] = bool(self.__class__._state.get("running"))
         state["requested_running"] = self._run_yn_equals_y(config) if config else None
@@ -273,6 +297,7 @@ class BatchAgentCommandTool(Component):
         return {"ok": True, **state}
 
     def _is_batch_control_running(self, config: dict[str, Any]) -> bool:
+        """Inspect NEXT_BATCH_CONTROL to determine if a RUNNING heartbeat exists."""
         table = self._batch_control_table(config)
         rows = self._query(
             config,
@@ -290,6 +315,7 @@ class BatchAgentCommandTool(Component):
         return bool(rows and int(rows[0][0] or 0) > 0)
 
     def _is_supervisor_running(self, config: dict[str, Any]) -> bool:
+        """Safe wrapper around `_is_batch_control_running` that logs on error."""
         try:
             return self._is_batch_control_running(config)
         except Exception:
@@ -297,9 +323,13 @@ class BatchAgentCommandTool(Component):
             return False
 
     def _console(self, message: str) -> None:
+        """Log a console/info level message prefixed for the BatchSupervisor."""
         self._logger().info(f"[BatchSupervisor] {message}")
 
     def _raise_if_batch_stop_requested(self) -> None:
+        """Raise InterruptedError if NEXT_BATCH_CONTROL indicates a stop or
+        if RunYN input has been set to N.
+        """
         config = getattr(self, "_batch_runtime_config", None)
         run_id = str((config or {}).get("batch_run_id") or "")
         if not config:
@@ -311,6 +341,7 @@ class BatchAgentCommandTool(Component):
             raise InterruptedError(reason)
 
     def _run_yn_value(self, config: dict[str, Any] | None = None) -> str:
+        """Return the current Run Y/N input value normalized to uppercase string."""
         value = getattr(self, "run_yn", None)
         if value is None and config:
             value = config.get("run_yn")
@@ -323,6 +354,11 @@ class BatchAgentCommandTool(Component):
         return self._run_yn_value(config) == "N"
 
     def Supervisor_loop(self, config: dict[str, Any], run_id: str) -> None:
+        """Main blocking supervisor loop executed once ownership is acquired.
+
+        This loop polls for jobs and executes one cycle per iteration until
+        NEXT_BATCH_CONTROL requests stop or the control row becomes invalid.
+        """
         cls = self.__class__
         config = {**config, "batch_run_id": run_id}
         self._batch_runtime_config = config
@@ -505,6 +541,11 @@ class BatchAgentCommandTool(Component):
             )
 
         def poll_jobs(_: BatchSupervisorState) -> BatchSupervisorState:
+            """Poll the DB for a candidate migration or SQL conversion job.
+
+            Returns a state dict containing `migration_job` or `sql_job` and
+            the parsed command context.
+            """
             self._raise_if_batch_stop_requested()
             migration_job = None
             sql_job = None
@@ -534,6 +575,11 @@ class BatchAgentCommandTool(Component):
             }
 
         def supervisor_decide(state: BatchSupervisorState) -> BatchSupervisorState:
+            """Invoke the configured LLM to choose one route for this cycle.
+
+            The function builds a payload with current jobs and policy, calls
+            the LLM, parses the JSON decision and returns it in `decision`.
+            """
             self._raise_if_batch_stop_requested()
             payload = {
                 "db_command": state.get("command_text") or "",
@@ -556,8 +602,10 @@ class BatchAgentCommandTool(Component):
                     "reason": "short reason",
                 },
             }
+            # Prefer external override from config, fall back to module constant
+            system_prompt = config.get("supervisor_system_prompt") or SUPERVISOR_SYSTEM_PROMPT
             messages = [
-                SystemMessage(content=SUPERVISOR_SYSTEM_PROMPT),
+                SystemMessage(content=system_prompt),
                 HumanMessage(content=json.dumps(payload, ensure_ascii=False, default=str)),
             ]
             llm_kwargs: dict[str, Any] = {
@@ -581,6 +629,7 @@ class BatchAgentCommandTool(Component):
             return {"decision": decision}
 
         def route_after_decision(state: BatchSupervisorState) -> str:
+            """Normalize and validate the LLM-chosen route against available jobs."""
             route = str((state.get("decision") or {}).get("route") or "").strip()
             migration_job = state.get("migration_job")
             sql_job = state.get("sql_job")
@@ -610,6 +659,7 @@ class BatchAgentCommandTool(Component):
             return "no_job"
 
         def run_data_migration(state: BatchSupervisorState) -> BatchSupervisorState:
+            """Execute a single migration job cycle by delegating to migration runner."""
             self._raise_if_batch_stop_requested()
             migration_job = state.get("migration_job") or {}
             map_id = int(migration_job["map_id"])
@@ -629,6 +679,7 @@ class BatchAgentCommandTool(Component):
             }
 
         def run_sql_conversion(state: BatchSupervisorState) -> BatchSupervisorState:
+            """Execute a single SQL conversion job cycle by delegating to SQL runner."""
             self._raise_if_batch_stop_requested()
             sql_job = state.get("sql_job") or {}
             selected_space = str(sql_job.get("space_nm") or "")
@@ -649,6 +700,7 @@ class BatchAgentCommandTool(Component):
             }
 
         def no_job(_: BatchSupervisorState) -> BatchSupervisorState:
+            """No-op route when no jobs are available. Returns result indicating NO_JOB."""
             self._raise_if_batch_stop_requested()
             return {
                 "result": {
@@ -699,6 +751,10 @@ class BatchAgentCommandTool(Component):
 
 
     def _run_migration_job(self, config: dict[str, Any], map_id: int) -> dict[str, Any]:
+        """Public wrapper to run migration job using internal migration runner.
+
+        It applies runtime config and forwards to the private migration runner implementation.
+        """
         self._apply_config(config)
         self._batch_runtime_config = config
         return self._mig__run_migration_job(
@@ -710,6 +766,7 @@ class BatchAgentCommandTool(Component):
             },
         )
     def _run_sql_conversion_job(self, config: dict[str, Any], space_nm: str, sql_id: str) -> dict[str, Any]:
+        """Public wrapper to run SQL conversion job using internal SQL runner."""
         self._apply_config(config)
         self._batch_runtime_config = config
         return self._sql_run_sql_conversion_job(
@@ -724,6 +781,10 @@ class BatchAgentCommandTool(Component):
         )
 
     def _parse_supervisor_decision(self, raw_decision: str) -> dict[str, Any]:
+        """Parse LLM output into a JSON decision dict (`route`, `reason`).
+
+        Attempts to strip code fences and extract the first JSON object.
+        """
         text = str(raw_decision or "").strip()
         if not text:
             self._logger().warning("[SupervisorDecision] empty LLM response")
@@ -752,6 +813,7 @@ class BatchAgentCommandTool(Component):
         }
 
     def _parse_command_target(self, command: dict[str, Any] | None) -> dict[str, Any]:
+        """Parse command JSON and text to extract target identifiers (map_id, sql_id, space_nm)."""
         payload = self._command_json(command)
         target: dict[str, Any] = {}
         if isinstance(payload, dict):
@@ -765,6 +827,7 @@ class BatchAgentCommandTool(Component):
         return target
 
     def _parse_command_text_target(self, command_text: str) -> dict[str, Any]:
+        """Extract simple targets from free-form command text using regex heuristics."""
         text = str(command_text or "").strip()
         if not text:
             return {}
@@ -795,6 +858,7 @@ class BatchAgentCommandTool(Component):
         return target
 
     def _poll_next_migration_job(self, config: dict[str, Any], map_id: int | None = None) -> dict[str, Any] | None:
+        """Query NEXT_MIG_INFO for the next pending migration job (optionally for a specific MAP_ID)."""
         table = self._qualify_table("NEXT_MIG_INFO", config["system_schema"])
         params: list[Any] = []
         map_filter = ""
@@ -819,6 +883,7 @@ class BatchAgentCommandTool(Component):
         return {"map_id": rows[0][0], "priority": rows[0][1]}
 
     def _count_pending_migration_jobs(self, config: dict[str, Any]) -> int:
+        """Return count of pending migration jobs in NEXT_MIG_INFO."""
         table = self._qualify_table("NEXT_MIG_INFO", config["system_schema"])
         sql = f"""
             SELECT COUNT(*)
@@ -837,6 +902,7 @@ class BatchAgentCommandTool(Component):
         sql_id: str | None = None,
         space_nm: str | None = None,
     ) -> dict[str, Any] | None:
+        """Query NEXT_SQL_INFO for the next pending SQL conversion job matching optional filters."""
         table = self._qualify_table("NEXT_SQL_INFO", config["system_schema"])
         params: list[Any] = []
         filters = ["STATUS_CONVERSION IS NULL"]
@@ -863,10 +929,15 @@ class BatchAgentCommandTool(Component):
         return {"space_nm": self._to_text(rows[0][0]), "sql_id": self._to_text(rows[0][1]), "priority": rows[0][2]}
 
     def _apply_config(self, config: dict[str, Any]) -> None:
+        """Apply runtime config values to the component instance attributes.
+
+        This allows per-cycle overrides coming from the input snapshot.
+        """
         for key, value in config.items():
             setattr(self, key, value)
         self.default_max_attempts = config["migration_max_attempts"]
     def _snapshot_config(self) -> dict[str, Any]:
+        """Create a plain dict snapshot of configured inputs used at runtime."""
         return {
             "run_yn": str(getattr(self, "run_yn", "") or "Y").strip().upper(),
             "db_host": str(getattr(self, "db_host", "") or "").strip(),
@@ -884,6 +955,7 @@ class BatchAgentCommandTool(Component):
             "to_sql_prompt": str(getattr(self, "to_sql_prompt", "") or ""),
             "bind_sql_prompt": str(getattr(self, "bind_sql_prompt", "") or ""),
             "test_sql_prompt": str(getattr(self, "test_sql_prompt", "") or ""),
+            "supervisor_system_prompt": str(getattr(self, "supervisor_system_prompt", "") or ""),
             "system_schema": str(getattr(self, "system_schema", "") or "").strip(),
             "source_schema": str(getattr(self, "source_schema", "") or "").strip(),
             "target_schema": str(getattr(self, "target_schema", "") or "").strip(),
