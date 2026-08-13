@@ -9,15 +9,6 @@ from lfx.io import MessageTextInput, SecretStrInput, StrInput, Output
 from lfx.schema.data import Data
 
 
-DEFAULT_DB_CONFIG = {
-    "db_host": "10.0.0.1",
-    "db_port": 1521,
-    "db_service_name": "ORCL",
-    "db_username": "SMARTMIGRATE",
-    "db_password": "password",
-    "system_schema": "SFAADM",
-}
-
 
 class SupervisorControlCommandTool(Component):
     display_name = "Supervisor Control Tool"
@@ -27,11 +18,12 @@ class SupervisorControlCommandTool(Component):
 
     inputs = [
         MessageTextInput(name="command_json", display_name="Command JSON", required=True, tool_mode=True),
-        StrInput(name="db_host", display_name="DB Host", value=DEFAULT_DB_CONFIG["db_host"], required=False),
-        StrInput(name="db_service_name", display_name="DB Service Name", value=DEFAULT_DB_CONFIG["db_service_name"], required=False),
-        StrInput(name="db_username", display_name="DB Username", value=DEFAULT_DB_CONFIG["db_username"], required=False),
+        StrInput(name="db_host", display_name="DB Host", required=False),
+        IntInput(name="db_port", display_name="DB Port", required=False),
+        StrInput(name="db_service_name", display_name="DB Service Name", required=False),
+        StrInput(name="db_username", display_name="DB Username", required=False),
         SecretStrInput(name="db_password", display_name="DB Password", required=False),
-        StrInput(name="system_schema", display_name="System Schema", value=DEFAULT_DB_CONFIG["system_schema"], required=False),
+        StrInput(name="system_schema", display_name="System Schema", required=False),
     ]
 
     outputs = [Output(display_name="Result", name="result", method="run_command")]
@@ -111,9 +103,13 @@ class SupervisorControlCommandTool(Component):
     def _connect(self):
         import oracledb
 
-        dsn = oracledb.makedsn(str(getattr(self, "db_host", "") or DEFAULT_DB_CONFIG["db_host"]).strip(), int(getattr(self, "db_port", None) or DEFAULT_DB_CONFIG["db_port"]), service_name=str(getattr(self, "db_service_name", "") or DEFAULT_DB_CONFIG["db_service_name"]).strip())
-        password = self._secret_to_str(getattr(self, "db_password", None)) or str(DEFAULT_DB_CONFIG["db_password"])
-        conn = oracledb.connect(user=str(getattr(self, "db_username", "") or DEFAULT_DB_CONFIG["db_username"]).strip(), password=password, dsn=dsn)
+        dsn = oracledb.makedsn(
+            str(getattr(self, "db_host", "") or "").strip(),
+            int(getattr(self, "db_port", None) or 1521),
+            service_name=str(getattr(self, "db_service_name", "") or "").strip(),
+        )
+        password = self._secret_to_str(getattr(self, "db_password", None)) or ""
+        conn = oracledb.connect(user=str(getattr(self, "db_username", "") or "").strip(), password=password, dsn=dsn)
         try:
             yield conn
         finally:
@@ -146,7 +142,7 @@ class SupervisorControlCommandTool(Component):
 
     def _qualify(self, table_name: str) -> str:
         table = str(table_name or "").strip().upper()
-        schema = str(getattr(self, "system_schema", "") or DEFAULT_DB_CONFIG["system_schema"]).strip().upper()
+        schema = str(getattr(self, "system_schema", "") or "").strip().upper()
         if not schema:
             return table
         return f"{schema}.{table}"

@@ -6,7 +6,18 @@ from lfx.custom.custom_component.component import Component
 from lfx.io import IntInput, MessageTextInput, SecretStrInput, StrInput, Output
 from lfx.schema.data import Data
 
-from app.utils.rag_db import get_all_rules, get_top_rules
+try:
+    from app.utils.rag_db import get_all_rules, get_top_rules
+except Exception:
+    # Langflow may run this component with a different cwd / sys.path.
+    # Add workspace root to sys.path at runtime and retry import.
+    import sys
+    from pathlib import Path
+
+    _ROOT = Path(__file__).resolve().parents[3]
+    if str(_ROOT) not in sys.path:
+        sys.path.insert(0, str(_ROOT))
+    from app.utils.rag_db import get_all_rules, get_top_rules
 
 
 class RagRuleCommandTool(Component):
