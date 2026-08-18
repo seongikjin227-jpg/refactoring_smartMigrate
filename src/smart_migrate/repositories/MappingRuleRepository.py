@@ -98,17 +98,6 @@ def get_all_mapping_rules() -> list[MappingRuleItem]:
     return rules
 
 
-def get_sql_map_type(target_table_value: str | None) -> str | None:
-    """Return SIMPLE when target tables are present.
-
-    SQL conversion no longer branches generation by complex mapping existence.
-    """
-    target_tables = _parse_target_tables(target_table_value)
-    if not target_tables:
-        return None
-    return "SIMPLE"
-
-
 def get_unready_target_tables(target_table_value: str | None) -> list[str]:
     target_tables = _parse_target_tables(target_table_value)
     if not target_tables:

@@ -11,5 +11,3 @@ class SqlFormattingState:
     job_key: str
     source_sql: str = ""
     formatted_sql: str = ""
-    status: str | None = None
-    error_message: str | None = None

@@ -1,5 +1,6 @@
 ﻿import os
 import json
+import re
 from pathlib import Path
 import anthropic
 import openai
@@ -109,6 +110,22 @@ def _format_ddl_info(ddl_rows: list) -> str:
     return "\n".join(lines)
 
 
+def _from_table_prompt_value(job) -> str:
+    raw_from = str(getattr(job, "fr_table", "") or "").strip()
+    map_type = str(getattr(job, "map_type", "") or "").strip().upper()
+    if map_type != "COMPLEX":
+        return qualify_fr_table(raw_from)
+
+    stripped = raw_from.rstrip(";").strip()
+    if not stripped:
+        return stripped
+    if stripped.startswith("("):
+        return stripped
+    if re.match(r"^(SELECT|WITH)\b", stripped, flags=re.IGNORECASE):
+        return f"({stripped})"
+    return stripped
+
+
 def generate_sqls(NEXT_SQL_INFO, last_error=None, last_sql=None, source_ddl=None, target_ddl=None, is_append=False):
     """
     OpenAI 호환 API를 호출하여 Oracle 21c 마이그레이션 SQL들을 생성합니다.
@@ -117,7 +134,7 @@ def generate_sqls(NEXT_SQL_INFO, last_error=None, last_sql=None, source_ddl=None
     client = get_client()
     model_name = os.getenv("LLM_MODEL") or "GLM-5.1"
 
-    from_table = qualify_fr_table(NEXT_SQL_INFO.fr_table)
+    from_table = _from_table_prompt_value(NEXT_SQL_INFO)
     to_table = qualify_to_table(NEXT_SQL_INFO.to_table)
     condition = getattr(NEXT_SQL_INFO, 'condition', None) or ''
 

@@ -18,21 +18,12 @@ class SqlFormattingWorkflow:
             source_sql=(job.tuned_sql or job.to_sql_text or "").strip(),
         )
         if not state.source_sql:
-            logger.warning(f"[{self.name}] ({state.job_key}) stage=SKIP_FORMATTING completed (reason=no_sql)")
-            state.status = "SKIP"
-            return state.status
+            raise ValueError("Formatting job has no TUNED_TO_SQL or TO_SQL input.")
 
-        try:
-            state.formatted_sql = generate_formatted_sql(job=job, input_sql=state.source_sql)
-            update_formatted_sql(row_id=job.row_id, formatted_sql=state.formatted_sql)
-            logger.info(
-                f"[{self.name}] ({state.job_key}) stage=GENERATE_FORMATTED_SQL "
-                f"completed (sql_length={len(state.formatted_sql)})"
-            )
-            state.status = "PASS"
-            return state.status
-        except Exception as exc:
-            state.error_message = str(exc)
-            logger.error(f"[{self.name}] ({state.job_key}) stage=GENERATE_FORMATTED_SQL failed: {exc}")
-            state.status = "FAIL"
-            return state.status
+        state.formatted_sql = generate_formatted_sql(job=job, input_sql=state.source_sql)
+        update_formatted_sql(row_id=job.row_id, formatted_sql=state.formatted_sql)
+        logger.info(
+            f"[{self.name}] ({state.job_key}) stage=GENERATE_FORMATTED_SQL "
+            f"completed (sql_length={len(state.formatted_sql)})"
+        )
+        return "FORMATTED"

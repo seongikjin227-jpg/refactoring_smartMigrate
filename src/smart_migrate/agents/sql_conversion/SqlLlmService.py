@@ -792,16 +792,18 @@ def generate_tobe_sql(
     job: SqlInfoJob,
     mapping_rules: list[MappingRuleItem],
     last_error: str | None = None,
+    source_sql: str | None = None,
 ) -> str:
     template_name = "tobe_sql_prompt.json"
+    effective_source_sql = source_sql or job.source_sql
     scoped_rules = _select_mapping_rules_for_job(job=job, mapping_rules=mapping_rules)
     source_tables = _load_target_tables(job)
     conversion_general_rules = tobe_sql_tuning_service.load_universal_conversion_rules(
-        sql_text=job.source_sql,
+        sql_text=effective_source_sql,
         source_tables=source_tables,
     )
     conversion_examples = tobe_sql_tuning_service.retrieve_conversion_examples(
-        sql_text=job.source_sql,
+        sql_text=effective_source_sql,
         source_tables=source_tables,
     )
     mapping_schema_text = _serialize_sql_conversion_mapping_rules(
@@ -818,7 +820,7 @@ def generate_tobe_sql(
         last_error=last_error,
         messages=_build_sql_messages(
             template_name,
-            from_sql=job.source_sql,
+            from_sql=effective_source_sql,
             mapping_schema_text=mapping_schema_text,
             target_schema=_schema_env("ORACLE_SCHEMA_TGT") or "UNKNOWN",
             correct_sql_hint_json="[]",

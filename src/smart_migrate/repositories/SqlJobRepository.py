@@ -175,15 +175,15 @@ def _can_select_column(table: str, column_name: str) -> bool:
 
 def _row_to_sql_info_job(row) -> SqlInfoJob:
     priority_value = None
-    if len(row) > 24 and row[24] is not None:
+    if len(row) > 22 and row[22] is not None:
         try:
-            priority_value = int(row[24])
+            priority_value = int(row[22])
         except Exception:
             priority_value = None
     retry_count_value = None
-    if len(row) > 25 and row[25] is not None:
+    if len(row) > 23 and row[23] is not None:
         try:
-            retry_count_value = int(row[25])
+            retry_count_value = int(row[23])
         except Exception:
             retry_count_value = None
 
@@ -206,10 +206,8 @@ def _row_to_sql_info_job(row) -> SqlInfoJob:
         upd_ts=row[15],
         fr_bindtuned_sql=_to_optional_text(row[16]) if len(row) > 16 else None,
         user_edited=_to_optional_text(row[17]) if len(row) > 17 else None,
-        sql_length=_to_optional_text(row[20]) if len(row) > 20 else None,
-        map_type=_to_optional_text(row[21]) if len(row) > 21 else None,
-        formatted_sql=_to_optional_text(row[22]) if len(row) > 22 else None,
-        tuned_result=_to_optional_text(row[23]) if len(row) > 23 else None,
+        formatted_sql=_to_optional_text(row[20]) if len(row) > 20 else None,
+        tuned_result=_to_optional_text(row[21]) if len(row) > 21 else None,
         priority=priority_value,
         retry_count=retry_count_value,
     )
@@ -231,8 +229,6 @@ def get_pending_jobs() -> list[SqlInfoJob]:
     tuning_status_select = _status_select_expr(tuning_status_column, "STATUS_TUNING")
     tuned_sql_column = _optional_alias_expr(available_columns, "TUNED_TO_SQL", "TUNED_TO_SQL")
     fr_bindtuned_sql_column = _optional_alias_expr(available_columns, "TUNED_FR_SQL", "TUNED_FR_SQL")
-    sql_length_column = "SQL_LENGTH" if "SQL_LENGTH" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS SQL_LENGTH"
-    map_type_column = "MAP_TYPE" if "MAP_TYPE" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS MAP_TYPE"
     formatted_sql_column = "FORMATTED_SQL" if "FORMATTED_SQL" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS FORMATTED_SQL"
     tuned_result_column = "TUNED_RESULT" if "TUNED_RESULT" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS TUNED_RESULT"
     priority_column = "PRIORITY" if "PRIORITY" in available_columns else "CAST(NULL AS NUMBER) AS PRIORITY"
@@ -280,8 +276,6 @@ def get_sql_job_by_row_id(row_id: str) -> SqlInfoJob | None:
     tuning_status_select = _status_select_expr(tuning_status_column, "STATUS_TUNING")
     tuned_sql_column = _optional_alias_expr(available_columns, "TUNED_TO_SQL", "TUNED_TO_SQL")
     fr_bindtuned_sql_column = _optional_alias_expr(available_columns, "TUNED_FR_SQL", "TUNED_FR_SQL")
-    sql_length_column = "SQL_LENGTH" if "SQL_LENGTH" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS SQL_LENGTH"
-    map_type_column = "MAP_TYPE" if "MAP_TYPE" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS MAP_TYPE"
     formatted_sql_column = "FORMATTED_SQL" if "FORMATTED_SQL" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS FORMATTED_SQL"
     tuned_result_column = "TUNED_RESULT" if "TUNED_RESULT" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS TUNED_RESULT"
     priority_column = "PRIORITY" if "PRIORITY" in available_columns else "CAST(NULL AS NUMBER) AS PRIORITY"
@@ -290,7 +284,7 @@ def get_sql_job_by_row_id(row_id: str) -> SqlInfoJob | None:
         SELECT ROWIDTOCHAR(ROWID) AS RID,
                TAG_KIND, SPACE_NM, SQL_ID, {fr_sql_select}, TARGET_TABLE, EDIT_FR_SQL,
                {to_sql_select}, {tuned_sql_column}, {tuning_status_select}, BIND_SQL, BIND_SET, TEST_SQL, {conversion_status_select}, LOG,
-               UPD_TS, {fr_bindtuned_sql_column}, {user_edited_column}, {removed_correct_placeholders}, {sql_length_column}, {map_type_column}, {formatted_sql_column}, {tuned_result_column}, {priority_column}, {retry_count_column}
+               UPD_TS, {fr_bindtuned_sql_column}, {user_edited_column}, {removed_correct_placeholders}, {formatted_sql_column}, {tuned_result_column}, {priority_column}, {retry_count_column}
         FROM {table}
         WHERE ROWID = CHARTOROWID(:1)
     """
@@ -322,8 +316,6 @@ def get_tuning_jobs() -> list:
     removed_correct_placeholders = "CAST(NULL AS VARCHAR2(1)) AS UNUSED_SQL_PLACEHOLDER_1, CAST(NULL AS VARCHAR2(1)) AS UNUSED_SQL_PLACEHOLDER_2"
     tuned_sql_column = _optional_alias_expr(available_columns, "TUNED_TO_SQL", "TUNED_TO_SQL")
     fr_bindtuned_sql_column = _optional_alias_expr(available_columns, "TUNED_FR_SQL", "TUNED_FR_SQL")
-    sql_length_column = "SQL_LENGTH" if "SQL_LENGTH" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS SQL_LENGTH"
-    map_type_column = "MAP_TYPE" if "MAP_TYPE" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS MAP_TYPE"
     formatted_sql_column = "FORMATTED_SQL" if "FORMATTED_SQL" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS FORMATTED_SQL"
     tuned_result_column = "TUNED_RESULT" if "TUNED_RESULT" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS TUNED_RESULT"
     priority_column = "PRIORITY" if "PRIORITY" in available_columns else "CAST(NULL AS NUMBER) AS PRIORITY"
@@ -381,8 +373,6 @@ def get_formatting_jobs() -> list[SqlInfoJob]:
     removed_correct_placeholders = "CAST(NULL AS VARCHAR2(1)) AS UNUSED_SQL_PLACEHOLDER_1, CAST(NULL AS VARCHAR2(1)) AS UNUSED_SQL_PLACEHOLDER_2"
     tuned_sql_column = _optional_alias_expr(available_columns, "TUNED_TO_SQL", "TUNED_TO_SQL")
     fr_bindtuned_sql_column = _optional_alias_expr(available_columns, "TUNED_FR_SQL", "TUNED_FR_SQL")
-    sql_length_column = "SQL_LENGTH" if "SQL_LENGTH" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS SQL_LENGTH"
-    map_type_column = "MAP_TYPE" if "MAP_TYPE" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS MAP_TYPE"
     tuned_result_column = "TUNED_RESULT" if "TUNED_RESULT" in available_columns else "CAST(NULL AS VARCHAR2(4000)) AS TUNED_RESULT"
     priority_column = "PRIORITY" if "PRIORITY" in available_columns else "CAST(NULL AS NUMBER) AS PRIORITY"
     retry_count_column = "RETRY_COUNT" if "RETRY_COUNT" in available_columns else "CAST(NULL AS NUMBER) AS RETRY_COUNT"
@@ -479,37 +469,6 @@ def classify_sql_length(fr_sql_text: str | None, edit_fr_sql: str | None) -> str
     if fr_length <= _SQL_LENGTH_SHORT_MAX and edit_length <= _SQL_LENGTH_SHORT_MAX:
         return "SHORT"
     return "LONG"
-
-
-def update_job_classification(row_id: str, sql_length: str, map_type: str | None) -> None:
-    table = get_result_table()
-    available_columns = _get_available_columns(table)
-    values: dict[str, str | None] = {}
-    if "SQL_LENGTH" in available_columns:
-        values["SQL_LENGTH"] = sql_length
-    if "MAP_TYPE" in available_columns:
-        values["MAP_TYPE"] = map_type
-    if not values:
-        return
-
-    payload = _fit_payload_to_column_limits(table=table, values=values)
-    set_clauses: list[str] = []
-    params: list[str | None] = []
-    for column, value in payload.items():
-        params.append(value)
-        set_clauses.append(f"{column} = :{len(params)}")
-    set_clauses.append("UPD_TS = CURRENT_TIMESTAMP")
-    params.append(row_id)
-
-    query = f"""
-        UPDATE {table}
-        SET {", ".join(set_clauses)}
-        WHERE ROWID = CHARTOROWID(:{len(params)})
-    """
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(query, params)
-        conn.commit()
 
 
 def reset_tuning_state(row_id: str) -> None:

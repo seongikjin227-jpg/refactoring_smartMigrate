@@ -9,6 +9,7 @@ from smart_migrate.repositories.MappingRuleRepository import get_all_mapping_rul
 from smart_migrate.repositories.SqlJobRepository import update_cycle_result, update_tuning_error
 from smart_migrate.shared.SqlStatuses import FAIL_TEST, is_fail
 from smart_migrate.agents.sql_conversion.SqlConversionCoordinator import SqlTuningAgent as _SqlTuningRunner
+from smart_migrate.agents.sql_tuning.SqlTuningGraph import build_sql_tuning_workflow
 from smart_migrate.agents.sql_tuning.SqlTuningState import SqlTuningState
 
 
@@ -17,6 +18,7 @@ class SqlTuningWorkflow:
 
     def __init__(self) -> None:
         self._runner = _SqlTuningRunner()
+        self._graph = build_sql_tuning_workflow(self._runner)
 
     def run(self, job) -> str:
         job_key = f"{job.space_nm}.{job.sql_id}"
@@ -30,8 +32,10 @@ class SqlTuningWorkflow:
             )
             state.tobe_sql = job.to_sql_text
             state.bind_set_for_db = job.bind_set
+            state.max_tuning_attempts = 2 if (job.tag_kind or "").strip().upper() == "SELECT" else 1
 
-            self._runner.run(state)
+            graph_result = self._graph.invoke({"execution": state})
+            state = graph_result["execution"]
 
             final_status = state.tuned_test if state.tuned_test else (state.failure_status or FAIL_TEST)
             final_log = self._build_final_log(state=state, final_status=final_status, job_key=job_key)

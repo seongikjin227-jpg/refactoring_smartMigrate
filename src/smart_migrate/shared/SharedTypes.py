@@ -27,8 +27,6 @@ class SqlInfoJob:
     log_text: Optional[str] = None
     upd_ts: Optional[datetime] = None
     user_edited: Optional[str] = None
-    sql_length: Optional[str] = None
-    map_type: Optional[str] = None
     priority: Optional[int] = None
     retry_count: Optional[int] = None
 

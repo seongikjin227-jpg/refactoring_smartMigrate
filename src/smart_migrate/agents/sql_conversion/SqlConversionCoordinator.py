@@ -8,15 +8,10 @@ import time
 from smart_migrate.config import AppSettings as settings
 from smart_migrate.shared.SharedExceptions import LLMRateLimitError
 from smart_migrate.shared.SharedLogging import logger
-from smart_migrate.repositories.MappingRuleRepository import (
-    get_all_mapping_rules,
-    get_sql_map_type,
-)
+from smart_migrate.repositories.MappingRuleRepository import get_all_mapping_rules
 from smart_migrate.repositories.SqlJobRepository import (
     classify_sql_length,
-    reset_tuning_state,
     update_block_rag_content,
-    update_job_classification,
     update_cycle_result,
     update_fr_bindtuned_sql,
 )
@@ -44,7 +39,6 @@ from smart_migrate.shared.SqlStatuses import (
     FAIL_TUNED,
     FAIL_TOBE,
     TUNING_PASS,
-    is_fail,
 )
 from smart_migrate.agents.sql_conversion.SqlConversionGraph import build_migration_workflow
 from smart_migrate.agents.sql_conversion.SqlConversionState import JobExecutionState
@@ -100,10 +94,12 @@ class TobeSqlGenerationAgent:
             )
             return
 
+        state.source_sql_for_conversion = self._prepare_conversion_source_sql(state)
         state.tobe_sql = generate_tobe_sql(
             job=state.job,
             mapping_rules=state.mapping_rules,
             last_error=state.last_error,
+            source_sql=state.source_sql_for_conversion,
         )
         logger.info(
             f"[{self.name}] ({state.job_key}) stage=GENERATE_TOBE_SQL "
@@ -274,8 +270,24 @@ class TobeSqlGenerationAgent:
         return (getattr(job, "user_edited", "") or "").strip().upper() == "Y"
 
     def _prepare_bind_source_sql(self, state: JobExecutionState) -> str:
+        if state.source_sql_for_conversion:
+            return state.source_sql_for_conversion
+        saved_tuned_sql = self._saved_sql(getattr(state.job, "fr_bindtuned_sql", None))
+        if saved_tuned_sql:
+            return saved_tuned_sql
+        return self._prepare_conversion_source_sql(state)
+
+    def _prepare_conversion_source_sql(self, state: JobExecutionState) -> str:
         original_sql = state.job.source_sql or ""
-        sql_length = (getattr(state.job, "sql_length", "") or "").strip().upper()
+        saved_tuned_sql = self._saved_sql(getattr(state.job, "fr_bindtuned_sql", None))
+        if saved_tuned_sql:
+            logger.info(
+                f"[{self.name}] ({state.job_key}) stage=USE_SAVED_TUNED_FR_SQL "
+                f"completed (sql_length={len(saved_tuned_sql)})"
+            )
+            return saved_tuned_sql
+
+        sql_length = classify_sql_length(state.job.source_sql, None)
         min_length = max(0, settings.BIND_SQL_PRETUNING_MIN_LENGTH)
         should_pretune = sql_length == "LONG" or len(original_sql) >= min_length
         if not settings.BIND_SQL_PRETUNING_ENABLED or not should_pretune:
@@ -286,8 +298,9 @@ class TobeSqlGenerationAgent:
             last_error=state.last_error,
         )
         update_fr_bindtuned_sql(row_id=state.job.row_id, fr_bindtuned_sql=tuned_sql)
+        state.job.fr_bindtuned_sql = tuned_sql
         logger.info(
-            f"[{self.name}] ({state.job_key}) stage=BIND_TUNING applied "
+            f"[{self.name}] ({state.job_key}) stage=TUNE_FR_SQL applied "
             f"(sql_length={sql_length or 'UNKNOWN'}, original_len={len(original_sql)}, "
             f"min_length={min_length}, tuned_len={len(tuned_sql)})"
         )
@@ -343,6 +356,13 @@ class SqlTuningAgent:
 
         for tuning_attempt in range(1, max_tuning_attempts + 1):
             self._apply_tuning_rules(state)
+
+            if self._is_missing_tuning_rule_result(state.tuned_result):
+                logger.warning(
+                    f"[{self.name}] ({state.job_key}) stage=FAIL_TUNED "
+                    f"completed (reason=tuning_rule_not_found)"
+                )
+                break
 
             if self._is_no_tuning_result(state.tuned_result):
                 state.tuned_test = TUNING_PASS
@@ -406,8 +426,15 @@ class SqlTuningAgent:
                 f"completed (iteration={iteration}, rule_blocks={len(tuning_examples)})"
             )
             if not tuning_examples:
-                state.tuned_result = "NO TUNING"
-                break
+                state.tuned_result = "TUNING RULE NOT FOUND"
+                state.tuned_test = FAIL_TUNED
+                state.failure_status = FAIL_TUNED
+                state.last_error = "TUNING_RULE_NOT_FOUND: no SQL_TUNING SEARCH rules matched the current SQL"
+                logger.warning(
+                    f"[{self.name}] ({state.job_key}) stage=TUNING_RULE_NOT_FOUND "
+                    f"failed (iteration={iteration})"
+                )
+                return
 
             tuned_sql, tuned_result = tune_tobe_sql(
                 current_tobe_sql=current_sql,
@@ -428,7 +455,11 @@ class SqlTuningAgent:
 
     @staticmethod
     def _is_no_tuning_result(tuned_result: str | None) -> bool:
-        return "NO TUNING" in (tuned_result or "").upper()
+        return (tuned_result or "").strip().upper() == "NO TUNING"
+
+    @staticmethod
+    def _is_missing_tuning_rule_result(tuned_result: str | None) -> bool:
+        return (tuned_result or "").strip().upper() == "TUNING RULE NOT FOUND"
 
     def _run_tuned_sql_validation(self, state: JobExecutionState) -> None:
         state.failure_status = FAIL_TEST
@@ -533,20 +564,8 @@ class TobeMultiAgentCoordinator:
         max_retries = 3
         stage = "INIT"
         state = self._build_state(job=job, last_error=None)
-        sql_length = classify_sql_length(job.fr_sql_text, job.edit_fr_sql)
-        map_type = get_sql_map_type(job.target_table)
-        update_job_classification(row_id=job.row_id, sql_length=sql_length, map_type=map_type)
-        job.sql_length = sql_length
-        job.map_type = map_type
-        logger.info(
-            f"[TobeMultiAgentCoordinator] ({job_key}) classification "
-            f"sql_length={sql_length}, map_type={map_type or 'UNKNOWN'}"
-        )
-
-        if is_fail(job.status):
-            reset_tuning_state(job.row_id)
-            job.tuned_sql = None
-            job.tuned_test = None
+        sql_length = classify_sql_length(job.source_sql, None)
+        logger.info(f"[TobeMultiAgentCoordinator] ({job_key}) classification sql_length={sql_length}")
 
         while retry_count < max_retries:
             raw_last_error = state.last_error

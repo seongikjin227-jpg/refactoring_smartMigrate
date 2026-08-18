@@ -66,25 +66,41 @@ def _is_user_edited(job) -> bool:
 def _user_edited_value(job) -> str:
     return str(getattr(job, "user_edited", "") or "N").strip().upper() or "N"
 
-def _extract_table_names(fr_table: str) -> list:
-    """FR_TABLE 표현식에서 실제 테이블명만 추출합니다."""
-    parts = re.split(
-        r'\b(?:(?:LEFT|RIGHT|FULL|INNER|CROSS)\s+(?:OUTER\s+)?)?JOIN\b',
-        fr_table, flags=re.IGNORECASE
-    )
-    tables = []
-    for part in parts:
-        part = re.split(r'\bON\b', part, flags=re.IGNORECASE)[0].strip()
-        tokens = part.split()
-        if tokens and tokens[0].upper() not in ('SELECT', 'WITH', 'FROM', '('):
-            tables.append(tokens[0])
+def _extract_query_table_names(sql_text: str) -> list[str]:
+    """Extract physical table names from a COMPLEX FR_TABLE SQL expression."""
+    text = re.sub(r"/\*.*?\*/", " ", sql_text or "", flags=re.DOTALL)
+    text = re.sub(r"--[^\n]*", " ", text)
+    tables: list[str] = []
+    seen: set[str] = set()
+    for match in re.finditer(
+        r"\b(?:FROM|JOIN)\s+([A-Z_][A-Z0-9_$#]*(?:\.[A-Z_][A-Z0-9_$#]*)?)",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        table_name = match.group(1).strip()
+        if table_name.upper() in {"SELECT", "WITH"}:
+            continue
+        key = table_name.upper()
+        if key not in seen:
+            seen.add(key)
+            tables.append(table_name)
     return tables
+
+
+def _source_tables_for_ddl(job) -> list[str]:
+    map_type = str(getattr(job, "map_type", "") or "").strip().upper()
+    fr_table = str(getattr(job, "fr_table", "") or "").strip()
+    if not fr_table:
+        return []
+    if map_type == "COMPLEX":
+        return _extract_query_table_names(fr_table)
+    return [fr_table]
 
 # Nodes
 def fetch_ddl_node(state: MigrationState) -> dict:
     job = state["next_sql_info"]
     source_ddl = {}
-    for tbl_name in _extract_table_names(job.fr_table):
+    for tbl_name in _source_tables_for_ddl(job):
         source_table = qualify_fr_table(tbl_name)
         rows = fetch_table_ddl(source_table)
         if rows:
@@ -412,18 +428,19 @@ workflow.add_node("verify", verify_sql_node)
 workflow.add_node("finalize", finalize_node)
 workflow.add_node("biz_retry_prepare", biz_retry_prepare_node)
 
-workflow.set_entry_point("fetch_ddl")
-workflow.add_edge("fetch_ddl", "check_dependency")
+workflow.set_entry_point("check_dependency")
 
 workflow.add_conditional_edges(
     "check_dependency",
     should_continue,
     {
-        "generate": "generate",
+        "generate": "fetch_ddl",
         "finalize": "finalize",
-        "execute": "generate"
+        "execute": "fetch_ddl"
     }
 )
+
+workflow.add_edge("fetch_ddl", "generate")
 
 workflow.add_conditional_edges(
     "generate",

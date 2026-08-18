@@ -12,6 +12,7 @@ class JobExecutionState:
     job_key: str
     mapping_rules: list
     last_error: str | None = None
+    source_sql_for_conversion: str = ""
     tuning_examples: list[dict] = field(default_factory=list)
     tobe_sql: str = ""
     tuned_sql: str = ""
