@@ -26,7 +26,7 @@ class NewType11SqlPipelineStub(Component):
     def run_stub(self) -> Data:
         try:
             payload = self._parse_payload(getattr(self, "payload_json", ""))
-            if not payload.get("active") or str(payload.get("route") or "").upper() != "SQL":
+            if str(payload.get("job_route") or "").upper() != "SQL":
                 payload.update({"component": "11_sqlPipelineStub", "pipeline_status": "SKIPPED", "next_node": "13_finalSummary"})
                 return Data(data=payload)
             job = payload.get("selected_job") or {}

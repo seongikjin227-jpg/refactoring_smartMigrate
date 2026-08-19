@@ -14,10 +14,10 @@ except Exception:
     DataInput = MessageTextInput
 
 
-class NewType08PrioritySelector(Component):
-    display_name = "08 Priority Selector"
+class NewType07PrioritySelector(Component):
+    display_name = "07 Priority Selector"
     description = "Selects one job from pending jobs. Default strategy keeps DB migration before SQL conversion."
-    name = "NewType08PrioritySelector"
+    name = "NewType07PrioritySelector"
     icon = "ListOrdered"
 
     inputs = [
@@ -40,10 +40,10 @@ class NewType08PrioritySelector(Component):
             selected = self._select(jobs)
             payload.update(
                 {
-                    "component": "08_prioritySelector",
+                    "component": "07_prioritySelector",
                     "selected_job": selected,
                     "has_selected_job": bool(selected),
-                    "next_node": "09_jobTypeRouter" if selected else "13_finalSummary",
+                    "next_node": "08_jobTypeRouter" if selected else "13_finalSummary",
                 }
             )
             payload.setdefault("history", []).append(
@@ -52,7 +52,7 @@ class NewType08PrioritySelector(Component):
             self.status = payload
             return Data(data=payload)
         except Exception as exc:
-            result = {"ok": False, "component": "08_prioritySelector", "error": str(exc)}
+            result = {"ok": False, "component": "07_prioritySelector", "error": str(exc)}
             self.status = result
             return Data(data=result)
 

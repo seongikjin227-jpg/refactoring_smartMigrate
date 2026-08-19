@@ -16,7 +16,7 @@ except Exception:
 
 class NewType12NextIncompleteLoop(Component):
     display_name = "12 Next Incomplete Loop"
-    description = "Decides whether a Langflow edge should loop back to 07 Get Pending Jobs or finish."
+    description = "Decides whether a Langflow edge should loop back to 06 Get Pending Jobs or finish."
     name = "NewType12NextIncompleteLoop"
     icon = "RefreshCw"
 
@@ -39,7 +39,7 @@ class NewType12NextIncompleteLoop(Component):
                     "cycle_no": cycle_no,
                     "max_poc_cycles": max_cycles,
                     "should_loop": should_loop,
-                    "next_node": "07_getPendingJobs" if should_loop else "13_finalSummary",
+                    "next_node": "06_getPendingJobs" if should_loop else "13_finalSummary",
                 }
             )
             payload.setdefault("history", []).append({"step": "loop_decision", "message": f"should_loop={should_loop}"})

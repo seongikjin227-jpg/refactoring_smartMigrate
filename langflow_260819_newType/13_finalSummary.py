@@ -52,7 +52,7 @@ class NewType13FinalSummary(Component):
             summary = payload.get("pending_summary") or {}
             return f"대기 작업이 없습니다. MIG={summary.get('migration_total', 0)}, SQL={summary.get('sql_total', 0)}"
         return (
-            f"POC 완료: route={payload.get('route')}, status={result.get('status') or payload.get('pipeline_status')}. "
+            f"POC 완료: route={payload.get('job_route') or payload.get('route')}, status={result.get('status') or payload.get('pipeline_status')}. "
             f"selected_job={self._job_label(selected)}, loop={payload.get('cycle_no', 0)}/{payload.get('max_poc_cycles', 1)}"
         )
 

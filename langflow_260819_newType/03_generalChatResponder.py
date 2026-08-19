@@ -14,10 +14,10 @@ except Exception:
     DataInput = MessageTextInput
 
 
-class NewType04GeneralChatResponder(Component):
-    display_name = "04 General Chat Responder"
+class NewType03GeneralChatResponder(Component):
+    display_name = "03 General Chat Responder"
     description = "Fast POC response for general conversation. Replace with an LLM answer node in production."
-    name = "NewType04GeneralChatResponder"
+    name = "NewType03GeneralChatResponder"
     icon = "MessageCircle"
 
     inputs = [DataInput(name="payload_json", display_name="Payload JSON", required=True)]
@@ -26,18 +26,15 @@ class NewType04GeneralChatResponder(Component):
     def respond(self) -> Data:
         try:
             payload = self._parse_payload(getattr(self, "payload_json", ""))
-            if not payload.get("active"):
-                payload.update({"component": "04_generalChatResponder", "response_status": "SKIPPED"})
-                return Data(data=payload)
             answer = (
                 "일반 대화로 분류했습니다. POC에서는 LLM 호출 없이 즉시 응답합니다. "
                 "운영 구조에서는 이 지점에 Chat LLM 노드를 연결하면 됩니다."
             )
-            result = {**payload, "component": "04_generalChatResponder", "answer_text": answer, "final": True}
+            result = {**payload, "component": "03_generalChatResponder", "answer_text": answer, "final": True}
             self.status = result
             return Data(data=result)
         except Exception as exc:
-            result = {"ok": False, "component": "04_generalChatResponder", "error": str(exc)}
+            result = {"ok": False, "component": "03_generalChatResponder", "error": str(exc)}
             self.status = result
             return Data(data=result)
 

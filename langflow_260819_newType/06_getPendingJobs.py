@@ -15,10 +15,10 @@ except Exception:
     DataInput = MessageTextInput
 
 
-class NewType07GetPendingJobs(Component):
-    display_name = "07 Get Pending Jobs"
+class NewType06GetPendingJobs(Component):
+    display_name = "06 Get Pending Jobs"
     description = "Loads pending MIG and SQL jobs from Oracle, or from mock_jobs_json for branch-only POC tests."
-    name = "NewType07GetPendingJobs"
+    name = "NewType06GetPendingJobs"
     icon = "Database"
 
     inputs = [
@@ -44,19 +44,19 @@ class NewType07GetPendingJobs(Component):
         try:
             payload = self._parse_payload(getattr(self, "payload_json", ""))
             if not payload.get("should_execute"):
-                payload.update({"component": "07_getPendingJobs", "next_node": "13_finalSummary"})
+                payload.update({"component": "06_getPendingJobs", "next_node": "13_finalSummary"})
                 return Data(data=payload)
 
             jobs = self._load_from_db() if self._has_db_config() else self._load_mock_jobs()
             payload.update(
                 {
-                    "component": "07_getPendingJobs",
+                    "component": "06_getPendingJobs",
                     "pending_jobs": jobs,
                     "pending_summary": {
                         "migration_total": len(jobs.get("migration_jobs", [])),
                         "sql_total": len(jobs.get("sql_jobs", [])),
                     },
-                    "next_node": "08_prioritySelector",
+                    "next_node": "07_prioritySelector",
                 }
             )
             payload.setdefault("history", []).append(
@@ -71,7 +71,7 @@ class NewType07GetPendingJobs(Component):
             self.status = payload
             return Data(data=payload)
         except Exception as exc:
-            result = {"ok": False, "component": "07_getPendingJobs", "error": str(exc)}
+            result = {"ok": False, "component": "06_getPendingJobs", "error": str(exc)}
             self.status = result
             return Data(data=result)
 

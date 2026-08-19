@@ -14,10 +14,10 @@ except Exception:
     DataInput = MessageTextInput
 
 
-class NewType06LongTaskNotice(Component):
-    display_name = "06 Long Task Notice"
+class NewType05LongTaskNotice(Component):
+    display_name = "05 Long Task Notice"
     description = "Adds a user-facing notice before routing to pending-job lookup for long-running work."
-    name = "NewType06LongTaskNotice"
+    name = "NewType05LongTaskNotice"
     icon = "Clock"
 
     inputs = [DataInput(name="payload_json", display_name="Payload JSON", required=True)]
@@ -26,26 +26,23 @@ class NewType06LongTaskNotice(Component):
     def add_notice(self) -> Data:
         try:
             payload = self._parse_payload(getattr(self, "payload_json", ""))
-            if not payload.get("active"):
-                payload.update({"component": "06_longTaskNotice", "notice_status": "SKIPPED"})
-                return Data(data=payload)
             notice = (
                 "이 요청은 DB migration 또는 SQL conversion 작업 실행으로 분류되었습니다. "
                 "실제 실행은 오래 걸릴 수 있으므로 먼저 pending job을 확인하고, 선택된 작업만 처리합니다."
             )
             payload.update(
                 {
-                    "component": "06_longTaskNotice",
+                    "component": "05_longTaskNotice",
                     "long_task_notice": notice,
                     "should_execute": True,
-                    "next_node": "07_getPendingJobs",
+                    "next_node": "06_getPendingJobs",
                 }
             )
             payload.setdefault("history", []).append({"step": "long_task_notice", "message": "long running task notice added"})
             self.status = payload
             return Data(data=payload)
         except Exception as exc:
-            result = {"ok": False, "component": "06_longTaskNotice", "error": str(exc)}
+            result = {"ok": False, "component": "05_longTaskNotice", "error": str(exc)}
             self.status = result
             return Data(data=result)
 
