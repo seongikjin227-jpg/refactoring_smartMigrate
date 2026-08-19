@@ -31,7 +31,7 @@ _BaseMigrationCommandTool = _load_base_migration_tool()
 
 class NewType10MigPipeline(_BaseMigrationCommandTool):
     display_name = "10 MIG Pipeline"
-    description = "Runs only run_migration_job from the legacy MigrationCommandTool in the new routed flow."
+    description = "Runs all pending DB Migration jobs through run_migration_job in the new routed flow."
     name = "NewType10MigPipeline"
     icon = "Database"
 
@@ -40,21 +40,7 @@ class NewType10MigPipeline(_BaseMigrationCommandTool):
             name="payload_json",
             display_name="Payload JSON",
             required=False,
-            info="Payload from 09 DB Migration Agent. selected_job.map_id is used when command_json has no map_id.",
-        ),
-        MessageTextInput(
-            name="command_json",
-            display_name="Command JSON",
-            required=False,
-            tool_mode=True,
-            info='Only run_migration_job is supported. Example: {"action":"run_migration_job","map_id":101}',
-        ),
-        StrInput(
-            name="run_all_if_no_map_id",
-            display_name="Run All If No MAP_ID",
-            value="Y",
-            required=False,
-            info="Y: if no map_id is provided, repeatedly run all pending DB Migration jobs.",
+            info="Payload from 09 DB Migration Agent. Long Job always runs all pending DB Migration jobs.",
         ),
         IntInput(name="run_all_limit", display_name="Run All Limit", value=1000, required=False),
         StrInput(name="db_host", display_name="DB Host", required=True),
@@ -100,20 +86,16 @@ class NewType10MigPipeline(_BaseMigrationCommandTool):
             if action != "run_migration_job":
                 raise ValueError("10 MIG Pipeline supports only action=run_migration_job")
 
-            run_all_pending = self._as_bool(command.get("run_all_pending"))
-            map_id = None if run_all_pending else command.get("map_id")
-            if map_id is None or str(map_id).strip() == "":
-                if not self._as_bool(getattr(self, "run_all_if_no_map_id", "Y")):
-                    raise ValueError("map_id is required when run_all_if_no_map_id is not Y")
-                result = self._run_all_pending_migration_jobs(command)
-            else:
-                result = self._run_one_migration_job(map_id, command)
+            result = self._run_all_pending_migration_jobs(command)
 
             out = {
                 **payload,
                 "component": "10_migPipeline",
                 "pipeline_status": result.get("status"),
                 "job_result": result,
+                "completed_jobs": result.get("completed_jobs", []),
+                "failed_jobs": result.get("failed_jobs", []),
+                "processed_jobs": result.get("processed_jobs", []),
                 "next_node": "13_finalSummary",
             }
             out.setdefault("history", []).append(
@@ -136,6 +118,8 @@ class NewType10MigPipeline(_BaseMigrationCommandTool):
     def _run_all_pending_migration_jobs(self, command: dict[str, Any]) -> dict[str, Any]:
         limit = max(1, int(getattr(self, "run_all_limit", None) or 1000))
         results: list[dict[str, Any]] = []
+        completed_jobs: list[dict[str, Any]] = []
+        failed_jobs: list[dict[str, Any]] = []
         seen: set[int] = set()
         for _ in range(limit):
             pending = self._list_pending(1)
@@ -148,6 +132,9 @@ class NewType10MigPipeline(_BaseMigrationCommandTool):
                     "run_mode": "all_pending",
                     "count": len(results),
                     "results": results,
+                    "processed_jobs": results,
+                    "completed_jobs": completed_jobs,
+                    "failed_jobs": failed_jobs,
                 }
             map_id = int(jobs[0]["map_id"])
             if map_id in seen:
@@ -158,30 +145,47 @@ class NewType10MigPipeline(_BaseMigrationCommandTool):
                     "run_mode": "all_pending",
                     "count": len(results),
                     "results": results,
+                    "processed_jobs": results,
+                    "completed_jobs": completed_jobs,
+                    "failed_jobs": failed_jobs,
                 }
             seen.add(map_id)
+            job = dict(jobs[0])
             result = self._run_one_migration_job(map_id, command)
-            results.append(result)
+            item = {
+                "job_type": "MIG",
+                "map_id": map_id,
+                "job": job,
+                "ok": bool(result.get("ok")),
+                "status": result.get("status"),
+                "message": result.get("message") or result.get("error") or "",
+                "result": result,
+            }
+            results.append(item)
+            if item["ok"]:
+                completed_jobs.append(item)
+            else:
+                failed_jobs.append(item)
             status = str(result.get("status") or "").upper()
             if status == "WAITING":
                 break
         return {
-            "ok": all(bool(item.get("ok")) for item in results) if results else True,
+            "ok": len(failed_jobs) == 0,
             "status": "DONE" if len(results) < limit else "LIMIT_REACHED",
             "message": f"Processed {len(results)} DB Migration job(s).",
             "run_mode": "all_pending",
             "count": len(results),
             "results": results,
+            "processed_jobs": results,
+            "completed_jobs": completed_jobs,
+            "failed_jobs": failed_jobs,
         }
 
     def _parse_newtype_command(self, payload: dict[str, Any]) -> dict[str, Any]:
-        command = self._parse_optional_json(getattr(self, "command_json", ""))
-        if not command:
-            command = {"action": "run_migration_job"}
-        selected = payload.get("selected_job") or {}
-        if not self._as_bool(command.get("run_all_pending")) and "map_id" not in command and selected.get("map_id") is not None:
-            command["map_id"] = selected.get("map_id")
+        command = self._parse_optional_json(payload.get("command_json"))
         command["action"] = "run_migration_job"
+        command["run_all_pending"] = True
+        command.pop("map_id", None)
         return command
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:

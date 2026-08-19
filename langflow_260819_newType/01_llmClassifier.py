@@ -10,10 +10,31 @@ from lfx.custom.custom_component.component import Component
 from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
 from lfx.schema.data import Data
 
-try:
-    from lfx.io import DataInput
-except Exception:
-    DataInput = MessageTextInput
+
+CLASSIFIER_PROMPT = """You are a SmartMigrate intent classifier. Return JSON only.
+
+Routes:
+- GENERAL_CHAT: normal conversation, explanation request, concept question, or non-operational help.
+- FAST_STATUS: fast DB status/control requests, status summary, counts, failure report, dashboard-like request, or a request to run/control one specific job by map_id/sql_id/row_id/priority/status.
+- LONG_RUNNING_JOB: run/execute/process ALL pending jobs for a domain. This route is only for full pending execution, for example all DB migration, all SQL conversion, all SQL tuning, or all SQL formatting.
+
+Important routing policy:
+- Single-job execution is NOT LONG_RUNNING_JOB.
+- If the user says one job, single job, this map_id, specific sql_id, priority N, only this, or similar, route FAST_STATUS.
+- FAST_STATUS may update status/priority/USE_YN so that a later full Long Job run includes only the intended target.
+- LONG_RUNNING_JOB never selects a single job. It always means run_all_pending=true for the selected domain.
+- If the user says "대기 작업 실행해줘" or "pending jobs run" without a specific ID, route LONG_RUNNING_JOB.
+
+Required JSON schema:
+{
+  "route": "GENERAL_CHAT|FAST_STATUS|LONG_RUNNING_JOB",
+  "task_type": "CHAT|STATUS|JOB_EXECUTION",
+  "expected_latency": "FAST|LONG",
+  "needs_pending_jobs": true,
+  "needs_llm_answer": false,
+  "reason": "short reason"
+}
+"""
 
 
 class NewType01LlmClassifier(Component):
@@ -33,20 +54,7 @@ class NewType01LlmClassifier(Component):
             name="classifier_prompt",
             display_name="Classifier Prompt",
             required=False,
-            value=(
-                "You are a SmartMigrate intent classifier. Return JSON only.\n"
-                "Routes:\n"
-                "- GENERAL_CHAT: normal conversation or explanation request.\n"
-                "- FAST_STATUS: status, summary, count, failure report, dashboard-like request.\n"
-                "- LONG_RUNNING_JOB: run/execute/process pending jobs, DB migration, SQL conversion.\n\n"
-                "Required JSON schema:\n"
-                "{\"route\":\"GENERAL_CHAT|FAST_STATUS|LONG_RUNNING_JOB\","
-                "\"task_type\":\"CHAT|STATUS|JOB_EXECUTION\","
-                "\"expected_latency\":\"FAST|LONG\","
-                "\"needs_pending_jobs\":true,"
-                "\"needs_llm_answer\":false,"
-                "\"reason\":\"short reason\"}"
-            ),
+            value=CLASSIFIER_PROMPT,
             info="System prompt for LLM classification. Keep it short; do not include migration/sql generation prompts.",
         ),
         StrInput(
@@ -131,7 +139,7 @@ class NewType01LlmClassifier(Component):
         if not model:
             raise ValueError("llm_model is required when classifier_mode=LLM")
 
-        system_prompt = str(getattr(self, "classifier_prompt", "") or "").strip()
+        system_prompt = str(getattr(self, "classifier_prompt", "") or CLASSIFIER_PROMPT).strip()
         user_prompt = (
             "Classify this user request for SmartMigrate routing.\n"
             f"User request:\n{text}\n\n"
@@ -199,30 +207,57 @@ class NewType01LlmClassifier(Component):
 
     def _defaults_for_route(self, route: str) -> dict[str, Any]:
         if route == "LONG_RUNNING_JOB":
-            return {"task_type": "JOB_EXECUTION", "expected_latency": "LONG", "needs_pending_jobs": True, "needs_llm_answer": False, "reason": ""}
+            return {
+                "task_type": "JOB_EXECUTION",
+                "expected_latency": "LONG",
+                "needs_pending_jobs": True,
+                "needs_llm_answer": False,
+                "reason": "",
+            }
         if route == "FAST_STATUS":
-            return {"task_type": "STATUS", "expected_latency": "FAST", "needs_pending_jobs": False, "needs_llm_answer": False, "reason": ""}
-        return {"task_type": "CHAT", "expected_latency": "FAST", "needs_pending_jobs": False, "needs_llm_answer": True, "reason": ""}
+            return {
+                "task_type": "STATUS",
+                "expected_latency": "FAST",
+                "needs_pending_jobs": False,
+                "needs_llm_answer": False,
+                "reason": "",
+            }
+        return {
+            "task_type": "CHAT",
+            "expected_latency": "FAST",
+            "needs_pending_jobs": False,
+            "needs_llm_answer": True,
+            "reason": "",
+        }
 
     def _classify_by_rule(self, text: str) -> dict[str, Any]:
         lowered = text.lower()
-        if re.search(r"(status|상태|현황|요약|몇 건|카운트|dashboard|fail|실패)", lowered):
+        if self._is_single_job_control(lowered):
             return {
                 "route": "FAST_STATUS",
                 "task_type": "STATUS",
                 "expected_latency": "FAST",
                 "needs_pending_jobs": False,
                 "needs_llm_answer": False,
-                "reason": "status/dashboard keyword",
+                "reason": "single-job execution/control belongs to fast status control flow",
             }
-        if re.search(r"(실행|run|start|처리|배치|pending|대기|job|작업|마이그레이션|migration|sql conversion|변환)", lowered):
+        if re.search(r"(status|상태|현황|요약|몇\s*건|건수|카운트|dashboard|fail|실패|조회|priority|우선순위|use_yn)", lowered):
+            return {
+                "route": "FAST_STATUS",
+                "task_type": "STATUS",
+                "expected_latency": "FAST",
+                "needs_pending_jobs": False,
+                "needs_llm_answer": False,
+                "reason": "status/dashboard/control keyword",
+            }
+        if self._is_all_pending_execution(lowered):
             return {
                 "route": "LONG_RUNNING_JOB",
                 "task_type": "JOB_EXECUTION",
                 "expected_latency": "LONG",
                 "needs_pending_jobs": True,
                 "needs_llm_answer": False,
-                "reason": "job execution keyword",
+                "reason": "all-pending execution request",
             }
         return {
             "route": "GENERAL_CHAT",
@@ -233,19 +268,21 @@ class NewType01LlmClassifier(Component):
             "reason": "general conversation",
         }
 
-    def _parse_payload(self, raw: Any) -> dict[str, Any]:
-        if isinstance(raw, Data):
-            return dict(raw.data or {})
-        if isinstance(raw, dict):
-            return dict(raw)
-        text = str(raw or "").strip()
-        if text.startswith("```"):
-            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
-            text = re.sub(r"\s*```$", "", text)
-        parsed = json.loads(text) if text else {}
-        if not isinstance(parsed, dict):
-            raise ValueError("payload_json must be a JSON object")
-        return parsed
+    def _is_single_job_control(self, text: str) -> bool:
+        single_terms = r"(단건|한\s*건|1\s*건|하나만|하나\s*만|특정|지정|only\s+this|single|one\s+job|this\s+job)"
+        id_terms = r"(map_id|mapid|sql_id|sqlid|row_id|rowid|id\s*[=:]?\s*\d+|map\s*[=:]?\s*\d+)"
+        control_terms = r"(실행|run|start|처리|priority|우선순위|status|상태|use_yn|대상)"
+        if re.search(single_terms, text, flags=re.I):
+            return True
+        return bool(re.search(id_terms, text, flags=re.I) and re.search(control_terms, text, flags=re.I))
+
+    def _is_all_pending_execution(self, text: str) -> bool:
+        all_terms = r"(전체|모든|전부|끝까지|일괄|배치|all|every|all\s+pending|run\s+all|process\s+all)"
+        domain_terms = r"(db\s*migration|migration|마이그레이션|mig|sql\s*conversion|sql\s*tuning|튜닝|sql\s*formatting|포맷|포매팅|pending|대기\s*작업)"
+        execution_terms = r"(실행|진행|처리|run|start|process)"
+        if re.search(all_terms, text, flags=re.I) and re.search(domain_terms, text, flags=re.I):
+            return True
+        return bool(re.search(r"(대기\s*작업|pending\s*jobs?)", text, flags=re.I) and re.search(execution_terms, text, flags=re.I))
 
     def _secret_to_str(self, value: Any) -> str:
         if value is None:

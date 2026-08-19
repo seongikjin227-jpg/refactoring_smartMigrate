@@ -56,7 +56,7 @@ class NewType06GetPendingJobs(Component):
                         "migration_total": len(jobs.get("migration_jobs", [])),
                         "sql_total": len(jobs.get("sql_jobs", [])),
                     },
-                    "next_node": "07_prioritySelector",
+                    "next_node": "08_longJobRouter",
                 }
             )
             payload.setdefault("history", []).append(

@@ -26,28 +26,42 @@ class NewType11SqlPipelineStub(Component):
     def run_stub(self) -> Data:
         try:
             payload = self._parse_payload(getattr(self, "payload_json", ""))
-            if str(payload.get("job_route") or "").upper() != "SQL":
+            if str(payload.get("job_route") or "").upper() != "SQL_CONVERSION":
                 payload.update({"component": "11_sqlPipelineStub", "pipeline_status": "SKIPPED", "next_node": "13_finalSummary"})
                 return Data(data=payload)
-            job = payload.get("selected_job") or {}
+            jobs = list(((payload.get("pending_jobs") or {}).get("sql_conversion_jobs")) or ((payload.get("pending_jobs") or {}).get("sql_jobs")) or [])
+            processed = [
+                {
+                    "job_type": "SQL_CONVERSION",
+                    "job": job,
+                    "ok": True,
+                    "status": "POC_PASS",
+                    "message": "SQL conversion branch selected. Real LLM/SQL work is intentionally skipped.",
+                }
+                for job in jobs
+            ]
             result = {
-                "job_type": "SQL",
-                "row_id": job.get("row_id"),
-                "space_nm": job.get("space_nm"),
-                "sql_id": job.get("sql_id"),
+                "ok": True,
                 "status": "POC_PASS",
-                "executed_steps": ["load_sql_job", "branch_check", "stub_sql_conversion_pipeline"],
-                "message": "SQL conversion branch selected. Real LLM/SQL work is intentionally skipped.",
+                "run_mode": "all_pending",
+                "count": len(processed),
+                "processed_jobs": processed,
+                "completed_jobs": processed,
+                "failed_jobs": [],
+                "message": "SQL conversion all-pending branch selected. Real LLM/SQL work is intentionally skipped.",
             }
             payload.update(
                 {
                     "component": "11_sqlPipelineStub",
                     "pipeline_status": "POC_PASS",
                     "job_result": result,
-                    "next_node": "12_nextIncompleteLoop",
+                    "processed_jobs": processed,
+                    "completed_jobs": processed,
+                    "failed_jobs": [],
+                    "next_node": "13_finalSummary",
                 }
             )
-            payload.setdefault("history", []).append({"step": "sql_stub", "message": f"sql_id={job.get('sql_id')} POC_PASS"})
+            payload.setdefault("history", []).append({"step": "sql_stub", "message": f"processed={len(processed)} POC_PASS"})
             self.status = payload
             return Data(data=payload)
         except Exception as exc:

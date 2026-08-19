@@ -36,30 +36,70 @@ class NewType13FinalSummary(Component):
             self.status = result
             return Data(data=result)
         except Exception as exc:
-            result = {"ok": False, "component": "13_finalSummary", "error": str(exc), "answer_text": f"POC flow failed: {exc}"}
+            result = {
+                "ok": False,
+                "component": "13_finalSummary",
+                "error": str(exc),
+                "answer_text": f"POC flow failed: {exc}",
+            }
             self.status = result
             return Data(data=result)
 
     def _answer_text(self, payload: dict[str, Any]) -> str:
         if not payload.get("ok", True):
             return f"실패: {payload.get('error') or 'unknown error'}"
-        intent = (payload.get("intent") or {}).get("action")
-        if intent and intent != "RUN_PENDING_JOBS":
-            return f"작업 실행 흐름이 아닙니다. intent={intent}, next={payload.get('next_node')}"
-        selected = payload.get("selected_job") or {}
-        result = payload.get("job_result") or {}
-        if not selected:
-            summary = payload.get("pending_summary") or {}
-            return f"대기 작업이 없습니다. MIG={summary.get('migration_total', 0)}, SQL={summary.get('sql_total', 0)}"
-        return (
-            f"POC 완료: route={payload.get('job_route') or payload.get('route')}, status={result.get('status') or payload.get('pipeline_status')}. "
-            f"selected_job={self._job_label(selected)}, loop={payload.get('cycle_no', 0)}/{payload.get('max_poc_cycles', 1)}"
-        )
 
-    def _job_label(self, job: dict[str, Any]) -> str:
-        if str(job.get("job_type") or "").upper() == "MIG":
-            return f"MIG map_id={job.get('map_id')}"
-        return f"SQL space_nm={job.get('space_nm') or '-'} sql_id={job.get('sql_id') or job.get('row_id')}"
+        job_result = payload.get("job_result") or {}
+        if job_result:
+            return self._pipeline_summary(payload, job_result)
+
+        route = payload.get("job_route") or payload.get("route")
+        if route in {"NO_RUNNABLE_JOB", "NEED_MORE_INFO"}:
+            summary = payload.get("pending_summary") or {}
+            reason = payload.get("routing_reason") or "실행 가능한 작업을 찾지 못했습니다."
+            return f"{reason} 현재 대기 작업: MIG={summary.get('migration_total', 0)}, SQL={summary.get('sql_total', 0)}"
+
+        if route in {"SQL_TUNING", "SQL_FORMATTING"}:
+            return f"{route} 전체 실행 플로우는 아직 신규 개발 대상입니다. 라우팅까지 완료되었습니다."
+
+        return f"POC 라우팅 완료: route={route}, next={payload.get('next_node')}"
+
+    def _pipeline_summary(self, payload: dict[str, Any], job_result: dict[str, Any]) -> str:
+        processed = list(job_result.get("processed_jobs") or job_result.get("results") or [])
+        completed = list(job_result.get("completed_jobs") or [])
+        failed = list(job_result.get("failed_jobs") or [])
+        route = payload.get("job_route") or "MIG"
+        status = job_result.get("status") or payload.get("pipeline_status")
+
+        lines = [
+            f"{route} 전체 작업 실행 완료",
+            f"- status: {status}",
+            f"- processed: {len(processed)}",
+            f"- success: {len(completed)}",
+            f"- failed: {len(failed)}",
+        ]
+
+        if processed:
+            lines.append("- job list:")
+            for item in processed[:30]:
+                lines.append(f"  - {self._job_label(item)}: {item.get('status') or '-'}")
+            if len(processed) > 30:
+                lines.append(f"  - ... and {len(processed) - 30} more")
+
+        if failed:
+            lines.append("- failed detail:")
+            for item in failed[:10]:
+                message = str(item.get("message") or item.get("error") or "").strip()
+                lines.append(f"  - {self._job_label(item)}: {message or item.get('status') or 'failed'}")
+
+        return "\n".join(lines)
+
+    def _job_label(self, item: dict[str, Any]) -> str:
+        job = item.get("job") if isinstance(item.get("job"), dict) else item
+        job_type = str(item.get("job_type") or job.get("job_type") or "").upper()
+        if job_type == "MIG" or item.get("map_id") is not None or job.get("map_id") is not None:
+            return f"MIG map_id={item.get('map_id') or job.get('map_id')}"
+        return f"SQL space_nm={job.get('space_nm') or '-'} sql_id={job.get('sql_id') or job.get('row_id') or '-'}"
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):
