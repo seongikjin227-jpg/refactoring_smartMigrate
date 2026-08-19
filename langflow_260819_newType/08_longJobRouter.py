@@ -245,14 +245,8 @@ class NewType08LongJobRouter(Component):
         return decision
 
     def _next_node(self, route: str) -> str:
-        if route == "MIG":
-            return "09_dbMigrationAgent"
-        if route == "SQL_CONVERSION":
-            return "11_sqlConversionAgent"
-        if route == "SQL_TUNING":
-            return "14_sqlTuningAgent"
-        if route == "SQL_FORMATTING":
-            return "16_sqlFormattingAgent"
+        if route in {"MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"}:
+            return "09_executionPlanSummary"
         return "13_finalSummary"
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:

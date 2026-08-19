@@ -41,7 +41,7 @@ class NewType10MigPipeline(_BaseMigrationCommandTool, Component):
             name="payload_json",
             display_name="Payload JSON",
             required=False,
-            info="Payload from 09 DB Migration Agent. Long Job always runs all pending DB Migration jobs.",
+            info="Payload from 08 Long Job Router MIG output. Long Job always runs all pending DB Migration jobs.",
         ),
         IntInput(name="run_all_limit", display_name="Run All Limit", value=1000, required=False),
         StrInput(name="db_host", display_name="DB Host", required=True),

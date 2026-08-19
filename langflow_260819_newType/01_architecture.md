@@ -3,11 +3,11 @@
 ## 핵심 정책
 
 - Long Job은 단건 실행을 하지 않는다.
-- Long Job은 DB Migration, SQL Conversion, SQL Tuning, SQL Formatting 중 선택된 도메인의 전체 pending 작업을 실행한다.
-- 단건 작업 대상 지정, 바로 다음 실행 대상 지정, priority/status/USE_YN 변경은 Fast Status의 `Status Change`로 처리한다.
-- 사용자가 수정 SQL을 입력하면 Fast Status의 `Correct SQL Input`으로 보내고, 운영 구현에서는 `USER_EDITED='Y'`와 입력 SQL 저장을 수행한다.
-- `07 Priority Selector`와 `12 Next Incomplete Loop`는 제거한다.
-- 전체 반복 처리는 Langflow loop 노드가 아니라 각 Pipeline 내부에서 수행한다.
+- Long Job은 선택된 도메인의 전체 pending 작업을 실행한다.
+- 각 도메인별 Agent는 제거한다. 실행 기능이 전체 pending 실행 하나라면 Agent가 별도 판단할 일이 없다.
+- 실행 전에 `09 Execution Plan Summary`가 어떤 도메인 작업을 몇 건 실행할지 요약한다.
+- `09 Execution Plan Summary.Notice`는 Chat Output으로 연결하고, `09 Execution Plan Summary.Payload`는 실제 Pipeline으로 연결한다.
+- 단건 대상 지정, priority/status/USE_YN 변경은 Fast Status의 `Status Change`로 처리한다.
 
 ## 전체 흐름
 
@@ -27,33 +27,32 @@ flowchart TD
     F --> G["06 Get Pending Jobs"]
     G --> H{"08 Long Job LLM Router"}
 
-    H -->|mig_job| I["09 DB Migration Agent"]
-    I --> I2["10 MIG Pipeline"]
+    H -->|mig_job| P["09 Execution Plan Summary"]
+    H -->|sql_conversion_job| P
+    H -->|sql_tuning_job| P
+    H -->|sql_formatting_job| P
 
-    H -->|sql_conversion_job| J["11 SQL Conversion Agent"]
-    J --> J2["12 SQL Conversion Pipeline"]
+    P -->|notice| OUT["Chat Output"]
+    P -->|payload / MIG| M["10 MIG Pipeline"]
+    P -->|payload / SQL_CONVERSION| C2["12 SQL Conversion Pipeline"]
+    P -->|payload / SQL_TUNING| T2["15 SQL Tuning Pipeline"]
+    P -->|payload / SQL_FORMATTING| F2["17 SQL Formatting Pipeline"]
 
-    H -->|sql_tuning_job| K["14 SQL Tuning Agent"]
-    K --> K2["15 SQL Tuning Pipeline"]
+    H -->|prerequisite_blocked| S1["13 Final Summary"]
+    H -->|no_runnable_job| S2["13 Final Summary"]
 
-    H -->|sql_formatting_job| L["16 SQL Formatting Agent"]
-    L --> L2["17 SQL Formatting Pipeline"]
+    M --> S3["13 Final Summary"]
+    C2 --> S3
+    T2 --> S3
+    F2 --> S3
 
-    H -->|prerequisite_blocked| M["13 Final Summary"]
-    H -->|no_runnable_job| N["13 Final Summary"]
-
-    I2 --> Z1["13 Final Summary"]
-    J2 --> Z1
-    K2 --> Z1
-    L2 --> Z1
-
-    D --> OUT["Chat Output"]
+    D --> OUT
     E1 --> OUT
     E2 --> OUT
     E3 --> OUT
-    M --> OUT
-    N --> OUT
-    Z1 --> OUT
+    S1 --> OUT
+    S2 --> OUT
+    S3 --> OUT
 ```
 
 ## 포트 연결
@@ -70,58 +69,46 @@ flowchart TD
 | 8 | `02 Conditional Router` | `Long Job` | `05 Long Task Notice` | `payload_json` |
 | 9 | `05 Long Task Notice` | `payload` | `06 Get Pending Jobs` | `payload_json` |
 | 10 | `06 Get Pending Jobs` | `payload` | `08 Long Job LLM Router` | `payload_json` |
-| 11 | `08 Long Job LLM Router` | `MIG Job` | `09 DB Migration Agent` | `payload_json` |
-| 12 | `09 DB Migration Agent` | `Payload` | `10 MIG Pipeline` | `payload_json` |
-| 13 | `10 MIG Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
-| 14 | `08 Long Job LLM Router` | `SQL Conversion Job` | `11 SQL Conversion Agent` | `payload_json` |
-| 15 | `11 SQL Conversion Agent` | `Payload` | `12 SQL Conversion Pipeline` | `payload_json` |
-| 16 | `12 SQL Conversion Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
-| 17 | `08 Long Job LLM Router` | `SQL Tuning Job` | `14 SQL Tuning Agent` | `payload_json` |
-| 18 | `14 SQL Tuning Agent` | `Payload` | `15 SQL Tuning Pipeline` | `payload_json` |
-| 19 | `15 SQL Tuning Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
-| 20 | `08 Long Job LLM Router` | `SQL Formatting Job` | `16 SQL Formatting Agent` | `payload_json` |
-| 21 | `16 SQL Formatting Agent` | `Payload` | `17 SQL Formatting Pipeline` | `payload_json` |
-| 22 | `17 SQL Formatting Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
-| 23 | `08 Long Job LLM Router` | `Prerequisite Blocked` | `13 Final Summary` | `payload_json` |
-| 24 | `08 Long Job LLM Router` | `No Runnable Job` | `13 Final Summary` | `payload_json` |
-| 25 | 최종 응답 노드 | `answer_text` | Chat Output | Message/Text |
-
-## Fast Status 세부 분기
-
-| Route | 컴포넌트 | 역할 |
-|---|---|---|
-| `DASHBOARD` | `04_dashboard.py` | 상태/현황/실패/대기 작업 조회 |
-| `STATUS_CHANGE` | `04_statusChange.py` | 단건 작업 대상 지정, priority/status/USE_YN 변경 |
-| `CORRECT_SQL_INPUT` | `04_correctSqlInput.py` | USER_EDITED='Y' 처리 및 수정 SQL 저장 |
+| 11 | `08 Long Job LLM Router` | runnable job output | `09 Execution Plan Summary` | `payload_json` |
+| 12 | `09 Execution Plan Summary` | `Notice` | Chat Output | Message/Text |
+| 13 | `09 Execution Plan Summary` | `Payload` | selected Pipeline | `payload_json` |
+| 14 | `10 MIG Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
+| 15 | `12 SQL Conversion Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
+| 16 | `15 SQL Tuning Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
+| 17 | `17 SQL Formatting Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
+| 18 | `08 Long Job LLM Router` | `Prerequisite Blocked` | `13 Final Summary` | `payload_json` |
+| 19 | `08 Long Job LLM Router` | `No Runnable Job` | `13 Final Summary` | `payload_json` |
+| 20 | `13 Final Summary` | `answer_text` | Chat Output | Message/Text |
 
 ## Long Job 세부 분기
 
-| Route | Agent | Pipeline | 상태 |
-|---|---|---|---|
-| `MIG` | `09_dbMigrationAgent.py` | `10_migPipeline.py` | 기존 `run_migration_job` 연동 |
-| `SQL_CONVERSION` | `11_sqlConversionAgent.py` | `12_sqlConversionPipeline.py` | 빈 컴포넌트 |
-| `SQL_TUNING` | `14_sqlTuningAgent.py` | `15_sqlTuningPipeline.py` | 빈 컴포넌트 |
-| `SQL_FORMATTING` | `16_sqlFormattingAgent.py` | `17_sqlFormattingPipeline.py` | 빈 컴포넌트 |
-| `PREREQUISITE_BLOCKED` | - | `13_finalSummary.py` | 선행 작업 안내 |
-| `NO_RUNNABLE_JOB` | - | `13_finalSummary.py` | 실행 대상 없음 안내 |
+| Route | Pre-run Summary | Pipeline |
+|---|---|---|
+| `MIG` | `09_executionPlanSummary.py` | `10_migPipeline.py` |
+| `SQL_CONVERSION` | `09_executionPlanSummary.py` | `12_sqlConversionPipeline.py` |
+| `SQL_TUNING` | `09_executionPlanSummary.py` | `15_sqlTuningPipeline.py` |
+| `SQL_FORMATTING` | `09_executionPlanSummary.py` | `17_sqlFormattingPipeline.py` |
 
-## 선행 작업 차단 정책
+## 실행 전 요약
 
-```text
-SQL_CONVERSION 요청 전에 MIG pending이 있으면 PREREQUISITE_BLOCKED
-SQL_TUNING 요청 전에 MIG 또는 SQL_CONVERSION pending이 있으면 PREREQUISITE_BLOCKED
-SQL_FORMATTING 요청 전에 MIG, SQL_CONVERSION, SQL_TUNING pending이 있으면 PREREQUISITE_BLOCKED
-```
-
-예시:
+`09_executionPlanSummary.py`는 실제 실행 전 사용자에게 아래 정보를 먼저 보여준다.
 
 ```text
-사용자: SQL Conversion 진행해줘
-상태: MIG pending 존재
--> 08 Long Job LLM Router.Prerequisite Blocked
--> 13 Final Summary
--> "DB Migration 작업이 아직 남아 있습니다. SQL_CONVERSION 작업을 진행하기 전에 DB Migration 전체 작업을 먼저 진행해주세요."
+실행 도메인
+실행 예정 작업 수
+실행 예정 job list
 ```
+
+이 컴포넌트의 `Notice` 출력은 Chat Output으로 연결한다. `Payload` 출력은 실제 Pipeline으로 연결한다.
+
+## 제거된 컴포넌트
+
+- `07_prioritySelector.py`
+- `09_dbMigrationAgent.py`
+- `11_sqlConversionAgent.py`
+- `14_sqlTuningAgent.py`
+- `16_sqlFormattingAgent.py`
+- `12_nextIncompleteLoop.py`
 
 ## Pipeline 출력 계약
 
