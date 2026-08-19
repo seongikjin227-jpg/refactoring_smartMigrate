@@ -27,21 +27,11 @@ class NewType13FinalSummary(Component):
         try:
             payload = self._parse_payload(getattr(self, "payload_json", ""))
             answer = self._answer_text(payload)
-            result = {
-                **payload,
-                "component": "13_finalSummary",
-                "answer_text": answer,
-                "final": True,
-            }
+            result = {**payload, "component": "13_finalSummary", "answer_text": answer, "final": True}
             self.status = result
             return Data(data=result)
         except Exception as exc:
-            result = {
-                "ok": False,
-                "component": "13_finalSummary",
-                "error": str(exc),
-                "answer_text": f"POC flow failed: {exc}",
-            }
+            result = {"ok": False, "component": "13_finalSummary", "error": str(exc), "answer_text": f"POC flow failed: {exc}"}
             self.status = result
             return Data(data=result)
 
@@ -54,15 +44,40 @@ class NewType13FinalSummary(Component):
             return self._pipeline_summary(payload, job_result)
 
         route = payload.get("job_route") or payload.get("route")
-        if route in {"NO_RUNNABLE_JOB", "NEED_MORE_INFO"}:
+        if route == "PREREQUISITE_BLOCKED":
+            return self._blocked_summary(payload)
+        if route == "NO_RUNNABLE_JOB":
             summary = payload.get("pending_summary") or {}
-            reason = payload.get("routing_reason") or "실행 가능한 작업을 찾지 못했습니다."
-            return f"{reason} 현재 대기 작업: MIG={summary.get('migration_total', 0)}, SQL={summary.get('sql_total', 0)}"
-
+            reason = payload.get("routing_reason") or "실행 가능한 pending 작업이 없습니다."
+            return (
+                f"{reason} 현재 대기 작업: "
+                f"MIG={summary.get('migration_total', 0)}, "
+                f"SQL_CONVERSION={summary.get('sql_conversion_total', summary.get('sql_total', 0))}, "
+                f"SQL_TUNING={summary.get('sql_tuning_total', 0)}, "
+                f"SQL_FORMATTING={summary.get('sql_formatting_total', 0)}"
+            )
         if route in {"SQL_TUNING", "SQL_FORMATTING"}:
-            return f"{route} 전체 실행 플로우는 아직 신규 개발 대상입니다. 라우팅까지 완료되었습니다."
-
+            return f"{route} 전체 실행 Pipeline은 아직 신규 개발 대상입니다. 라우팅까지 완료되었습니다."
         return f"POC 라우팅 완료: route={route}, next={payload.get('next_node')}"
+
+    def _blocked_summary(self, payload: dict[str, Any]) -> str:
+        blocker = payload.get("blocker_route") or "선행"
+        requested = self._requested_label_from_reason(payload.get("routing_reason") or "")
+        summary = payload.get("pending_summary") or {}
+        if blocker == "MIG":
+            return (
+                "DB Migration 작업이 아직 남아 있습니다. "
+                f"{requested} 작업을 진행하기 전에 DB Migration 전체 작업을 먼저 진행해주세요. "
+                f"현재 MIG 대기 작업 수: {summary.get('migration_total', 0)}"
+            )
+        return (
+            f"{blocker} 선행 작업이 아직 남아 있습니다. "
+            f"{requested} 작업을 진행하기 전에 선행 작업을 먼저 진행해주세요."
+        )
+
+    def _requested_label_from_reason(self, reason: str) -> str:
+        match = re.search(r"(SQL_CONVERSION|SQL_TUNING|SQL_FORMATTING|MIG)", reason or "")
+        return match.group(1) if match else "요청한"
 
     def _pipeline_summary(self, payload: dict[str, Any], job_result: dict[str, Any]) -> str:
         processed = list(job_result.get("processed_jobs") or job_result.get("results") or [])
@@ -70,7 +85,6 @@ class NewType13FinalSummary(Component):
         failed = list(job_result.get("failed_jobs") or [])
         route = payload.get("job_route") or "MIG"
         status = job_result.get("status") or payload.get("pipeline_status")
-
         lines = [
             f"{route} 전체 작업 실행 완료",
             f"- status: {status}",
@@ -78,20 +92,17 @@ class NewType13FinalSummary(Component):
             f"- success: {len(completed)}",
             f"- failed: {len(failed)}",
         ]
-
         if processed:
             lines.append("- job list:")
             for item in processed[:30]:
                 lines.append(f"  - {self._job_label(item)}: {item.get('status') or '-'}")
             if len(processed) > 30:
                 lines.append(f"  - ... and {len(processed) - 30} more")
-
         if failed:
             lines.append("- failed detail:")
             for item in failed[:10]:
                 message = str(item.get("message") or item.get("error") or "").strip()
                 lines.append(f"  - {self._job_label(item)}: {message or item.get('status') or 'failed'}")
-
         return "\n".join(lines)
 
     def _job_label(self, item: dict[str, Any]) -> str:

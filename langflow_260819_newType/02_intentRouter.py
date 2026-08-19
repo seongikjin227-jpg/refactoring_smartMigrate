@@ -43,7 +43,7 @@ class NewType02IntentRouter(Component):
             route = str(payload.get("route") or (payload.get("classification") or {}).get("route") or "GENERAL_CHAT").upper()
             next_node = {
                 "GENERAL_CHAT": "03_generalChatResponder",
-                "FAST_STATUS": "04_fastStatusResponder",
+                "FAST_STATUS": "04_fastStatusRouter",
                 "LONG_RUNNING_JOB": "05_longTaskNotice",
             }.get(route, "03_generalChatResponder")
             if route != expected_route:

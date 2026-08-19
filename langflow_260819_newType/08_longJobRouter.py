@@ -16,54 +16,43 @@ except Exception:
     DataInput = MessageTextInput
 
 
-DEFAULT_ROUTING_PROMPT = """You are a Langflow long-running job router.
+DEFAULT_ROUTING_PROMPT = """You are a SmartMigrate long-running job router. Return JSON only.
 
-Decide which pipeline should handle the user's request by looking at BOTH:
-1. user_request
-2. pending_jobs
+Long Job never runs a single job. It runs all pending jobs for one domain.
 
-Return JSON only:
+Routes:
+- MIG: run all pending DB Migration jobs.
+- SQL_CONVERSION: run all pending SQL Conversion jobs.
+- SQL_TUNING: run all pending SQL Tuning jobs.
+- SQL_FORMATTING: run all pending SQL Formatting jobs.
+- PREREQUISITE_BLOCKED: user requested a later phase but earlier pending work remains.
+- NO_RUNNABLE_JOB: no runnable pending work exists for the request.
+
+Prerequisite rules:
+- SQL_CONVERSION requires no pending MIG jobs.
+- SQL_TUNING requires no pending MIG or SQL_CONVERSION jobs.
+- SQL_FORMATTING requires no pending MIG, SQL_CONVERSION, or SQL_TUNING jobs.
+
+Return JSON:
 {
-  "job_route": "MIG|SQL_CONVERSION|SQL_TUNING|SQL_FORMATTING|NO_RUNNABLE_JOB|NEED_MORE_INFO",
-  "selected_job": {},
+  "job_route": "MIG|SQL_CONVERSION|SQL_TUNING|SQL_FORMATTING|PREREQUISITE_BLOCKED|NO_RUNNABLE_JOB",
   "run_all_pending": true,
+  "blocker_route": "",
   "reason": "short reason"
 }
-
-Rules:
-- MIG means DB migration work.
-- SQL_CONVERSION means SQL conversion or SQL migration query conversion work.
-- SQL_TUNING means performance tuning work.
-- SQL_FORMATTING means SQL formatting/style work.
-- Long-running execution always means running all pending jobs for the selected domain.
-- For MIG, SQL_CONVERSION, SQL_TUNING, and SQL_FORMATTING, set run_all_pending=true.
-- If no matching pending job exists, use NO_RUNNABLE_JOB.
-- If the request is too ambiguous and pending jobs do not make the target clear, use NEED_MORE_INFO.
-- selected_job should be {} because single-job execution belongs to the Fast Status flow, not Long Job.
 """
 
 
 class NewType08LongJobRouter(Component):
     display_name = "08 Long Job LLM Router"
-    description = "Routes long-running work by combining user request and pending job context."
+    description = "Routes all-pending long jobs and blocks later phases when prerequisites remain."
     name = "NewType08LongJobRouter"
     icon = "Route"
 
     inputs = [
         DataInput(name="payload_json", display_name="Payload JSON", required=True),
-        MessageTextInput(
-            name="routing_prompt",
-            display_name="Routing Prompt",
-            value=DEFAULT_ROUTING_PROMPT,
-            required=True,
-        ),
-        StrInput(
-            name="router_mode",
-            display_name="Router Mode",
-            value="LLM",
-            required=False,
-            info="LLM uses OpenAI-compatible chat completions. RULE uses deterministic fallback routing.",
-        ),
+        MessageTextInput(name="routing_prompt", display_name="Routing Prompt", value=DEFAULT_ROUTING_PROMPT, required=False),
+        StrInput(name="router_mode", display_name="Router Mode", value="LLM", required=False),
         StrInput(name="llm_base_url", display_name="LLM Base URL", value="http://localhost:11434/v1", required=False),
         SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=False),
         StrInput(name="llm_model", display_name="LLM Model", value="gpt-4o-mini", required=False),
@@ -76,8 +65,8 @@ class NewType08LongJobRouter(Component):
         Output(display_name="SQL Conversion Job", name="sql_conversion_job", method="sql_conversion_response", group_outputs=True),
         Output(display_name="SQL Tuning Job", name="sql_tuning_job", method="sql_tuning_response", group_outputs=True),
         Output(display_name="SQL Formatting Job", name="sql_formatting_job", method="sql_formatting_response", group_outputs=True),
+        Output(display_name="Prerequisite Blocked", name="prerequisite_blocked", method="prerequisite_blocked_response", group_outputs=True),
         Output(display_name="No Runnable Job", name="no_runnable_job", method="no_runnable_response", group_outputs=True),
-        Output(display_name="Need More Info", name="need_more_info", method="need_more_info_response", group_outputs=True),
     ]
 
     def mig_response(self) -> Data:
@@ -92,11 +81,11 @@ class NewType08LongJobRouter(Component):
     def sql_formatting_response(self) -> Data:
         return self._route_output("SQL_FORMATTING", "sql_formatting_job")
 
+    def prerequisite_blocked_response(self) -> Data:
+        return self._route_output("PREREQUISITE_BLOCKED", "prerequisite_blocked")
+
     def no_runnable_response(self) -> Data:
         return self._route_output("NO_RUNNABLE_JOB", "no_runnable_job")
-
-    def need_more_info_response(self) -> Data:
-        return self._route_output("NEED_MORE_INFO", "need_more_info")
 
     def _route_output(self, expected_route: str, output_name: str) -> Data:
         try:
@@ -118,29 +107,26 @@ class NewType08LongJobRouter(Component):
             return cached
 
         payload = self._parse_payload(getattr(self, "payload_json", ""))
-        if not payload.get("should_execute", True):
-            decision = {
-                "job_route": "NO_RUNNABLE_JOB",
-                "selected_job": {},
-                "run_all_pending": False,
-                "reason": "Execution flag is false.",
-            }
+        decision = self._route_with_rules(payload)
+        if self._use_llm() and decision["job_route"] not in {"PREREQUISITE_BLOCKED", "NO_RUNNABLE_JOB"}:
+            llm_decision = self._route_with_llm(payload)
+            decision = self._normalize_decision(llm_decision, payload, fallback=decision)
         else:
-            decision = self._route_with_llm(payload) if self._use_llm() else self._route_with_rules(payload)
+            decision = self._normalize_decision(decision, payload)
 
-        decision = self._normalize_decision(decision, payload)
         routed = {
             **payload,
             "component": "08_longJobRouter",
             "job_route": decision["job_route"],
-            "selected_job": decision.get("selected_job") or {},
+            "selected_job": {},
             "run_all_pending": bool(decision.get("run_all_pending")),
+            "blocker_route": decision.get("blocker_route") or "",
             "routing_reason": decision.get("reason") or "",
         }
         routed.setdefault("history", []).append(
             {
                 "step": "long_job_route",
-                "message": f"job_route={routed['job_route']}, run_all_pending={routed['run_all_pending']}",
+                "message": f"job_route={routed['job_route']}, blocker={routed['blocker_route']}",
             }
         )
         self._cached_routed_payload = routed
@@ -149,17 +135,76 @@ class NewType08LongJobRouter(Component):
     def _use_llm(self) -> bool:
         return str(getattr(self, "router_mode", "LLM") or "LLM").strip().upper() == "LLM"
 
+    def _route_with_rules(self, payload: dict[str, Any]) -> dict[str, Any]:
+        requested = self._requested_route(str(payload.get("user_request") or payload.get("input") or ""))
+        jobs = payload.get("pending_jobs") or {}
+        counts = {
+            "MIG": len(jobs.get("migration_jobs") or []),
+            "SQL_CONVERSION": len(jobs.get("sql_conversion_jobs") or jobs.get("sql_jobs") or []),
+            "SQL_TUNING": len(jobs.get("sql_tuning_jobs") or []),
+            "SQL_FORMATTING": len(jobs.get("sql_formatting_jobs") or []),
+        }
+
+        if requested is None:
+            requested = self._first_available_route(counts)
+        if requested is None:
+            return self._decision("NO_RUNNABLE_JOB", False, "", "No runnable pending jobs found.")
+
+        blocker = self._blocking_route(requested, counts)
+        if blocker:
+            return self._decision(
+                "PREREQUISITE_BLOCKED",
+                False,
+                blocker,
+                f"{requested} cannot start because pending {blocker} jobs remain.",
+            )
+        if counts.get(requested, 0) <= 0:
+            return self._decision("NO_RUNNABLE_JOB", False, "", f"No pending {requested} jobs found.")
+        return self._decision(requested, True, "", f"Run all pending {requested} jobs.")
+
+    def _requested_route(self, text: str) -> str | None:
+        lowered = text.lower()
+        if re.search(r"(tuning|튜닝|성능|performance)", lowered):
+            return "SQL_TUNING"
+        if re.search(r"(format|formatting|포맷|포매팅|정렬)", lowered):
+            return "SQL_FORMATTING"
+        if re.search(r"(conversion|convert|변환|sql\s*conversion)", lowered):
+            return "SQL_CONVERSION"
+        if re.search(r"(migration|마이그레이션|mig|db)", lowered):
+            return "MIG"
+        return None
+
+    def _first_available_route(self, counts: dict[str, int]) -> str | None:
+        for route in ("MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"):
+            if counts.get(route, 0) > 0:
+                return route
+        return None
+
+    def _blocking_route(self, requested: str, counts: dict[str, int]) -> str:
+        order = ["MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"]
+        if requested not in order:
+            return ""
+        for route in order[: order.index(requested)]:
+            if counts.get(route, 0) > 0:
+                return route
+        return ""
+
+    def _decision(self, route: str, run_all: bool, blocker: str, reason: str) -> dict[str, Any]:
+        return {"job_route": route, "selected_job": {}, "run_all_pending": run_all, "blocker_route": blocker, "reason": reason}
+
     def _route_with_llm(self, payload: dict[str, Any]) -> dict[str, Any]:
-        user_request = payload.get("user_request") or payload.get("input") or ""
-        request_body = {
+        base_url = str(getattr(self, "llm_base_url", "") or "").rstrip("/")
+        if not base_url:
+            return self._route_with_rules(payload)
+        body = {
             "model": str(getattr(self, "llm_model", "") or "").strip(),
             "messages": [
-                {"role": "system", "content": str(getattr(self, "routing_prompt", DEFAULT_ROUTING_PROMPT) or DEFAULT_ROUTING_PROMPT)},
+                {"role": "system", "content": str(getattr(self, "routing_prompt", "") or DEFAULT_ROUTING_PROMPT)},
                 {
                     "role": "user",
                     "content": json.dumps(
                         {
-                            "user_request": user_request,
+                            "user_request": payload.get("user_request") or "",
                             "pending_jobs": payload.get("pending_jobs") or {},
                             "pending_summary": payload.get("pending_summary") or {},
                         },
@@ -170,13 +215,9 @@ class NewType08LongJobRouter(Component):
             "temperature": 0,
             "max_tokens": int(getattr(self, "llm_max_tokens", None) or 400),
         }
-        base_url = str(getattr(self, "llm_base_url", "") or "").rstrip("/")
-        if not base_url:
-            return self._route_with_rules(payload)
-
         request = urllib.request.Request(
             f"{base_url}/chat/completions",
-            data=json.dumps(request_body).encode("utf-8"),
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {self._secret_to_str(getattr(self, 'llm_api_key', None))}",
@@ -185,66 +226,33 @@ class NewType08LongJobRouter(Component):
         )
         try:
             with urllib.request.urlopen(request, timeout=int(getattr(self, "llm_timeout_seconds", None) or 30)) as response:
-                raw = json.loads(response.read().decode("utf-8"))
+                raw = json.loads(response.read().decode("utf-8", errors="ignore"))
         except (urllib.error.URLError, TimeoutError, ValueError):
             return self._route_with_rules(payload)
-
         content = (((raw.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
         return self._parse_json_object(content)
 
-    def _route_with_rules(self, payload: dict[str, Any]) -> dict[str, Any]:
-        text = str(payload.get("user_request") or payload.get("input") or "").lower()
-        jobs = payload.get("pending_jobs") or {}
-        migration_jobs = list(jobs.get("migration_jobs") or [])
-        conversion_jobs = list(jobs.get("sql_conversion_jobs") or jobs.get("sql_jobs") or [])
-        tuning_jobs = list(jobs.get("sql_tuning_jobs") or [])
-        formatting_jobs = list(jobs.get("sql_formatting_jobs") or jobs.get("formatting_jobs") or [])
-        if re.search(r"(tuning|튜닝|성능|performance)", text):
-            return self._decision("SQL_TUNING", tuning_jobs)
-        if re.search(r"(format|formatting|포맷|포매팅|정렬)", text):
-            return self._decision("SQL_FORMATTING", formatting_jobs)
-        if re.search(r"(conversion|convert|변환|sql)", text) and not re.search(r"(migration|마이그레이션|mig|db)", text):
-            return self._decision("SQL_CONVERSION", conversion_jobs)
-        if re.search(r"(migration|마이그레이션|mig|db|대기|pending|작업|실행|run|start|처리)", text):
-            if migration_jobs:
-                return self._decision("MIG", migration_jobs)
-            if conversion_jobs:
-                return self._decision("SQL_CONVERSION", conversion_jobs)
-
-        return {"job_route": "NO_RUNNABLE_JOB", "selected_job": {}, "run_all_pending": False, "reason": "No matching pending job found."}
-
-    def _decision(self, route: str, jobs: list[dict[str, Any]]) -> dict[str, Any]:
-        if not jobs:
-            return {"job_route": "NO_RUNNABLE_JOB", "selected_job": {}, "run_all_pending": False, "reason": f"No pending {route} jobs."}
-        return {"job_route": route, "selected_job": {}, "run_all_pending": True, "reason": f"Run all pending {route} jobs."}
-
-    def _normalize_decision(self, decision: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    def _normalize_decision(self, decision: dict[str, Any], payload: dict[str, Any], fallback: dict[str, Any] | None = None) -> dict[str, Any]:
         route = str(decision.get("job_route") or "").upper()
-        allowed = {"MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING", "NO_RUNNABLE_JOB", "NEED_MORE_INFO"}
-        route = route if route in allowed else "NEED_MORE_INFO"
-        selected = {}
-        run_all = bool(decision.get("run_all_pending"))
-
+        allowed = {"MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING", "PREREQUISITE_BLOCKED", "NO_RUNNABLE_JOB"}
+        if route not in allowed:
+            return fallback or self._route_with_rules(payload)
+        rules = self._route_with_rules(payload)
+        if rules["job_route"] in {"PREREQUISITE_BLOCKED", "NO_RUNNABLE_JOB"}:
+            return rules
         if route in {"MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"}:
-            selected = {}
-            run_all = True
-            fallback = self._route_with_rules(payload)
-            if fallback.get("job_route") == "NO_RUNNABLE_JOB":
-                route = "NO_RUNNABLE_JOB"
-                run_all = False
-
-        return {
-            "job_route": route,
-            "selected_job": selected,
-            "run_all_pending": run_all,
-            "reason": str(decision.get("reason") or ""),
-        }
+            return {**decision, "job_route": route, "run_all_pending": True, "selected_job": {}, "blocker_route": ""}
+        return decision
 
     def _next_node(self, route: str) -> str:
         if route == "MIG":
             return "09_dbMigrationAgent"
         if route == "SQL_CONVERSION":
-            return "11_sqlPipelineStub"
+            return "11_sqlConversionAgent"
+        if route == "SQL_TUNING":
+            return "14_sqlTuningAgent"
+        if route == "SQL_FORMATTING":
+            return "16_sqlFormattingAgent"
         return "13_finalSummary"
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:

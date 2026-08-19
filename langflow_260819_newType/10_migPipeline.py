@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from lfx.custom.custom_component.component import Component
 from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
 from lfx.schema.data import Data
 
@@ -29,7 +30,7 @@ def _load_base_migration_tool():
 _BaseMigrationCommandTool = _load_base_migration_tool()
 
 
-class NewType10MigPipeline(_BaseMigrationCommandTool):
+class NewType10MigPipeline(_BaseMigrationCommandTool, Component):
     display_name = "10 MIG Pipeline"
     description = "Runs all pending DB Migration jobs through run_migration_job in the new routed flow."
     name = "NewType10MigPipeline"
