@@ -70,8 +70,8 @@ class NewType08JobExecutionRouter(Component):
         StrInput(name="llm_base_url", display_name="LLM Base URL", value="https://api.openai.com/v1", required=False),
         SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=False),
         StrInput(name="llm_model", display_name="LLM Model", value="gpt-4.1-mini", required=False),
-        IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=500, required=False),
-        IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=30, required=False),
+        IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=1500, required=False),
+        IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=90, required=False),
     ]
 
     outputs = [
@@ -242,7 +242,7 @@ class NewType08JobExecutionRouter(Component):
                 },
             ],
             "temperature": 0,
-            "max_tokens": int(getattr(self, "llm_max_tokens", None) or 500),
+            "max_tokens": int(getattr(self, "llm_max_tokens", None) or 1500),
         }
         url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
         request = urllib.request.Request(
@@ -251,7 +251,7 @@ class NewType08JobExecutionRouter(Component):
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=int(getattr(self, "llm_timeout_seconds", None) or 30)) as response:
+        with urllib.request.urlopen(request, timeout=int(getattr(self, "llm_timeout_seconds", None) or 90)) as response:
             raw = json.loads(response.read().decode("utf-8", errors="ignore"))
         content = (((raw.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
         return self._parse_json_object(content)

@@ -56,8 +56,8 @@ class NewType04ManagementRouter(Component):
         StrInput(name="llm_base_url", display_name="LLM Base URL", value="https://api.openai.com/v1", required=False),
         SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=True),
         StrInput(name="llm_model", display_name="LLM Model", value="gpt-4.1-mini", required=True),
-        IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=400, required=False),
-        IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=30, required=False),
+        IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=1200, required=False),
+        IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=90, required=False),
     ]
 
     outputs = [
@@ -136,7 +136,7 @@ class NewType04ManagementRouter(Component):
                 {"role": "user", "content": json.dumps({"user_request": payload.get("user_request") or ""}, ensure_ascii=False)},
             ],
             "temperature": 0,
-            "max_tokens": int(getattr(self, "llm_max_tokens", None) or 400),
+            "max_tokens": int(getattr(self, "llm_max_tokens", None) or 1200),
         }
         url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
         request = urllib.request.Request(
@@ -146,7 +146,7 @@ class NewType04ManagementRouter(Component):
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=int(getattr(self, "llm_timeout_seconds", None) or 30)) as response:
+            with urllib.request.urlopen(request, timeout=int(getattr(self, "llm_timeout_seconds", None) or 90)) as response:
                 raw = json.loads(response.read().decode("utf-8", errors="ignore"))
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="ignore")

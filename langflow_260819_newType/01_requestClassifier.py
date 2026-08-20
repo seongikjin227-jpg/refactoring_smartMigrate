@@ -49,8 +49,8 @@ class NewType01RequestClassifier(Component):
         StrInput(name="llm_base_url", display_name="LLM Base URL", value="https://api.openai.com/v1", required=False),
         SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=True),
         StrInput(name="llm_model", display_name="LLM Model", value="gpt-4.1-mini", required=True),
-        IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=512, required=False),
-        IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=30, required=False),
+        IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=1536, required=False),
+        IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=90, required=False),
     ]
 
     outputs = [Output(display_name="Payload", name="payload", method="classify")]
@@ -110,7 +110,7 @@ class NewType01RequestClassifier(Component):
                 {"role": "user", "content": f"사용자 요청:\n{text}\n\nJSON만 반환하세요."},
             ],
             "temperature": 0,
-            "max_tokens": int(getattr(self, "llm_max_tokens", None) or 512),
+            "max_tokens": int(getattr(self, "llm_max_tokens", None) or 1536),
         }
         url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
         req = urllib.request.Request(
@@ -120,7 +120,7 @@ class NewType01RequestClassifier(Component):
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=int(getattr(self, "llm_timeout_seconds", None) or 30)) as resp:
+            with urllib.request.urlopen(req, timeout=int(getattr(self, "llm_timeout_seconds", None) or 90)) as resp:
                 raw = json.loads(resp.read().decode("utf-8", errors="ignore"))
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="ignore")
