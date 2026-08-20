@@ -17,7 +17,7 @@ except Exception:
 
 class NewType04Dashboard(Component):
     display_name = "04 Dashboard"
-    description = "POC dashboard/status query branch."
+    description = "Dashboard/query branch that formats dashboard payload as a chat message."
     name = "NewType04Dashboard"
     icon = "Gauge"
 
@@ -26,10 +26,38 @@ class NewType04Dashboard(Component):
 
     def run(self) -> Message:
         payload = self._parse_payload(getattr(self, "payload_json", ""))
-        answer = "Dashboard 조회 플로우로 분기되었습니다. POC에서는 실제 DB 조회 없이 라우팅 결과만 반환합니다."
+        answer = self._build_answer(payload)
         result = {**payload, "component": "04_dashboard", "answer_text": answer, "final": True}
         self.status = result
         return Message(text=answer)
+
+    def _build_answer(self, payload: dict[str, Any]) -> str:
+        user_request = str(payload.get("user_request") or payload.get("original_request") or "").strip()
+        route = str(payload.get("management_route") or payload.get("route") or "DASHBOARD").strip()
+        dashboard_data = (
+            payload.get("dashboard_data")
+            or payload.get("dashboard_result")
+            or payload.get("query_result")
+            or payload.get("rows")
+            or payload.get("summary")
+        )
+
+        lines = [
+            "component=04_dashboard",
+            "대시보드 조회 플로우로 분기되었습니다.",
+        ]
+        if user_request:
+            lines.append(f"사용자 요청: {user_request}")
+        lines.append(f"관리 라우트: {route}")
+
+        if dashboard_data:
+            lines.append("대시보드 조회 결과:")
+            lines.append(json.dumps(dashboard_data, ensure_ascii=False, indent=2, default=str))
+            lines.append("위 대시보드 조회 결과만 근거로 사용자에게 답변하세요.")
+        else:
+            lines.append("POC payload에 아직 dashboard_data/query_result가 없어 실제 조회 결과는 포함되지 않았습니다.")
+            lines.append("실제 플로우에서는 Dashboard 조회 컴포넌트의 결과를 dashboard_data 또는 query_result로 전달해야 합니다.")
+        return "\n".join(lines)
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):

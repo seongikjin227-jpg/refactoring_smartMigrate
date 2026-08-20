@@ -20,13 +20,14 @@ except Exception:
 MANAGEMENT_ROUTER_PROMPT = """당신은 SmartMigrate의 Management 라우터입니다. 반드시 JSON 객체만 반환하세요.
 
 Management route:
-- DASHBOARD: Dashboard, 상태/현황/건수/실패/대기 작업 조회.
+- DASHBOARD: Dashboard, 상태/현황/건수/실패/대기 작업/작업 대상 조회. DB Migration, SQL Conversion, SQL Tuning, SQL Formatting 대상 조회를 포함합니다.
 - STATUS_CHANGE: status, priority, USE_YN, retry 상태, 포함/제외, 실행 대상 순서 변경.
 - CORRECT_SQL_INPUT: 사용자가 수정 SQL을 입력하거나 Correct SQL 저장을 요청한 경우.
 - EXCEPTION: Management로 들어왔지만 위 세 가지 중 하나로 판단하기 어려운 경우.
 
 주의:
 - 실제 작업 실행 요청은 이 컴포넌트가 처리하지 않습니다. 그런 요청은 01 Request Classifier가 JOB_EXECUTION으로 보내야 합니다.
+- "SQL Conversion 작업 대상 조회", "SQL Tuning 대상 보여줘", "Formatting 대기 작업 몇 건이야" 같은 읽기 요청은 DASHBOARD입니다.
 - 애매하면 억지로 Dashboard나 Status Change로 보내지 말고 EXCEPTION을 반환하세요.
 
 반환 JSON schema:

@@ -15,12 +15,13 @@ CLASSIFIER_PROMPT = """당신은 SmartMigrate의 1차 요청 분류기입니다.
 
 분류 route:
 - GENERAL_CHAT: 일반 대화, 설명 요청, 개념 질문, 작업 실행/관리와 무관한 도움 요청.
-- MANAGEMENT: Dashboard/상태/건수/실패 현황 조회, priority/status/USE_YN 변경, Correct SQL 입력 같은 관리 기능.
-- JOB_EXECUTION: 실제 작업 실행 요청. 전체 pending 실행, map_id/sql_id/space_nm 기반 단건 또는 복수건 실행을 포함합니다.
+- MANAGEMENT: Dashboard/상태/건수/실패 현황/작업 대상 조회, priority/status/USE_YN 변경, Correct SQL 입력 같은 관리 기능.
+- JOB_EXECUTION: 실제 작업 실행 요청. DB Migration, SQL Conversion, SQL Tuning, SQL Formatting의 전체 pending 실행과 map_id/sql_id/space_nm 기반 단건 또는 복수건 실행을 포함합니다.
 
 중요 규칙:
-- 사용자가 "map_id=101 실행", "sql_id=Q001 변환", "space_nm=SALES 튜닝"처럼 실행을 요청하면 JOB_EXECUTION입니다.
-- 사용자가 "대기 작업 실행", "전체 DB Migration 진행", "모든 SQL Conversion 실행"처럼 말하면 JOB_EXECUTION입니다.
+- 사용자가 "map_id=101 실행", "sql_id=Q001 변환", "space_nm=SALES 튜닝", "sql_id=Q002 포맷팅"처럼 특정 작업 실행을 요청하면 JOB_EXECUTION입니다.
+- 사용자가 "대기 작업 실행", "전체 DB Migration 진행", "모든 SQL Conversion 실행", "SQL Tuning 전체 실행", "SQL Formatting 전체 진행"처럼 말하면 JOB_EXECUTION입니다.
+- 사용자가 "SQL Conversion 작업 대상 조회", "SQL Tuning 대상 보여줘", "Formatting 대기 작업 몇 건이야", "DB Migration 대상 목록"처럼 조회를 요청하면 MANAGEMENT입니다.
 - 사용자가 priority/status/USE_YN 변경, 제외/포함, Correct SQL 저장을 요청하면 MANAGEMENT입니다.
 - 빠른 단순 답변이나 설명은 GENERAL_CHAT입니다.
 

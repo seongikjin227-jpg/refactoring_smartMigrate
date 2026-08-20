@@ -9,6 +9,7 @@ from typing import Any
 from lfx.custom.custom_component.component import Component
 from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
 from lfx.schema.data import Data
+from lfx.schema.message import Message
 
 try:
     from lfx.io import DataInput
@@ -78,8 +79,8 @@ class NewType08JobExecutionRouter(Component):
         Output(display_name="SQL Conversion Targets", name="sql_conversion_job", method="sql_conversion_response", group_outputs=True),
         Output(display_name="SQL Tuning Targets", name="sql_tuning_job", method="sql_tuning_response", group_outputs=True),
         Output(display_name="SQL Formatting Targets", name="sql_formatting_job", method="sql_formatting_response", group_outputs=True),
-        Output(display_name="Prerequisite Blocked", name="prerequisite_blocked", method="prerequisite_blocked_response", group_outputs=True),
-        Output(display_name="No Runnable Target", name="no_runnable_job", method="no_runnable_response", group_outputs=True),
+        Output(display_name="Prerequisite Blocked Message", name="prerequisite_blocked", method="prerequisite_blocked_response", group_outputs=True, types=["Message"]),
+        Output(display_name="No Runnable Target Message", name="no_runnable_job", method="no_runnable_response", group_outputs=True, types=["Message"]),
     ]
 
     def mig_response(self) -> Data:
@@ -94,11 +95,11 @@ class NewType08JobExecutionRouter(Component):
     def sql_formatting_response(self) -> Data:
         return self._route_output("SQL_FORMATTING", "sql_formatting_job")
 
-    def prerequisite_blocked_response(self) -> Data:
-        return self._route_output("PREREQUISITE_BLOCKED", "prerequisite_blocked")
+    def prerequisite_blocked_response(self) -> Message:
+        return self._message_route_output("PREREQUISITE_BLOCKED", "prerequisite_blocked")
 
-    def no_runnable_response(self) -> Data:
-        return self._route_output("NO_RUNNABLE_JOB", "no_runnable_job")
+    def no_runnable_response(self) -> Message:
+        return self._message_route_output("NO_RUNNABLE_JOB", "no_runnable_job")
 
     def _route_output(self, expected_route: str, output_name: str) -> Data:
         try:
@@ -113,6 +114,45 @@ class NewType08JobExecutionRouter(Component):
             result = {"ok": False, "component": "08_jobExecutionRouter", "error": str(exc)}
             self.status = result
             return Data(data=result)
+
+    def _message_route_output(self, expected_route: str, output_name: str) -> Message:
+        try:
+            routed = self._get_routed_payload()
+            if routed.get("job_route") != expected_route:
+                self.stop(output_name)
+                return Message(text="")
+            routed = {**routed, "selected_output": output_name, "next_node": "chat_output", "final": True}
+            message = self._build_block_message(routed)
+            self.status = {**routed, "answer_text": message}
+            return Message(text=message)
+        except Exception as exc:
+            message = f"component=08_jobExecutionRouter\n작업 대상 라우팅 중 오류가 발생했습니다.\n오류: {exc}"
+            self.status = {"ok": False, "component": "08_jobExecutionRouter", "error": str(exc), "answer_text": message}
+            return Message(text=message)
+
+    def _build_block_message(self, routed: dict[str, Any]) -> str:
+        route = str(routed.get("job_route") or "")
+        user_request = str(routed.get("user_request") or routed.get("original_request") or "").strip()
+        reason = str(routed.get("routing_reason") or routed.get("reason") or "").strip()
+        targets = routed.get("target_filter") or {}
+        blocked_jobs = routed.get("blocked_jobs") or []
+
+        lines = ["component=08_jobExecutionRouter"]
+        if route == "PREREQUISITE_BLOCKED":
+            lines.append("요청한 작업은 바로 실행할 수 없는 상태입니다.")
+        else:
+            lines.append("실행 가능한 작업 대상을 찾지 못했습니다.")
+        if user_request:
+            lines.append(f"사용자 요청: {user_request}")
+        if reason:
+            lines.append(f"사유: {reason}")
+        if targets:
+            lines.append("요청 대상:")
+            lines.append(json.dumps(targets, ensure_ascii=False, indent=2, default=str))
+        if blocked_jobs:
+            lines.append("차단된 작업:")
+            lines.append(json.dumps(blocked_jobs, ensure_ascii=False, indent=2, default=str))
+        return "\n".join(lines)
 
     def _get_routed_payload(self) -> dict[str, Any]:
         cached = getattr(self, "_cached_routed_payload", None)
