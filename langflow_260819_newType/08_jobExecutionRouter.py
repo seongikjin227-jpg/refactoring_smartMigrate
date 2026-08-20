@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import re
+import urllib.error
+import urllib.request
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
-from lfx.io import MessageTextInput, Output
+from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
 from lfx.schema.data import Data
 
 try:
@@ -14,13 +16,60 @@ except Exception:
     DataInput = MessageTextInput
 
 
+JOB_EXECUTION_ROUTER_PROMPT = """You are a SmartMigrate job execution router. Return JSON only.
+
+Your job is to classify a job execution request into one execution domain and one execution mode.
+
+Domains:
+- MIG: DB Migration jobs, usually identified by map_id.
+- SQL_CONVERSION: SQL conversion jobs, usually identified by sql_id or space_nm.
+- SQL_TUNING: SQL tuning jobs.
+- SQL_FORMATTING: SQL formatting jobs.
+
+Execution modes:
+- all_pending: user asks to run all pending jobs for a domain, or says "대기 작업 실행".
+- targeted: user asks to run explicit one-or-more targets by map_id/sql_id/space_nm.
+
+Return JSON only:
+{
+  "job_route": "MIG|SQL_CONVERSION|SQL_TUNING|SQL_FORMATTING|PREREQUISITE_BLOCKED|NO_RUNNABLE_JOB",
+  "run_mode": "all_pending|targeted",
+  "target_filter": {
+    "map_ids": [],
+    "sql_ids": [],
+    "space_nms": []
+  },
+  "reason": "short reason"
+}
+
+Rules:
+- If map_id is present, job_route is MIG and run_mode is targeted.
+- If sql_id or space_nm is present and the user says tuning, job_route is SQL_TUNING.
+- If sql_id or space_nm is present and the user says formatting/format, job_route is SQL_FORMATTING.
+- If sql_id or space_nm is present without tuning/formatting, job_route is SQL_CONVERSION.
+- If no explicit target exists and the user asks to run pending/all jobs, use run_mode=all_pending.
+- If DB context shows that the requested target is not runnable, you may choose PREREQUISITE_BLOCKED and explain why.
+- If prerequisite work should run first, you may choose PREREQUISITE_BLOCKED and set blocker_route in the reason text.
+- The component will pass your routing decision through as payload variables.
+"""
+
+
 class NewType08JobExecutionRouter(Component):
     display_name = "08 Job Target Router"
     description = "Routes job execution requests by domain and target mode: all pending or explicit map_id/sql_id/space_nm targets."
     name = "NewType08JobExecutionRouter"
     icon = "Route"
 
-    inputs = [DataInput(name="payload_json", display_name="Payload JSON", required=True)]
+    inputs = [
+        DataInput(name="payload_json", display_name="Payload JSON", required=True),
+        MessageTextInput(name="routing_prompt", display_name="Routing Prompt", value=JOB_EXECUTION_ROUTER_PROMPT, required=False),
+        StrInput(name="router_mode", display_name="Router Mode", value="LLM", required=False),
+        StrInput(name="llm_base_url", display_name="LLM Base URL", value="https://api.openai.com/v1", required=False),
+        SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=False),
+        StrInput(name="llm_model", display_name="LLM Model", value="gpt-4.1-mini", required=False),
+        IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=500, required=False),
+        IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=30, required=False),
+    ]
 
     outputs = [
         Output(display_name="MIG Targets", name="mig_job", method="mig_response", group_outputs=True),
@@ -69,9 +118,10 @@ class NewType08JobExecutionRouter(Component):
             return cached
 
         payload = self._parse_payload(getattr(self, "payload_json", ""))
-        text = str(payload.get("user_request") or payload.get("input") or "")
-        targets = self._extract_targets(text)
-        route = self._requested_route(text, targets)
+        decision_hint = self._routing_hint(payload)
+        targets = decision_hint["target_filter"]
+        route = decision_hint["job_route"]
+        requested_run_mode = decision_hint["run_mode"]
         jobs = payload.get("pending_jobs") or {}
         counts = self._counts(jobs)
 
@@ -80,40 +130,22 @@ class NewType08JobExecutionRouter(Component):
 
         if route is None:
             decision = self._empty_decision("No explicit target and no runnable pending jobs found.", targets)
+        elif route == "NO_RUNNABLE_JOB":
+            decision = self._empty_decision(decision_hint.get("reason") or "No runnable job target selected by LLM.", targets)
+        elif route == "PREREQUISITE_BLOCKED":
+            decision = {
+                "job_route": "PREREQUISITE_BLOCKED",
+                "run_mode": "blocked",
+                "run_all_pending": False,
+                "selected_jobs": [],
+                "target_filter": targets,
+                "blocker_route": str(decision_hint.get("blocker_route") or "LLM_BLOCKED"),
+                "blocked_jobs": [],
+                "reason": decision_hint.get("reason") or "LLM selected prerequisite blocked route.",
+            }
         else:
-            explicit_target = any(targets.values())
-            if explicit_target:
-                target_status = self._target_status(payload, route, targets)
-                if target_status["blocked"]:
-                    decision = {
-                        "job_route": "PREREQUISITE_BLOCKED",
-                        "run_mode": "blocked",
-                        "run_all_pending": False,
-                        "selected_jobs": [],
-                        "target_filter": targets,
-                        "blocker_route": "TARGET_NOT_RUNNABLE",
-                        "blocked_jobs": target_status["blocked_jobs"],
-                        "reason": target_status["reason"],
-                    }
-                else:
-                    decision = self._execution_decision(route, "targeted", targets, target_status["selected_jobs"])
-            else:
-                selected_jobs = self._select_jobs(payload, route, targets)
-                blocker = self._blocking_route(route, counts)
-                if blocker:
-                    decision = {
-                        "job_route": "PREREQUISITE_BLOCKED",
-                        "run_mode": "blocked",
-                        "run_all_pending": False,
-                        "selected_jobs": [],
-                        "target_filter": targets,
-                        "blocker_route": blocker,
-                        "reason": f"{route} cannot start because pending {blocker} jobs remain.",
-                    }
-                elif not selected_jobs:
-                    decision = self._empty_decision(f"No pending {route} jobs found.", targets)
-                else:
-                    decision = self._execution_decision(route, "all_pending", targets, selected_jobs)
+            selected_jobs = self._selected_jobs_for_hint(payload, route, requested_run_mode, targets)
+            decision = self._execution_decision(route, requested_run_mode, targets, selected_jobs)
 
         routed = {
             **payload,
@@ -126,15 +158,149 @@ class NewType08JobExecutionRouter(Component):
             "blocker_route": decision["blocker_route"],
             "blocked_jobs": decision.get("blocked_jobs") or [],
             "routing_reason": decision["reason"],
+            "llm_job_route": decision_hint.get("job_route"),
+            "llm_run_mode": decision_hint.get("run_mode"),
+            "llm_target_filter": decision_hint.get("target_filter"),
         }
         routed.setdefault("history", []).append(
             {
                 "step": "job_target_route",
-                "message": f"job_route={routed['job_route']}, run_mode={routed['run_mode']}, count={len(routed['selected_jobs'])}",
+                "message": f"job_route={routed['job_route']}, run_mode={routed['run_mode']}, count={len(routed['selected_jobs'])}, router={decision_hint['source']}",
             }
         )
         self._cached_routed_payload = routed
         return routed
+
+    def _routing_hint(self, payload: dict[str, Any]) -> dict[str, Any]:
+        rule_hint = self._route_with_rules(payload)
+        if not self._use_llm() or not self._has_llm_config():
+            return {**rule_hint, "source": "RULE_POC"}
+        try:
+            llm_hint = self._route_with_llm(payload)
+            return self._normalize_llm_hint(llm_hint, fallback=rule_hint)
+        except Exception:
+            return {**rule_hint, "source": "RULE_FALLBACK"}
+
+    def _use_llm(self) -> bool:
+        return str(getattr(self, "router_mode", "LLM") or "LLM").strip().upper() == "LLM"
+
+    def _has_llm_config(self) -> bool:
+        return bool(
+            self._secret_to_str(getattr(self, "llm_api_key", None)).strip()
+            and str(getattr(self, "llm_model", "") or "").strip()
+            and str(getattr(self, "llm_base_url", "") or "").strip()
+        )
+
+    def _route_with_rules(self, payload: dict[str, Any]) -> dict[str, Any]:
+        text = str(payload.get("user_request") or payload.get("input") or "")
+        targets = self._extract_targets(text)
+        route = self._requested_route(text, targets)
+        run_mode = "targeted" if any(targets.values()) else "all_pending"
+        return {"job_route": route, "run_mode": run_mode, "target_filter": targets, "reason": "rule routing"}
+
+    def _route_with_llm(self, payload: dict[str, Any]) -> dict[str, Any]:
+        api_key = self._secret_to_str(getattr(self, "llm_api_key", None)).strip()
+        model = str(getattr(self, "llm_model", "") or "").strip()
+        base_url = str(getattr(self, "llm_base_url", "") or "").strip().rstrip("/")
+
+        body = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": str(getattr(self, "routing_prompt", "") or JOB_EXECUTION_ROUTER_PROMPT)},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "user_request": payload.get("user_request") or "",
+                            "pending_summary": payload.get("pending_summary") or {},
+                            "sample_pending_jobs": self._sample_jobs(payload),
+                        },
+                        ensure_ascii=False,
+                        default=str,
+                    ),
+                },
+            ],
+            "temperature": 0,
+            "max_tokens": int(getattr(self, "llm_max_tokens", None) or 500),
+        }
+        url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=int(getattr(self, "llm_timeout_seconds", None) or 30)) as response:
+                raw = json.loads(response.read().decode("utf-8", errors="ignore"))
+        except (urllib.error.URLError, TimeoutError, ValueError):
+            return self._route_with_rules(payload)
+        content = (((raw.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+        return self._parse_json_object(content)
+
+    def _normalize_llm_hint(self, hint: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
+        route = str(hint.get("job_route") or "").upper()
+        if route == "NO_RUNNABLE_JOB":
+            route = "NO_RUNNABLE_JOB"
+        if route not in {"MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING", "PREREQUISITE_BLOCKED", "NO_RUNNABLE_JOB", None}:
+            route = fallback.get("job_route")
+        run_mode = str(hint.get("run_mode") or fallback.get("run_mode") or "all_pending").lower()
+        if run_mode not in {"all_pending", "targeted"}:
+            run_mode = fallback.get("run_mode") or "all_pending"
+        llm_targets = hint.get("target_filter") if isinstance(hint.get("target_filter"), dict) else {}
+        rule_targets = fallback.get("target_filter") or {}
+        targets = {
+            "map_ids": self._merge_lists(
+                self._normalize_list(llm_targets.get("map_ids"), int),
+                self._normalize_list(rule_targets.get("map_ids"), int),
+            ),
+            "sql_ids": self._merge_lists(
+                self._normalize_list(llm_targets.get("sql_ids"), str),
+                self._normalize_list(rule_targets.get("sql_ids"), str),
+            ),
+            "space_nms": self._merge_lists(
+                self._normalize_list(llm_targets.get("space_nms"), str),
+                self._normalize_list(rule_targets.get("space_nms"), str),
+            ),
+        }
+        return {
+            "job_route": route,
+            "run_mode": run_mode,
+            "target_filter": targets,
+            "blocker_route": str(hint.get("blocker_route") or ""),
+            "reason": str(hint.get("reason") or ""),
+            "source": "LLM",
+        }
+
+    def _normalize_list(self, value: Any, caster: Any) -> list[Any]:
+        if value is None:
+            return []
+        raw_values = value if isinstance(value, list) else [value]
+        out: list[Any] = []
+        for item in raw_values:
+            try:
+                casted = caster(item)
+            except (TypeError, ValueError):
+                continue
+            if casted not in out:
+                out.append(casted)
+        return out
+
+    def _merge_lists(self, first: list[Any], second: list[Any]) -> list[Any]:
+        out: list[Any] = []
+        for item in [*first, *second]:
+            if item not in out:
+                out.append(item)
+        return out
+
+    def _sample_jobs(self, payload: dict[str, Any]) -> dict[str, Any]:
+        jobs = payload.get("pending_jobs") or {}
+        return {
+            "migration_jobs": list(jobs.get("migration_jobs") or [])[:5],
+            "sql_conversion_jobs": list(jobs.get("sql_conversion_jobs") or jobs.get("sql_jobs") or [])[:5],
+            "sql_tuning_jobs": list(jobs.get("sql_tuning_jobs") or [])[:5],
+            "sql_formatting_jobs": list(jobs.get("sql_formatting_jobs") or [])[:5],
+        }
 
     def _empty_decision(self, reason: str, targets: dict[str, list[Any]]) -> dict[str, Any]:
         return {
@@ -189,6 +355,21 @@ class NewType08JobExecutionRouter(Component):
         if selected:
             return selected
         return self._synthetic_jobs(route, targets)
+
+    def _selected_jobs_for_hint(
+        self,
+        payload: dict[str, Any],
+        route: str,
+        run_mode: str,
+        targets: dict[str, list[Any]],
+    ) -> list[dict[str, Any]]:
+        if run_mode == "targeted" or any(targets.values()):
+            lookup_jobs = self._lookup_jobs_for_route(payload, route)
+            matched_lookup = [job for job in lookup_jobs if self._matches(job, targets)]
+            if matched_lookup:
+                return matched_lookup
+            return self._synthetic_jobs(route, targets)
+        return self._jobs_for_route(payload, route)
 
     def _target_status(self, payload: dict[str, Any], route: str, targets: dict[str, list[Any]]) -> dict[str, Any]:
         lookup_jobs = self._lookup_jobs_for_route(payload, route)
@@ -261,10 +442,22 @@ class NewType08JobExecutionRouter(Component):
 
     def _extract_targets(self, text: str) -> dict[str, list[Any]]:
         return {
-            "map_ids": self._extract_number_values(text, r"map[_\s-]*id|mapid"),
+            "map_ids": self._extract_map_ids(text),
             "sql_ids": self._extract_text_values(text, r"sql[_\s-]*id|sqlid"),
             "space_nms": self._extract_text_values(text, r"space[_\s-]*nm|spacenm|space"),
         }
+
+    def _extract_map_ids(self, text: str) -> list[int]:
+        values: list[int] = []
+        patterns = [
+            r"(?:map[_\s-]*id|mapid|map|맵\s*id|맵아이디)\s*[=:]?\s*([0-9,\s]+)",
+            r"([0-9]+)\s*번?\s*(?:map[_\s-]*id|mapid|map|맵\s*id|맵아이디)",
+        ]
+        for pattern in patterns:
+            for match in re.finditer(pattern, text, flags=re.I):
+                for item in re.findall(r"\d+", match.group(1)):
+                    values.append(int(item))
+        return list(dict.fromkeys(values))
 
     def _extract_number_values(self, text: str, label_pattern: str) -> list[int]:
         values: list[int] = []
@@ -318,11 +511,23 @@ class NewType08JobExecutionRouter(Component):
             return dict(raw.data or {})
         if isinstance(raw, dict):
             return dict(raw)
-        text = str(raw or "").strip()
+        return self._parse_json_object(str(raw or "").strip()) if str(raw or "").strip() else {}
+
+    def _parse_json_object(self, text: str) -> dict[str, Any]:
+        text = str(text or "").strip()
         if text.startswith("```"):
             text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
             text = re.sub(r"\s*```$", "", text)
+        match = re.search(r"\{.*\}", text, flags=re.S)
+        text = match.group(0) if match else text
         parsed = json.loads(text) if text else {}
         if not isinstance(parsed, dict):
             raise ValueError("payload_json must be a JSON object")
         return parsed
+
+    def _secret_to_str(self, value: Any) -> str:
+        if value is None:
+            return ""
+        if hasattr(value, "get_secret_value"):
+            return str(value.get_secret_value())
+        return str(value)

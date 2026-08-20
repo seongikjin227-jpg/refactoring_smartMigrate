@@ -114,7 +114,11 @@ class NewType09ExecutionPlanSummary(Component):
             "SQL_FORMATTING": "SQL Formatting",
         }.get(route, route or "Unknown")
         mode_label = "전체 pending 작업" if run_mode == "all_pending" else "지정 작업"
-        lines = [f"{label} {mode_label}을 시작합니다.", f"- 실행 예정 작업 수: {len(jobs)}"]
+        lines = [
+            "component=09_executionPlanSummary",
+            f"{label} {mode_label}을 시작합니다.",
+            f"- 실행 예정 작업 수: {len(jobs)}",
+        ]
         if jobs:
             lines.append("- 실행 예정 목록:")
             for job in jobs[:20]:

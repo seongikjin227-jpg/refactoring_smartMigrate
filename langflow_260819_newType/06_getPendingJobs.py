@@ -95,8 +95,6 @@ class NewType06GetPendingJobs(Component):
                                NULL AS ROW_ID,
                                NULL AS SPACE_NM,
                                NULL AS SQL_ID,
-                               TO_CHAR(FR_TABLE) AS SOURCE_NAME,
-                               TO_CHAR(TO_TABLE) AS TARGET_NAME,
                                PRIORITY,
                                RETRY_COUNT,
                                TO_CHAR(USE_YN) AS USE_YN,
@@ -115,8 +113,6 @@ class NewType06GetPendingJobs(Component):
                                ROWIDTOCHAR(ROWID) AS ROW_ID,
                                TO_CHAR(SPACE_NM) AS SPACE_NM,
                                TO_CHAR(SQL_ID) AS SQL_ID,
-                               TO_CHAR(TAG_KIND) AS SOURCE_NAME,
-                               TO_CHAR(TARGET_TABLE) AS TARGET_NAME,
                                PRIORITY,
                                RETRY_COUNT,
                                NULL AS USE_YN,
@@ -143,13 +139,11 @@ class NewType06GetPendingJobs(Component):
             "row_id": self._json_value(row[3]),
             "space_nm": self._json_value(row[4]),
             "sql_id": self._json_value(row[5]),
-            "source_name": self._json_value(row[6]),
-            "target_name": self._json_value(row[7]),
-            "priority": self._json_value(row[8]),
-            "retry_count": self._json_value(row[9]) or 0,
-            "use_yn": self._json_value(row[10]),
-            "status": self._json_value(row[11]),
-            "runnable_yn": self._json_value(row[12]),
+            "priority": self._json_value(row[6]),
+            "retry_count": self._json_value(row[7]) or 0,
+            "use_yn": self._json_value(row[8]),
+            "status": self._json_value(row[9]),
+            "runnable_yn": self._json_value(row[10]),
         }
 
     def _load_mock_jobs(self) -> dict[str, list[dict[str, Any]]]:
@@ -157,7 +151,7 @@ class NewType06GetPendingJobs(Component):
         if not str(raw).strip():
             return self._group_jobs(
                 [
-                    {"job_route": "MIG", "job_type": "MIG", "map_id": 101, "source_name": "SRC_EMP", "target_name": "TGT_EMP", "priority": 1, "use_yn": "Y", "status": None, "runnable_yn": "Y"},
+                    {"job_route": "MIG", "job_type": "MIG", "map_id": 101, "priority": 1, "use_yn": "Y", "status": None, "runnable_yn": "Y"},
                     {"job_route": "SQL_CONVERSION", "job_type": "SQL", "row_id": "MOCK_ROWID_1", "space_nm": "demo", "sql_id": "selectEmp", "priority": 10, "status": None, "runnable_yn": "Y"},
                 ]
             )

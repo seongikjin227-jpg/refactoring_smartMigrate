@@ -18,24 +18,27 @@ except Exception:
 
 MANAGEMENT_ROUTER_PROMPT = """You are a SmartMigrate management router. Return JSON only.
 
-MANAGEMENT has exactly three routes:
+MANAGEMENT normally has three management routes:
 - DASHBOARD: read-only dashboard/status/failure/pending summary requests.
 - STATUS_CHANGE: change DB control values such as status, priority, USE_YN, retry state, include/exclude, or target ordering.
 - CORRECT_SQL_INPUT: user provides corrected SQL or asks to save user-edited SQL. This should set USER_EDITED='Y' and store the provided SQL in the proper SQL column.
 
+There is also one redirect route:
+- JOB_EXECUTION_REDIRECT: the user is asking to execute/run/process a job now. This is not management and must be routed to the Job Execution flow.
+
 Return JSON only:
 {
-  "management_route": "DASHBOARD|STATUS_CHANGE|CORRECT_SQL_INPUT",
-  "db_action": "READ|UPDATE_STATUS|UPDATE_CORRECT_SQL",
+  "management_route": "DASHBOARD|STATUS_CHANGE|CORRECT_SQL_INPUT|JOB_EXECUTION_REDIRECT",
+  "db_action": "READ|UPDATE_STATUS|UPDATE_CORRECT_SQL|REDIRECT_JOB_EXECUTION",
   "target": {},
   "correct_sql": "",
   "reason": "short reason"
 }
 
 Rules:
+- If the user asks to execute/run/start/process/proceed with map_id/sql_id/space_nm or pending jobs now, use JOB_EXECUTION_REDIRECT.
 - If the user asks for status, count, failures, pending jobs, dashboard, or progress, use DASHBOARD.
 - If the user asks to change priority, change status, include/exclude a job, or change the next target order, use STATUS_CHANGE.
-- If the user asks to execute/run/process map_id/sql_id/space_nm now, this is not MANAGEMENT. It should have been routed to JOB_EXECUTION.
 - If the user provides SQL text or says corrected SQL/user edited SQL/save this SQL, use CORRECT_SQL_INPUT.
 """
 
@@ -61,6 +64,7 @@ class NewType04ManagementRouter(Component):
         Output(display_name="Dashboard", name="dashboard", method="dashboard_response", group_outputs=True),
         Output(display_name="Status Change", name="status_change", method="status_change_response", group_outputs=True),
         Output(display_name="Correct SQL Input", name="correct_sql_input", method="correct_sql_input_response", group_outputs=True),
+        Output(display_name="Job Execution Redirect", name="job_execution_redirect", method="job_execution_redirect_response", group_outputs=True),
     ]
 
     def dashboard_response(self) -> Data:
@@ -71,6 +75,9 @@ class NewType04ManagementRouter(Component):
 
     def correct_sql_input_response(self) -> Data:
         return self._route_output("CORRECT_SQL_INPUT", "correct_sql_input")
+
+    def job_execution_redirect_response(self) -> Data:
+        return self._route_output("JOB_EXECUTION_REDIRECT", "job_execution_redirect")
 
     def _route_output(self, expected_route: str, output_name: str) -> Data:
         try:
@@ -145,6 +152,14 @@ class NewType04ManagementRouter(Component):
         text = str(payload.get("user_request") or "")
         lowered = text.lower()
         target = self._extract_target(text)
+        if self._looks_like_execution_request(text):
+            return {
+                "management_route": "JOB_EXECUTION_REDIRECT",
+                "db_action": "REDIRECT_JOB_EXECUTION",
+                "target": target,
+                "correct_sql": "",
+                "reason": "execution request belongs to job execution flow",
+            }
         if self._looks_like_correct_sql(text):
             return {
                 "management_route": "CORRECT_SQL_INPUT",
@@ -159,13 +174,14 @@ class NewType04ManagementRouter(Component):
 
     def _normalize_decision(self, decision: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         route = str(decision.get("management_route") or "").upper()
-        if route not in {"DASHBOARD", "STATUS_CHANGE", "CORRECT_SQL_INPUT"}:
+        if route not in {"DASHBOARD", "STATUS_CHANGE", "CORRECT_SQL_INPUT", "JOB_EXECUTION_REDIRECT"}:
             route = self._route_with_rules(payload)["management_route"]
         db_action = str(decision.get("db_action") or "").upper()
         defaults = {
             "DASHBOARD": "READ",
             "STATUS_CHANGE": "UPDATE_STATUS",
             "CORRECT_SQL_INPUT": "UPDATE_CORRECT_SQL",
+            "JOB_EXECUTION_REDIRECT": "REDIRECT_JOB_EXECUTION",
         }
         return {
             "management_route": route,
@@ -180,7 +196,14 @@ class NewType04ManagementRouter(Component):
             "DASHBOARD": "04_dashboard",
             "STATUS_CHANGE": "04_statusChange",
             "CORRECT_SQL_INPUT": "04_correctSqlInput",
+            "JOB_EXECUTION_REDIRECT": "05_jobExecutionNotice",
         }.get(route, "04_dashboard")
+
+    def _looks_like_execution_request(self, text: str) -> bool:
+        lowered = text.lower()
+        execution_terms = r"(실행|진행|처리|시작|돌려|수행|execute|run|start|process|proceed)"
+        target_terms = r"(map[_\s-]*id|mapid|sql[_\s-]*id|sqlid|space[_\s-]*nm|spacenm|pending|대기\s*작업|전체|전부|모든)"
+        return bool(re.search(execution_terms, lowered, flags=re.I) and re.search(target_terms, lowered, flags=re.I))
 
     def _looks_like_correct_sql(self, text: str) -> bool:
         return bool(

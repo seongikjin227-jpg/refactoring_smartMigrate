@@ -4,9 +4,12 @@
 
 - `Management`는 조회/관리 기능이다. Dashboard, Status Change, Correct SQL Input만 처리한다.
 - `Job Execution`은 작업 대상 실행 기능이다. 전체 pending 실행과 `map_id`/`sql_id`/`space_nm` 기반 단건 또는 복수건 지정 실행을 모두 처리한다.
-- `08 Job Target Router`가 실행 도메인과 실행 모드를 결정한다.
+- `08 Job Target Router`는 LLM으로 실행 도메인과 실행 모드를 결정한다.
+- `08 Job Target Router`의 rule 로직은 LLM 설정이 없거나 호출에 실패했을 때 fallback으로 사용한다.
+- DB 상태, runnable 여부, 선행 작업 여부는 LLM 입력 context로 제공한다.
+- `08 Job Target Router`의 output에는 LLM이 결정한 `job_route`, `run_mode`, `target_filter`가 그대로 포함된다.
 - 실행 모드는 `all_pending` 또는 `targeted`다.
-- `targeted` 실행에서 지정 대상이 DB에 존재하지만 `USE_YN != Y` 또는 `STATUS != NULL`이면 `PREREQUISITE_BLOCKED`로 차단한다.
+- `targeted` 실행에서 지정 대상이 DB에 존재하지만 `USE_YN != Y` 또는 `STATUS != NULL`이면, 해당 상태 정보가 LLM 입력 context로 전달된다.
 - Pipeline은 아직 실제 DB Migration/SQL 변환/튜닝/포맷팅 로직을 실행하지 않는다. POC 검증용 테스트 결과와 로그만 반환한다.
 - 실행 전에 `09 Execution Plan Summary`가 어떤 도메인 작업을 몇 건 실행할지 완성된 Message로 먼저 안내한다.
 - `09 Execution Plan Summary.Notice Message`는 Chat Output으로 바로 연결한다.
@@ -27,6 +30,7 @@ flowchart TD
     E -->|dashboard| E1["04 Dashboard"]
     E -->|status_change| E2["04 Status Change"]
     E -->|correct_sql_input| E3["04 Correct SQL Input"]
+    E -->|job_execution_redirect| F
 
     F --> G["06 Get Pending Jobs"]
     G --> H{"08 Job Target Router"}
@@ -70,19 +74,20 @@ flowchart TD
 | 5 | `04 Management LLM Router` | `Dashboard` | `04 Dashboard` | `payload_json` |
 | 6 | `04 Management LLM Router` | `Status Change` | `04 Status Change` | `payload_json` |
 | 7 | `04 Management LLM Router` | `Correct SQL Input` | `04 Correct SQL Input` | `payload_json` |
-| 8 | `02 Intent Conditional Router` | `Job Execution` | `05 Job Execution Notice` | `payload_json` |
-| 9 | `05 Job Execution Notice` | `payload` | `06 Get Pending Jobs` | `payload_json` |
-| 10 | `06 Get Pending Jobs` | `payload` | `08 Job Target Router` | `payload_json` |
-| 11 | `08 Job Target Router` | executable target output | `09 Execution Plan Summary` | `payload_json` |
-| 12 | `09 Execution Plan Summary` | `Notice Message` | Chat Output | Message |
-| 13 | `09 Execution Plan Summary` | `Payload` | selected Pipeline | `payload_json` |
-| 14 | `10 MIG Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
-| 15 | `12 SQL Conversion Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
-| 16 | `15 SQL Tuning Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
-| 17 | `17 SQL Formatting Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
-| 18 | `08 Job Target Router` | `Prerequisite Blocked` | `13 Final Summary` | `payload_json` |
-| 19 | `08 Job Target Router` | `No Runnable Target` | `13 Final Summary` | `payload_json` |
-| 20 | `13 Final Summary` | `Result Message` | Chat Output | Message |
+| 8 | `04 Management LLM Router` | `Job Execution Redirect` | `05 Job Execution Notice` | `payload_json` |
+| 9 | `02 Intent Conditional Router` | `Job Execution` | `05 Job Execution Notice` | `payload_json` |
+| 10 | `05 Job Execution Notice` | `payload` | `06 Get Pending Jobs` | `payload_json` |
+| 11 | `06 Get Pending Jobs` | `payload` | `08 Job Target Router` | `payload_json` |
+| 12 | `08 Job Target Router` | executable target output | `09 Execution Plan Summary` | `payload_json` |
+| 13 | `09 Execution Plan Summary` | `Notice Message` | Chat Output | Message |
+| 14 | `09 Execution Plan Summary` | `Payload` | selected Pipeline | `payload_json` |
+| 15 | `10 MIG Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
+| 16 | `12 SQL Conversion Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
+| 17 | `15 SQL Tuning Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
+| 18 | `17 SQL Formatting Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
+| 19 | `08 Job Target Router` | `Prerequisite Blocked` | `13 Final Summary` | `payload_json` |
+| 20 | `08 Job Target Router` | `No Runnable Target` | `13 Final Summary` | `payload_json` |
+| 21 | `13 Final Summary` | `Result Message` | Chat Output | Message |
 
 ## 작업 대상 실행 세부 분기
 
@@ -95,7 +100,7 @@ flowchart TD
 | `sql_id=Q001 변환해줘` | `JOB_EXECUTION` | `targeted` | `SQL_CONVERSION` | `12_sqlConversionPipeline.py` |
 | `space_nm=SALES 튜닝 진행해줘` | `JOB_EXECUTION` | `targeted` | `SQL_TUNING` | `15_sqlTuningPipeline.py` |
 | `sql_id=Q001 포맷팅해줘` | `JOB_EXECUTION` | `targeted` | `SQL_FORMATTING` | `17_sqlFormattingPipeline.py` |
-| `map_id=101 진행해줘`, but `USE_YN=N` or `STATUS != NULL` | `JOB_EXECUTION` | `blocked` | `PREREQUISITE_BLOCKED` | `13_finalSummary.py` |
+| `map_id=101 진행해줘`, but `USE_YN=N` or `STATUS != NULL` | `JOB_EXECUTION` | LLM 결정 | `MIG` 또는 `PREREQUISITE_BLOCKED` | selected node |
 
 ## 실행 전 요약
 
