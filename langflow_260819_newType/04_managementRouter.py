@@ -16,16 +16,16 @@ except Exception:
     DataInput = MessageTextInput
 
 
-FAST_STATUS_ROUTER_PROMPT = """You are a SmartMigrate fast-status router. Return JSON only.
+MANAGEMENT_ROUTER_PROMPT = """You are a SmartMigrate management router. Return JSON only.
 
-FAST_STATUS has exactly three routes:
+MANAGEMENT has exactly three routes:
 - DASHBOARD: read-only dashboard/status/failure/pending summary requests.
-- STATUS_CHANGE: change DB control values such as status, priority, USE_YN, retry state, or make one job the next execution target.
+- STATUS_CHANGE: change DB control values such as status, priority, USE_YN, retry state, include/exclude, or target ordering.
 - CORRECT_SQL_INPUT: user provides corrected SQL or asks to save user-edited SQL. This should set USER_EDITED='Y' and store the provided SQL in the proper SQL column.
 
 Return JSON only:
 {
-  "fast_route": "DASHBOARD|STATUS_CHANGE|CORRECT_SQL_INPUT",
+  "management_route": "DASHBOARD|STATUS_CHANGE|CORRECT_SQL_INPUT",
   "db_action": "READ|UPDATE_STATUS|UPDATE_CORRECT_SQL",
   "target": {},
   "correct_sql": "",
@@ -34,20 +34,21 @@ Return JSON only:
 
 Rules:
 - If the user asks for status, count, failures, pending jobs, dashboard, or progress, use DASHBOARD.
-- If the user asks to run one job, run a specific map_id/sql_id, change priority, change status, include/exclude a job, or make a job the next target, use STATUS_CHANGE. Do not execute the job directly.
+- If the user asks to change priority, change status, include/exclude a job, or change the next target order, use STATUS_CHANGE.
+- If the user asks to execute/run/process map_id/sql_id/space_nm now, this is not MANAGEMENT. It should have been routed to JOB_EXECUTION.
 - If the user provides SQL text or says corrected SQL/user edited SQL/save this SQL, use CORRECT_SQL_INPUT.
 """
 
 
-class NewType04FastStatusRouter(Component):
-    display_name = "04 Fast Status LLM Router"
-    description = "Routes fast status requests to Dashboard, Status Change, or Correct SQL Input."
-    name = "NewType04FastStatusRouter"
+class NewType04ManagementRouter(Component):
+    display_name = "04 Management LLM Router"
+    description = "Routes management requests to Dashboard, Status Change, or Correct SQL Input."
+    name = "NewType04ManagementRouter"
     icon = "Route"
 
     inputs = [
         DataInput(name="payload_json", display_name="Payload JSON", required=True),
-        MessageTextInput(name="routing_prompt", display_name="Routing Prompt", value=FAST_STATUS_ROUTER_PROMPT, required=False),
+        MessageTextInput(name="routing_prompt", display_name="Routing Prompt", value=MANAGEMENT_ROUTER_PROMPT, required=False),
         StrInput(name="router_mode", display_name="Router Mode", value="LLM", required=False),
         StrInput(name="llm_base_url", display_name="LLM Base URL", value="https://api.openai.com/v1", required=False),
         SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=False),
@@ -74,14 +75,14 @@ class NewType04FastStatusRouter(Component):
     def _route_output(self, expected_route: str, output_name: str) -> Data:
         try:
             routed = self._get_routed_payload()
-            if routed.get("fast_route") != expected_route:
+            if routed.get("management_route") != expected_route:
                 self.stop(output_name)
                 return Data(data={})
             routed = {**routed, "selected_output": output_name, "next_node": self._next_node(expected_route)}
             self.status = routed
             return Data(data=routed)
         except Exception as exc:
-            result = {"ok": False, "component": "04_fastStatusRouter", "error": str(exc)}
+            result = {"ok": False, "component": "04_managementRouter", "error": str(exc)}
             self.status = result
             return Data(data=result)
 
@@ -94,15 +95,15 @@ class NewType04FastStatusRouter(Component):
         decision = self._normalize_decision(decision, payload)
         routed = {
             **payload,
-            "component": "04_fastStatusRouter",
-            "fast_route": decision["fast_route"],
+            "component": "04_managementRouter",
+            "management_route": decision["management_route"],
             "db_action": decision["db_action"],
             "target": decision.get("target") or {},
             "correct_sql": decision.get("correct_sql") or "",
-            "fast_routing_reason": decision.get("reason") or "",
+            "management_routing_reason": decision.get("reason") or "",
         }
         routed.setdefault("history", []).append(
-            {"step": "fast_status_route", "message": f"fast_route={routed['fast_route']}, db_action={routed['db_action']}"}
+            {"step": "management_route", "message": f"management_route={routed['management_route']}, db_action={routed['db_action']}"}
         )
         self._cached_routed_payload = routed
         return routed
@@ -119,7 +120,7 @@ class NewType04FastStatusRouter(Component):
         body = {
             "model": model,
             "messages": [
-                {"role": "system", "content": str(getattr(self, "routing_prompt", "") or FAST_STATUS_ROUTER_PROMPT)},
+                {"role": "system", "content": str(getattr(self, "routing_prompt", "") or MANAGEMENT_ROUTER_PROMPT)},
                 {"role": "user", "content": json.dumps({"user_request": payload.get("user_request") or ""}, ensure_ascii=False)},
             ],
             "temperature": 0,
@@ -146,20 +147,20 @@ class NewType04FastStatusRouter(Component):
         target = self._extract_target(text)
         if self._looks_like_correct_sql(text):
             return {
-                "fast_route": "CORRECT_SQL_INPUT",
+                "management_route": "CORRECT_SQL_INPUT",
                 "db_action": "UPDATE_CORRECT_SQL",
                 "target": target,
                 "correct_sql": self._extract_sql(text),
                 "reason": "correct SQL input",
             }
-        if re.search(r"(단건|단일|한\s*건|하나만|특정|map_id|mapid|sql_id|sqlid|row_id|rowid|priority|우선순위|status|상태|use_yn|제외|포함|대상|next|single|one\s+job)", lowered, flags=re.I):
-            return {"fast_route": "STATUS_CHANGE", "db_action": "UPDATE_STATUS", "target": target, "correct_sql": "", "reason": "status or targeting change"}
-        return {"fast_route": "DASHBOARD", "db_action": "READ", "target": target, "correct_sql": "", "reason": "dashboard/status query"}
+        if re.search(r"(priority|우선순위|status|상태|use_yn|제외|포함|대상\s*변경|next\s*target|순서|order)", lowered, flags=re.I):
+            return {"management_route": "STATUS_CHANGE", "db_action": "UPDATE_STATUS", "target": target, "correct_sql": "", "reason": "status or targeting change"}
+        return {"management_route": "DASHBOARD", "db_action": "READ", "target": target, "correct_sql": "", "reason": "dashboard/status query"}
 
     def _normalize_decision(self, decision: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
-        route = str(decision.get("fast_route") or "").upper()
+        route = str(decision.get("management_route") or "").upper()
         if route not in {"DASHBOARD", "STATUS_CHANGE", "CORRECT_SQL_INPUT"}:
-            route = self._route_with_rules(payload)["fast_route"]
+            route = self._route_with_rules(payload)["management_route"]
         db_action = str(decision.get("db_action") or "").upper()
         defaults = {
             "DASHBOARD": "READ",
@@ -167,7 +168,7 @@ class NewType04FastStatusRouter(Component):
             "CORRECT_SQL_INPUT": "UPDATE_CORRECT_SQL",
         }
         return {
-            "fast_route": route,
+            "management_route": route,
             "db_action": db_action if db_action else defaults[route],
             "target": decision.get("target") if isinstance(decision.get("target"), dict) else {},
             "correct_sql": str(decision.get("correct_sql") or ""),

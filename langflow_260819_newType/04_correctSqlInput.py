@@ -7,6 +7,7 @@ from typing import Any
 from lfx.custom.custom_component.component import Component
 from lfx.io import MessageTextInput, Output
 from lfx.schema.data import Data
+from lfx.schema.message import Message
 
 try:
     from lfx.io import DataInput
@@ -21,9 +22,9 @@ class NewType04CorrectSqlInput(Component):
     icon = "FilePenLine"
 
     inputs = [DataInput(name="payload_json", display_name="Payload JSON", required=True)]
-    outputs = [Output(display_name="Result", name="result", method="run")]
+    outputs = [Output(display_name="Result Message", name="result", method="run", types=["Message"])]
 
-    def run(self) -> Data:
+    def run(self) -> Message:
         payload = self._parse_payload(getattr(self, "payload_json", ""))
         correct_sql = payload.get("correct_sql") or ""
         answer = (
@@ -33,7 +34,7 @@ class NewType04CorrectSqlInput(Component):
         )
         result = {**payload, "component": "04_correctSqlInput", "answer_text": answer, "final": True}
         self.status = result
-        return Data(data=result)
+        return Message(text=answer)
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):

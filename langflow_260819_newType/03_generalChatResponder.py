@@ -7,6 +7,7 @@ from typing import Any
 from lfx.custom.custom_component.component import Component
 from lfx.io import MessageTextInput, Output
 from lfx.schema.data import Data
+from lfx.schema.message import Message
 
 try:
     from lfx.io import DataInput
@@ -21,9 +22,9 @@ class NewType03GeneralChatResponder(Component):
     icon = "MessageCircle"
 
     inputs = [DataInput(name="payload_json", display_name="Payload JSON", required=True)]
-    outputs = [Output(display_name="Result", name="result", method="respond")]
+    outputs = [Output(display_name="Result Message", name="result", method="respond", types=["Message"])]
 
-    def respond(self) -> Data:
+    def respond(self) -> Message:
         try:
             payload = self._parse_payload(getattr(self, "payload_json", ""))
             answer = (
@@ -32,11 +33,11 @@ class NewType03GeneralChatResponder(Component):
             )
             result = {**payload, "component": "03_generalChatResponder", "answer_text": answer, "final": True}
             self.status = result
-            return Data(data=result)
+            return Message(text=answer)
         except Exception as exc:
             result = {"ok": False, "component": "03_generalChatResponder", "error": str(exc)}
             self.status = result
-            return Data(data=result)
+            return Message(text=f"POC flow failed: {exc}")
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):

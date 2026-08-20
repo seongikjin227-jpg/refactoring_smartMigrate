@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 import re
 from typing import Any
 
@@ -16,7 +17,7 @@ except Exception:
 
 class NewType12SqlConversionPipeline(Component):
     display_name = "12 SQL Conversion Pipeline"
-    description = "Placeholder all-pending SQL Conversion pipeline."
+    description = "POC pipeline that sequentially returns random test results for selected SQL Conversion jobs."
     name = "NewType12SqlConversionPipeline"
     icon = "FileCode"
 
@@ -25,26 +26,39 @@ class NewType12SqlConversionPipeline(Component):
 
     def run_pipeline(self) -> Data:
         payload = self._parse_payload(getattr(self, "payload_json", ""))
-        jobs = list(((payload.get("pending_jobs") or {}).get("sql_conversion_jobs")) or [])
-        processed = [{"job_type": "SQL_CONVERSION", "job": job, "ok": True, "status": "PLACEHOLDER"} for job in jobs]
+        processed = [self._mock_result(job, index) for index, job in enumerate(self._execution_jobs(payload), start=1)]
+        completed = [item for item in processed if item["ok"]]
+        failed = [item for item in processed if not item["ok"]]
         result = {
-            "ok": True,
-            "status": "PLACEHOLDER",
-            "run_mode": "all_pending",
+            "ok": not failed,
+            "status": "DONE_WITH_TEST_FAILURES" if failed else "DONE",
+            "run_mode": payload.get("run_mode") or "targeted",
             "processed_jobs": processed,
-            "completed_jobs": [],
-            "failed_jobs": [],
-            "message": "SQL Conversion pipeline placeholder. Real implementation is pending.",
+            "completed_jobs": completed,
+            "failed_jobs": failed,
+            "message": f"Processed {len(processed)} SQL Conversion test job(s).",
         }
-        out = {
-            **payload,
-            "component": "12_sqlConversionPipeline",
-            "pipeline_status": "PLACEHOLDER",
-            "job_result": result,
-            "next_node": "13_finalSummary",
-        }
+        out = {**payload, "component": "12_sqlConversionPipeline", "pipeline_status": result["status"], "job_result": result, "next_node": "13_finalSummary"}
         self.status = out
         return Data(data=out)
+
+    def _execution_jobs(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        return [dict(job) for job in (payload.get("selected_jobs") or payload.get("planned_jobs") or []) if isinstance(job, dict)]
+
+    def _mock_result(self, job: dict[str, Any], index: int) -> dict[str, Any]:
+        sql_id = job.get("sql_id") or job.get("row_id") or f"SQL-{index}"
+        space_nm = job.get("space_nm") or "-"
+        rng = random.Random(f"SQL_CONVERSION:{space_nm}:{sql_id}:{index}")
+        ok = rng.choice([True, False])
+        status = "SUCCESS-TEST" if ok else "FAIL-TEST"
+        return {
+            "job_type": "SQL_CONVERSION",
+            "job": job,
+            "ok": ok,
+            "status": status,
+            "message": f"space_nm={space_nm}, sql_id={sql_id} {status} 입니다.",
+            "log": f"[POC][SQL_CONVERSION][{index}] space_nm={space_nm}, sql_id={sql_id}, status={status}, trace_id=TEST-{rng.randint(1000, 9999)}",
+        }
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):

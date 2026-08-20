@@ -7,6 +7,7 @@ from typing import Any
 from lfx.custom.custom_component.component import Component
 from lfx.io import MessageTextInput, Output
 from lfx.schema.data import Data
+from lfx.schema.message import Message
 
 try:
     from lfx.io import DataInput
@@ -21,19 +22,19 @@ class NewType13FinalSummary(Component):
     icon = "MessageCircle"
 
     inputs = [DataInput(name="payload_json", display_name="Payload JSON", required=True)]
-    outputs = [Output(display_name="Result", name="result", method="summarize")]
+    outputs = [Output(display_name="Result Message", name="result", method="summarize", types=["Message"])]
 
-    def summarize(self) -> Data:
+    def summarize(self) -> Message:
         try:
             payload = self._parse_payload(getattr(self, "payload_json", ""))
             answer = self._answer_text(payload)
             result = {**payload, "component": "13_finalSummary", "answer_text": answer, "final": True}
             self.status = result
-            return Data(data=result)
+            return Message(text=answer)
         except Exception as exc:
             result = {"ok": False, "component": "13_finalSummary", "error": str(exc), "answer_text": f"POC flow failed: {exc}"}
             self.status = result
-            return Data(data=result)
+            return Message(text=result["answer_text"])
 
     def _answer_text(self, payload: dict[str, Any]) -> str:
         if not payload.get("ok", True):
@@ -56,14 +57,27 @@ class NewType13FinalSummary(Component):
                 f"SQL_TUNING={summary.get('sql_tuning_total', 0)}, "
                 f"SQL_FORMATTING={summary.get('sql_formatting_total', 0)}"
             )
-        if route in {"SQL_TUNING", "SQL_FORMATTING"}:
-            return f"{route} 전체 실행 Pipeline은 아직 신규 개발 대상입니다. 라우팅까지 완료되었습니다."
         return f"POC 라우팅 완료: route={route}, next={payload.get('next_node')}"
 
     def _blocked_summary(self, payload: dict[str, Any]) -> str:
         blocker = payload.get("blocker_route") or "선행"
         requested = self._requested_label_from_reason(payload.get("routing_reason") or "")
         summary = payload.get("pending_summary") or {}
+        if blocker == "TARGET_NOT_RUNNABLE":
+            blocked_jobs = list(payload.get("blocked_jobs") or [])
+            lines = [
+                "요청한 작업 대상은 현재 실행 가능한 상태가 아닙니다.",
+                "Management의 Status Change에서 USE_YN/status/priority를 먼저 조정한 뒤 다시 실행해주세요.",
+            ]
+            if blocked_jobs:
+                lines.append("- blocked target:")
+                for job in blocked_jobs[:10]:
+                    lines.append(
+                        f"  - {self._job_label(job)} "
+                        f"use_yn={job.get('use_yn') or '-'} "
+                        f"status={job.get('status') if job.get('status') is not None else 'NULL'}"
+                    )
+            return "\n".join(lines)
         if blocker == "MIG":
             return (
                 "DB Migration 작업이 아직 남아 있습니다. "
@@ -84,9 +98,11 @@ class NewType13FinalSummary(Component):
         completed = list(job_result.get("completed_jobs") or [])
         failed = list(job_result.get("failed_jobs") or [])
         route = payload.get("job_route") or "MIG"
+        run_mode = payload.get("run_mode") or job_result.get("run_mode") or "targeted"
+        mode_label = "전체 pending 작업" if run_mode == "all_pending" else "지정 작업"
         status = job_result.get("status") or payload.get("pipeline_status")
         lines = [
-            f"{route} 전체 작업 실행 완료",
+            f"{route} {mode_label} 실행 완료",
             f"- status: {status}",
             f"- processed: {len(processed)}",
             f"- success: {len(completed)}",
@@ -96,6 +112,8 @@ class NewType13FinalSummary(Component):
             lines.append("- job list:")
             for item in processed[:30]:
                 lines.append(f"  - {self._job_label(item)}: {item.get('status') or '-'}")
+                if item.get("log"):
+                    lines.append(f"    log: {item.get('log')}")
             if len(processed) > 30:
                 lines.append(f"  - ... and {len(processed) - 30} more")
         if failed:

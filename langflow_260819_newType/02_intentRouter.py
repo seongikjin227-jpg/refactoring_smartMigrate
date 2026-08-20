@@ -24,18 +24,18 @@ class NewType02IntentRouter(Component):
 
     outputs = [
         Output(display_name="General Chat", name="general_chat", method="general_chat_response", group_outputs=True),
-        Output(display_name="Fast Status", name="fast_status", method="fast_status_response", group_outputs=True),
-        Output(display_name="Long Job", name="long_job", method="long_job_response", group_outputs=True),
+        Output(display_name="Management", name="management", method="management_response", group_outputs=True),
+        Output(display_name="Job Execution", name="job_execution", method="job_execution_response", group_outputs=True),
     ]
 
     def general_chat_response(self) -> Data:
         return self._route_output("GENERAL_CHAT", "general_chat")
 
-    def fast_status_response(self) -> Data:
-        return self._route_output("FAST_STATUS", "fast_status")
+    def management_response(self) -> Data:
+        return self._route_output("MANAGEMENT", "management")
 
-    def long_job_response(self) -> Data:
-        return self._route_output("LONG_RUNNING_JOB", "long_job")
+    def job_execution_response(self) -> Data:
+        return self._route_output("JOB_EXECUTION", "job_execution")
 
     def _route_output(self, expected_route: str, output_name: str) -> Data:
         try:
@@ -43,8 +43,8 @@ class NewType02IntentRouter(Component):
             route = str(payload.get("route") or (payload.get("classification") or {}).get("route") or "GENERAL_CHAT").upper()
             next_node = {
                 "GENERAL_CHAT": "03_generalChatResponder",
-                "FAST_STATUS": "04_fastStatusRouter",
-                "LONG_RUNNING_JOB": "05_longTaskNotice",
+                "MANAGEMENT": "04_managementRouter",
+                "JOB_EXECUTION": "05_jobExecutionNotice",
             }.get(route, "03_generalChatResponder")
             if route != expected_route:
                 self.stop(output_name)

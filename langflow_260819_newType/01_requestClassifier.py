@@ -15,19 +15,18 @@ CLASSIFIER_PROMPT = """You are a SmartMigrate intent classifier. Return JSON onl
 
 Routes:
 - GENERAL_CHAT: normal conversation, explanation request, concept question, or non-operational help.
-- FAST_STATUS: fast DB status/control requests, status summary, counts, failure report, dashboard-like request, or a request to run/control one specific job by map_id/sql_id/row_id/priority/status.
-- LONG_RUNNING_JOB: run/execute/process ALL pending jobs for a domain. This route is only for full pending execution, for example all DB migration, all SQL conversion, all SQL tuning, or all SQL formatting.
+- MANAGEMENT: fast management requests such as dashboard/status summary/counts/failure report, priority/status/USE_YN updates, or Correct SQL input.
+- JOB_EXECUTION: run/execute/process job targets. This includes all pending jobs for a domain and explicit one-or-more targets by map_id/sql_id/space_nm.
 
 Important routing policy:
-- Single-job execution is NOT LONG_RUNNING_JOB.
-- If the user says one job, single job, this map_id, specific sql_id, priority N, only this, or similar, route FAST_STATUS.
-- FAST_STATUS may update status/priority/USE_YN so that a later full Long Job run includes only the intended target.
-- LONG_RUNNING_JOB never selects a single job. It always means run_all_pending=true for the selected domain.
-- If the user says "대기 작업 실행해줘" or "pending jobs run" without a specific ID, route LONG_RUNNING_JOB.
+- Single-job or multi-target execution IS JOB_EXECUTION.
+- If the user says map_id=101 run, sql_id=ABC run, space_nm=X run, or similar, route JOB_EXECUTION.
+- If the user asks to update priority/status/USE_YN or exclude/include a job without executing it now, route MANAGEMENT.
+- If the user says "대기 작업 실행해줘" or "pending jobs run" without a specific ID, route JOB_EXECUTION.
 
 Required JSON schema:
 {
-  "route": "GENERAL_CHAT|FAST_STATUS|LONG_RUNNING_JOB",
+  "route": "GENERAL_CHAT|MANAGEMENT|JOB_EXECUTION",
   "task_type": "CHAT|STATUS|JOB_EXECUTION",
   "expected_latency": "FAST|LONG",
   "needs_pending_jobs": true,
@@ -37,10 +36,10 @@ Required JSON schema:
 """
 
 
-class NewType01LlmClassifier(Component):
-    display_name = "01 LLM Classifier"
-    description = "Classifies user intent for routing with an OpenAI-compatible chat completion LLM."
-    name = "NewType01LlmClassifier"
+class NewType01RequestClassifier(Component):
+    display_name = "01 Request Classifier"
+    description = "Classifies the user request into the first-level SmartMigrate route."
+    name = "NewType01RequestClassifier"
     icon = "BrainCircuit"
 
     inputs = [
@@ -87,7 +86,7 @@ class NewType01LlmClassifier(Component):
             classification = self._classify(text)
             payload.update(
                 {
-                    "component": "01_llmClassifier",
+                    "component": "01_requestClassifier",
                     "classification": classification,
                     "route": classification["route"],
                     "expected_latency": classification["expected_latency"],
@@ -103,7 +102,7 @@ class NewType01LlmClassifier(Component):
             self.status = payload
             return Data(data=payload)
         except Exception as exc:
-            result = {"ok": False, "component": "01_llmClassifier", "error": str(exc)}
+            result = {"ok": False, "component": "01_requestClassifier", "error": str(exc)}
             self.status = result
             return Data(data=result)
 
@@ -192,7 +191,7 @@ class NewType01LlmClassifier(Component):
 
     def _normalize_classification(self, value: dict[str, Any]) -> dict[str, Any]:
         route = str(value.get("route") or "GENERAL_CHAT").strip().upper()
-        allowed = {"GENERAL_CHAT", "FAST_STATUS", "LONG_RUNNING_JOB"}
+        allowed = {"GENERAL_CHAT", "MANAGEMENT", "JOB_EXECUTION"}
         if route not in allowed:
             route = "GENERAL_CHAT"
         defaults = self._defaults_for_route(route)
@@ -206,7 +205,7 @@ class NewType01LlmClassifier(Component):
         }
 
     def _defaults_for_route(self, route: str) -> dict[str, Any]:
-        if route == "LONG_RUNNING_JOB":
+        if route == "JOB_EXECUTION":
             return {
                 "task_type": "JOB_EXECUTION",
                 "expected_latency": "LONG",
@@ -214,7 +213,7 @@ class NewType01LlmClassifier(Component):
                 "needs_llm_answer": False,
                 "reason": "",
             }
-        if route == "FAST_STATUS":
+        if route == "MANAGEMENT":
             return {
                 "task_type": "STATUS",
                 "expected_latency": "FAST",
@@ -232,18 +231,18 @@ class NewType01LlmClassifier(Component):
 
     def _classify_by_rule(self, text: str) -> dict[str, Any]:
         lowered = text.lower()
-        if self._is_single_job_control(lowered):
+        if self._is_job_execution(lowered):
             return {
-                "route": "FAST_STATUS",
-                "task_type": "STATUS",
-                "expected_latency": "FAST",
-                "needs_pending_jobs": False,
+                "route": "JOB_EXECUTION",
+                "task_type": "JOB_EXECUTION",
+                "expected_latency": "LONG",
+                "needs_pending_jobs": True,
                 "needs_llm_answer": False,
-                "reason": "single-job execution/control belongs to fast status control flow",
+                "reason": "explicit job target execution request",
             }
         if re.search(r"(status|상태|현황|요약|몇\s*건|건수|카운트|dashboard|fail|실패|조회|priority|우선순위|use_yn)", lowered):
             return {
-                "route": "FAST_STATUS",
+                "route": "MANAGEMENT",
                 "task_type": "STATUS",
                 "expected_latency": "FAST",
                 "needs_pending_jobs": False,
@@ -252,12 +251,12 @@ class NewType01LlmClassifier(Component):
             }
         if self._is_all_pending_execution(lowered):
             return {
-                "route": "LONG_RUNNING_JOB",
+                "route": "JOB_EXECUTION",
                 "task_type": "JOB_EXECUTION",
                 "expected_latency": "LONG",
                 "needs_pending_jobs": True,
                 "needs_llm_answer": False,
-                "reason": "all-pending execution request",
+                "reason": "job execution request",
             }
         return {
             "route": "GENERAL_CHAT",
@@ -268,13 +267,10 @@ class NewType01LlmClassifier(Component):
             "reason": "general conversation",
         }
 
-    def _is_single_job_control(self, text: str) -> bool:
-        single_terms = r"(단건|한\s*건|1\s*건|하나만|하나\s*만|특정|지정|only\s+this|single|one\s+job|this\s+job)"
-        id_terms = r"(map_id|mapid|sql_id|sqlid|row_id|rowid|id\s*[=:]?\s*\d+|map\s*[=:]?\s*\d+)"
-        control_terms = r"(실행|run|start|처리|priority|우선순위|status|상태|use_yn|대상)"
-        if re.search(single_terms, text, flags=re.I):
-            return True
-        return bool(re.search(id_terms, text, flags=re.I) and re.search(control_terms, text, flags=re.I))
+    def _is_job_execution(self, text: str) -> bool:
+        id_terms = r"(map[_\s-]*id|mapid|sql[_\s-]*id|sqlid|space[_\s-]*nm|row[_\s-]*id|rowid|id\s*[=:]?\s*\d+)"
+        execution_terms = r"(실행|진행|처리|run|start|process)"
+        return bool(re.search(id_terms, text, flags=re.I) and re.search(execution_terms, text, flags=re.I))
 
     def _is_all_pending_execution(self, text: str) -> bool:
         all_terms = r"(전체|모든|전부|끝까지|일괄|배치|all|every|all\s+pending|run\s+all|process\s+all)"

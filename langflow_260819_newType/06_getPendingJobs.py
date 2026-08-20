@@ -60,7 +60,7 @@ class NewType06GetPendingJobs(Component):
                     "component": "06_getPendingJobs",
                     "pending_jobs": jobs,
                     "pending_summary": summary,
-                    "next_node": "08_longJobRouter",
+                    "next_node": "08_jobExecutionRouter",
                 }
             )
             payload.setdefault("history", []).append(
@@ -99,10 +99,15 @@ class NewType06GetPendingJobs(Component):
                                TO_CHAR(TO_TABLE) AS TARGET_NAME,
                                PRIORITY,
                                RETRY_COUNT,
+                               TO_CHAR(USE_YN) AS USE_YN,
+                               TO_CHAR(STATUS) AS STATUS,
+                               CASE
+                                   WHEN UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
+                                    AND STATUS IS NULL THEN 'Y'
+                                   ELSE 'N'
+                               END AS RUNNABLE_YN,
                                0 AS SORT_GROUP
                           FROM {mig_table}
-                         WHERE UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
-                           AND STATUS IS NULL
                         UNION ALL
                         SELECT 'SQL_CONVERSION' AS JOB_ROUTE,
                                'SQL' AS JOB_TYPE,
@@ -114,9 +119,14 @@ class NewType06GetPendingJobs(Component):
                                TO_CHAR(TARGET_TABLE) AS TARGET_NAME,
                                PRIORITY,
                                RETRY_COUNT,
+                               NULL AS USE_YN,
+                               TO_CHAR(STATUS_CONVERSION) AS STATUS,
+                               CASE
+                                   WHEN STATUS_CONVERSION IS NULL THEN 'Y'
+                                   ELSE 'N'
+                               END AS RUNNABLE_YN,
                                1 AS SORT_GROUP
                           FROM {sql_table}
-                         WHERE STATUS_CONVERSION IS NULL
                        )
                  ORDER BY SORT_GROUP ASC, PRIORITY ASC NULLS LAST, MAP_ID ASC NULLS LAST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                  FETCH FIRST {limit} ROWS ONLY
@@ -137,6 +147,9 @@ class NewType06GetPendingJobs(Component):
             "target_name": self._json_value(row[7]),
             "priority": self._json_value(row[8]),
             "retry_count": self._json_value(row[9]) or 0,
+            "use_yn": self._json_value(row[10]),
+            "status": self._json_value(row[11]),
+            "runnable_yn": self._json_value(row[12]),
         }
 
     def _load_mock_jobs(self) -> dict[str, list[dict[str, Any]]]:
@@ -144,8 +157,8 @@ class NewType06GetPendingJobs(Component):
         if not str(raw).strip():
             return self._group_jobs(
                 [
-                    {"job_route": "MIG", "job_type": "MIG", "map_id": 101, "source_name": "SRC_EMP", "target_name": "TGT_EMP", "priority": 1},
-                    {"job_route": "SQL_CONVERSION", "job_type": "SQL", "row_id": "MOCK_ROWID_1", "space_nm": "demo", "sql_id": "selectEmp", "priority": 10},
+                    {"job_route": "MIG", "job_type": "MIG", "map_id": 101, "source_name": "SRC_EMP", "target_name": "TGT_EMP", "priority": 1, "use_yn": "Y", "status": None, "runnable_yn": "Y"},
+                    {"job_route": "SQL_CONVERSION", "job_type": "SQL", "row_id": "MOCK_ROWID_1", "space_nm": "demo", "sql_id": "selectEmp", "priority": 10, "status": None, "runnable_yn": "Y"},
                 ]
             )
         parsed = self._parse_payload(raw)
@@ -159,12 +172,14 @@ class NewType06GetPendingJobs(Component):
 
     def _group_jobs(self, all_jobs: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
         normalized = [self._normalize_job(job) for job in all_jobs]
-        migration_jobs = [job for job in normalized if job.get("job_route") == "MIG"]
-        sql_conversion_jobs = [job for job in normalized if job.get("job_route") in {"SQL_CONVERSION", "SQL"}]
-        sql_tuning_jobs = [job for job in normalized if job.get("job_route") == "SQL_TUNING"]
-        sql_formatting_jobs = [job for job in normalized if job.get("job_route") == "SQL_FORMATTING"]
+        runnable = [job for job in normalized if job.get("runnable")]
+        migration_jobs = [job for job in runnable if job.get("job_route") == "MIG"]
+        sql_conversion_jobs = [job for job in runnable if job.get("job_route") in {"SQL_CONVERSION", "SQL"}]
+        sql_tuning_jobs = [job for job in runnable if job.get("job_route") == "SQL_TUNING"]
+        sql_formatting_jobs = [job for job in runnable if job.get("job_route") == "SQL_FORMATTING"]
         return {
-            "all_jobs": normalized,
+            "all_jobs": runnable,
+            "job_lookup_jobs": normalized,
             "migration_jobs": migration_jobs,
             "sql_conversion_jobs": sql_conversion_jobs,
             "sql_jobs": sql_conversion_jobs,
@@ -183,7 +198,16 @@ class NewType06GetPendingJobs(Component):
             route = "SQL_CONVERSION"
         out["job_route"] = route or "UNKNOWN"
         out["job_type"] = out.get("job_type") or ("MIG" if out["job_route"] == "MIG" else "SQL")
+        out["runnable"] = self._is_runnable(out)
         return out
+
+    def _is_runnable(self, job: dict[str, Any]) -> bool:
+        runnable_yn = str(job.get("runnable_yn") or "").strip().upper()
+        if runnable_yn in {"Y", "N"}:
+            return runnable_yn == "Y"
+        use_yn = str(job.get("use_yn") or "Y").strip().upper()
+        status = job.get("status")
+        return use_yn != "N" and (status is None or str(status).strip() == "")
 
     @contextmanager
     def _connect(self):

@@ -14,10 +14,10 @@ except Exception:
     DataInput = MessageTextInput
 
 
-class NewType05LongTaskNotice(Component):
-    display_name = "05 Long Task Notice"
-    description = "Adds a user-facing notice before routing to pending-job lookup for long-running work."
-    name = "NewType05LongTaskNotice"
+class NewType05JobExecutionNotice(Component):
+    display_name = "05 Job Execution Notice"
+    description = "Adds a user-facing notice before loading job-target context."
+    name = "NewType05JobExecutionNotice"
     icon = "Clock"
 
     inputs = [DataInput(name="payload_json", display_name="Payload JSON", required=True)]
@@ -27,22 +27,22 @@ class NewType05LongTaskNotice(Component):
         try:
             payload = self._parse_payload(getattr(self, "payload_json", ""))
             notice = (
-                "이 요청은 DB migration 또는 SQL conversion 작업 실행으로 분류되었습니다. "
-                "실제 실행은 오래 걸릴 수 있으므로 먼저 pending job을 확인하고, 선택된 작업만 처리합니다."
+                "이 요청은 작업 대상 실행으로 분류되었습니다. "
+                "먼저 pending job과 사용자가 지정한 map_id/sql_id/space_nm을 확인한 뒤 실행 대상을 정리합니다."
             )
             payload.update(
                 {
-                    "component": "05_longTaskNotice",
-                    "long_task_notice": notice,
+                    "component": "05_jobExecutionNotice",
+                    "job_execution_notice": notice,
                     "should_execute": True,
                     "next_node": "06_getPendingJobs",
                 }
             )
-            payload.setdefault("history", []).append({"step": "long_task_notice", "message": "long running task notice added"})
+            payload.setdefault("history", []).append({"step": "job_execution_notice", "message": "job execution notice added"})
             self.status = payload
             return Data(data=payload)
         except Exception as exc:
-            result = {"ok": False, "component": "05_longTaskNotice", "error": str(exc)}
+            result = {"ok": False, "component": "05_jobExecutionNotice", "error": str(exc)}
             self.status = result
             return Data(data=result)
 
