@@ -42,10 +42,10 @@ class NewType02IntentRouter(Component):
             payload = self._parse_payload(getattr(self, "payload_json", ""))
             route = str(payload.get("route") or (payload.get("classification") or {}).get("route") or "GENERAL_CHAT").upper()
             next_node = {
-                "GENERAL_CHAT": "03_generalChatResponder",
+                "GENERAL_CHAT": "03_llmResponse",
                 "MANAGEMENT": "04_managementRouter",
                 "JOB_EXECUTION": "06_getPendingJobs",
-            }.get(route, "03_generalChatResponder")
+            }.get(route, "03_llmResponse")
             if route != expected_route:
                 self.stop(output_name)
                 return Data(data={})

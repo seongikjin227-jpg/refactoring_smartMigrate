@@ -22,7 +22,7 @@ flowchart TD
     A["Chat Input"] --> B["01 Request Classifier"]
     B --> C{"02 Intent Conditional Router"}
 
-    C -->|general_chat| D["03 General Chat Responder"]
+    C -->|general_chat| D["03 LLM Response"]
     C -->|management| E{"04 Management LLM Router"}
     C -->|job_execution| G["06 Get Pending Jobs"]
 
@@ -64,7 +64,7 @@ flowchart TD
 |---:|---|---|---|---|
 | 1 | Chat Input | Message/Text | `01 Request Classifier` | `user_request` |
 | 2 | `01 Request Classifier` | `payload` | `02 Intent Conditional Router` | `payload_json` |
-| 3 | `02 Intent Conditional Router` | `General Chat` | `03 General Chat Responder` | `payload_json` |
+| 3 | `02 Intent Conditional Router` | `General Chat` | `03 LLM Response` | `user_request` + `03_llmResponsePrompt.md` |
 | 4 | `02 Intent Conditional Router` | `Management` | `04 Management LLM Router` | `payload_json` |
 | 5 | `04 Management LLM Router` | `Dashboard` | `04 Dashboard` | `payload_json` |
 | 6 | `04 Management LLM Router` | `Status Change` | `04 Status Change` | `payload_json` |
@@ -87,7 +87,7 @@ flowchart TD
 
 | 사용자 요청 예시 | 1차 route | 2차 route / 실행 모드 | 연결 |
 |---|---|---|---|
-| `안녕`, `이 구조 설명해줘` | `GENERAL_CHAT` | - | `03 General Chat Responder` |
+| `안녕`, `이 구조 설명해줘` | `GENERAL_CHAT` | - | `03 LLM Response` |
 | `SQL Conversion 작업 대상 조회해줘` | `MANAGEMENT` | `DASHBOARD` | `04 Dashboard` |
 | `DB Migration 대상 목록 보여줘` | `MANAGEMENT` | `DASHBOARD` | `04 Dashboard` |
 | `map_id=101 priority 올려줘` | `MANAGEMENT` | `STATUS_CHANGE` | `04 Status Change` |
@@ -133,7 +133,7 @@ Chat Output으로 직접 연결되는 출력은 모두 `Message` 타입이다.
 
 | Component | Output |
 |---|---|
-| `03 General Chat Responder` | `Result Message` |
+| `03 LLM Response` | `LLM Message` |
 | `04 Dashboard` | `Result Message` |
 | `04 Status Change` | `Result Message` |
 | `04 Correct SQL Input` | `Result Message` |
@@ -146,6 +146,7 @@ Chat Output으로 직접 연결되는 출력은 모두 `Message` 타입이다.
 ## 제거된 컴포넌트
 
 - `05_jobExecutionNotice.py`
+- `03_generalChatResponder.py`
 - `07_prioritySelector.py`
 - `09_dbMigrationAgent.py`
 - `11_sqlConversionAgent.py`

@@ -13,7 +13,7 @@
 | 테스트 | Request Classifier 샘플 입력별 route 검증 | `01_requestClassifier.py` | 0.5 WD |
 | 개발 | 1차 route를 multi-output으로 분기하는 Conditional Router 정리 | `02_intentRouter.py` | 0.5 WD |
 | 테스트 | 1차 Router에서 선택되지 않은 branch가 실행되지 않는지 검증 | `02_intentRouter.py` | 0.5 WD |
-| 개발 | 일반 대화 branch 응답 컴포넌트 정리 | `03_generalChatResponder.py` | 0.25 WD |
+| 개발 | 일반 대화 branch LLM 응답 프롬프트 정리 | `03_llmResponsePrompt.md` | 0.25 WD |
 | 개발 | 최종 Chat Output 메시지 생성 컴포넌트 정리 | `13_finalSummary.py` | 0.75 WD |
 | 테스트 | Final Summary가 성공/실패/선행작업차단/대상없음 결과를 모두 메시지로 변환하는지 검증 | `13_finalSummary.py` | 0.5 WD |
 
