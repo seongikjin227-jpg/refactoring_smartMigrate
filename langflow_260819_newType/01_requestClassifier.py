@@ -11,27 +11,27 @@ from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
 from lfx.schema.data import Data
 
 
-CLASSIFIER_PROMPT = """You are a SmartMigrate intent classifier. Return JSON only.
+CLASSIFIER_PROMPT = """당신은 SmartMigrate의 1차 요청 분류기입니다. 반드시 JSON 객체만 반환하세요.
 
-Routes:
-- GENERAL_CHAT: normal conversation, explanation request, concept question, or non-operational help.
-- MANAGEMENT: fast management requests such as dashboard/status summary/counts/failure report, priority/status/USE_YN updates, or Correct SQL input.
-- JOB_EXECUTION: run/execute/process job targets. This includes all pending jobs for a domain and explicit one-or-more targets by map_id/sql_id/space_nm.
+분류 route:
+- GENERAL_CHAT: 일반 대화, 설명 요청, 개념 질문, 작업 실행/관리와 무관한 도움 요청.
+- MANAGEMENT: Dashboard/상태/건수/실패 현황 조회, priority/status/USE_YN 변경, Correct SQL 입력 같은 관리 기능.
+- JOB_EXECUTION: 실제 작업 실행 요청. 전체 pending 실행, map_id/sql_id/space_nm 기반 단건 또는 복수건 실행을 포함합니다.
 
-Important routing policy:
-- Single-job or multi-target execution IS JOB_EXECUTION.
-- If the user says map_id=101 run, sql_id=ABC run, space_nm=X run, or similar, route JOB_EXECUTION.
-- If the user asks to update priority/status/USE_YN or exclude/include a job without executing it now, route MANAGEMENT.
-- If the user says "대기 작업 실행해줘" or "pending jobs run" without a specific ID, route JOB_EXECUTION.
+중요 규칙:
+- 사용자가 "map_id=101 실행", "sql_id=Q001 변환", "space_nm=SALES 튜닝"처럼 실행을 요청하면 JOB_EXECUTION입니다.
+- 사용자가 "대기 작업 실행", "전체 DB Migration 진행", "모든 SQL Conversion 실행"처럼 말하면 JOB_EXECUTION입니다.
+- 사용자가 priority/status/USE_YN 변경, 제외/포함, Correct SQL 저장을 요청하면 MANAGEMENT입니다.
+- 빠른 단순 답변이나 설명은 GENERAL_CHAT입니다.
 
-Required JSON schema:
+반환 JSON schema:
 {
   "route": "GENERAL_CHAT|MANAGEMENT|JOB_EXECUTION",
   "task_type": "CHAT|STATUS|JOB_EXECUTION",
   "expected_latency": "FAST|LONG",
   "needs_pending_jobs": true,
   "needs_llm_answer": false,
-  "reason": "short reason"
+  "reason": "짧은 한국어 사유"
 }
 """
 
@@ -43,38 +43,12 @@ class NewType01RequestClassifier(Component):
     icon = "BrainCircuit"
 
     inputs = [
-        MessageTextInput(
-            name="user_request",
-            display_name="User Request",
-            required=True,
-            info="Connect Chat Input directly here.",
-        ),
-        MessageTextInput(
-            name="classifier_prompt",
-            display_name="Classifier Prompt",
-            required=False,
-            value=CLASSIFIER_PROMPT,
-            info="System prompt for LLM classification. Keep it short; do not include migration/sql generation prompts.",
-        ),
-        StrInput(
-            name="classifier_mode",
-            display_name="Classifier Mode",
-            value="LLM",
-            required=False,
-            info="LLM or RULE_POC. LLM calls an OpenAI-compatible /chat/completions endpoint.",
-        ),
+        MessageTextInput(name="user_request", display_name="User Request", required=True),
         StrInput(name="llm_base_url", display_name="LLM Base URL", value="https://api.openai.com/v1", required=False),
-        SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=False),
-        StrInput(name="llm_model", display_name="LLM Model", value="gpt-4.1-mini", required=False),
+        SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=True),
+        StrInput(name="llm_model", display_name="LLM Model", value="gpt-4.1-mini", required=True),
         IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=512, required=False),
         IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=30, required=False),
-        StrInput(
-            name="fallback_to_rules",
-            display_name="Fallback To Rules",
-            value="Y",
-            required=False,
-            info="Y: use rule classifier if LLM config/call fails. N: return error.",
-        ),
     ]
 
     outputs = [Output(display_name="Payload", name="payload", method="classify")]
@@ -82,23 +56,22 @@ class NewType01RequestClassifier(Component):
     def classify(self) -> Data:
         try:
             text = self._read_user_request()
-            payload = {"ok": True, "user_request": text, "history": []}
-            classification = self._classify(text)
-            payload.update(
-                {
-                    "component": "01_requestClassifier",
-                    "classification": classification,
-                    "route": classification["route"],
-                    "expected_latency": classification["expected_latency"],
-                    "next_node": "02_intentRouter",
-                }
-            )
-            payload.setdefault("history", []).append(
-                {
-                    "step": "llm_classifier",
-                    "message": f"route={classification['route']}, latency={classification['expected_latency']}",
-                }
-            )
+            classification = self._classify_by_llm(text)
+            payload = {
+                "ok": True,
+                "component": "01_requestClassifier",
+                "user_request": text,
+                "classification": classification,
+                "route": classification["route"],
+                "expected_latency": classification["expected_latency"],
+                "next_node": "02_intentRouter",
+                "history": [
+                    {
+                        "step": "request_classifier",
+                        "message": f"route={classification['route']}, latency={classification['expected_latency']}",
+                    }
+                ],
+            }
             self.status = payload
             return Data(data=payload)
         except Exception as exc:
@@ -117,84 +90,51 @@ class NewType01RequestClassifier(Component):
             return str(raw.text or "")
         return str(raw or "").strip()
 
-    def _classify(self, text: str) -> dict[str, Any]:
-        mode = str(getattr(self, "classifier_mode", "") or "LLM").strip().upper()
-        if mode == "RULE_POC":
-            return self._classify_by_rule(text)
-        try:
-            return self._classify_by_llm(text)
-        except Exception:
-            if self._as_bool(getattr(self, "fallback_to_rules", "Y")):
-                result = self._classify_by_rule(text)
-                result["fallback"] = "RULE_POC"
-                return result
-            raise
-
     def _classify_by_llm(self, text: str) -> dict[str, Any]:
         api_key = self._secret_to_str(getattr(self, "llm_api_key", None)).strip()
         model = str(getattr(self, "llm_model", "") or "").strip()
+        base_url = str(getattr(self, "llm_base_url", "") or "").strip().rstrip("/")
         if not api_key:
-            raise ValueError("llm_api_key is required when classifier_mode=LLM")
+            raise ValueError("llm_api_key is required for 01 Request Classifier")
         if not model:
-            raise ValueError("llm_model is required when classifier_mode=LLM")
+            raise ValueError("llm_model is required for 01 Request Classifier")
+        if not base_url:
+            raise ValueError("llm_base_url is required for 01 Request Classifier")
 
-        system_prompt = str(getattr(self, "classifier_prompt", "") or CLASSIFIER_PROMPT).strip()
-        user_prompt = (
-            "Classify this user request for SmartMigrate routing.\n"
-            f"User request:\n{text}\n\n"
-            "Return only the required JSON object."
-        )
-        payload = {
+        body = {
             "model": model,
             "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+                {"role": "system", "content": CLASSIFIER_PROMPT},
+                {"role": "user", "content": f"사용자 요청:\n{text}\n\nJSON만 반환하세요."},
             ],
             "temperature": 0,
             "max_tokens": int(getattr(self, "llm_max_tokens", None) or 512),
         }
-        base_url = str(getattr(self, "llm_base_url", "") or "https://api.openai.com/v1").strip().rstrip("/")
         url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
         req = urllib.request.Request(
             url,
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
-            },
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
             method="POST",
         )
-        timeout = int(getattr(self, "llm_timeout_seconds", None) or 30)
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                body = resp.read().decode("utf-8", errors="ignore")
+            with urllib.request.urlopen(req, timeout=int(getattr(self, "llm_timeout_seconds", None) or 30)) as resp:
+                raw = json.loads(resp.read().decode("utf-8", errors="ignore"))
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="ignore")
-            raise ValueError(f"LLM classifier HTTP {exc.code}: {detail[:1000]}") from exc
-        data = json.loads(body)
-        content = str(data["choices"][0]["message"].get("content") or "").strip()
-        parsed = self._parse_llm_json(content)
-        return self._normalize_classification(parsed)
-
-    def _parse_llm_json(self, text: str) -> dict[str, Any]:
-        value = text.strip()
-        if value.startswith("```"):
-            value = re.sub(r"^```(?:json)?\s*", "", value, flags=re.I)
-            value = re.sub(r"\s*```$", "", value)
-        match = re.search(r"\{.*\}", value, flags=re.S)
-        if match:
-            value = match.group(0)
-        parsed = json.loads(value)
-        if not isinstance(parsed, dict):
-            raise ValueError("LLM classifier must return a JSON object")
-        return parsed
+            raise ValueError(f"01 Request Classifier LLM HTTP {exc.code}: {detail[:1000]}") from exc
+        content = str(raw["choices"][0]["message"].get("content") or "").strip()
+        return self._normalize_classification(self._parse_json_object(content))
 
     def _normalize_classification(self, value: dict[str, Any]) -> dict[str, Any]:
-        route = str(value.get("route") or "GENERAL_CHAT").strip().upper()
-        allowed = {"GENERAL_CHAT", "MANAGEMENT", "JOB_EXECUTION"}
-        if route not in allowed:
-            route = "GENERAL_CHAT"
-        defaults = self._defaults_for_route(route)
+        route = str(value.get("route") or "").strip().upper()
+        if route not in {"GENERAL_CHAT", "MANAGEMENT", "JOB_EXECUTION"}:
+            raise ValueError(f"Invalid classifier route: {route}")
+        defaults = {
+            "GENERAL_CHAT": {"task_type": "CHAT", "expected_latency": "FAST", "needs_pending_jobs": False, "needs_llm_answer": True},
+            "MANAGEMENT": {"task_type": "STATUS", "expected_latency": "FAST", "needs_pending_jobs": False, "needs_llm_answer": False},
+            "JOB_EXECUTION": {"task_type": "JOB_EXECUTION", "expected_latency": "LONG", "needs_pending_jobs": True, "needs_llm_answer": False},
+        }[route]
         return {
             **defaults,
             **value,
@@ -204,81 +144,17 @@ class NewType01RequestClassifier(Component):
             "needs_llm_answer": bool(value.get("needs_llm_answer", defaults["needs_llm_answer"])),
         }
 
-    def _defaults_for_route(self, route: str) -> dict[str, Any]:
-        if route == "JOB_EXECUTION":
-            return {
-                "task_type": "JOB_EXECUTION",
-                "expected_latency": "LONG",
-                "needs_pending_jobs": True,
-                "needs_llm_answer": False,
-                "reason": "",
-            }
-        if route == "MANAGEMENT":
-            return {
-                "task_type": "STATUS",
-                "expected_latency": "FAST",
-                "needs_pending_jobs": False,
-                "needs_llm_answer": False,
-                "reason": "",
-            }
-        return {
-            "task_type": "CHAT",
-            "expected_latency": "FAST",
-            "needs_pending_jobs": False,
-            "needs_llm_answer": True,
-            "reason": "",
-        }
-
-    def _classify_by_rule(self, text: str) -> dict[str, Any]:
-        lowered = text.lower()
-        if self._is_job_execution(lowered):
-            return {
-                "route": "JOB_EXECUTION",
-                "task_type": "JOB_EXECUTION",
-                "expected_latency": "LONG",
-                "needs_pending_jobs": True,
-                "needs_llm_answer": False,
-                "reason": "explicit job target execution request",
-            }
-        if re.search(r"(status|상태|현황|요약|몇\s*건|건수|카운트|dashboard|fail|실패|조회|priority|우선순위|use_yn)", lowered):
-            return {
-                "route": "MANAGEMENT",
-                "task_type": "STATUS",
-                "expected_latency": "FAST",
-                "needs_pending_jobs": False,
-                "needs_llm_answer": False,
-                "reason": "status/dashboard/control keyword",
-            }
-        if self._is_all_pending_execution(lowered):
-            return {
-                "route": "JOB_EXECUTION",
-                "task_type": "JOB_EXECUTION",
-                "expected_latency": "LONG",
-                "needs_pending_jobs": True,
-                "needs_llm_answer": False,
-                "reason": "job execution request",
-            }
-        return {
-            "route": "GENERAL_CHAT",
-            "task_type": "CHAT",
-            "expected_latency": "FAST",
-            "needs_pending_jobs": False,
-            "needs_llm_answer": True,
-            "reason": "general conversation",
-        }
-
-    def _is_job_execution(self, text: str) -> bool:
-        id_terms = r"(map[_\s-]*id|mapid|sql[_\s-]*id|sqlid|space[_\s-]*nm|row[_\s-]*id|rowid|id\s*[=:]?\s*\d+)"
-        execution_terms = r"(실행|진행|처리|run|start|process)"
-        return bool(re.search(id_terms, text, flags=re.I) and re.search(execution_terms, text, flags=re.I))
-
-    def _is_all_pending_execution(self, text: str) -> bool:
-        all_terms = r"(전체|모든|전부|끝까지|일괄|배치|all|every|all\s+pending|run\s+all|process\s+all)"
-        domain_terms = r"(db\s*migration|migration|마이그레이션|mig|sql\s*conversion|sql\s*tuning|튜닝|sql\s*formatting|포맷|포매팅|pending|대기\s*작업)"
-        execution_terms = r"(실행|진행|처리|run|start|process)"
-        if re.search(all_terms, text, flags=re.I) and re.search(domain_terms, text, flags=re.I):
-            return True
-        return bool(re.search(r"(대기\s*작업|pending\s*jobs?)", text, flags=re.I) and re.search(execution_terms, text, flags=re.I))
+    def _parse_json_object(self, text: str) -> dict[str, Any]:
+        clean = str(text or "").strip()
+        if clean.startswith("```"):
+            clean = re.sub(r"^```(?:json)?\s*", "", clean, flags=re.I)
+            clean = re.sub(r"\s*```$", "", clean)
+        match = re.search(r"\{.*\}", clean, flags=re.S)
+        clean = match.group(0) if match else clean
+        parsed = json.loads(clean)
+        if not isinstance(parsed, dict):
+            raise ValueError("LLM must return a JSON object")
+        return parsed
 
     def _secret_to_str(self, value: Any) -> str:
         if value is None:
@@ -286,8 +162,3 @@ class NewType01RequestClassifier(Component):
         if hasattr(value, "get_secret_value"):
             return str(value.get_secret_value())
         return str(value)
-
-    def _as_bool(self, value: Any) -> bool:
-        if isinstance(value, bool):
-            return value
-        return str(value or "").strip().lower() in {"1", "true", "t", "y", "yes", "on"}

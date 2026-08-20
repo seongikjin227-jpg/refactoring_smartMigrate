@@ -23,12 +23,6 @@ class NewType06GetPendingJobs(Component):
 
     inputs = [
         DataInput(name="payload_json", display_name="Payload JSON", required=True),
-        MessageTextInput(
-            name="mock_jobs_json",
-            display_name="Mock Jobs JSON",
-            required=False,
-            info='Optional fallback. Example: {"migration_jobs":[{"map_id":1}],"sql_conversion_jobs":[]}',
-        ),
         StrInput(name="db_host", display_name="DB Host", required=False),
         IntInput(name="db_port", display_name="DB Port", value=1521, required=False),
         StrInput(name="db_service_name", display_name="DB Service Name", required=False),
@@ -47,7 +41,9 @@ class NewType06GetPendingJobs(Component):
                 payload.update({"component": "06_getPendingJobs", "next_node": "13_finalSummary"})
                 return Data(data=payload)
 
-            jobs = self._load_from_db() if self._has_db_config() else self._load_mock_jobs()
+            if not self._has_db_config():
+                raise ValueError("DB connection settings are required for 06 Get Pending Jobs")
+            jobs = self._load_from_db()
             summary = {
                 "total": len(jobs.get("all_jobs", [])),
                 "migration_total": len(jobs.get("migration_jobs", [])),
@@ -145,24 +141,6 @@ class NewType06GetPendingJobs(Component):
             "status": self._json_value(row[9]),
             "runnable_yn": self._json_value(row[10]),
         }
-
-    def _load_mock_jobs(self) -> dict[str, list[dict[str, Any]]]:
-        raw = getattr(self, "mock_jobs_json", "") or ""
-        if not str(raw).strip():
-            return self._group_jobs(
-                [
-                    {"job_route": "MIG", "job_type": "MIG", "map_id": 101, "priority": 1, "use_yn": "Y", "status": None, "runnable_yn": "Y"},
-                    {"job_route": "SQL_CONVERSION", "job_type": "SQL", "row_id": "MOCK_ROWID_1", "space_nm": "demo", "sql_id": "selectEmp", "priority": 10, "status": None, "runnable_yn": "Y"},
-                ]
-            )
-        parsed = self._parse_payload(raw)
-        all_jobs = list(parsed.get("all_jobs") or [])
-        if not all_jobs:
-            all_jobs.extend(parsed.get("migration_jobs") or [])
-            all_jobs.extend(parsed.get("sql_conversion_jobs") or parsed.get("sql_jobs") or [])
-            all_jobs.extend(parsed.get("sql_tuning_jobs") or [])
-            all_jobs.extend(parsed.get("sql_formatting_jobs") or [])
-        return self._group_jobs(all_jobs)
 
     def _group_jobs(self, all_jobs: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
         normalized = [self._normalize_job(job) for job in all_jobs]

@@ -4,8 +4,10 @@
 
 - `Management`는 조회/관리 기능이다. Dashboard, Status Change, Correct SQL Input만 처리한다.
 - `Job Execution`은 작업 대상 실행 기능이다. 전체 pending 실행과 `map_id`/`sql_id`/`space_nm` 기반 단건 또는 복수건 지정 실행을 모두 처리한다.
+- `01 Request Classifier`, `04 Management LLM Router`, `08 Job Target Router`는 LLM 설정이 필수다.
+- 위 LLM 컴포넌트들의 prompt는 코드 내부 상수로 관리하며 Langflow input으로 받지 않는다.
 - `08 Job Target Router`는 LLM으로 실행 도메인과 실행 모드를 결정한다.
-- `08 Job Target Router`의 rule 로직은 LLM 설정이 없거나 호출에 실패했을 때 fallback으로 사용한다.
+- `08 Job Target Router`는 LLM 설정이 필수다. LLM 설정이 없거나 호출에 실패하면 오류로 처리한다.
 - DB 상태, runnable 여부, 선행 작업 여부는 LLM 입력 context로 제공한다.
 - `08 Job Target Router`의 output에는 LLM이 결정한 `job_route`, `run_mode`, `target_filter`가 그대로 포함된다.
 - 실행 모드는 `all_pending` 또는 `targeted`다.
@@ -25,14 +27,12 @@ flowchart TD
 
     C -->|general_chat| D["03 General Chat Responder"]
     C -->|management| E{"04 Management LLM Router"}
-    C -->|job_execution| F["05 Job Execution Notice"]
+    C -->|job_execution| G["06 Get Pending Jobs"]
 
     E -->|dashboard| E1["04 Dashboard"]
     E -->|status_change| E2["04 Status Change"]
     E -->|correct_sql_input| E3["04 Correct SQL Input"]
-    E -->|job_execution_redirect| F
-
-    F --> G["06 Get Pending Jobs"]
+    E -->|exception message| OUT
     G --> H{"08 Job Target Router"}
 
     H -->|MIG targets| P["09 Execution Plan Summary"]
@@ -74,20 +74,19 @@ flowchart TD
 | 5 | `04 Management LLM Router` | `Dashboard` | `04 Dashboard` | `payload_json` |
 | 6 | `04 Management LLM Router` | `Status Change` | `04 Status Change` | `payload_json` |
 | 7 | `04 Management LLM Router` | `Correct SQL Input` | `04 Correct SQL Input` | `payload_json` |
-| 8 | `04 Management LLM Router` | `Job Execution Redirect` | `05 Job Execution Notice` | `payload_json` |
-| 9 | `02 Intent Conditional Router` | `Job Execution` | `05 Job Execution Notice` | `payload_json` |
-| 10 | `05 Job Execution Notice` | `payload` | `06 Get Pending Jobs` | `payload_json` |
-| 11 | `06 Get Pending Jobs` | `payload` | `08 Job Target Router` | `payload_json` |
-| 12 | `08 Job Target Router` | executable target output | `09 Execution Plan Summary` | `payload_json` |
-| 13 | `09 Execution Plan Summary` | `Notice Message` | Chat Output | Message |
-| 14 | `09 Execution Plan Summary` | `Payload` | selected Pipeline | `payload_json` |
-| 15 | `10 MIG Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
-| 16 | `12 SQL Conversion Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
-| 17 | `15 SQL Tuning Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
-| 18 | `17 SQL Formatting Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
-| 19 | `08 Job Target Router` | `Prerequisite Blocked` | `13 Final Summary` | `payload_json` |
-| 20 | `08 Job Target Router` | `No Runnable Target` | `13 Final Summary` | `payload_json` |
-| 21 | `13 Final Summary` | `Result Message` | Chat Output | Message |
+| 8 | `04 Management LLM Router` | `Exception Message` | Chat Output | Message |
+| 9 | `02 Intent Conditional Router` | `Job Execution` | `06 Get Pending Jobs` | `payload_json` |
+| 10 | `06 Get Pending Jobs` | `payload` | `08 Job Target Router` | `payload_json` |
+| 11 | `08 Job Target Router` | executable target output | `09 Execution Plan Summary` | `payload_json` |
+| 12 | `09 Execution Plan Summary` | `Notice Message` | Chat Output | Message |
+| 13 | `09 Execution Plan Summary` | `Payload` | selected Pipeline | `payload_json` |
+| 14 | `10 MIG Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
+| 15 | `12 SQL Conversion Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
+| 16 | `15 SQL Tuning Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
+| 17 | `17 SQL Formatting Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
+| 18 | `08 Job Target Router` | `Prerequisite Blocked` | `13 Final Summary` | `payload_json` |
+| 19 | `08 Job Target Router` | `No Runnable Target` | `13 Final Summary` | `payload_json` |
+| 20 | `13 Final Summary` | `Result Message` | Chat Output | Message |
 
 ## 작업 대상 실행 세부 분기
 
@@ -127,6 +126,7 @@ Chat Output으로 직접 연결되는 출력은 모두 `Message` 타입이다.
 | `04 Dashboard` | `Result Message` |
 | `04 Status Change` | `Result Message` |
 | `04 Correct SQL Input` | `Result Message` |
+| `04 Management LLM Router` | `Exception Message` |
 | `09 Execution Plan Summary` | `Notice Message` |
 | `13 Final Summary` | `Result Message` |
 
@@ -157,6 +157,7 @@ log
 ## 제거된 컴포넌트
 
 - `07_prioritySelector.py`
+- `05_jobExecutionNotice.py`
 - `09_dbMigrationAgent.py`
 - `11_sqlConversionAgent.py`
 - `14_sqlTuningAgent.py`

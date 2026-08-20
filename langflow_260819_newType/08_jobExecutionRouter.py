@@ -16,21 +16,26 @@ except Exception:
     DataInput = MessageTextInput
 
 
-JOB_EXECUTION_ROUTER_PROMPT = """You are a SmartMigrate job execution router. Return JSON only.
+JOB_EXECUTION_ROUTER_PROMPT = """당신은 SmartMigrate의 작업 대상 실행 라우터입니다. 반드시 JSON 객체만 반환하세요.
 
-Your job is to classify a job execution request into one execution domain and one execution mode.
+역할:
+- 사용자 실행 요청을 하나의 실행 도메인과 실행 모드로 분류합니다.
+- 06 Get Pending Jobs가 전달한 pending_summary와 sample_pending_jobs를 참고합니다.
+- 사용자 요청에 있는 map_id/sql_id/space_nm 값을 target_filter에 넣습니다.
 
-Domains:
-- MIG: DB Migration jobs, usually identified by map_id.
-- SQL_CONVERSION: SQL conversion jobs, usually identified by sql_id or space_nm.
-- SQL_TUNING: SQL tuning jobs.
-- SQL_FORMATTING: SQL formatting jobs.
+실행 도메인:
+- MIG: DB Migration 작업. 보통 map_id로 식별합니다.
+- SQL_CONVERSION: SQL Conversion 작업. 보통 sql_id 또는 space_nm으로 식별합니다.
+- SQL_TUNING: SQL Tuning 작업.
+- SQL_FORMATTING: SQL Formatting 작업.
+- PREREQUISITE_BLOCKED: 선행 작업 또는 상태 문제로 바로 실행하지 않는 것이 맞는 경우.
+- NO_RUNNABLE_JOB: 실행할 대상이 없다고 판단되는 경우.
 
-Execution modes:
-- all_pending: user asks to run all pending jobs for a domain, or says "대기 작업 실행".
-- targeted: user asks to run explicit one-or-more targets by map_id/sql_id/space_nm.
+실행 모드:
+- all_pending: 사용자가 전체 pending/대기 작업 실행을 요청한 경우.
+- targeted: 사용자가 map_id/sql_id/space_nm으로 단건 또는 복수건 대상을 지정한 경우.
 
-Return JSON only:
+반환 JSON schema:
 {
   "job_route": "MIG|SQL_CONVERSION|SQL_TUNING|SQL_FORMATTING|PREREQUISITE_BLOCKED|NO_RUNNABLE_JOB",
   "run_mode": "all_pending|targeted",
@@ -39,18 +44,17 @@ Return JSON only:
     "sql_ids": [],
     "space_nms": []
   },
-  "reason": "short reason"
+  "reason": "짧은 한국어 사유"
 }
 
-Rules:
-- If map_id is present, job_route is MIG and run_mode is targeted.
-- If sql_id or space_nm is present and the user says tuning, job_route is SQL_TUNING.
-- If sql_id or space_nm is present and the user says formatting/format, job_route is SQL_FORMATTING.
-- If sql_id or space_nm is present without tuning/formatting, job_route is SQL_CONVERSION.
-- If no explicit target exists and the user asks to run pending/all jobs, use run_mode=all_pending.
-- If DB context shows that the requested target is not runnable, you may choose PREREQUISITE_BLOCKED and explain why.
-- If prerequisite work should run first, you may choose PREREQUISITE_BLOCKED and set blocker_route in the reason text.
-- The component will pass your routing decision through as payload variables.
+규칙:
+- map_id가 있으면 job_route는 MIG, run_mode는 targeted입니다.
+- sql_id 또는 space_nm이 있고 튜닝 요청이면 SQL_TUNING입니다.
+- sql_id 또는 space_nm이 있고 포맷팅 요청이면 SQL_FORMATTING입니다.
+- sql_id 또는 space_nm이 있고 튜닝/포맷팅이 아니면 SQL_CONVERSION입니다.
+- 명시 대상이 없고 전체/대기 작업 실행 요청이면 run_mode는 all_pending입니다.
+- DB context상 요청 대상이 실행 불가 상태라고 판단하면 PREREQUISITE_BLOCKED를 선택할 수 있습니다.
+- 선행 작업을 먼저 해야 한다고 판단하면 PREREQUISITE_BLOCKED를 선택할 수 있습니다.
 """
 
 
@@ -62,8 +66,6 @@ class NewType08JobExecutionRouter(Component):
 
     inputs = [
         DataInput(name="payload_json", display_name="Payload JSON", required=True),
-        MessageTextInput(name="routing_prompt", display_name="Routing Prompt", value=JOB_EXECUTION_ROUTER_PROMPT, required=False),
-        StrInput(name="router_mode", display_name="Router Mode", value="LLM", required=False),
         StrInput(name="llm_base_url", display_name="LLM Base URL", value="https://api.openai.com/v1", required=False),
         SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=False),
         StrInput(name="llm_model", display_name="LLM Model", value="gpt-4.1-mini", required=False),
@@ -118,7 +120,7 @@ class NewType08JobExecutionRouter(Component):
             return cached
 
         payload = self._parse_payload(getattr(self, "payload_json", ""))
-        decision_hint = self._routing_hint(payload)
+        decision_hint = self._normalize_llm_hint(self._route_with_llm(payload), payload)
         targets = decision_hint["target_filter"]
         route = decision_hint["job_route"]
         requested_run_mode = decision_hint["run_mode"]
@@ -171,42 +173,21 @@ class NewType08JobExecutionRouter(Component):
         self._cached_routed_payload = routed
         return routed
 
-    def _routing_hint(self, payload: dict[str, Any]) -> dict[str, Any]:
-        rule_hint = self._route_with_rules(payload)
-        if not self._use_llm() or not self._has_llm_config():
-            return {**rule_hint, "source": "RULE_POC"}
-        try:
-            llm_hint = self._route_with_llm(payload)
-            return self._normalize_llm_hint(llm_hint, fallback=rule_hint)
-        except Exception:
-            return {**rule_hint, "source": "RULE_FALLBACK"}
-
-    def _use_llm(self) -> bool:
-        return str(getattr(self, "router_mode", "LLM") or "LLM").strip().upper() == "LLM"
-
-    def _has_llm_config(self) -> bool:
-        return bool(
-            self._secret_to_str(getattr(self, "llm_api_key", None)).strip()
-            and str(getattr(self, "llm_model", "") or "").strip()
-            and str(getattr(self, "llm_base_url", "") or "").strip()
-        )
-
-    def _route_with_rules(self, payload: dict[str, Any]) -> dict[str, Any]:
-        text = str(payload.get("user_request") or payload.get("input") or "")
-        targets = self._extract_targets(text)
-        route = self._requested_route(text, targets)
-        run_mode = "targeted" if any(targets.values()) else "all_pending"
-        return {"job_route": route, "run_mode": run_mode, "target_filter": targets, "reason": "rule routing"}
-
     def _route_with_llm(self, payload: dict[str, Any]) -> dict[str, Any]:
         api_key = self._secret_to_str(getattr(self, "llm_api_key", None)).strip()
         model = str(getattr(self, "llm_model", "") or "").strip()
         base_url = str(getattr(self, "llm_base_url", "") or "").strip().rstrip("/")
+        if not api_key:
+            raise ValueError("llm_api_key is required for 08 Job Target Router")
+        if not model:
+            raise ValueError("llm_model is required for 08 Job Target Router")
+        if not base_url:
+            raise ValueError("llm_base_url is required for 08 Job Target Router")
 
         body = {
             "model": model,
             "messages": [
-                {"role": "system", "content": str(getattr(self, "routing_prompt", "") or JOB_EXECUTION_ROUTER_PROMPT)},
+                {"role": "system", "content": JOB_EXECUTION_ROUTER_PROMPT},
                 {
                     "role": "user",
                     "content": json.dumps(
@@ -230,37 +211,34 @@ class NewType08JobExecutionRouter(Component):
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(request, timeout=int(getattr(self, "llm_timeout_seconds", None) or 30)) as response:
-                raw = json.loads(response.read().decode("utf-8", errors="ignore"))
-        except (urllib.error.URLError, TimeoutError, ValueError):
-            return self._route_with_rules(payload)
+        with urllib.request.urlopen(request, timeout=int(getattr(self, "llm_timeout_seconds", None) or 30)) as response:
+            raw = json.loads(response.read().decode("utf-8", errors="ignore"))
         content = (((raw.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
         return self._parse_json_object(content)
 
-    def _normalize_llm_hint(self, hint: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
+    def _normalize_llm_hint(self, hint: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+        extracted_targets = self._extract_targets(str(payload.get("user_request") or payload.get("input") or ""))
         route = str(hint.get("job_route") or "").upper()
         if route == "NO_RUNNABLE_JOB":
             route = "NO_RUNNABLE_JOB"
-        if route not in {"MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING", "PREREQUISITE_BLOCKED", "NO_RUNNABLE_JOB", None}:
-            route = fallback.get("job_route")
-        run_mode = str(hint.get("run_mode") or fallback.get("run_mode") or "all_pending").lower()
+        if route not in {"MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING", "PREREQUISITE_BLOCKED", "NO_RUNNABLE_JOB"}:
+            raise ValueError(f"Invalid LLM job_route: {route}")
+        run_mode = str(hint.get("run_mode") or "all_pending").lower()
         if run_mode not in {"all_pending", "targeted"}:
-            run_mode = fallback.get("run_mode") or "all_pending"
+            raise ValueError(f"Invalid LLM run_mode: {run_mode}")
         llm_targets = hint.get("target_filter") if isinstance(hint.get("target_filter"), dict) else {}
-        rule_targets = fallback.get("target_filter") or {}
         targets = {
             "map_ids": self._merge_lists(
                 self._normalize_list(llm_targets.get("map_ids"), int),
-                self._normalize_list(rule_targets.get("map_ids"), int),
+                self._normalize_list(extracted_targets.get("map_ids"), int),
             ),
             "sql_ids": self._merge_lists(
                 self._normalize_list(llm_targets.get("sql_ids"), str),
-                self._normalize_list(rule_targets.get("sql_ids"), str),
+                self._normalize_list(extracted_targets.get("sql_ids"), str),
             ),
             "space_nms": self._merge_lists(
                 self._normalize_list(llm_targets.get("space_nms"), str),
-                self._normalize_list(rule_targets.get("space_nms"), str),
+                self._normalize_list(extracted_targets.get("space_nms"), str),
             ),
         }
         return {

@@ -9,6 +9,7 @@ from typing import Any
 from lfx.custom.custom_component.component import Component
 from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
 from lfx.schema.data import Data
+from lfx.schema.message import Message
 
 try:
     from lfx.io import DataInput
@@ -16,46 +17,43 @@ except Exception:
     DataInput = MessageTextInput
 
 
-MANAGEMENT_ROUTER_PROMPT = """You are a SmartMigrate management router. Return JSON only.
+MANAGEMENT_ROUTER_PROMPT = """당신은 SmartMigrate의 Management 라우터입니다. 반드시 JSON 객체만 반환하세요.
 
-MANAGEMENT normally has three management routes:
-- DASHBOARD: read-only dashboard/status/failure/pending summary requests.
-- STATUS_CHANGE: change DB control values such as status, priority, USE_YN, retry state, include/exclude, or target ordering.
-- CORRECT_SQL_INPUT: user provides corrected SQL or asks to save user-edited SQL. This should set USER_EDITED='Y' and store the provided SQL in the proper SQL column.
+Management route:
+- DASHBOARD: Dashboard, 상태/현황/건수/실패/대기 작업 조회.
+- STATUS_CHANGE: status, priority, USE_YN, retry 상태, 포함/제외, 실행 대상 순서 변경.
+- CORRECT_SQL_INPUT: 사용자가 수정 SQL을 입력하거나 Correct SQL 저장을 요청한 경우.
+- EXCEPTION: Management로 들어왔지만 위 세 가지 중 하나로 판단하기 어려운 경우.
 
-There is also one redirect route:
-- JOB_EXECUTION_REDIRECT: the user is asking to execute/run/process a job now. This is not management and must be routed to the Job Execution flow.
+주의:
+- 실제 작업 실행 요청은 이 컴포넌트가 처리하지 않습니다. 그런 요청은 01 Request Classifier가 JOB_EXECUTION으로 보내야 합니다.
+- 애매하면 억지로 Dashboard나 Status Change로 보내지 말고 EXCEPTION을 반환하세요.
 
-Return JSON only:
+반환 JSON schema:
 {
-  "management_route": "DASHBOARD|STATUS_CHANGE|CORRECT_SQL_INPUT|JOB_EXECUTION_REDIRECT",
-  "db_action": "READ|UPDATE_STATUS|UPDATE_CORRECT_SQL|REDIRECT_JOB_EXECUTION",
+  "management_route": "DASHBOARD|STATUS_CHANGE|CORRECT_SQL_INPUT|EXCEPTION",
   "target": {},
   "correct_sql": "",
-  "reason": "short reason"
+  "reason": "짧은 한국어 사유"
 }
-
-Rules:
-- If the user asks to execute/run/start/process/proceed with map_id/sql_id/space_nm or pending jobs now, use JOB_EXECUTION_REDIRECT.
-- If the user asks for status, count, failures, pending jobs, dashboard, or progress, use DASHBOARD.
-- If the user asks to change priority, change status, include/exclude a job, or change the next target order, use STATUS_CHANGE.
-- If the user provides SQL text or says corrected SQL/user edited SQL/save this SQL, use CORRECT_SQL_INPUT.
 """
+
+EXCEPTION_MESSAGE = """Management 요청을 분류할 수 없습니다.
+Dashboard 조회, Status/priority/USE_YN 변경, Correct SQL 입력 중 어떤 작업인지 다시 요청해주세요.
+실행 요청이면 "map_id=101 실행"처럼 작업 대상 실행 요청으로 다시 입력해주세요."""
 
 
 class NewType04ManagementRouter(Component):
     display_name = "04 Management LLM Router"
-    description = "Routes management requests to Dashboard, Status Change, or Correct SQL Input."
+    description = "Routes management requests to Dashboard, Status Change, Correct SQL Input, or Exception."
     name = "NewType04ManagementRouter"
     icon = "Route"
 
     inputs = [
         DataInput(name="payload_json", display_name="Payload JSON", required=True),
-        MessageTextInput(name="routing_prompt", display_name="Routing Prompt", value=MANAGEMENT_ROUTER_PROMPT, required=False),
-        StrInput(name="router_mode", display_name="Router Mode", value="LLM", required=False),
         StrInput(name="llm_base_url", display_name="LLM Base URL", value="https://api.openai.com/v1", required=False),
-        SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=False),
-        StrInput(name="llm_model", display_name="LLM Model", value="gpt-4.1-mini", required=False),
+        SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=True),
+        StrInput(name="llm_model", display_name="LLM Model", value="gpt-4.1-mini", required=True),
         IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=400, required=False),
         IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=30, required=False),
     ]
@@ -64,7 +62,7 @@ class NewType04ManagementRouter(Component):
         Output(display_name="Dashboard", name="dashboard", method="dashboard_response", group_outputs=True),
         Output(display_name="Status Change", name="status_change", method="status_change_response", group_outputs=True),
         Output(display_name="Correct SQL Input", name="correct_sql_input", method="correct_sql_input_response", group_outputs=True),
-        Output(display_name="Job Execution Redirect", name="job_execution_redirect", method="job_execution_redirect_response", group_outputs=True),
+        Output(display_name="Exception Message", name="exception", method="exception_response", group_outputs=True, types=["Message"]),
     ]
 
     def dashboard_response(self) -> Data:
@@ -76,8 +74,13 @@ class NewType04ManagementRouter(Component):
     def correct_sql_input_response(self) -> Data:
         return self._route_output("CORRECT_SQL_INPUT", "correct_sql_input")
 
-    def job_execution_redirect_response(self) -> Data:
-        return self._route_output("JOB_EXECUTION_REDIRECT", "job_execution_redirect")
+    def exception_response(self) -> Message:
+        routed = self._get_routed_payload()
+        if routed.get("management_route") != "EXCEPTION":
+            self.stop("exception")
+            return Message(text="")
+        self.status = {**routed, "selected_output": "exception", "answer_text": EXCEPTION_MESSAGE, "final": True}
+        return Message(text=EXCEPTION_MESSAGE)
 
     def _route_output(self, expected_route: str, output_name: str) -> Data:
         try:
@@ -98,36 +101,36 @@ class NewType04ManagementRouter(Component):
         if cached is not None:
             return cached
         payload = self._parse_payload(getattr(self, "payload_json", ""))
-        decision = self._route_with_llm(payload) if self._use_llm() else self._route_with_rules(payload)
-        decision = self._normalize_decision(decision, payload)
+        decision = self._normalize_decision(self._route_with_llm(payload))
         routed = {
             **payload,
             "component": "04_managementRouter",
             "management_route": decision["management_route"],
-            "db_action": decision["db_action"],
             "target": decision.get("target") or {},
             "correct_sql": decision.get("correct_sql") or "",
             "management_routing_reason": decision.get("reason") or "",
         }
         routed.setdefault("history", []).append(
-            {"step": "management_route", "message": f"management_route={routed['management_route']}, db_action={routed['db_action']}"}
+            {"step": "management_route", "message": f"management_route={routed['management_route']}"}
         )
         self._cached_routed_payload = routed
         return routed
-
-    def _use_llm(self) -> bool:
-        return str(getattr(self, "router_mode", "LLM") or "LLM").strip().upper() == "LLM"
 
     def _route_with_llm(self, payload: dict[str, Any]) -> dict[str, Any]:
         api_key = self._secret_to_str(getattr(self, "llm_api_key", None)).strip()
         model = str(getattr(self, "llm_model", "") or "").strip()
         base_url = str(getattr(self, "llm_base_url", "") or "").strip().rstrip("/")
-        if not api_key or not model or not base_url:
-            return self._route_with_rules(payload)
+        if not api_key:
+            raise ValueError("llm_api_key is required for 04 Management Router")
+        if not model:
+            raise ValueError("llm_model is required for 04 Management Router")
+        if not base_url:
+            raise ValueError("llm_base_url is required for 04 Management Router")
+
         body = {
             "model": model,
             "messages": [
-                {"role": "system", "content": str(getattr(self, "routing_prompt", "") or MANAGEMENT_ROUTER_PROMPT)},
+                {"role": "system", "content": MANAGEMENT_ROUTER_PROMPT},
                 {"role": "user", "content": json.dumps({"user_request": payload.get("user_request") or ""}, ensure_ascii=False)},
             ],
             "temperature": 0,
@@ -143,50 +146,20 @@ class NewType04ManagementRouter(Component):
         try:
             with urllib.request.urlopen(request, timeout=int(getattr(self, "llm_timeout_seconds", None) or 30)) as response:
                 raw = json.loads(response.read().decode("utf-8", errors="ignore"))
-        except (urllib.error.URLError, TimeoutError, ValueError):
-            return self._route_with_rules(payload)
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")
+            raise ValueError(f"04 Management Router LLM HTTP {exc.code}: {detail[:1000]}") from exc
         content = (((raw.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
         return self._parse_json_object(content)
 
-    def _route_with_rules(self, payload: dict[str, Any]) -> dict[str, Any]:
-        text = str(payload.get("user_request") or "")
-        lowered = text.lower()
-        target = self._extract_target(text)
-        if self._looks_like_execution_request(text):
-            return {
-                "management_route": "JOB_EXECUTION_REDIRECT",
-                "db_action": "REDIRECT_JOB_EXECUTION",
-                "target": target,
-                "correct_sql": "",
-                "reason": "execution request belongs to job execution flow",
-            }
-        if self._looks_like_correct_sql(text):
-            return {
-                "management_route": "CORRECT_SQL_INPUT",
-                "db_action": "UPDATE_CORRECT_SQL",
-                "target": target,
-                "correct_sql": self._extract_sql(text),
-                "reason": "correct SQL input",
-            }
-        if re.search(r"(priority|우선순위|status|상태|use_yn|제외|포함|대상\s*변경|next\s*target|순서|order)", lowered, flags=re.I):
-            return {"management_route": "STATUS_CHANGE", "db_action": "UPDATE_STATUS", "target": target, "correct_sql": "", "reason": "status or targeting change"}
-        return {"management_route": "DASHBOARD", "db_action": "READ", "target": target, "correct_sql": "", "reason": "dashboard/status query"}
-
-    def _normalize_decision(self, decision: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    def _normalize_decision(self, decision: dict[str, Any]) -> dict[str, Any]:
         route = str(decision.get("management_route") or "").upper()
-        if route not in {"DASHBOARD", "STATUS_CHANGE", "CORRECT_SQL_INPUT", "JOB_EXECUTION_REDIRECT"}:
-            route = self._route_with_rules(payload)["management_route"]
-        db_action = str(decision.get("db_action") or "").upper()
-        defaults = {
-            "DASHBOARD": "READ",
-            "STATUS_CHANGE": "UPDATE_STATUS",
-            "CORRECT_SQL_INPUT": "UPDATE_CORRECT_SQL",
-            "JOB_EXECUTION_REDIRECT": "REDIRECT_JOB_EXECUTION",
-        }
+        if route not in {"DASHBOARD", "STATUS_CHANGE", "CORRECT_SQL_INPUT", "EXCEPTION"}:
+            raise ValueError(f"Invalid management_route: {route}")
+        target = decision.get("target") if isinstance(decision.get("target"), dict) else {}
         return {
             "management_route": route,
-            "db_action": db_action if db_action else defaults[route],
-            "target": decision.get("target") if isinstance(decision.get("target"), dict) else {},
+            "target": target,
             "correct_sql": str(decision.get("correct_sql") or ""),
             "reason": str(decision.get("reason") or ""),
         }
@@ -196,44 +169,8 @@ class NewType04ManagementRouter(Component):
             "DASHBOARD": "04_dashboard",
             "STATUS_CHANGE": "04_statusChange",
             "CORRECT_SQL_INPUT": "04_correctSqlInput",
-            "JOB_EXECUTION_REDIRECT": "05_jobExecutionNotice",
+            "EXCEPTION": "04_managementRouter",
         }.get(route, "04_dashboard")
-
-    def _looks_like_execution_request(self, text: str) -> bool:
-        lowered = text.lower()
-        execution_terms = r"(실행|진행|처리|시작|돌려|수행|execute|run|start|process|proceed)"
-        target_terms = r"(map[_\s-]*id|mapid|sql[_\s-]*id|sqlid|space[_\s-]*nm|spacenm|pending|대기\s*작업|전체|전부|모든)"
-        return bool(re.search(execution_terms, lowered, flags=re.I) and re.search(target_terms, lowered, flags=re.I))
-
-    def _looks_like_correct_sql(self, text: str) -> bool:
-        return bool(
-            re.search(r"(correct\s*sql|user\s*edited|수정\s*sql|정정\s*sql|sql\s*입력|이\s*sql|저장)", text, flags=re.I)
-            or re.search(r"\b(select|insert|update|delete|merge|with)\b", text, flags=re.I)
-        )
-
-    def _extract_sql(self, text: str) -> str:
-        fenced = re.search(r"```(?:sql)?\s*(.*?)\s*```", text, flags=re.I | re.S)
-        if fenced:
-            return fenced.group(1).strip()
-        sql = re.search(r"\b(select|insert|update|delete|merge|with)\b.*", text, flags=re.I | re.S)
-        return sql.group(0).strip() if sql else ""
-
-    def _extract_target(self, text: str) -> dict[str, Any]:
-        target: dict[str, Any] = {}
-        patterns = {
-            "map_id": r"map[_\s-]*id\s*[=:]?\s*(\d+)",
-            "sql_id": r"sql[_\s-]*id\s*[=:]?\s*([A-Za-z0-9_.:-]+)",
-            "row_id": r"row[_\s-]*id\s*[=:]?\s*([A-Za-z0-9_.:-]+)",
-            "priority": r"priority\s*[=:]?\s*(\d+)|우선순위\s*(\d+)",
-        }
-        for key, pattern in patterns.items():
-            match = re.search(pattern, text, flags=re.I)
-            if not match:
-                continue
-            value = next((group for group in match.groups() if group), None)
-            if value is not None:
-                target[key] = int(value) if key in {"map_id", "priority"} and str(value).isdigit() else value
-        return target
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):
@@ -249,9 +186,9 @@ class NewType04ManagementRouter(Component):
             clean = re.sub(r"\s*```$", "", clean)
         match = re.search(r"\{.*\}", clean, flags=re.S)
         clean = match.group(0) if match else clean
-        parsed = json.loads(clean) if clean else {}
+        parsed = json.loads(clean)
         if not isinstance(parsed, dict):
-            raise ValueError("Expected a JSON object")
+            raise ValueError("LLM must return a JSON object")
         return parsed
 
     def _secret_to_str(self, value: Any) -> str:

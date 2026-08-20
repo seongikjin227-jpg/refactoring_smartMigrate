@@ -14,18 +14,17 @@
 | 개발 | 1차 route를 multi-output으로 분기하는 Conditional Router 정리 | `02_intentRouter.py` | 0.5 WD |
 | 테스트 | 1차 Router에서 선택되지 않은 branch가 실행되지 않는지 검증 | `02_intentRouter.py` | 0.5 WD |
 | 개발 | 일반 대화 branch 응답 컴포넌트 정리 | `03_generalChatResponder.py` | 0.25 WD |
-| 개발 | 작업 대상 실행 전 안내 payload를 추가하는 Notice 컴포넌트 정리 | `05_jobExecutionNotice.py` | 0.25 WD |
 | 개발 | 최종 Chat Output 메시지 생성 컴포넌트 정리 | `13_finalSummary.py` | 0.75 WD |
 | 테스트 | Final Summary가 성공/실패/선행작업차단/대상없음 결과를 모두 메시지로 변환하는지 검증 | `13_finalSummary.py` | 0.5 WD |
 
-공통 소계: 4.75 WD
+공통 소계: 4.5 WD
 
 ## 1. Management
 
 | 구분 | Task | 파일 | 기간 |
 |---|---|---|---:|
 | 개발 | Management 요청을 Dashboard, Status Change, Correct SQL Input으로 분기하는 Router 정리 | `04_managementRouter.py` | 1.0 WD |
-| 테스트 | Management Router 샘플 입력별 route 검증 | `04_managementRouter.py` | 0.5 WD |
+| 테스트 | Management Router 샘플 입력별 route 및 Exception Message 검증 | `04_managementRouter.py` | 0.5 WD |
 | 개발 | Dashboard 조회 branch를 Langflow 컴포넌트 형태로 리팩토링 | `04_dashboard.py` | 1.0 WD |
 | 테스트 | Dashboard branch DB 조회 결과 payload/message 검증 | `04_dashboard.py` | 0.5 WD |
 | 개발 | Status/priority/USE_YN 변경 branch를 Langflow 컴포넌트 형태로 리팩토링 | `04_statusChange.py` | 1.5 WD |
@@ -96,13 +95,13 @@ SQL Formatting 소계: 2.75 WD
 
 | 구분 | 기간 |
 |---|---:|
-| 공통 / Flow | 4.75 WD |
+| 공통 / Flow | 4.5 WD |
 | Management | 7.5 WD |
 | Job Target Execution Routing | 6.0 WD |
 | DB Migration Pipeline | 2.5 WD |
 | SQL Conversion Pipeline | 3.0 WD |
 | SQL Tuning Pipeline | 3.0 WD |
 | SQL Formatting Pipeline | 2.75 WD |
-| 총합 | 29.5 WD |
+| 총합 | 29.25 WD |
 
 이 일정은 기존 구현 로직을 Langflow 컴포넌트 형태로 리팩토링한다는 전제다. 새 알고리즘 개발이나 프롬프트 재설계는 포함하지 않는다.
