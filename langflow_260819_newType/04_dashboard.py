@@ -26,7 +26,7 @@ AGENT_ORDER = [
 
 class NewType04Dashboard(Component):
     display_name = "04 Dashboard"
-    description = "Queries dashboard job targets and formats a concise Gaia output message."
+    description = "Queries dashboard counts/progress and formats a concise Gaia output message."
     name = "NewType04Dashboard"
     icon = "Gauge"
 
@@ -38,7 +38,6 @@ class NewType04Dashboard(Component):
         StrInput(name="db_username", display_name="DB Username", required=False),
         SecretStrInput(name="db_password", display_name="DB Password", required=False),
         StrInput(name="system_schema", display_name="System Schema", required=False),
-        IntInput(name="list_limit", display_name="List Limit", value=5, required=False),
     ]
     outputs = [Output(display_name="Result Message", name="result", method="run", types=["Message"])]
 
@@ -63,196 +62,196 @@ class NewType04Dashboard(Component):
     def _query_dashboard(self) -> dict[str, Any]:
         if not self._has_db_config():
             raise ValueError("DB connection settings are required for 04 Dashboard")
-        limit = max(1, min(int(getattr(self, "list_limit", None) or 5), 50))
         agents = {
-            "db_migration": self._migration_summary(limit),
-            "sql_conversion": self._sql_conversion_summary(limit),
-            "sql_tuning": self._sql_tuning_summary(limit),
-            "sql_formatting": self._sql_formatting_summary(limit),
+            "db_migration": self._migration_summary(),
+            "sql_conversion": self._sql_conversion_summary(),
+            "sql_tuning": self._sql_tuning_summary(),
+            "sql_formatting": self._sql_formatting_summary(),
         }
-        return {
-            "ok": True,
-            "agents": agents,
-            "recommendations": self._recommendations(agents),
-        }
+        return {"ok": True, "agents": agents, "recommendation": self._recommendation(agents)}
 
-    def _migration_summary(self, limit: int) -> dict[str, Any]:
+    def _migration_summary(self) -> dict[str, Any]:
         table = self._qualify("NEXT_MIG_INFO")
-        where_clause = "UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y' AND STATUS IS NULL"
-        return {
-            "agent": "DB_MIGRATION",
-            "available": True,
-            "table": table,
-            "target_condition": "USE_YN='Y' AND STATUS IS NULL",
-            "target_count": self._count(table, where_clause),
-            "status_counts": self._status_counts(table, "STATUS", "UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'"),
-            "next_jobs": self._query_rows(
-                f"""
-                SELECT *
-                  FROM (
-                        SELECT MAP_ID, MAP_TYPE, FR_TABLE, TO_TABLE, PRIORITY, STATUS, BATCH_CNT, RETRY_COUNT, UPD_TS
-                          FROM {table}
-                         WHERE {where_clause}
-                         ORDER BY PRIORITY ASC NULLS LAST, MAP_ID ASC
-                       )
-                 WHERE ROWNUM <= :1
-                """,
-                [limit],
-                ["map_id", "map_type", "fr_table", "to_table", "priority", "status", "batch_cnt", "retry_count", "upd_ts"],
-            ),
-        }
+        total = self._count(table, "UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'")
+        target = self._count(table, "UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y' AND STATUS IS NULL")
+        pass_count = self._count(table, "UPPER(TRIM(NVL(STATUS, 'NULL'))) IN ('PASS', 'SUCCESS')")
+        fail_count = self._count(table, "UPPER(TRIM(NVL(STATUS, 'NULL'))) = 'FAIL' OR UPPER(TRIM(NVL(STATUS, 'NULL'))) LIKE 'FAIL-%'")
+        return self._stage_summary(
+            agent="DB_MIGRATION",
+            table=table,
+            target_condition="USE_YN='Y' AND STATUS IS NULL",
+            total=total,
+            target_count=target,
+            progress_count=pass_count,
+            progress_base=total,
+            success_count=pass_count,
+            success_base=pass_count + fail_count,
+            pass_count=pass_count,
+            fail_count=fail_count,
+            status_counts=self._status_counts(table, "STATUS", "UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'"),
+        )
 
-    def _sql_conversion_summary(self, limit: int) -> dict[str, Any]:
+    def _sql_conversion_summary(self) -> dict[str, Any]:
         table = self._qualify("NEXT_SQL_INFO")
-        where_clause = "STATUS_CONVERSION IS NULL"
-        return {
-            "agent": "SQL_CONVERSION",
-            "available": True,
-            "table": table,
-            "target_condition": "STATUS_CONVERSION IS NULL",
-            "target_count": self._count(table, where_clause),
-            "status_counts": self._status_counts(table, "STATUS_CONVERSION"),
-            "next_jobs": self._query_rows(
-                f"""
-                SELECT *
-                  FROM (
-                        SELECT TAG_KIND, SPACE_NM, SQL_ID, STATUS_CONVERSION, PRIORITY, BATCH_CNT, UPD_TS
-                          FROM {table}
-                         WHERE {where_clause}
-                         ORDER BY PRIORITY ASC NULLS LAST, UPD_TS NULLS FIRST, SPACE_NM, SQL_ID
-                       )
-                 WHERE ROWNUM <= :1
-                """,
-                [limit],
-                ["tag_kind", "space_nm", "sql_id", "status_conversion", "priority", "batch_cnt", "upd_ts"],
-            ),
-        }
+        total = self._count(table)
+        target = self._count(table, "STATUS_CONVERSION IS NULL")
+        pass_count = self._count(table, "UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')")
+        fail_count = self._count(
+            table,
+            "UPPER(TRIM(NVL(STATUS_CONVERSION, 'NULL'))) = 'FAIL' OR UPPER(TRIM(NVL(STATUS_CONVERSION, 'NULL'))) LIKE 'FAIL-%'",
+        )
+        return self._stage_summary(
+            agent="SQL_CONVERSION",
+            table=table,
+            target_condition="STATUS_CONVERSION IS NULL",
+            total=total,
+            target_count=target,
+            progress_count=pass_count,
+            progress_base=total,
+            success_count=pass_count,
+            success_base=pass_count + fail_count,
+            pass_count=pass_count,
+            fail_count=fail_count,
+            status_counts=self._status_counts(table, "STATUS_CONVERSION"),
+        )
 
-    def _sql_tuning_summary(self, limit: int) -> dict[str, Any]:
+    def _sql_tuning_summary(self) -> dict[str, Any]:
         table = self._qualify("NEXT_SQL_INFO")
         columns = self._available_columns("NEXT_SQL_INFO")
         missing = [col for col in ("STATUS_TUNING", "STATUS_CONVERSION") if col not in columns]
         if missing:
             return self._unavailable("SQL_TUNING", table, f"missing columns: {', '.join(missing)}")
-        where_clause = (
-            "STATUS_TUNING IS NULL "
-            "AND UPPER(TRIM(STATUS_CONVERSION)) = 'PASS-CONVERSION'"
+        base_where = "UPPER(TRIM(STATUS_CONVERSION)) = 'PASS-CONVERSION'"
+        total = self._count(table, base_where)
+        target = self._count(table, f"{base_where} AND STATUS_TUNING IS NULL")
+        pass_count = self._count(table, f"{base_where} AND UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING')")
+        fail_count = self._count(
+            table,
+            f"{base_where} AND (UPPER(TRIM(NVL(STATUS_TUNING, 'NULL'))) = 'FAIL' OR UPPER(TRIM(NVL(STATUS_TUNING, 'NULL'))) LIKE 'FAIL-%')",
         )
-        return {
-            "agent": "SQL_TUNING",
-            "available": True,
-            "table": table,
-            "target_condition": "STATUS_TUNING IS NULL AND STATUS_CONVERSION='PASS-CONVERSION'",
-            "target_count": self._count(table, where_clause),
-            "status_counts": self._status_counts(table, "STATUS_TUNING"),
-            "next_jobs": self._query_rows(
-                f"""
-                SELECT *
-                  FROM (
-                        SELECT TAG_KIND, SPACE_NM, SQL_ID, STATUS_CONVERSION, STATUS_TUNING, PRIORITY, BATCH_CNT, UPD_TS
-                          FROM {table}
-                         WHERE {where_clause}
-                         ORDER BY PRIORITY ASC NULLS LAST, UPD_TS NULLS FIRST, SPACE_NM, SQL_ID
-                       )
-                 WHERE ROWNUM <= :1
-                """,
-                [limit],
-                ["tag_kind", "space_nm", "sql_id", "status_conversion", "status_tuning", "priority", "batch_cnt", "upd_ts"],
-            ),
-        }
+        return self._stage_summary(
+            agent="SQL_TUNING",
+            table=table,
+            target_condition="STATUS_TUNING IS NULL AND STATUS_CONVERSION='PASS-CONVERSION'",
+            total=total,
+            target_count=target,
+            progress_count=pass_count,
+            progress_base=total - target,
+            success_count=pass_count,
+            success_base=pass_count + fail_count,
+            pass_count=pass_count,
+            fail_count=fail_count,
+            status_counts=self._status_counts(table, "STATUS_TUNING", base_where),
+        )
 
-    def _sql_formatting_summary(self, limit: int) -> dict[str, Any]:
+    def _sql_formatting_summary(self) -> dict[str, Any]:
         table = self._qualify("NEXT_SQL_INFO")
         columns = self._available_columns("NEXT_SQL_INFO")
         missing = [col for col in ("STATUS_TUNING", "FORMATTED_SQL") if col not in columns]
         if missing:
             return self._unavailable("SQL_FORMATTING", table, f"missing columns: {', '.join(missing)}")
-        where_clause = (
-            "UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING') "
-            "AND (FORMATTED_SQL IS NULL OR NVL(DBMS_LOB.GETLENGTH(FORMATTED_SQL), 0) = 0)"
+        base_where = "UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING')"
+        target_where = f"{base_where} AND (FORMATTED_SQL IS NULL OR NVL(DBMS_LOB.GETLENGTH(FORMATTED_SQL), 0) = 0)"
+        applied_where = f"{base_where} AND FORMATTED_SQL IS NOT NULL AND DBMS_LOB.GETLENGTH(FORMATTED_SQL) > 0"
+        total = self._count(table, base_where)
+        target = self._count(table, target_where)
+        applied = self._count(table, applied_where)
+        return self._stage_summary(
+            agent="SQL_FORMATTING",
+            table=table,
+            target_condition="STATUS_TUNING PASS and FORMATTED_SQL empty",
+            total=total,
+            target_count=target,
+            progress_count=applied,
+            progress_base=total,
+            success_count=applied,
+            success_base=total,
+            pass_count=applied,
+            fail_count=0,
+            status_counts={"APPLIED": applied, "PENDING": target},
         )
+
+    def _stage_summary(
+        self,
+        *,
+        agent: str,
+        table: str,
+        target_condition: str,
+        total: int,
+        target_count: int,
+        progress_count: int,
+        progress_base: int,
+        success_count: int,
+        success_base: int,
+        pass_count: int,
+        fail_count: int,
+        status_counts: dict[str, int],
+    ) -> dict[str, Any]:
         return {
-            "agent": "SQL_FORMATTING",
+            "agent": agent,
             "available": True,
             "table": table,
-            "target_condition": "STATUS_TUNING PASS and FORMATTED_SQL empty",
-            "target_count": self._count(table, where_clause),
-            "status_counts": {"FORMATTED_SQL_EMPTY": self._count(table, where_clause)},
-            "next_jobs": self._query_rows(
-                f"""
-                SELECT *
-                  FROM (
-                        SELECT TAG_KIND, SPACE_NM, SQL_ID, STATUS_CONVERSION, STATUS_TUNING, PRIORITY, BATCH_CNT, UPD_TS
-                          FROM {table}
-                         WHERE {where_clause}
-                         ORDER BY PRIORITY ASC NULLS LAST, UPD_TS NULLS FIRST, SPACE_NM, SQL_ID
-                       )
-                 WHERE ROWNUM <= :1
-                """,
-                [limit],
-                ["tag_kind", "space_nm", "sql_id", "status_conversion", "status_tuning", "priority", "batch_cnt", "upd_ts"],
-            ),
+            "target_condition": target_condition,
+            "total": int(total or 0),
+            "target_count": int(target_count or 0),
+            "pass_count": int(pass_count or 0),
+            "fail_count": int(fail_count or 0),
+            "progress": {
+                "count": int(progress_count or 0),
+                "base": int(progress_base or 0),
+                "rate": self._pct(progress_count, progress_base),
+            },
+            "success": {
+                "count": int(success_count or 0),
+                "base": int(success_base or 0),
+                "rate": self._pct(success_count, success_base),
+            },
+            "status_counts": status_counts,
         }
 
     def _build_answer(self, payload: dict[str, Any], dashboard: dict[str, Any]) -> str:
         user_request = str(payload.get("user_request") or payload.get("original_request") or "").strip()
         agents = dashboard.get("agents") or {}
-        recommendations = dashboard.get("recommendations") or []
+        recommendation = dashboard.get("recommendation") or {}
 
         lines = ["[Dashboard 조회 결과]"]
         if user_request:
             lines.append(f"요청: {user_request}")
         lines.append("")
-        lines.append("작업 대상 현황")
+        lines.append("작업 현황")
         for key, label in AGENT_ORDER:
             summary = agents.get(key) or {}
             if not summary.get("available", True):
                 lines.append(f"- {label}: 조회 불가 ({summary.get('reason')})")
                 continue
-            lines.append(f"- {label}: 작업 대상 {int(summary.get('target_count') or 0)}건")
+            progress = summary.get("progress") or {}
+            success = summary.get("success") or {}
+            lines.append(
+                f"- {label}: 전체 {summary.get('total', 0)}건 / "
+                f"작업대상 {summary.get('target_count', 0)}건 / "
+                f"성공 {summary.get('pass_count', 0)}건 / "
+                f"실패 {summary.get('fail_count', 0)}건 / "
+                f"진척률 {progress.get('rate', '-')} ({progress.get('count', 0)}/{progress.get('base', 0)}) / "
+                f"성공률 {success.get('rate', '-')} ({success.get('count', 0)}/{success.get('base', 0)})"
+            )
 
         lines.append("")
-        if recommendations:
-            rec = recommendations[0]
+        if recommendation:
             lines.append(
-                f"우선 실행 추천: {rec.get('label')} "
-                f"{self._job_label(rec.get('first_job') or {})} "
-                f"(대상 {rec.get('target_count')}건)"
+                f"우선 진행 추천: {recommendation.get('label')} "
+                f"(작업대상 {recommendation.get('target_count')}건)"
             )
         else:
-            lines.append("우선 실행 추천: 현재 실행 가능한 작업 대상이 없습니다.")
-
-        lines.append("")
-        lines.append("우선순위별 다음 작업")
-        for key, label in AGENT_ORDER:
-            summary = agents.get(key) or {}
-            if not summary.get("available", True):
-                lines.append(f"- {label}: 조회 불가")
-                continue
-            jobs = list(summary.get("next_jobs") or [])
-            if not jobs:
-                lines.append(f"- {label}: 대상 없음")
-                continue
-            lines.append(f"- {label}: {', '.join(self._job_summary(job) for job in jobs)}")
-
+            lines.append("우선 진행 추천: 현재 작업 대상이 없습니다.")
         return "\n".join(lines)
 
-    def _recommendations(self, agents: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-        out: list[dict[str, Any]] = []
+    def _recommendation(self, agents: dict[str, dict[str, Any]]) -> dict[str, Any]:
         for key, label in AGENT_ORDER:
             summary = agents.get(key) or {}
             count = int(summary.get("target_count") or 0)
-            if not summary.get("available", True) or count <= 0:
-                continue
-            out.append(
-                {
-                    "agent": summary.get("agent"),
-                    "label": label,
-                    "target_count": count,
-                    "first_job": (summary.get("next_jobs") or [None])[0],
-                }
-            )
-        return out
+            if summary.get("available", True) and count > 0:
+                return {"agent": summary.get("agent"), "label": label, "target_count": count}
+        return {}
 
     def _count(self, table: str, where_clause: str = "1=1") -> int:
         with self._connect() as conn:
@@ -275,13 +274,6 @@ class NewType04Dashboard(Component):
             )
             rows = cur.fetchall()
         return {str(row[0]): int(row[1]) for row in rows}
-
-    def _query_rows(self, sql: str, params: list[Any], columns: list[str]) -> list[dict[str, Any]]:
-        with self._connect() as conn:
-            cur = conn.cursor()
-            cur.execute(sql, params)
-            rows = cur.fetchall()
-        return [{columns[idx]: self._json_value(value) for idx, value in enumerate(row)} for row in rows]
 
     def _available_columns(self, table_name: str) -> set[str]:
         table = self._clean_identifier(table_name)
@@ -316,9 +308,13 @@ class NewType04Dashboard(Component):
             "available": False,
             "table": table,
             "reason": reason,
+            "total": 0,
             "target_count": 0,
+            "pass_count": 0,
+            "fail_count": 0,
+            "progress": {"count": 0, "base": 0, "rate": "-"},
+            "success": {"count": 0, "base": 0, "rate": "-"},
             "status_counts": {},
-            "next_jobs": [],
         }
 
     @contextmanager
@@ -354,24 +350,11 @@ class NewType04Dashboard(Component):
             raise ValueError(f"Invalid identifier: {clean}")
         return clean
 
-    def _job_summary(self, job: dict[str, Any]) -> str:
-        return f"{self._job_label(job)}(P{self._display(job.get('priority'))})"
-
-    def _job_label(self, job: dict[str, Any]) -> str:
-        if job.get("map_id") is not None:
-            return f"map_id={job.get('map_id')}"
-        sql_id = job.get("sql_id")
-        space_nm = job.get("space_nm")
-        if sql_id and space_nm:
-            return f"{space_nm}/{sql_id}"
-        if sql_id:
-            return f"sql_id={sql_id}"
-        if space_nm:
-            return f"space_nm={space_nm}"
-        return "대상 미지정"
-
-    def _display(self, value: Any) -> str:
-        return "-" if value is None or str(value).strip() == "" else str(value)
+    def _pct(self, numerator: int, denominator: int) -> str:
+        denominator = int(denominator or 0)
+        if denominator <= 0:
+            return "-"
+        return f"{(int(numerator or 0) / denominator) * 100:.1f}%"
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):
@@ -386,15 +369,6 @@ class NewType04Dashboard(Component):
         if not isinstance(parsed, dict):
             raise ValueError("payload_json must be a JSON object")
         return parsed
-
-    def _json_value(self, value: Any) -> Any:
-        if value is None:
-            return None
-        if hasattr(value, "read"):
-            value = value.read()
-        if isinstance(value, bytes):
-            return value.decode("utf-8", errors="ignore")
-        return value if isinstance(value, (str, int, float, bool)) else str(value)
 
     def _secret_to_str(self, value: Any) -> str:
         if value is None:
