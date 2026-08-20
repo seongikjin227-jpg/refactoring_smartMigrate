@@ -75,7 +75,7 @@ class NewType04Dashboard(Component):
     def _migration_summary(self) -> dict[str, Any]:
         # Build DB Migration dashboard counts and rates.
         table = self._qualify("NEXT_MIG_INFO")
-        total = self._count(table, "UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'")
+        total = self._count(table)
         target = self._count(table, "UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y' AND STATUS IS NULL")
         pass_count = self._count(table, "UPPER(TRIM(NVL(STATUS, 'NULL'))) IN ('PASS', 'SUCCESS')")
         fail_count = self._count(table, "UPPER(TRIM(NVL(STATUS, 'NULL'))) = 'FAIL' OR UPPER(TRIM(NVL(STATUS, 'NULL'))) LIKE 'FAIL-%'")
@@ -91,7 +91,7 @@ class NewType04Dashboard(Component):
             success_base=pass_count + fail_count,
             pass_count=pass_count,
             fail_count=fail_count,
-            status_counts=self._status_counts(table, "STATUS", "UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'"),
+            status_counts=self._status_counts(table, "STATUS"),
         )
 
     def _sql_conversion_summary(self) -> dict[str, Any]:
@@ -203,6 +203,10 @@ class NewType04Dashboard(Component):
             "target_count": int(target_count or 0),
             "pass_count": int(pass_count or 0),
             "fail_count": int(fail_count or 0),
+            "other_count": max(
+                int(total or 0) - int(target_count or 0) - int(pass_count or 0) - int(fail_count or 0),
+                0,
+            ),
             "progress": {
                 "count": int(progress_count or 0),
                 "base": int(progress_base or 0),
@@ -239,6 +243,7 @@ class NewType04Dashboard(Component):
                 f"작업대상 {summary.get('target_count', 0)}건 / "
                 f"성공 {summary.get('pass_count', 0)}건 / "
                 f"실패 {summary.get('fail_count', 0)}건 / "
+                f"기타 {summary.get('other_count', 0)}건 / "
                 f"진척률 {progress.get('rate', '-')} ({progress.get('count', 0)}/{progress.get('base', 0)}) / "
                 f"성공률 {success.get('rate', '-')} ({success.get('count', 0)}/{success.get('base', 0)})"
             )
@@ -325,6 +330,7 @@ class NewType04Dashboard(Component):
             "target_count": 0,
             "pass_count": 0,
             "fail_count": 0,
+            "other_count": 0,
             "progress": {"count": 0, "base": 0, "rate": "-"},
             "success": {"count": 0, "base": 0, "rate": "-"},
             "status_counts": {},
