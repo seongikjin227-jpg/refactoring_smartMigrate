@@ -29,7 +29,6 @@ JOB_EXECUTION_ROUTER_PROMPT = """당신은 SmartMigrate의 작업 대상 실행 
 - SQL_CONVERSION: SQL Conversion 작업. 보통 sql_id 또는 space_nm으로 식별합니다.
 - SQL_TUNING: SQL Tuning 작업.
 - SQL_FORMATTING: SQL Formatting 작업.
-- PREREQUISITE_BLOCKED: 선행 작업 또는 상태 문제로 바로 실행하지 않는 것이 맞는 경우.
 - NO_RUNNABLE_JOB: 실행할 대상이 없다고 판단되는 경우.
 
 실행 모드:
@@ -38,7 +37,7 @@ JOB_EXECUTION_ROUTER_PROMPT = """당신은 SmartMigrate의 작업 대상 실행 
 
 반환 JSON schema:
 {
-  "job_route": "MIG|SQL_CONVERSION|SQL_TUNING|SQL_FORMATTING|PREREQUISITE_BLOCKED|NO_RUNNABLE_JOB",
+  "job_route": "MIG|SQL_CONVERSION|SQL_TUNING|SQL_FORMATTING|NO_RUNNABLE_JOB",
   "run_mode": "all_pending|targeted",
   "target_filter": {
     "map_ids": [],
@@ -54,8 +53,8 @@ JOB_EXECUTION_ROUTER_PROMPT = """당신은 SmartMigrate의 작업 대상 실행 
 - sql_id 또는 space_nm이 있고 포맷팅 요청이면 SQL_FORMATTING입니다.
 - sql_id 또는 space_nm이 있고 튜닝/포맷팅이 아니면 SQL_CONVERSION입니다.
 - 명시 대상이 없고 전체/대기 작업 실행 요청이면 run_mode는 all_pending입니다.
-- DB context상 요청 대상이 실행 불가 상태라고 판단하면 PREREQUISITE_BLOCKED를 선택할 수 있습니다.
-- 선행 작업을 먼저 해야 한다고 판단하면 PREREQUISITE_BLOCKED를 선택할 수 있습니다.
+- targeted 요청에서 사용자가 요청한 map_id 또는 sql_id+space_nm 조합이 sample_pending_jobs에 없으면 NO_RUNNABLE_JOB을 선택합니다.
+- all_pending 요청에서 해당 도메인의 pending count가 0이면 NO_RUNNABLE_JOB을 선택합니다.
 """
 
 
@@ -79,7 +78,6 @@ class NewType08JobExecutionRouter(Component):
         Output(display_name="SQL Conversion Targets", name="sql_conversion_job", method="sql_conversion_response", group_outputs=True),
         Output(display_name="SQL Tuning Targets", name="sql_tuning_job", method="sql_tuning_response", group_outputs=True),
         Output(display_name="SQL Formatting Targets", name="sql_formatting_job", method="sql_formatting_response", group_outputs=True),
-        Output(display_name="Prerequisite Blocked Message", name="prerequisite_blocked", method="prerequisite_blocked_response", group_outputs=True, types=["Message"]),
         Output(display_name="No Runnable Target Message", name="no_runnable_job", method="no_runnable_response", group_outputs=True, types=["Message"]),
     ]
 
@@ -98,10 +96,6 @@ class NewType08JobExecutionRouter(Component):
     def sql_formatting_response(self) -> Data:
         # Return the SQL Formatting execution branch when selected.
         return self._route_output("SQL_FORMATTING", "sql_formatting_job")
-
-    def prerequisite_blocked_response(self) -> Message:
-        # Return a message for prerequisite-blocked execution requests.
-        return self._message_route_output("PREREQUISITE_BLOCKED", "prerequisite_blocked")
 
     def no_runnable_response(self) -> Message:
         # Return a message when no runnable target exists.
@@ -139,29 +133,31 @@ class NewType08JobExecutionRouter(Component):
             return Message(text=message)
 
     def _build_block_message(self, routed: dict[str, Any]) -> str:
-        # Format a blocked or no-runnable route message.
-        route = str(routed.get("job_route") or "")
+        # Format a no-runnable route message.
         user_request = str(routed.get("user_request") or routed.get("original_request") or "").strip()
-        reason = str(routed.get("routing_reason") or routed.get("reason") or "").strip()
         targets = routed.get("target_filter") or {}
-        blocked_jobs = routed.get("blocked_jobs") or []
-
-        lines = ["component=08_jobExecutionRouter"]
-        if route == "PREREQUISITE_BLOCKED":
-            lines.append("요청한 작업은 바로 실행할 수 없는 상태입니다.")
-        else:
-            lines.append("실행 가능한 작업 대상을 찾지 못했습니다.")
+        target_label = self._target_label(targets) or "요청하신 작업"
+        message = f"{target_label}이 작업 대상에서 조회되지 않았습니다."
+        lines = [message]
         if user_request:
-            lines.append(f"사용자 요청: {user_request}")
-        if reason:
-            lines.append(f"사유: {reason}")
-        if targets:
-            lines.append("요청 대상:")
-            lines.append(json.dumps(targets, ensure_ascii=False, indent=2, default=str))
-        if blocked_jobs:
-            lines.append("차단된 작업:")
-            lines.append(json.dumps(blocked_jobs, ensure_ascii=False, indent=2, default=str))
+            lines.append(f"요청: {user_request}")
+        lines.append("대상 상태를 변경하거나 Dashboard에서 작업 대상을 먼저 확인해주세요.")
         return "\n".join(lines)
+
+    def _target_label(self, targets: dict[str, Any]) -> str:
+        # Build a short Korean label for requested target filters.
+        map_ids = targets.get("map_ids") or []
+        sql_ids = targets.get("sql_ids") or []
+        space_nms = targets.get("space_nms") or []
+        if map_ids:
+            return f"map_id={', '.join(str(item) for item in map_ids)}"
+        if sql_ids and space_nms:
+            return f"space_nm={', '.join(str(item) for item in space_nms)}, sql_id={', '.join(str(item) for item in sql_ids)}"
+        if sql_ids:
+            return f"sql_id={', '.join(str(item) for item in sql_ids)}"
+        if space_nms:
+            return f"space_nm={', '.join(str(item) for item in space_nms)}"
+        return ""
 
     def _get_routed_payload(self) -> dict[str, Any]:
         # Compute and cache the routed payload for this component.
@@ -184,20 +180,15 @@ class NewType08JobExecutionRouter(Component):
             decision = self._empty_decision("No explicit target and no runnable pending jobs found.", targets)
         elif route == "NO_RUNNABLE_JOB":
             decision = self._empty_decision(decision_hint.get("reason") or "No runnable job target selected by LLM.", targets)
-        elif route == "PREREQUISITE_BLOCKED":
-            decision = {
-                "job_route": "PREREQUISITE_BLOCKED",
-                "run_mode": "blocked",
-                "run_all_pending": False,
-                "selected_jobs": [],
-                "target_filter": targets,
-                "blocker_route": str(decision_hint.get("blocker_route") or "LLM_BLOCKED"),
-                "blocked_jobs": [],
-                "reason": decision_hint.get("reason") or "LLM selected prerequisite blocked route.",
-            }
         else:
             selected_jobs = self._selected_jobs_for_hint(payload, route, requested_run_mode, targets)
-            decision = self._execution_decision(route, requested_run_mode, targets, selected_jobs)
+            if not selected_jobs:
+                decision = self._empty_decision(
+                    decision_hint.get("reason") or "Requested target was not found in pending job identifiers.",
+                    targets,
+                )
+            else:
+                decision = self._execution_decision(route, requested_run_mode, targets, selected_jobs)
 
         routed = {
             **payload,
@@ -207,8 +198,6 @@ class NewType08JobExecutionRouter(Component):
             "run_all_pending": decision["run_all_pending"],
             "target_filter": decision["target_filter"],
             "selected_jobs": decision["selected_jobs"],
-            "blocker_route": decision["blocker_route"],
-            "blocked_jobs": decision.get("blocked_jobs") or [],
             "routing_reason": decision["reason"],
             "llm_job_route": decision_hint.get("job_route"),
             "llm_run_mode": decision_hint.get("run_mode"),
@@ -273,7 +262,7 @@ class NewType08JobExecutionRouter(Component):
         route = str(hint.get("job_route") or "").upper()
         if route == "NO_RUNNABLE_JOB":
             route = "NO_RUNNABLE_JOB"
-        if route not in {"MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING", "PREREQUISITE_BLOCKED", "NO_RUNNABLE_JOB"}:
+        if route not in {"MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING", "NO_RUNNABLE_JOB"}:
             raise ValueError(f"Invalid LLM job_route: {route}")
         run_mode = str(hint.get("run_mode") or "all_pending").lower()
         if run_mode not in {"all_pending", "targeted"}:
@@ -297,7 +286,6 @@ class NewType08JobExecutionRouter(Component):
             "job_route": route,
             "run_mode": run_mode,
             "target_filter": targets,
-            "blocker_route": str(hint.get("blocker_route") or ""),
             "reason": str(hint.get("reason") or ""),
             "source": "LLM",
         }
@@ -343,7 +331,6 @@ class NewType08JobExecutionRouter(Component):
             "run_all_pending": False,
             "selected_jobs": [],
             "target_filter": targets,
-            "blocker_route": "",
             "reason": reason,
         }
 
@@ -361,37 +348,8 @@ class NewType08JobExecutionRouter(Component):
             "run_all_pending": run_mode == "all_pending",
             "selected_jobs": selected_jobs,
             "target_filter": targets,
-            "blocker_route": "",
             "reason": f"Run {len(selected_jobs)} {route} job target(s) in {run_mode} mode.",
         }
-
-    def _requested_route(self, text: str, targets: dict[str, list[Any]]) -> str | None:
-        # Infer a route from request text and explicit targets.
-        lowered = text.lower()
-        if targets.get("map_ids"):
-            return "MIG"
-        if re.search(r"(tuning|튜닝|성능|performance)", lowered):
-            return "SQL_TUNING"
-        if re.search(r"(format|formatting|포맷|포매팅|정렬)", lowered):
-            return "SQL_FORMATTING"
-        if re.search(r"(conversion|convert|변환|sql\s*conversion)", lowered):
-            return "SQL_CONVERSION"
-        if re.search(r"(migration|마이그레이션|mig|db)", lowered):
-            return "MIG"
-        if targets.get("sql_ids") or targets.get("space_nms"):
-            return "SQL_CONVERSION"
-        return None
-
-    def _select_jobs(self, payload: dict[str, Any], route: str, targets: dict[str, list[Any]]) -> list[dict[str, Any]]:
-        # Select jobs that match the requested route and targets.
-        jobs = self._jobs_for_route(payload, route)
-        if not any(targets.values()):
-            return jobs
-
-        selected = [job for job in jobs if self._matches(job, targets)]
-        if selected:
-            return selected
-        return self._synthetic_jobs(route, targets)
 
     def _selected_jobs_for_hint(
         self,
@@ -406,36 +364,8 @@ class NewType08JobExecutionRouter(Component):
             matched_lookup = [job for job in lookup_jobs if self._matches(job, targets)]
             if matched_lookup:
                 return matched_lookup
-            return self._synthetic_jobs(route, targets)
+            return []
         return self._jobs_for_route(payload, route)
-
-    def _target_status(self, payload: dict[str, Any], route: str, targets: dict[str, list[Any]]) -> dict[str, Any]:
-        # Inspect matched target jobs for runnable or blocked status.
-        lookup_jobs = self._lookup_jobs_for_route(payload, route)
-        matched_lookup = [job for job in lookup_jobs if self._matches(job, targets)]
-        if not matched_lookup:
-            return {
-                "blocked": False,
-                "selected_jobs": self._synthetic_jobs(route, targets),
-                "blocked_jobs": [],
-                "reason": "Explicit target not found in lookup context; using POC synthetic target.",
-            }
-
-        runnable = [job for job in matched_lookup if job.get("runnable")]
-        blocked = [job for job in matched_lookup if not job.get("runnable")]
-        if runnable:
-            return {
-                "blocked": False,
-                "selected_jobs": runnable,
-                "blocked_jobs": blocked,
-                "reason": f"Run {len(runnable)} runnable explicit target(s).",
-            }
-        return {
-            "blocked": True,
-            "selected_jobs": [],
-            "blocked_jobs": blocked,
-            "reason": "Requested target exists but is not runnable. Check USE_YN/status and use Management Status Change before execution.",
-        }
 
     def _jobs_for_route(self, payload: dict[str, Any], route: str) -> list[dict[str, Any]]:
         # Select the planned jobs for the chosen execution route.
@@ -456,20 +386,6 @@ class NewType08JobExecutionRouter(Component):
         lookup = list(jobs.get("job_lookup_jobs") or jobs.get("all_jobs") or [])
         return [job for job in lookup if str(job.get("job_route") or "").upper() == route]
 
-    def _synthetic_jobs(self, route: str, targets: dict[str, list[Any]]) -> list[dict[str, Any]]:
-        # Create POC jobs for explicit user targets not found in lookup context.
-        if route == "MIG":
-            return [{"job_route": "MIG", "job_type": "MIG", "map_id": map_id, "source": "USER_TARGET"} for map_id in targets.get("map_ids", [])]
-
-        sql_ids = targets.get("sql_ids") or []
-        space_nms = targets.get("space_nms") or []
-        if sql_ids:
-            return [
-                {"job_route": route, "job_type": "SQL", "sql_id": sql_id, "space_nm": space_nms[0] if space_nms else "", "source": "USER_TARGET"}
-                for sql_id in sql_ids
-            ]
-        return [{"job_route": route, "job_type": "SQL", "space_nm": space_nm, "sql_id": "", "source": "USER_TARGET"} for space_nm in space_nms]
-
     def _matches(self, job: dict[str, Any], targets: dict[str, list[Any]]) -> bool:
         # Check whether a job matches requested target filters.
         map_ids = {int(v) for v in targets.get("map_ids", []) if str(v).isdigit()}
@@ -477,9 +393,13 @@ class NewType08JobExecutionRouter(Component):
         space_nms = {str(v).lower() for v in targets.get("space_nms", [])}
         if map_ids and self._to_int(job.get("map_id")) in map_ids:
             return True
-        if sql_ids and str(job.get("sql_id") or job.get("row_id") or "").lower() in sql_ids:
+        job_sql_id = str(job.get("sql_id") or "").lower()
+        job_space_nm = str(job.get("space_nm") or "").lower()
+        if sql_ids and space_nms:
+            return job_sql_id in sql_ids and job_space_nm in space_nms
+        if sql_ids and job_sql_id in sql_ids:
             return True
-        if space_nms and str(job.get("space_nm") or "").lower() in space_nms:
+        if space_nms and job_space_nm in space_nms:
             return True
         return False
 
@@ -534,16 +454,6 @@ class NewType08JobExecutionRouter(Component):
             if counts.get(route, 0) > 0:
                 return route
         return None
-
-    def _blocking_route(self, requested: str, counts: dict[str, int]) -> str:
-        # Return an earlier route that blocks the requested route.
-        order = ["MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"]
-        if requested not in order:
-            return ""
-        for route in order[: order.index(requested)]:
-            if counts.get(route, 0) > 0:
-                return route
-        return ""
 
     def _next_node(self, route: str) -> str:
         # Resolve the next component name for a route.

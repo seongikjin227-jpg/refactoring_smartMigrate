@@ -165,18 +165,16 @@ class NewType09ExecutionPlanSummary(Component):
             "job_type": job.get("job_type"),
             "map_id": job.get("map_id"),
             "space_nm": job.get("space_nm"),
-            "sql_id": job.get("sql_id") or job.get("row_id"),
-            "priority": job.get("priority"),
+            "sql_id": job.get("sql_id"),
         }
 
     def _job_label(self, job: dict[str, Any]) -> str:
         # Return a compact display label for a job target.
         if str(job.get("job_route") or job.get("job_type") or "").upper() == "MIG" or job.get("map_id") is not None:
-            return f"MIG map_id={job.get('map_id')}, priority={job.get('priority')}"
+            return f"MIG map_id={job.get('map_id')}"
         return (
             f"SQL space_nm={job.get('space_nm') or '-'}, "
-            f"sql_id={job.get('sql_id') or job.get('row_id') or '-'}, "
-            f"priority={job.get('priority')}"
+            f"sql_id={job.get('sql_id') or '-'}"
         )
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:

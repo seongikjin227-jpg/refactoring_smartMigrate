@@ -29,7 +29,6 @@ class NewType06GetPendingJobs(Component):
         StrInput(name="db_username", display_name="DB Username", required=False),
         SecretStrInput(name="db_password", display_name="DB Password", required=False),
         StrInput(name="system_schema", display_name="System Schema", required=False),
-        IntInput(name="limit", display_name="Candidate Limit", value=200, required=False),
     ]
 
     outputs = [Output(display_name="Payload", name="payload", method="get_pending_jobs")]
@@ -77,85 +76,65 @@ class NewType06GetPendingJobs(Component):
             return Data(data=result)
 
     def _load_from_db(self) -> dict[str, list[dict[str, Any]]]:
-        # Query pending job candidates from the configured database.
-        limit = max(1, int(getattr(self, "limit", None) or 200))
+        # Query only pending job identifiers needed for downstream routing.
         mig_table = self._qualify("NEXT_MIG_INFO")
         sql_table = self._qualify("NEXT_SQL_INFO")
         with self._connect() as conn:
             cur = conn.cursor()
-            cur.execute(
+            migration_jobs = self._query_jobs(
+                cur,
                 f"""
-                SELECT *
-                  FROM (
-                        SELECT 'MIG' AS JOB_ROUTE,
-                               'MIG' AS JOB_TYPE,
-                               MAP_ID,
-                               NULL AS ROW_ID,
-                               NULL AS SPACE_NM,
-                               NULL AS SQL_ID,
-                               PRIORITY,
-                               RETRY_COUNT,
-                               TO_CHAR(USE_YN) AS USE_YN,
-                               TO_CHAR(STATUS) AS STATUS,
-                               CASE
-                                   WHEN UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
-                                    AND STATUS IS NULL THEN 'Y'
-                                   ELSE 'N'
-                               END AS RUNNABLE_YN,
-                               0 AS SORT_GROUP
-                          FROM {mig_table}
-                        UNION ALL
-                        SELECT 'SQL_CONVERSION' AS JOB_ROUTE,
-                               'SQL' AS JOB_TYPE,
-                               NULL AS MAP_ID,
-                               ROWIDTOCHAR(ROWID) AS ROW_ID,
-                               TO_CHAR(SPACE_NM) AS SPACE_NM,
-                               TO_CHAR(SQL_ID) AS SQL_ID,
-                               PRIORITY,
-                               RETRY_COUNT,
-                               NULL AS USE_YN,
-                               TO_CHAR(STATUS_CONVERSION) AS STATUS,
-                               CASE
-                                   WHEN STATUS_CONVERSION IS NULL THEN 'Y'
-                                   ELSE 'N'
-                               END AS RUNNABLE_YN,
-                               1 AS SORT_GROUP
-                          FROM {sql_table}
-                       )
-                 ORDER BY SORT_GROUP ASC, PRIORITY ASC NULLS LAST, MAP_ID ASC NULLS LAST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
-                 FETCH FIRST {limit} ROWS ONLY
-                """
+                SELECT MAP_ID
+                  FROM {mig_table}
+                 WHERE UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
+                   AND STATUS IS NULL
+                 ORDER BY MAP_ID ASC
+                """,
+                "MIG",
+                ["map_id"],
             )
-            all_jobs = [self._row_to_job(row) for row in cur.fetchall()]
-        return self._group_jobs(all_jobs)
-
-    def _row_to_job(self, row: Any) -> dict[str, Any]:
-        # Convert a database row into a normalized job dictionary.
+            sql_conversion_jobs = self._query_jobs(
+                cur,
+                f"""
+                SELECT TO_CHAR(SPACE_NM) AS SPACE_NM,
+                       TO_CHAR(SQL_ID) AS SQL_ID
+                  FROM {sql_table}
+                 WHERE STATUS_CONVERSION IS NULL
+                 ORDER BY SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
+                """,
+                "SQL_CONVERSION",
+                ["space_nm", "sql_id"],
+            )
+            sql_tuning_jobs = self._query_jobs(
+                cur,
+                f"""
+                SELECT TO_CHAR(SPACE_NM) AS SPACE_NM,
+                       TO_CHAR(SQL_ID) AS SQL_ID
+                  FROM {sql_table}
+                 WHERE STATUS_TUNING IS NULL
+                   AND UPPER(TRIM(STATUS_CONVERSION)) = 'PASS-CONVERSION'
+                 ORDER BY SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
+                """,
+                "SQL_TUNING",
+                ["space_nm", "sql_id"],
+            )
+            sql_formatting_jobs = self._query_jobs(
+                cur,
+                f"""
+                SELECT TO_CHAR(SPACE_NM) AS SPACE_NM,
+                       TO_CHAR(SQL_ID) AS SQL_ID
+                  FROM {sql_table}
+                 WHERE UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING')
+                   AND (FORMATTED_SQL IS NULL OR NVL(DBMS_LOB.GETLENGTH(FORMATTED_SQL), 0) = 0)
+                 ORDER BY SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
+                """,
+                "SQL_FORMATTING",
+                ["space_nm", "sql_id"],
+            )
+        all_jobs = [*migration_jobs, *sql_conversion_jobs, *sql_tuning_jobs, *sql_formatting_jobs]
         return {
-            "job_route": self._json_value(row[0]),
-            "job_type": self._json_value(row[1]),
-            "map_id": self._json_value(row[2]),
-            "row_id": self._json_value(row[3]),
-            "space_nm": self._json_value(row[4]),
-            "sql_id": self._json_value(row[5]),
-            "priority": self._json_value(row[6]),
-            "retry_count": self._json_value(row[7]) or 0,
-            "use_yn": self._json_value(row[8]),
-            "status": self._json_value(row[9]),
-            "runnable_yn": self._json_value(row[10]),
-        }
-
-    def _group_jobs(self, all_jobs: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-        # Group normalized jobs by execution route.
-        normalized = [self._normalize_job(job) for job in all_jobs]
-        runnable = [job for job in normalized if job.get("runnable")]
-        migration_jobs = [job for job in runnable if job.get("job_route") == "MIG"]
-        sql_conversion_jobs = [job for job in runnable if job.get("job_route") in {"SQL_CONVERSION", "SQL"}]
-        sql_tuning_jobs = [job for job in runnable if job.get("job_route") == "SQL_TUNING"]
-        sql_formatting_jobs = [job for job in runnable if job.get("job_route") == "SQL_FORMATTING"]
-        return {
-            "all_jobs": runnable,
-            "job_lookup_jobs": normalized,
+            "all_jobs": all_jobs,
+            "job_lookup_jobs": all_jobs,
             "migration_jobs": migration_jobs,
             "sql_conversion_jobs": sql_conversion_jobs,
             "sql_jobs": sql_conversion_jobs,
@@ -163,29 +142,19 @@ class NewType06GetPendingJobs(Component):
             "sql_formatting_jobs": sql_formatting_jobs,
         }
 
-    def _normalize_job(self, job: dict[str, Any]) -> dict[str, Any]:
-        # Normalize route and runnable flags for a job.
-        out = dict(job or {})
-        route = str(out.get("job_route") or out.get("job_type") or "").upper()
-        if route == "SQL":
-            route = "SQL_CONVERSION"
-        if not route and out.get("map_id") is not None:
-            route = "MIG"
-        if not route and (out.get("sql_id") is not None or out.get("row_id") is not None):
-            route = "SQL_CONVERSION"
-        out["job_route"] = route or "UNKNOWN"
-        out["job_type"] = out.get("job_type") or ("MIG" if out["job_route"] == "MIG" else "SQL")
-        out["runnable"] = self._is_runnable(out)
-        return out
-
-    def _is_runnable(self, job: dict[str, Any]) -> bool:
-        # Determine whether a job is currently runnable.
-        runnable_yn = str(job.get("runnable_yn") or "").strip().upper()
-        if runnable_yn in {"Y", "N"}:
-            return runnable_yn == "Y"
-        use_yn = str(job.get("use_yn") or "Y").strip().upper()
-        status = job.get("status")
-        return use_yn != "N" and (status is None or str(status).strip() == "")
+    def _query_jobs(self, cur: Any, sql: str, route: str, columns: list[str]) -> list[dict[str, Any]]:
+        # Execute an identifier-only pending-job query for one route.
+        cur.execute(sql)
+        jobs: list[dict[str, Any]] = []
+        for row in cur.fetchall():
+            job = {
+                "job_route": route,
+                "job_type": "MIG" if route == "MIG" else "SQL",
+            }
+            for index, column in enumerate(columns):
+                job[column] = self._json_value(row[index])
+            jobs.append(job)
+        return jobs
 
     @contextmanager
     def _connect(self):

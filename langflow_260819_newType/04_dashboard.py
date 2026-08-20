@@ -226,26 +226,29 @@ class NewType04Dashboard(Component):
         agents = dashboard.get("agents") or {}
         recommendation = dashboard.get("recommendation") or {}
 
-        lines = ["[Dashboard 조회 결과]"]
+        lines = ["SmartMigrate Dashboard"]
         if user_request:
             lines.append(f"요청: {user_request}")
         lines.append("")
         lines.append("작업 현황")
+        lines.append("단계                         전체  대상  성공  실패  기타  진척률      성공률")
+        lines.append("--------------------------------------------------------------------------")
         for key, label in AGENT_ORDER:
             summary = agents.get(key) or {}
             if not summary.get("available", True):
-                lines.append(f"- {label}: 조회 불가 ({summary.get('reason')})")
+                lines.append(f"{label:<28} 조회 불가 ({summary.get('reason')})")
                 continue
             progress = summary.get("progress") or {}
             success = summary.get("success") or {}
             lines.append(
-                f"- {label}: 전체 {summary.get('total', 0)}건 / "
-                f"작업대상 {summary.get('target_count', 0)}건 / "
-                f"성공 {summary.get('pass_count', 0)}건 / "
-                f"실패 {summary.get('fail_count', 0)}건 / "
-                f"기타 {summary.get('other_count', 0)}건 / "
-                f"진척률 {progress.get('rate', '-')} ({progress.get('count', 0)}/{progress.get('base', 0)}) / "
-                f"성공률 {success.get('rate', '-')} ({success.get('count', 0)}/{success.get('base', 0)})"
+                f"{label:<28} "
+                f"{self._num(summary.get('total')):>4} "
+                f"{self._num(summary.get('target_count')):>5} "
+                f"{self._num(summary.get('pass_count')):>5} "
+                f"{self._num(summary.get('fail_count')):>5} "
+                f"{self._num(summary.get('other_count')):>5} "
+                f"{self._rate(progress):>11} "
+                f"{self._rate(success):>11}"
             )
 
         lines.append("")
@@ -379,6 +382,17 @@ class NewType04Dashboard(Component):
         if denominator <= 0:
             return "-"
         return f"{(int(numerator or 0) / denominator) * 100:.1f}%"
+
+    def _num(self, value: Any) -> int:
+        # Convert a display count value to an integer.
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _rate(self, value: dict[str, Any]) -> str:
+        # Format a rate with count/base detail for compact dashboard display.
+        return f"{value.get('rate', '-')}({value.get('count', 0)}/{value.get('base', 0)})"
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         # Parse a Langflow Data, dict, or JSON string payload.
