@@ -17,7 +17,7 @@ except Exception:
 
 class NewType06GetPendingJobs(Component):
     display_name = "06 Get Pending Jobs"
-    description = "Loads all runnable pending job candidates as routing context."
+    description = "Loads runnable pending job candidates and minimal routing metadata."
     name = "NewType06GetPendingJobs"
     icon = "Database"
 
@@ -76,7 +76,7 @@ class NewType06GetPendingJobs(Component):
             return Data(data=result)
 
     def _load_from_db(self) -> dict[str, list[dict[str, Any]]]:
-        # Query only pending job identifiers needed for downstream routing.
+        # Query only pending job identifiers and lightweight routing metadata.
         mig_table = self._qualify("NEXT_MIG_INFO")
         sql_table = self._qualify("NEXT_SQL_INFO")
         with self._connect() as conn:
@@ -84,52 +84,57 @@ class NewType06GetPendingJobs(Component):
             migration_jobs = self._query_jobs(
                 cur,
                 f"""
-                SELECT MAP_ID
+                SELECT MAP_ID,
+                       PRIORITY,
+                       PRIOR_MAP_ID
                   FROM {mig_table}
                  WHERE UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
                    AND STATUS IS NULL
-                 ORDER BY MAP_ID ASC
+                 ORDER BY PRIORITY ASC NULLS LAST, MAP_ID ASC
                 """,
                 "MIG",
-                ["map_id"],
+                ["map_id", "priority", "prior_map_id"],
             )
             sql_conversion_jobs = self._query_jobs(
                 cur,
                 f"""
                 SELECT TO_CHAR(SPACE_NM) AS SPACE_NM,
-                       TO_CHAR(SQL_ID) AS SQL_ID
+                       TO_CHAR(SQL_ID) AS SQL_ID,
+                       PRIORITY
                   FROM {sql_table}
                  WHERE STATUS_CONVERSION IS NULL
-                 ORDER BY SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
+                 ORDER BY PRIORITY ASC NULLS LAST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                 """,
                 "SQL_CONVERSION",
-                ["space_nm", "sql_id"],
+                ["space_nm", "sql_id", "priority"],
             )
             sql_tuning_jobs = self._query_jobs(
                 cur,
                 f"""
                 SELECT TO_CHAR(SPACE_NM) AS SPACE_NM,
-                       TO_CHAR(SQL_ID) AS SQL_ID
+                       TO_CHAR(SQL_ID) AS SQL_ID,
+                       PRIORITY
                   FROM {sql_table}
                  WHERE STATUS_TUNING IS NULL
                    AND UPPER(TRIM(STATUS_CONVERSION)) = 'PASS-CONVERSION'
-                 ORDER BY SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
+                 ORDER BY PRIORITY ASC NULLS LAST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                 """,
                 "SQL_TUNING",
-                ["space_nm", "sql_id"],
+                ["space_nm", "sql_id", "priority"],
             )
             sql_formatting_jobs = self._query_jobs(
                 cur,
                 f"""
                 SELECT TO_CHAR(SPACE_NM) AS SPACE_NM,
-                       TO_CHAR(SQL_ID) AS SQL_ID
+                       TO_CHAR(SQL_ID) AS SQL_ID,
+                       PRIORITY
                   FROM {sql_table}
                  WHERE UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING')
                    AND (FORMATTED_SQL IS NULL OR NVL(DBMS_LOB.GETLENGTH(FORMATTED_SQL), 0) = 0)
-                 ORDER BY SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
+                 ORDER BY PRIORITY ASC NULLS LAST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                 """,
                 "SQL_FORMATTING",
-                ["space_nm", "sql_id"],
+                ["space_nm", "sql_id", "priority"],
             )
         all_jobs = [*migration_jobs, *sql_conversion_jobs, *sql_tuning_jobs, *sql_formatting_jobs]
         return {

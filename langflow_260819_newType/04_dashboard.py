@@ -221,44 +221,70 @@ class NewType04Dashboard(Component):
         }
 
     def _build_answer(self, payload: dict[str, Any], dashboard: dict[str, Any]) -> str:
-        # Format dashboard data into a concise user-facing message.
+        # Format dashboard data into a Markdown user-facing message.
         user_request = str(payload.get("user_request") or payload.get("original_request") or "").strip()
         agents = dashboard.get("agents") or {}
         recommendation = dashboard.get("recommendation") or {}
 
-        lines = ["SmartMigrate Dashboard"]
+        lines = ["# SmartMigrate Dashboard"]
         if user_request:
-            lines.append(f"요청: {user_request}")
+            lines.append("")
+            lines.append(f"> 요청: {user_request}")
         lines.append("")
-        lines.append("작업 현황")
-        lines.append("단계                         전체  대상  성공  실패  기타  진척률      성공률")
-        lines.append("--------------------------------------------------------------------------")
+        if recommendation:
+            lines.append("## 우선 진행")
+            lines.append("")
+            lines.append(
+                f"- **{recommendation.get('label')}** 작업 대상이 **{recommendation.get('target_count')}건** 남아 있습니다."
+            )
+        else:
+            lines.append("## 우선 진행")
+            lines.append("")
+            lines.append("- 현재 실행할 작업 대상이 없습니다.")
+
+        lines.append("")
+        lines.append("## 작업 현황")
+        lines.append("")
+        lines.append("| 우선순위 | 단계 | 전체 | 작업 대상 | 성공 | 실패 | 기타 | 진척률 | 성공률 |")
+        lines.append("|---:|---|---:|---:|---:|---:|---:|---:|---:|")
         for key, label in AGENT_ORDER:
             summary = agents.get(key) or {}
+            priority = AGENT_ORDER.index((key, label)) + 1
             if not summary.get("available", True):
-                lines.append(f"{label:<28} 조회 불가 ({summary.get('reason')})")
+                lines.append(f"| {priority} | {label} | - | - | - | - | - | - | - |")
                 continue
             progress = summary.get("progress") or {}
             success = summary.get("success") or {}
             lines.append(
-                f"{label:<28} "
-                f"{self._num(summary.get('total')):>4} "
-                f"{self._num(summary.get('target_count')):>5} "
-                f"{self._num(summary.get('pass_count')):>5} "
-                f"{self._num(summary.get('fail_count')):>5} "
-                f"{self._num(summary.get('other_count')):>5} "
-                f"{self._rate(progress):>11} "
-                f"{self._rate(success):>11}"
+                "| "
+                f"{priority} | "
+                f"{label} | "
+                f"{self._num(summary.get('total'))} | "
+                f"{self._num(summary.get('target_count'))} | "
+                f"{self._num(summary.get('pass_count'))} | "
+                f"{self._num(summary.get('fail_count'))} | "
+                f"{self._num(summary.get('other_count'))} | "
+                f"{self._rate(progress)} | "
+                f"{self._rate(success)} |"
             )
 
+        unavailable = [
+            (label, (agents.get(key) or {}).get("reason"))
+            for key, label in AGENT_ORDER
+            if not (agents.get(key) or {}).get("available", True)
+        ]
+        if unavailable:
+            lines.append("")
+            lines.append("## 조회 불가")
+            lines.append("")
+            for label, reason in unavailable:
+                lines.append(f"- **{label}**: {reason}")
+
         lines.append("")
-        if recommendation:
-            lines.append(
-                f"우선 진행 추천: {recommendation.get('label')} "
-                f"(작업대상 {recommendation.get('target_count')}건)"
-            )
-        else:
-            lines.append("우선 진행 추천: 현재 작업 대상이 없습니다.")
+        lines.append("## 기준")
+        lines.append("")
+        lines.append("- 작업 대상은 각 단계에서 현재 실행 가능한 pending 기준입니다.")
+        lines.append("- 우선순위는 `DB Migration > SQL Conversion > SQL Tuning > SQL Formatting` 순서입니다.")
         return "\n".join(lines)
 
     def _recommendation(self, agents: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -391,8 +417,8 @@ class NewType04Dashboard(Component):
             return 0
 
     def _rate(self, value: dict[str, Any]) -> str:
-        # Format a rate with count/base detail for compact dashboard display.
-        return f"{value.get('rate', '-')}({value.get('count', 0)}/{value.get('base', 0)})"
+        # Format a rate with count/base detail for Markdown table display.
+        return f"{value.get('rate', '-')} ({value.get('count', 0)}/{value.get('base', 0)})"
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         # Parse a Langflow Data, dict, or JSON string payload.

@@ -53,9 +53,9 @@ class NewType04ManagementRouter(Component):
 
     inputs = [
         DataInput(name="payload_json", display_name="Payload JSON", required=True),
-        StrInput(name="llm_base_url", display_name="LLM Base URL", value="https://api.openai.com/v1", required=False),
+        StrInput(name="llm_base_url", display_name="LLM Base URL", value="", required=True),
         SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=True),
-        StrInput(name="llm_model", display_name="LLM Model", value="gpt-4.1-mini", required=True),
+        StrInput(name="llm_model", display_name="LLM Model", value="", required=True),
         IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=1200, required=False),
         IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=90, required=False),
     ]

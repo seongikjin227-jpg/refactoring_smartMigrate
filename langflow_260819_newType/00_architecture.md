@@ -9,8 +9,9 @@
 - `JOB_EXECUTION`은 실제 작업 실행 요청이다. 전체 pending 실행과 `map_id`/`sql_id`/`space_nm` 기반 단건 또는 복수건 실행을 모두 포함한다.
 - `01 Request Classifier LLM`, `04 Management LLM Router`, `08 Job Target Router`는 LLM 기반 분기다. rule fallback, classifier mode, router mode는 사용하지 않는다.
 - LLM 프롬프트는 컴포넌트 코드 내부 상수로 관리하고 Langflow 입력값으로 받지 않는다.
-- `06 Get Pending Jobs`는 실행 라우팅에 필요한 count와 대상 식별자만 조회한다. DB Migration은 `map_id`, NEXT_SQL_INFO 계열은 `space_nm + sql_id` 조합만 반환한다.
+- `06 Get Pending Jobs`는 실행 라우팅에 필요한 count, 대상 식별자, 경량 메타데이터만 조회한다. CLOB/SQL 본문은 반환하지 않고, DB Migration은 `map_id`, `priority`, `prior_map_id`, NEXT_SQL_INFO 계열은 `space_nm + sql_id`, `priority`를 반환한다.
 - `08 Job Target Router`는 `06 Get Pending Jobs` 결과와 사용자 요청을 함께 보고 실행 도메인, 실행 모드, 대상 필터를 LLM으로 결정한다.
+- 선행 작업이 남아 있는 경우는 `Prerequisite Required Message`, 요청 대상이 작업 대상에 없는 경우는 `No Runnable Target Message`로 분리한다.
 - 실행 전 `09 Execution Plan Summary`가 어떤 파이프라인에서 몇 개의 job을 실행할지 `Message`로 먼저 안내한다.
 - 각 pipeline은 현재 POC이므로 실제 DB Migration/SQL 변환/튜닝/포맷팅 로직을 실행하지 않고 테스트용 랜덤 결과와 로그를 반환한다.
 - Chat Output에 직접 연결되는 출력은 모두 `Message` 타입이다.
@@ -37,6 +38,7 @@ flowchart TD
     H -->|SQL Conversion targets| P
     H -->|SQL Tuning targets| P
     H -->|SQL Formatting targets| P
+    H -->|prerequisite_required message| OUT
     H -->|no_runnable_target message| OUT
 
     P -->|notice message| OUT
@@ -78,7 +80,8 @@ flowchart TD
 | 15 | `12 SQL Conversion Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
 | 16 | `15 SQL Tuning Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
 | 17 | `17 SQL Formatting Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
-| 18 | `08 Job Target Router` | `No Runnable Target Message` | Chat Output | Message |
+| 18 | `08 Job Target Router` | `Prerequisite Required Message` | Chat Output | Message |
+| 19 | `08 Job Target Router` | `No Runnable Target Message` | Chat Output | Message |
 | 20 | `13 Final Summary` | `Result Message` | Chat Output | Message |
 
 ## 요청별 분기 기준
@@ -95,6 +98,8 @@ flowchart TD
 | `sql_id=Q001 변환해줘` | `JOB_EXECUTION` | `targeted / SQL_CONVERSION` | `06 -> 08 -> 09 -> 12 -> 13` |
 | `space_nm=SALES 튜닝 진행해줘` | `JOB_EXECUTION` | `targeted / SQL_TUNING` | `06 -> 08 -> 09 -> 15 -> 13` |
 | `sql_id=Q001 포맷팅해줘` | `JOB_EXECUTION` | `targeted / SQL_FORMATTING` | `06 -> 08 -> 09 -> 17 -> 13` |
+| `SQL Conversion 전체 실행해줘` + DB Migration pending 존재 | `JOB_EXECUTION` | `PREREQUISITE_REQUIRED` | `06 -> 08 -> Chat Output` |
+| `map_id=999 실행해줘` + 작업 대상 없음 | `JOB_EXECUTION` | `NO_RUNNABLE_JOB` | `06 -> 08 -> Chat Output` |
 
 ## Dashboard 응답 계약
 
@@ -136,6 +141,7 @@ Chat Output으로 직접 연결되는 출력은 모두 `Message` 타입이다.
 | `04 Status Change` | `Result Message` |
 | `04 Correct SQL Input` | `Result Message` |
 | `04 Management LLM Router` | `Exception Message` |
+| `08 Job Target Router` | `Prerequisite Required Message` |
 | `08 Job Target Router` | `No Runnable Target Message` |
 | `09 Execution Plan Summary` | `Notice Message` |
 | `13 Final Summary` | `Result Message` |

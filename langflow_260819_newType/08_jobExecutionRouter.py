@@ -21,7 +21,7 @@ JOB_EXECUTION_ROUTER_PROMPT = """당신은 SmartMigrate의 작업 대상 실행 
 
 역할:
 - 사용자 실행 요청을 하나의 실행 도메인과 실행 모드로 분류합니다.
-- 06 Get Pending Jobs가 전달한 pending_summary와 sample_pending_jobs를 참고합니다.
+- 06 Get Pending Jobs가 전달한 pending_summary와 pending_job_identifiers를 참고합니다.
 - 사용자 요청에 있는 map_id/sql_id/space_nm 값을 target_filter에 넣습니다.
 
 실행 도메인:
@@ -29,6 +29,7 @@ JOB_EXECUTION_ROUTER_PROMPT = """당신은 SmartMigrate의 작업 대상 실행 
 - SQL_CONVERSION: SQL Conversion 작업. 보통 sql_id 또는 space_nm으로 식별합니다.
 - SQL_TUNING: SQL Tuning 작업.
 - SQL_FORMATTING: SQL Formatting 작업.
+- PREREQUISITE_REQUIRED: 작업 대상은 있지만 선행 작업이 남아 있어 지금 실행하면 안 되는 경우.
 - NO_RUNNABLE_JOB: 실행할 대상이 없다고 판단되는 경우.
 
 실행 모드:
@@ -37,7 +38,7 @@ JOB_EXECUTION_ROUTER_PROMPT = """당신은 SmartMigrate의 작업 대상 실행 
 
 반환 JSON schema:
 {
-  "job_route": "MIG|SQL_CONVERSION|SQL_TUNING|SQL_FORMATTING|NO_RUNNABLE_JOB",
+  "job_route": "MIG|SQL_CONVERSION|SQL_TUNING|SQL_FORMATTING|PREREQUISITE_REQUIRED|NO_RUNNABLE_JOB",
   "run_mode": "all_pending|targeted",
   "target_filter": {
     "map_ids": [],
@@ -48,13 +49,19 @@ JOB_EXECUTION_ROUTER_PROMPT = """당신은 SmartMigrate의 작업 대상 실행 
 }
 
 규칙:
+- pending_summary의 count key는 migration_total, sql_conversion_total, sql_tuning_total, sql_formatting_total입니다.
 - map_id가 있으면 job_route는 MIG, run_mode는 targeted입니다.
 - sql_id 또는 space_nm이 있고 튜닝 요청이면 SQL_TUNING입니다.
 - sql_id 또는 space_nm이 있고 포맷팅 요청이면 SQL_FORMATTING입니다.
 - sql_id 또는 space_nm이 있고 튜닝/포맷팅이 아니면 SQL_CONVERSION입니다.
 - 명시 대상이 없고 전체/대기 작업 실행 요청이면 run_mode는 all_pending입니다.
-- targeted 요청에서 사용자가 요청한 map_id 또는 sql_id+space_nm 조합이 sample_pending_jobs에 없으면 NO_RUNNABLE_JOB을 선택합니다.
+- SQL Conversion 실행 요청에서 pending_summary.migration_total이 1건 이상이면 PREREQUISITE_REQUIRED를 선택합니다.
+- SQL Tuning 실행 요청에서 pending_summary.migration_total 또는 pending_summary.sql_conversion_total이 1건 이상이면 PREREQUISITE_REQUIRED를 선택합니다.
+- SQL Formatting 실행 요청에서 pending_summary.migration_total, pending_summary.sql_conversion_total, pending_summary.sql_tuning_total 중 하나라도 1건 이상이면 PREREQUISITE_REQUIRED를 선택합니다.
+- targeted 요청에서 사용자가 요청한 작업 대상은 있지만 priority/prior_map_id 등 06 payload에서 확인 가능한 선행 조건이 남아 있으면 PREREQUISITE_REQUIRED를 선택합니다.
+- targeted 요청에서 사용자가 요청한 map_id 또는 sql_id+space_nm 조합이 pending_job_identifiers에 없으면 NO_RUNNABLE_JOB을 선택합니다.
 - all_pending 요청에서 해당 도메인의 pending count가 0이면 NO_RUNNABLE_JOB을 선택합니다.
+- PREREQUISITE_REQUIRED의 reason에는 어떤 선행 작업이 남았는지 사용자에게 보여줄 한국어 메시지를 작성합니다.
 """
 
 
@@ -66,9 +73,9 @@ class NewType08JobExecutionRouter(Component):
 
     inputs = [
         DataInput(name="payload_json", display_name="Payload JSON", required=True),
-        StrInput(name="llm_base_url", display_name="LLM Base URL", value="https://api.openai.com/v1", required=False),
-        SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=False),
-        StrInput(name="llm_model", display_name="LLM Model", value="gpt-4.1-mini", required=False),
+        StrInput(name="llm_base_url", display_name="LLM Base URL", value="", required=True),
+        SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=True),
+        StrInput(name="llm_model", display_name="LLM Model", value="", required=True),
         IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=1500, required=False),
         IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=90, required=False),
     ]
@@ -78,6 +85,7 @@ class NewType08JobExecutionRouter(Component):
         Output(display_name="SQL Conversion Targets", name="sql_conversion_job", method="sql_conversion_response", group_outputs=True),
         Output(display_name="SQL Tuning Targets", name="sql_tuning_job", method="sql_tuning_response", group_outputs=True),
         Output(display_name="SQL Formatting Targets", name="sql_formatting_job", method="sql_formatting_response", group_outputs=True),
+        Output(display_name="Prerequisite Required Message", name="prerequisite_required", method="prerequisite_required_response", group_outputs=True, types=["Message"]),
         Output(display_name="No Runnable Target Message", name="no_runnable_job", method="no_runnable_response", group_outputs=True, types=["Message"]),
     ]
 
@@ -96,6 +104,10 @@ class NewType08JobExecutionRouter(Component):
     def sql_formatting_response(self) -> Data:
         # Return the SQL Formatting execution branch when selected.
         return self._route_output("SQL_FORMATTING", "sql_formatting_job")
+
+    def prerequisite_required_response(self) -> Message:
+        # Return a message when prerequisite work must be completed first.
+        return self._message_route_output("PREREQUISITE_REQUIRED", "prerequisite_required")
 
     def no_runnable_response(self) -> Message:
         # Return a message when no runnable target exists.
@@ -124,7 +136,7 @@ class NewType08JobExecutionRouter(Component):
                 self.stop(output_name)
                 return Message(text="")
             routed = {**routed, "selected_output": output_name, "next_node": "chat_output", "final": True}
-            message = self._build_block_message(routed)
+            message = self._build_message_route_text(routed)
             self.status = {**routed, "answer_text": message}
             return Message(text=message)
         except Exception as exc:
@@ -132,16 +144,24 @@ class NewType08JobExecutionRouter(Component):
             self.status = {"ok": False, "component": "08_jobExecutionRouter", "error": str(exc), "answer_text": message}
             return Message(text=message)
 
-    def _build_block_message(self, routed: dict[str, Any]) -> str:
-        # Format a no-runnable route message.
+    def _build_message_route_text(self, routed: dict[str, Any]) -> str:
+        # Format a direct message route response.
+        route = str(routed.get("job_route") or "")
+        reason = str(routed.get("routing_reason") or "").strip()
         user_request = str(routed.get("user_request") or routed.get("original_request") or "").strip()
         targets = routed.get("target_filter") or {}
         target_label = self._target_label(targets) or "요청하신 작업"
-        message = f"{target_label}이 작업 대상에서 조회되지 않았습니다."
+        if route == "PREREQUISITE_REQUIRED":
+            message = reason or f"{target_label}은 선행 작업이 남아 있어 지금 실행할 수 없습니다."
+        else:
+            message = reason or f"{target_label}이 작업 대상에서 조회되지 않았습니다."
         lines = [message]
         if user_request:
             lines.append(f"요청: {user_request}")
-        lines.append("대상 상태를 변경하거나 Dashboard에서 작업 대상을 먼저 확인해주세요.")
+        if route == "PREREQUISITE_REQUIRED":
+            lines.append("선행 작업을 먼저 완료한 뒤 다시 실행해주세요.")
+        else:
+            lines.append("대상 상태를 변경하거나 Dashboard에서 작업 대상을 먼저 확인해주세요.")
         return "\n".join(lines)
 
     def _target_label(self, targets: dict[str, Any]) -> str:
@@ -180,6 +200,8 @@ class NewType08JobExecutionRouter(Component):
             decision = self._empty_decision("No explicit target and no runnable pending jobs found.", targets)
         elif route == "NO_RUNNABLE_JOB":
             decision = self._empty_decision(decision_hint.get("reason") or "No runnable job target selected by LLM.", targets)
+        elif route == "PREREQUISITE_REQUIRED":
+            decision = self._prerequisite_decision(decision_hint.get("reason") or "선행 작업이 남아 있어 지금 실행할 수 없습니다.", targets)
         else:
             selected_jobs = self._selected_jobs_for_hint(payload, route, requested_run_mode, targets)
             if not selected_jobs:
@@ -234,7 +256,7 @@ class NewType08JobExecutionRouter(Component):
                         {
                             "user_request": payload.get("user_request") or "",
                             "pending_summary": payload.get("pending_summary") or {},
-                            "sample_pending_jobs": self._sample_jobs(payload),
+                            "pending_job_identifiers": self._sample_jobs(payload),
                         },
                         ensure_ascii=False,
                         default=str,
@@ -262,7 +284,7 @@ class NewType08JobExecutionRouter(Component):
         route = str(hint.get("job_route") or "").upper()
         if route == "NO_RUNNABLE_JOB":
             route = "NO_RUNNABLE_JOB"
-        if route not in {"MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING", "NO_RUNNABLE_JOB"}:
+        if route not in {"MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING", "PREREQUISITE_REQUIRED", "NO_RUNNABLE_JOB"}:
             raise ValueError(f"Invalid LLM job_route: {route}")
         run_mode = str(hint.get("run_mode") or "all_pending").lower()
         if run_mode not in {"all_pending", "targeted"}:
@@ -314,19 +336,30 @@ class NewType08JobExecutionRouter(Component):
         return out
 
     def _sample_jobs(self, payload: dict[str, Any]) -> dict[str, Any]:
-        # Build a small pending-job sample for LLM context.
+        # Build pending-job identifiers for LLM routing context.
         jobs = payload.get("pending_jobs") or {}
         return {
-            "migration_jobs": list(jobs.get("migration_jobs") or [])[:5],
-            "sql_conversion_jobs": list(jobs.get("sql_conversion_jobs") or jobs.get("sql_jobs") or [])[:5],
-            "sql_tuning_jobs": list(jobs.get("sql_tuning_jobs") or [])[:5],
-            "sql_formatting_jobs": list(jobs.get("sql_formatting_jobs") or [])[:5],
+            "migration_jobs": list(jobs.get("migration_jobs") or []),
+            "sql_conversion_jobs": list(jobs.get("sql_conversion_jobs") or jobs.get("sql_jobs") or []),
+            "sql_tuning_jobs": list(jobs.get("sql_tuning_jobs") or []),
+            "sql_formatting_jobs": list(jobs.get("sql_formatting_jobs") or []),
         }
 
     def _empty_decision(self, reason: str, targets: dict[str, list[Any]]) -> dict[str, Any]:
         # Create a no-runnable execution decision.
         return {
             "job_route": "NO_RUNNABLE_JOB",
+            "run_mode": "none",
+            "run_all_pending": False,
+            "selected_jobs": [],
+            "target_filter": targets,
+            "reason": reason,
+        }
+
+    def _prerequisite_decision(self, reason: str, targets: dict[str, list[Any]]) -> dict[str, Any]:
+        # Create a prerequisite-required execution decision.
+        return {
+            "job_route": "PREREQUISITE_REQUIRED",
             "run_mode": "none",
             "run_all_pending": False,
             "selected_jobs": [],
