@@ -25,6 +25,7 @@ class NewType12SqlConversionPipeline(Component):
     outputs = [Output(display_name="Payload", name="payload", method="run_pipeline")]
 
     def run_pipeline(self) -> Data:
+        # Run the POC pipeline and return test execution results.
         payload = self._parse_payload(getattr(self, "payload_json", ""))
         processed = [self._mock_result(job, index) for index, job in enumerate(self._execution_jobs(payload), start=1)]
         completed = [item for item in processed if item["ok"]]
@@ -43,9 +44,11 @@ class NewType12SqlConversionPipeline(Component):
         return Data(data=out)
 
     def _execution_jobs(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        # Read selected or planned jobs from the payload.
         return [dict(job) for job in (payload.get("selected_jobs") or payload.get("planned_jobs") or []) if isinstance(job, dict)]
 
     def _mock_result(self, job: dict[str, Any], index: int) -> dict[str, Any]:
+        # Create a deterministic-looking POC result for one job.
         sql_id = job.get("sql_id") or job.get("row_id") or f"SQL-{index}"
         space_nm = job.get("space_nm") or "-"
         rng = random.Random(f"SQL_CONVERSION:{space_nm}:{sql_id}:{index}")
@@ -61,6 +64,7 @@ class NewType12SqlConversionPipeline(Component):
         }
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
+        # Parse a Langflow Data, dict, or JSON string payload.
         if isinstance(raw, Data):
             return dict(raw.data or {})
         if isinstance(raw, dict):

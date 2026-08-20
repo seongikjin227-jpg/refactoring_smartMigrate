@@ -25,6 +25,7 @@ class NewType13FinalSummary(Component):
     outputs = [Output(display_name="Result Message", name="result", method="summarize", types=["Message"])]
 
     def summarize(self) -> Message:
+        # Create the final user-facing flow summary message.
         try:
             payload = self._parse_payload(getattr(self, "payload_json", ""))
             answer = self._answer_text(payload)
@@ -37,6 +38,7 @@ class NewType13FinalSummary(Component):
             return Message(text=result["answer_text"])
 
     def _answer_text(self, payload: dict[str, Any]) -> str:
+        # Select the appropriate final summary text for a payload.
         if not payload.get("ok", True):
             return f"실패: {payload.get('error') or 'unknown error'}"
 
@@ -60,6 +62,7 @@ class NewType13FinalSummary(Component):
         return f"POC 라우팅 완료: route={route}, next={payload.get('next_node')}"
 
     def _blocked_summary(self, payload: dict[str, Any]) -> str:
+        # Format a prerequisite-blocked or no-target summary.
         blocker = payload.get("blocker_route") or "선행"
         requested = self._requested_label_from_reason(payload.get("routing_reason") or "")
         summary = payload.get("pending_summary") or {}
@@ -90,10 +93,12 @@ class NewType13FinalSummary(Component):
         )
 
     def _requested_label_from_reason(self, reason: str) -> str:
+        # Infer a requested stage label from a routing reason.
         match = re.search(r"(SQL_CONVERSION|SQL_TUNING|SQL_FORMATTING|MIG)", reason or "")
         return match.group(1) if match else "요청한"
 
     def _pipeline_summary(self, payload: dict[str, Any], job_result: dict[str, Any]) -> str:
+        # Format the final summary for a completed pipeline run.
         processed = list(job_result.get("processed_jobs") or job_result.get("results") or [])
         completed = list(job_result.get("completed_jobs") or [])
         failed = list(job_result.get("failed_jobs") or [])
@@ -124,6 +129,7 @@ class NewType13FinalSummary(Component):
         return "\n".join(lines)
 
     def _job_label(self, item: dict[str, Any]) -> str:
+        # Return a compact display label for a job target.
         job = item.get("job") if isinstance(item.get("job"), dict) else item
         job_type = str(item.get("job_type") or job.get("job_type") or "").upper()
         if job_type == "MIG" or item.get("map_id") is not None or job.get("map_id") is not None:
@@ -131,6 +137,7 @@ class NewType13FinalSummary(Component):
         return f"SQL space_nm={job.get('space_nm') or '-'} sql_id={job.get('sql_id') or job.get('row_id') or '-'}"
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
+        # Parse a Langflow Data, dict, or JSON string payload.
         if isinstance(raw, Data):
             return dict(raw.data or {})
         if isinstance(raw, dict):

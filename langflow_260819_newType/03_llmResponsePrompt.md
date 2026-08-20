@@ -6,7 +6,7 @@
 
 ```text
 Chat Input
--> 01 Request Classifier
+-> 01 Request Classifier LLM
 -> 02 Intent Conditional Router.General Chat
 -> 03 LLM Response
 -> Chat Output
@@ -21,19 +21,13 @@ system prompt = 이 문서의 "System Prompt"
 user message = payload.user_request
 ```
 
-가능하면 `01 Request Classifier`의 payload 전체를 context로 함께 넣는다.
+가능하면 `01 Request Classifier LLM`이 생성한 JSON payload 전체를 context로 함께 넣는다.
 
 ```json
 {
   "user_request": "...",
   "route": "GENERAL_CHAT",
-  "classification": {
-    "route": "GENERAL_CHAT",
-    "task_type": "CHAT",
-    "expected_latency": "FAST",
-    "needs_pending_jobs": false,
-    "needs_llm_answer": true
-  },
+  "reason": "일반 기능 설명 요청입니다.",
   "history": []
 }
 ```

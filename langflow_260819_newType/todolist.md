@@ -9,8 +9,8 @@
 | 구분 | Task | 파일 | 기간 |
 |---|---|---|---:|
 | 개발 | newType 전체 노드 연결 문서 최신화 | `01_architecture.md` | 0.5 WD |
-| 개발 | 사용자 입력을 `GENERAL_CHAT`, `MANAGEMENT`, `JOB_EXECUTION`으로 분류하는 Request Classifier 정리 | `01_requestClassifier.py` | 1.0 WD |
-| 테스트 | Request Classifier 샘플 입력별 route 검증 | `01_requestClassifier.py` | 0.5 WD |
+| 개발 | 사용자 입력을 `GENERAL_CHAT`, `MANAGEMENT`, `JOB_EXECUTION`으로 분류하는 Request Classifier LLM 프롬프트 정리 | `01_requestClassifierPrompt.md` | 1.0 WD |
+| 테스트 | Request Classifier LLM 샘플 입력별 JSON route 검증 | `01_requestClassifierPrompt.md` | 0.5 WD |
 | 개발 | 1차 route를 multi-output으로 분기하는 Conditional Router 정리 | `02_intentRouter.py` | 0.5 WD |
 | 테스트 | 1차 Router에서 선택되지 않은 branch가 실행되지 않는지 검증 | `02_intentRouter.py` | 0.5 WD |
 | 개발 | 일반 대화 branch LLM 응답 프롬프트 정리 | `03_llmResponsePrompt.md` | 0.25 WD |

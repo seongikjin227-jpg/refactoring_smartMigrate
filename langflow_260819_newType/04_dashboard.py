@@ -42,6 +42,7 @@ class NewType04Dashboard(Component):
     outputs = [Output(display_name="Result Message", name="result", method="run", types=["Message"])]
 
     def run(self) -> Message:
+        # Execute the component and return a Langflow message.
         try:
             payload = self._parse_payload(getattr(self, "payload_json", ""))
             dashboard = self._query_dashboard()
@@ -60,6 +61,7 @@ class NewType04Dashboard(Component):
             return Message(text=answer)
 
     def _query_dashboard(self) -> dict[str, Any]:
+        # Query all dashboard metrics from the configured database.
         if not self._has_db_config():
             raise ValueError("DB connection settings are required for 04 Dashboard")
         agents = {
@@ -71,6 +73,7 @@ class NewType04Dashboard(Component):
         return {"ok": True, "agents": agents, "recommendation": self._recommendation(agents)}
 
     def _migration_summary(self) -> dict[str, Any]:
+        # Build DB Migration dashboard counts and rates.
         table = self._qualify("NEXT_MIG_INFO")
         total = self._count(table, "UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'")
         target = self._count(table, "UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y' AND STATUS IS NULL")
@@ -92,6 +95,7 @@ class NewType04Dashboard(Component):
         )
 
     def _sql_conversion_summary(self) -> dict[str, Any]:
+        # Build SQL Conversion dashboard counts and rates.
         table = self._qualify("NEXT_SQL_INFO")
         total = self._count(table)
         target = self._count(table, "STATUS_CONVERSION IS NULL")
@@ -116,6 +120,7 @@ class NewType04Dashboard(Component):
         )
 
     def _sql_tuning_summary(self) -> dict[str, Any]:
+        # Build SQL Tuning dashboard counts and rates.
         table = self._qualify("NEXT_SQL_INFO")
         columns = self._available_columns("NEXT_SQL_INFO")
         missing = [col for col in ("STATUS_TUNING", "STATUS_CONVERSION") if col not in columns]
@@ -145,6 +150,7 @@ class NewType04Dashboard(Component):
         )
 
     def _sql_formatting_summary(self) -> dict[str, Any]:
+        # Build SQL Formatting dashboard counts and rates.
         table = self._qualify("NEXT_SQL_INFO")
         columns = self._available_columns("NEXT_SQL_INFO")
         missing = [col for col in ("STATUS_TUNING", "FORMATTED_SQL") if col not in columns]
@@ -187,6 +193,7 @@ class NewType04Dashboard(Component):
         fail_count: int,
         status_counts: dict[str, int],
     ) -> dict[str, Any]:
+        # Assemble a normalized dashboard summary for one stage.
         return {
             "agent": agent,
             "available": True,
@@ -210,6 +217,7 @@ class NewType04Dashboard(Component):
         }
 
     def _build_answer(self, payload: dict[str, Any], dashboard: dict[str, Any]) -> str:
+        # Format dashboard data into a concise user-facing message.
         user_request = str(payload.get("user_request") or payload.get("original_request") or "").strip()
         agents = dashboard.get("agents") or {}
         recommendation = dashboard.get("recommendation") or {}
@@ -246,6 +254,7 @@ class NewType04Dashboard(Component):
         return "\n".join(lines)
 
     def _recommendation(self, agents: dict[str, dict[str, Any]]) -> dict[str, Any]:
+        # Choose the highest-priority stage with remaining targets.
         for key, label in AGENT_ORDER:
             summary = agents.get(key) or {}
             count = int(summary.get("target_count") or 0)
@@ -254,6 +263,7 @@ class NewType04Dashboard(Component):
         return {}
 
     def _count(self, table: str, where_clause: str = "1=1") -> int:
+        # Run a count query with the supplied table and condition.
         with self._connect() as conn:
             cur = conn.cursor()
             cur.execute(f"SELECT COUNT(*) FROM {table} WHERE {where_clause}")
@@ -261,6 +271,7 @@ class NewType04Dashboard(Component):
         return int(row[0] if row else 0)
 
     def _status_counts(self, table: str, status_column: str, where_clause: str = "1=1") -> dict[str, int]:
+        # Query grouped status counts for a dashboard stage.
         with self._connect() as conn:
             cur = conn.cursor()
             cur.execute(
@@ -276,6 +287,7 @@ class NewType04Dashboard(Component):
         return {str(row[0]): int(row[1]) for row in rows}
 
     def _available_columns(self, table_name: str) -> set[str]:
+        # Load available Oracle column names for a table.
         table = self._clean_identifier(table_name)
         schema = str(getattr(self, "system_schema", "") or "").strip().upper()
         with self._connect() as conn:
@@ -303,6 +315,7 @@ class NewType04Dashboard(Component):
         return {str(row[0]).upper() for row in rows}
 
     def _unavailable(self, agent: str, table: str, reason: str) -> dict[str, Any]:
+        # Return a standard unavailable-stage dashboard summary.
         return {
             "agent": agent,
             "available": False,
@@ -319,6 +332,7 @@ class NewType04Dashboard(Component):
 
     @contextmanager
     def _connect(self):
+        # Open and safely close an Oracle database connection.
         import oracledb
 
         dsn = oracledb.makedsn(
@@ -337,26 +351,31 @@ class NewType04Dashboard(Component):
             conn.close()
 
     def _has_db_config(self) -> bool:
+        # Check whether the minimum DB connection settings are present.
         return all(str(getattr(self, name, "") or "").strip() for name in ("db_host", "db_service_name", "db_username"))
 
     def _qualify(self, table_name: str) -> str:
+        # Qualify a table name with the optional system schema.
         table = self._clean_identifier(table_name)
         schema = str(getattr(self, "system_schema", "") or "").strip().upper()
         return f"{schema}.{table}" if schema else table
 
     def _clean_identifier(self, value: str) -> str:
+        # Validate and normalize an Oracle identifier.
         clean = str(value or "").strip().upper()
         if not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", clean):
             raise ValueError(f"Invalid identifier: {clean}")
         return clean
 
     def _pct(self, numerator: int, denominator: int) -> str:
+        # Format a numerator and denominator as a percentage string.
         denominator = int(denominator or 0)
         if denominator <= 0:
             return "-"
         return f"{(int(numerator or 0) / denominator) * 100:.1f}%"
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
+        # Parse a Langflow Data, dict, or JSON string payload.
         if isinstance(raw, Data):
             return dict(raw.data or {})
         if isinstance(raw, dict):
@@ -371,6 +390,7 @@ class NewType04Dashboard(Component):
         return parsed
 
     def _secret_to_str(self, value: Any) -> str:
+        # Convert a Langflow secret value into a plain string.
         if value is None:
             return ""
         if hasattr(value, "get_secret_value"):

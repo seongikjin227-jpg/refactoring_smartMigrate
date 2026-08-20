@@ -68,15 +68,19 @@ class NewType04ManagementRouter(Component):
     ]
 
     def dashboard_response(self) -> Data:
+        # Return the dashboard branch when management routing matches.
         return self._route_output("DASHBOARD", "dashboard")
 
     def status_change_response(self) -> Data:
+        # Return the status-change branch when management routing matches.
         return self._route_output("STATUS_CHANGE", "status_change")
 
     def correct_sql_input_response(self) -> Data:
+        # Return the Correct SQL branch when management routing matches.
         return self._route_output("CORRECT_SQL_INPUT", "correct_sql_input")
 
     def exception_response(self) -> Message:
+        # Return a user-facing exception message for ambiguous management requests.
         routed = self._get_routed_payload()
         if routed.get("management_route") != "EXCEPTION":
             self.stop("exception")
@@ -85,6 +89,7 @@ class NewType04ManagementRouter(Component):
         return Message(text=EXCEPTION_MESSAGE)
 
     def _route_output(self, expected_route: str, output_name: str) -> Data:
+        # Build a routed payload for the active output branch.
         try:
             routed = self._get_routed_payload()
             if routed.get("management_route") != expected_route:
@@ -99,6 +104,7 @@ class NewType04ManagementRouter(Component):
             return Data(data=result)
 
     def _get_routed_payload(self) -> dict[str, Any]:
+        # Compute and cache the routed payload for this component.
         cached = getattr(self, "_cached_routed_payload", None)
         if cached is not None:
             return cached
@@ -119,6 +125,7 @@ class NewType04ManagementRouter(Component):
         return routed
 
     def _route_with_llm(self, payload: dict[str, Any]) -> dict[str, Any]:
+        # Call the configured LLM to decide the route.
         api_key = self._secret_to_str(getattr(self, "llm_api_key", None)).strip()
         model = str(getattr(self, "llm_model", "") or "").strip()
         base_url = str(getattr(self, "llm_base_url", "") or "").strip().rstrip("/")
@@ -155,6 +162,7 @@ class NewType04ManagementRouter(Component):
         return self._parse_json_object(content)
 
     def _normalize_decision(self, decision: dict[str, Any]) -> dict[str, Any]:
+        # Validate and normalize the management router decision.
         route = str(decision.get("management_route") or "").upper()
         if route not in {"DASHBOARD", "STATUS_CHANGE", "CORRECT_SQL_INPUT", "EXCEPTION"}:
             raise ValueError(f"Invalid management_route: {route}")
@@ -167,6 +175,7 @@ class NewType04ManagementRouter(Component):
         }
 
     def _next_node(self, route: str) -> str:
+        # Resolve the next component name for a route.
         return {
             "DASHBOARD": "04_dashboard",
             "STATUS_CHANGE": "04_statusChange",
@@ -175,6 +184,7 @@ class NewType04ManagementRouter(Component):
         }.get(route, "04_dashboard")
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
+        # Parse a Langflow Data, dict, or JSON string payload.
         if isinstance(raw, Data):
             return dict(raw.data or {})
         if isinstance(raw, dict):
@@ -182,6 +192,7 @@ class NewType04ManagementRouter(Component):
         return self._parse_json_object(str(raw or "").strip()) if str(raw or "").strip() else {}
 
     def _parse_json_object(self, text: str) -> dict[str, Any]:
+        # Parse a JSON object from raw LLM or text output.
         clean = str(text or "").strip()
         if clean.startswith("```"):
             clean = re.sub(r"^```(?:json)?\s*", "", clean, flags=re.I)
@@ -194,6 +205,7 @@ class NewType04ManagementRouter(Component):
         return parsed
 
     def _secret_to_str(self, value: Any) -> str:
+        # Convert a Langflow secret value into a plain string.
         if value is None:
             return ""
         if hasattr(value, "get_secret_value"):

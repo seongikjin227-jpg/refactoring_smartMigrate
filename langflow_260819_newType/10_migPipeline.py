@@ -25,6 +25,7 @@ class NewType10MigPipeline(Component):
     outputs = [Output(display_name="Payload", name="payload", method="run_pipeline")]
 
     def run_pipeline(self) -> Data:
+        # Run the POC pipeline and return test execution results.
         try:
             payload = self._parse_payload(getattr(self, "payload_json", ""))
             jobs = self._execution_jobs(payload)
@@ -58,10 +59,12 @@ class NewType10MigPipeline(Component):
             return Data(data=result)
 
     def _execution_jobs(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        # Read selected or planned jobs from the payload.
         jobs = payload.get("selected_jobs") or payload.get("planned_jobs") or []
         return [dict(job) for job in jobs if isinstance(job, dict)]
 
     def _mock_result(self, job: dict[str, Any], index: int) -> dict[str, Any]:
+        # Create a deterministic-looking POC result for one job.
         map_id = job.get("map_id")
         seed = f"MIG:{map_id}:{index}"
         rng = random.Random(seed)
@@ -81,6 +84,7 @@ class NewType10MigPipeline(Component):
         }
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
+        # Parse a Langflow Data, dict, or JSON string payload.
         if isinstance(raw, Data):
             return dict(raw.data or {})
         if isinstance(raw, dict):

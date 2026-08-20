@@ -28,6 +28,7 @@ class NewType09ExecutionPlanSummary(Component):
     ]
 
     def build_notice(self) -> Message:
+        # Build the execution-plan notice message.
         payload = self._build()
         notice = Message(text=str(payload.get("execution_plan_message") or ""))
         self.status = {
@@ -39,11 +40,13 @@ class NewType09ExecutionPlanSummary(Component):
         return notice
 
     def build_payload(self) -> Data:
+        # Build the execution-plan payload for the selected pipeline.
         payload = self._build()
         self.status = payload
         return Data(data=payload)
 
     def _build(self) -> dict[str, Any]:
+        # Create and cache the execution-plan data structure.
         cached = getattr(self, "_cached_payload", None)
         if cached is not None:
             return cached
@@ -76,6 +79,7 @@ class NewType09ExecutionPlanSummary(Component):
         return out
 
     def _jobs_for_route(self, payload: dict[str, Any], route: str) -> list[dict[str, Any]]:
+        # Select the planned jobs for the chosen execution route.
         selected_jobs = payload.get("selected_jobs")
         if isinstance(selected_jobs, list) and selected_jobs:
             return [dict(job) for job in selected_jobs if isinstance(job, dict)]
@@ -91,6 +95,7 @@ class NewType09ExecutionPlanSummary(Component):
         return []
 
     def _action_for_route(self, route: str) -> str:
+        # Map an execution route to its action name.
         return {
             "MIG": "run_migration_job",
             "SQL_CONVERSION": "run_sql_conversion_job",
@@ -99,6 +104,7 @@ class NewType09ExecutionPlanSummary(Component):
         }.get(route, "run_pending_jobs")
 
     def _next_node(self, route: str) -> str:
+        # Resolve the next component name for a route.
         return {
             "MIG": "10_migPipeline",
             "SQL_CONVERSION": "12_sqlConversionPipeline",
@@ -107,6 +113,7 @@ class NewType09ExecutionPlanSummary(Component):
         }.get(route, "13_finalSummary")
 
     def _message(self, route: str, run_mode: str, jobs: list[dict[str, Any]]) -> str:
+        # Format the execution-plan notice text.
         label = {
             "MIG": "DB Migration",
             "SQL_CONVERSION": "SQL Conversion",
@@ -128,6 +135,7 @@ class NewType09ExecutionPlanSummary(Component):
         return "\n".join(lines)
 
     def _llm_prompt(self, route: str, run_mode: str, jobs: list[dict[str, Any]]) -> str:
+        # Build an optional LLM prompt for execution-plan messaging.
         return "\n".join(
             [
                 "아래 실행 계획을 사용자에게 한국어로 짧고 명확하게 안내하세요.",
@@ -151,6 +159,7 @@ class NewType09ExecutionPlanSummary(Component):
         )
 
     def _compact_job(self, job: dict[str, Any]) -> dict[str, Any]:
+        # Reduce a job dictionary to the fields needed for display.
         return {
             "job_route": job.get("job_route"),
             "job_type": job.get("job_type"),
@@ -161,6 +170,7 @@ class NewType09ExecutionPlanSummary(Component):
         }
 
     def _job_label(self, job: dict[str, Any]) -> str:
+        # Return a compact display label for a job target.
         if str(job.get("job_route") or job.get("job_type") or "").upper() == "MIG" or job.get("map_id") is not None:
             return f"MIG map_id={job.get('map_id')}, priority={job.get('priority')}"
         return (
@@ -170,6 +180,7 @@ class NewType09ExecutionPlanSummary(Component):
         )
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
+        # Parse a Langflow Data, dict, or JSON string payload.
         if isinstance(raw, Data):
             return dict(raw.data or {})
         if isinstance(raw, dict):

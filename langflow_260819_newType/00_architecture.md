@@ -2,12 +2,12 @@
 
 ## 핵심 원칙
 
-- `01 Request Classifier`는 사용자 요청을 `GENERAL_CHAT`, `MANAGEMENT`, `JOB_EXECUTION`으로 1차 분류한다.
+- `01 Request Classifier LLM`은 `01_requestClassifierPrompt.md`를 사용해 사용자 요청을 `GENERAL_CHAT`, `MANAGEMENT`, `JOB_EXECUTION`으로 1차 분류한다.
 - `SQL Conversion 작업 대상 조회`, `SQL Tuning 대상 보여줘`, `Formatting 대기 작업 몇 건이야`, `DB Migration 대상 목록`처럼 읽기성 작업 대상 조회 요청은 `MANAGEMENT`로 보낸다.
 - `04 Management LLM Router`는 관리 요청을 `DASHBOARD`, `STATUS_CHANGE`, `CORRECT_SQL_INPUT`, `EXCEPTION`으로 분기한다.
 - 작업 대상 조회/현황/건수/실패/대기 작업 조회는 `DASHBOARD`로 분기하고, 대시보드 조회 결과를 활용해 답변한다.
 - `JOB_EXECUTION`은 실제 작업 실행 요청이다. 전체 pending 실행과 `map_id`/`sql_id`/`space_nm` 기반 단건 또는 복수건 실행을 모두 포함한다.
-- `01 Request Classifier`, `04 Management LLM Router`, `08 Job Target Router`는 LLM 설정이 필수다. rule fallback, classifier mode, router mode는 사용하지 않는다.
+- `01 Request Classifier LLM`, `04 Management LLM Router`, `08 Job Target Router`는 LLM 기반 분기다. rule fallback, classifier mode, router mode는 사용하지 않는다.
 - LLM 프롬프트는 컴포넌트 코드 내부 상수로 관리하고 Langflow 입력값으로 받지 않는다.
 - `06 Get Pending Jobs`는 실행 라우팅에 필요한 최소 상태 컬럼만 조회한다. CLOB/SQL 본문 컬럼은 조회하지 않는다.
 - `08 Job Target Router`는 `06 Get Pending Jobs` 결과와 사용자 요청을 함께 보고 실행 도메인, 실행 모드, 대상 필터를 LLM으로 결정한다.
@@ -19,7 +19,7 @@
 
 ```mermaid
 flowchart TD
-    A["Chat Input"] --> B["01 Request Classifier"]
+    A["Chat Input"] --> B["01 Request Classifier LLM"]
     B --> C{"02 Intent Conditional Router"}
 
     C -->|general_chat| D["03 LLM Response"]
@@ -62,8 +62,8 @@ flowchart TD
 
 | 순서 | From | Output | To | Input |
 |---:|---|---|---|---|
-| 1 | Chat Input | Message/Text | `01 Request Classifier` | `user_request` |
-| 2 | `01 Request Classifier` | `payload` | `02 Intent Conditional Router` | `payload_json` |
+| 1 | Chat Input | Message/Text | `01 Request Classifier LLM` | `user message` + `01_requestClassifierPrompt.md` |
+| 2 | `01 Request Classifier LLM` | `Message(JSON text)` | `02 Intent Conditional Router` | `payload_json` |
 | 3 | `02 Intent Conditional Router` | `General Chat` | `03 LLM Response` | `user_request` + `03_llmResponsePrompt.md` |
 | 4 | `02 Intent Conditional Router` | `Management` | `04 Management LLM Router` | `payload_json` |
 | 5 | `04 Management LLM Router` | `Dashboard` | `04 Dashboard` | `payload_json` |

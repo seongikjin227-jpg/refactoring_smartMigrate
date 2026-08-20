@@ -35,6 +35,7 @@ class NewType06GetPendingJobs(Component):
     outputs = [Output(display_name="Payload", name="payload", method="get_pending_jobs")]
 
     def get_pending_jobs(self) -> Data:
+        # Load pending jobs and attach them to the routing payload.
         try:
             payload = self._parse_payload(getattr(self, "payload_json", ""))
             if not payload.get("should_execute", True):
@@ -76,6 +77,7 @@ class NewType06GetPendingJobs(Component):
             return Data(data=result)
 
     def _load_from_db(self) -> dict[str, list[dict[str, Any]]]:
+        # Query pending job candidates from the configured database.
         limit = max(1, int(getattr(self, "limit", None) or 200))
         mig_table = self._qualify("NEXT_MIG_INFO")
         sql_table = self._qualify("NEXT_SQL_INFO")
@@ -128,6 +130,7 @@ class NewType06GetPendingJobs(Component):
         return self._group_jobs(all_jobs)
 
     def _row_to_job(self, row: Any) -> dict[str, Any]:
+        # Convert a database row into a normalized job dictionary.
         return {
             "job_route": self._json_value(row[0]),
             "job_type": self._json_value(row[1]),
@@ -143,6 +146,7 @@ class NewType06GetPendingJobs(Component):
         }
 
     def _group_jobs(self, all_jobs: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+        # Group normalized jobs by execution route.
         normalized = [self._normalize_job(job) for job in all_jobs]
         runnable = [job for job in normalized if job.get("runnable")]
         migration_jobs = [job for job in runnable if job.get("job_route") == "MIG"]
@@ -160,6 +164,7 @@ class NewType06GetPendingJobs(Component):
         }
 
     def _normalize_job(self, job: dict[str, Any]) -> dict[str, Any]:
+        # Normalize route and runnable flags for a job.
         out = dict(job or {})
         route = str(out.get("job_route") or out.get("job_type") or "").upper()
         if route == "SQL":
@@ -174,6 +179,7 @@ class NewType06GetPendingJobs(Component):
         return out
 
     def _is_runnable(self, job: dict[str, Any]) -> bool:
+        # Determine whether a job is currently runnable.
         runnable_yn = str(job.get("runnable_yn") or "").strip().upper()
         if runnable_yn in {"Y", "N"}:
             return runnable_yn == "Y"
@@ -183,6 +189,7 @@ class NewType06GetPendingJobs(Component):
 
     @contextmanager
     def _connect(self):
+        # Open and safely close an Oracle database connection.
         import oracledb
 
         dsn = oracledb.makedsn(
@@ -201,20 +208,24 @@ class NewType06GetPendingJobs(Component):
             conn.close()
 
     def _has_db_config(self) -> bool:
+        # Check whether the minimum DB connection settings are present.
         return all(str(getattr(self, name, "") or "").strip() for name in ("db_host", "db_service_name", "db_username"))
 
     def _qualify(self, table_name: str) -> str:
+        # Qualify a table name with the optional system schema.
         table = self._clean_identifier(table_name)
         schema = str(getattr(self, "system_schema", "") or "").strip().upper()
         return f"{schema}.{table}" if schema else table
 
     def _clean_identifier(self, value: str) -> str:
+        # Validate and normalize an Oracle identifier.
         clean = str(value or "").strip().upper()
         if not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", clean):
             raise ValueError(f"Invalid identifier: {clean}")
         return clean
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
+        # Parse a Langflow Data, dict, or JSON string payload.
         if isinstance(raw, Data):
             return dict(raw.data or {})
         if isinstance(raw, dict):
@@ -229,6 +240,7 @@ class NewType06GetPendingJobs(Component):
         return parsed
 
     def _json_value(self, value: Any) -> Any:
+        # Convert database values into JSON-safe values.
         if value is None:
             return None
         if hasattr(value, "read"):
@@ -238,6 +250,7 @@ class NewType06GetPendingJobs(Component):
         return value if isinstance(value, (str, int, float, bool)) else str(value)
 
     def _secret_to_str(self, value: Any) -> str:
+        # Convert a Langflow secret value into a plain string.
         if value is None:
             return ""
         if hasattr(value, "get_secret_value"):

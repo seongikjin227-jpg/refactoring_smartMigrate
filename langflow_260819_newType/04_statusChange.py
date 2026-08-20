@@ -25,6 +25,7 @@ class NewType04StatusChange(Component):
     outputs = [Output(display_name="Result Message", name="result", method="run", types=["Message"])]
 
     def run(self) -> Message:
+        # Execute the component and return a Langflow message.
         payload = self._parse_payload(getattr(self, "payload_json", ""))
         target = payload.get("target") or {}
         answer = (
@@ -37,6 +38,7 @@ class NewType04StatusChange(Component):
         return Message(text=answer)
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
+        # Parse a Langflow Data, dict, or JSON string payload.
         if isinstance(raw, Data):
             return dict(raw.data or {})
         if isinstance(raw, dict):

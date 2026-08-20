@@ -84,24 +84,31 @@ class NewType08JobExecutionRouter(Component):
     ]
 
     def mig_response(self) -> Data:
+        # Return the MIG execution branch when selected.
         return self._route_output("MIG", "mig_job")
 
     def sql_conversion_response(self) -> Data:
+        # Return the SQL Conversion execution branch when selected.
         return self._route_output("SQL_CONVERSION", "sql_conversion_job")
 
     def sql_tuning_response(self) -> Data:
+        # Return the SQL Tuning execution branch when selected.
         return self._route_output("SQL_TUNING", "sql_tuning_job")
 
     def sql_formatting_response(self) -> Data:
+        # Return the SQL Formatting execution branch when selected.
         return self._route_output("SQL_FORMATTING", "sql_formatting_job")
 
     def prerequisite_blocked_response(self) -> Message:
+        # Return a message for prerequisite-blocked execution requests.
         return self._message_route_output("PREREQUISITE_BLOCKED", "prerequisite_blocked")
 
     def no_runnable_response(self) -> Message:
+        # Return a message when no runnable target exists.
         return self._message_route_output("NO_RUNNABLE_JOB", "no_runnable_job")
 
     def _route_output(self, expected_route: str, output_name: str) -> Data:
+        # Build a routed payload for the active output branch.
         try:
             routed = self._get_routed_payload()
             if routed.get("job_route") != expected_route:
@@ -116,6 +123,7 @@ class NewType08JobExecutionRouter(Component):
             return Data(data=result)
 
     def _message_route_output(self, expected_route: str, output_name: str) -> Message:
+        # Build a direct Message output for non-pipeline routes.
         try:
             routed = self._get_routed_payload()
             if routed.get("job_route") != expected_route:
@@ -131,6 +139,7 @@ class NewType08JobExecutionRouter(Component):
             return Message(text=message)
 
     def _build_block_message(self, routed: dict[str, Any]) -> str:
+        # Format a blocked or no-runnable route message.
         route = str(routed.get("job_route") or "")
         user_request = str(routed.get("user_request") or routed.get("original_request") or "").strip()
         reason = str(routed.get("routing_reason") or routed.get("reason") or "").strip()
@@ -155,6 +164,7 @@ class NewType08JobExecutionRouter(Component):
         return "\n".join(lines)
 
     def _get_routed_payload(self) -> dict[str, Any]:
+        # Compute and cache the routed payload for this component.
         cached = getattr(self, "_cached_routed_payload", None)
         if cached is not None:
             return cached
@@ -214,6 +224,7 @@ class NewType08JobExecutionRouter(Component):
         return routed
 
     def _route_with_llm(self, payload: dict[str, Any]) -> dict[str, Any]:
+        # Call the configured LLM to decide the route.
         api_key = self._secret_to_str(getattr(self, "llm_api_key", None)).strip()
         model = str(getattr(self, "llm_model", "") or "").strip()
         base_url = str(getattr(self, "llm_base_url", "") or "").strip().rstrip("/")
@@ -257,6 +268,7 @@ class NewType08JobExecutionRouter(Component):
         return self._parse_json_object(content)
 
     def _normalize_llm_hint(self, hint: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+        # Validate and enrich the LLM job-routing decision.
         extracted_targets = self._extract_targets(str(payload.get("user_request") or payload.get("input") or ""))
         route = str(hint.get("job_route") or "").upper()
         if route == "NO_RUNNABLE_JOB":
@@ -291,6 +303,7 @@ class NewType08JobExecutionRouter(Component):
         }
 
     def _normalize_list(self, value: Any, caster: Any) -> list[Any]:
+        # Normalize scalar or list values with a caster.
         if value is None:
             return []
         raw_values = value if isinstance(value, list) else [value]
@@ -305,6 +318,7 @@ class NewType08JobExecutionRouter(Component):
         return out
 
     def _merge_lists(self, first: list[Any], second: list[Any]) -> list[Any]:
+        # Merge two lists while preserving first-seen order.
         out: list[Any] = []
         for item in [*first, *second]:
             if item not in out:
@@ -312,6 +326,7 @@ class NewType08JobExecutionRouter(Component):
         return out
 
     def _sample_jobs(self, payload: dict[str, Any]) -> dict[str, Any]:
+        # Build a small pending-job sample for LLM context.
         jobs = payload.get("pending_jobs") or {}
         return {
             "migration_jobs": list(jobs.get("migration_jobs") or [])[:5],
@@ -321,6 +336,7 @@ class NewType08JobExecutionRouter(Component):
         }
 
     def _empty_decision(self, reason: str, targets: dict[str, list[Any]]) -> dict[str, Any]:
+        # Create a no-runnable execution decision.
         return {
             "job_route": "NO_RUNNABLE_JOB",
             "run_mode": "none",
@@ -338,6 +354,7 @@ class NewType08JobExecutionRouter(Component):
         targets: dict[str, list[Any]],
         selected_jobs: list[dict[str, Any]],
     ) -> dict[str, Any]:
+        # Create a runnable execution decision.
         return {
             "job_route": route,
             "run_mode": run_mode,
@@ -349,6 +366,7 @@ class NewType08JobExecutionRouter(Component):
         }
 
     def _requested_route(self, text: str, targets: dict[str, list[Any]]) -> str | None:
+        # Infer a route from request text and explicit targets.
         lowered = text.lower()
         if targets.get("map_ids"):
             return "MIG"
@@ -365,6 +383,7 @@ class NewType08JobExecutionRouter(Component):
         return None
 
     def _select_jobs(self, payload: dict[str, Any], route: str, targets: dict[str, list[Any]]) -> list[dict[str, Any]]:
+        # Select jobs that match the requested route and targets.
         jobs = self._jobs_for_route(payload, route)
         if not any(targets.values()):
             return jobs
@@ -381,6 +400,7 @@ class NewType08JobExecutionRouter(Component):
         run_mode: str,
         targets: dict[str, list[Any]],
     ) -> list[dict[str, Any]]:
+        # Select jobs according to the normalized LLM hint.
         if run_mode == "targeted" or any(targets.values()):
             lookup_jobs = self._lookup_jobs_for_route(payload, route)
             matched_lookup = [job for job in lookup_jobs if self._matches(job, targets)]
@@ -390,6 +410,7 @@ class NewType08JobExecutionRouter(Component):
         return self._jobs_for_route(payload, route)
 
     def _target_status(self, payload: dict[str, Any], route: str, targets: dict[str, list[Any]]) -> dict[str, Any]:
+        # Inspect matched target jobs for runnable or blocked status.
         lookup_jobs = self._lookup_jobs_for_route(payload, route)
         matched_lookup = [job for job in lookup_jobs if self._matches(job, targets)]
         if not matched_lookup:
@@ -417,6 +438,7 @@ class NewType08JobExecutionRouter(Component):
         }
 
     def _jobs_for_route(self, payload: dict[str, Any], route: str) -> list[dict[str, Any]]:
+        # Select the planned jobs for the chosen execution route.
         jobs = payload.get("pending_jobs") or {}
         if route == "MIG":
             return list(jobs.get("migration_jobs") or [])
@@ -429,11 +451,13 @@ class NewType08JobExecutionRouter(Component):
         return []
 
     def _lookup_jobs_for_route(self, payload: dict[str, Any], route: str) -> list[dict[str, Any]]:
+        # Return all lookup jobs for a specific route.
         jobs = payload.get("pending_jobs") or {}
         lookup = list(jobs.get("job_lookup_jobs") or jobs.get("all_jobs") or [])
         return [job for job in lookup if str(job.get("job_route") or "").upper() == route]
 
     def _synthetic_jobs(self, route: str, targets: dict[str, list[Any]]) -> list[dict[str, Any]]:
+        # Create POC jobs for explicit user targets not found in lookup context.
         if route == "MIG":
             return [{"job_route": "MIG", "job_type": "MIG", "map_id": map_id, "source": "USER_TARGET"} for map_id in targets.get("map_ids", [])]
 
@@ -447,6 +471,7 @@ class NewType08JobExecutionRouter(Component):
         return [{"job_route": route, "job_type": "SQL", "space_nm": space_nm, "sql_id": "", "source": "USER_TARGET"} for space_nm in space_nms]
 
     def _matches(self, job: dict[str, Any], targets: dict[str, list[Any]]) -> bool:
+        # Check whether a job matches requested target filters.
         map_ids = {int(v) for v in targets.get("map_ids", []) if str(v).isdigit()}
         sql_ids = {str(v).lower() for v in targets.get("sql_ids", [])}
         space_nms = {str(v).lower() for v in targets.get("space_nms", [])}
@@ -459,6 +484,7 @@ class NewType08JobExecutionRouter(Component):
         return False
 
     def _extract_targets(self, text: str) -> dict[str, list[Any]]:
+        # Extract target identifiers from the user request text.
         return {
             "map_ids": self._extract_map_ids(text),
             "sql_ids": self._extract_text_values(text, r"sql[_\s-]*id|sqlid"),
@@ -466,6 +492,7 @@ class NewType08JobExecutionRouter(Component):
         }
 
     def _extract_map_ids(self, text: str) -> list[int]:
+        # Extract map_id values from request text.
         values: list[int] = []
         patterns = [
             r"(?:map[_\s-]*id|mapid|map|맵\s*id|맵아이디)\s*[=:]?\s*([0-9,\s]+)",
@@ -478,6 +505,7 @@ class NewType08JobExecutionRouter(Component):
         return list(dict.fromkeys(values))
 
     def _extract_number_values(self, text: str, label_pattern: str) -> list[int]:
+        # Extract numeric values following a label pattern.
         values: list[int] = []
         for match in re.finditer(rf"(?:{label_pattern})\s*[=:]?\s*([0-9,\s]+)", text, flags=re.I):
             for item in re.findall(r"\d+", match.group(1)):
@@ -485,12 +513,14 @@ class NewType08JobExecutionRouter(Component):
         return list(dict.fromkeys(values))
 
     def _extract_text_values(self, text: str, label_pattern: str) -> list[str]:
+        # Extract text identifiers following a label pattern.
         values: list[str] = []
         for match in re.finditer(rf"(?:{label_pattern})\s*[=:]?\s*([A-Za-z0-9_.:-]+(?:\s*,\s*[A-Za-z0-9_.:-]+)*)", text, flags=re.I):
             values.extend([item.strip() for item in match.group(1).split(",") if item.strip()])
         return list(dict.fromkeys(values))
 
     def _counts(self, jobs: dict[str, Any]) -> dict[str, int]:
+        # Count runnable pending jobs by route.
         return {
             "MIG": len(jobs.get("migration_jobs") or []),
             "SQL_CONVERSION": len(jobs.get("sql_conversion_jobs") or jobs.get("sql_jobs") or []),
@@ -499,12 +529,14 @@ class NewType08JobExecutionRouter(Component):
         }
 
     def _first_available_route(self, counts: dict[str, int]) -> str | None:
+        # Return the first route with runnable jobs in priority order.
         for route in ("MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"):
             if counts.get(route, 0) > 0:
                 return route
         return None
 
     def _blocking_route(self, requested: str, counts: dict[str, int]) -> str:
+        # Return an earlier route that blocks the requested route.
         order = ["MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"]
         if requested not in order:
             return ""
@@ -514,17 +546,20 @@ class NewType08JobExecutionRouter(Component):
         return ""
 
     def _next_node(self, route: str) -> str:
+        # Resolve the next component name for a route.
         if route in {"MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"}:
             return "09_executionPlanSummary"
         return "13_finalSummary"
 
     def _to_int(self, value: Any) -> int | None:
+        # Convert a value to int when possible.
         try:
             return int(value)
         except (TypeError, ValueError):
             return None
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
+        # Parse a Langflow Data, dict, or JSON string payload.
         if isinstance(raw, Data):
             return dict(raw.data or {})
         if isinstance(raw, dict):
@@ -532,6 +567,7 @@ class NewType08JobExecutionRouter(Component):
         return self._parse_json_object(str(raw or "").strip()) if str(raw or "").strip() else {}
 
     def _parse_json_object(self, text: str) -> dict[str, Any]:
+        # Parse a JSON object from raw LLM or text output.
         text = str(text or "").strip()
         if text.startswith("```"):
             text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
@@ -544,6 +580,7 @@ class NewType08JobExecutionRouter(Component):
         return parsed
 
     def _secret_to_str(self, value: Any) -> str:
+        # Convert a Langflow secret value into a plain string.
         if value is None:
             return ""
         if hasattr(value, "get_secret_value"):
