@@ -2,7 +2,7 @@
 
 ## 역할
 
-`08_jobExecutionRouter.py`는 `06_getPendingJobs.py`가 조회한 잔여 작업 요약과 사용자 요청을 함께 보고, 실행 파이프라인으로 보낼지 아니면 바로 Chat Output 메시지로 종료할지 결정한다.
+`08_jobExecutionRouter.py`는 `06_getRemainingJobs.py`가 조회한 잔여 작업 요약과 사용자 요청을 함께 보고, 실행 파이프라인으로 보낼지 아니면 바로 Chat Output 메시지로 종료할지 결정한다.
 
 이 컴포넌트는 LLM 판단을 사용한다. 단, Langflow output branch는 단순하게 유지한다.
 
@@ -24,13 +24,13 @@
 ```json
 {
   "user_request": "사용자 원문 요청",
-  "pending_summary": {
+  "remaining_summary": {
     "migration_total": 0,
     "sql_conversion_total": 0,
     "sql_tuning_total": 0,
     "sql_formatting_total": 0
   },
-  "pending_jobs": {
+  "remaining_jobs": {
     "migration_jobs": [{"job_route": "MIG", "map_id": 101, "priority": 1, "prior_map_id": null}],
     "sql_conversion_jobs": [{"job_route": "SQL_CONVERSION", "space_nm": "SALES", "sql_id": "Q001", "priority": 1}],
     "sql_tuning_jobs": [{"job_route": "SQL_TUNING", "space_nm": "SALES", "sql_id": "Q002", "priority": 1}],
@@ -40,7 +40,7 @@
 }
 ```
 
-`06_getPendingJobs.py`는 CLOB SQL 본문을 넘기지 않는다. 08번은 실행 대상 판단에 필요한 count, 식별자, `priority`, `prior_map_id` 같은 경량 라우팅 메타데이터만 사용한다.
+`06_getRemainingJobs.py`는 CLOB SQL 본문을 넘기지 않는다. 08번은 실행 대상 판단에 필요한 count, 식별자, `priority`, `prior_map_id` 같은 경량 라우팅 메타데이터만 사용한다.
 
 ## LLM 반환 Payload
 

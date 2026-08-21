@@ -50,7 +50,7 @@ class NewType13FinalSummary(Component):
         if route == "PREREQUISITE_BLOCKED":
             return self._blocked_summary(payload)
         if route == "NO_RUNNABLE_JOB":
-            summary = payload.get("pending_summary") or {}
+            summary = payload.get("remaining_summary") or payload.get("pending_summary") or {}
             reason = payload.get("routing_reason") or "실행 가능한 잔여 작업이 없습니다."
             return (
                 f"{reason} 현재 대기 작업: "
@@ -65,7 +65,7 @@ class NewType13FinalSummary(Component):
         # Format a prerequisite-blocked or no-target summary.
         blocker = payload.get("blocker_route") or "선행"
         requested = self._requested_label_from_reason(payload.get("routing_reason") or "")
-        summary = payload.get("pending_summary") or {}
+        summary = payload.get("remaining_summary") or payload.get("pending_summary") or {}
         if blocker == "TARGET_NOT_RUNNABLE":
             blocked_jobs = list(payload.get("blocked_jobs") or [])
             lines = [

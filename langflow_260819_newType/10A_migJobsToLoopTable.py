@@ -63,7 +63,7 @@ class NewType10AMigJobsToLoopTable(Component):
             "component": "10A_migJobsToLoopTable",
             "run_id": run_id,
             "loop_job_count": total,
-            "next_node": "10B_loop",
+            "next_node": "10B_migLoop",
         }
         self.status = status
         return DataFrame(rows)

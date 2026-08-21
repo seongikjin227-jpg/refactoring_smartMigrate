@@ -6,11 +6,11 @@
 - `SQL Conversion 작업 대상 조회`, `SQL Tuning 대상 보여줘`, `Formatting 대기 작업 몇 건이야`, `DB Migration 대상 목록`처럼 읽기성 작업 대상 조회 요청은 `MANAGEMENT`로 보낸다.
 - `04 Management LLM Router`는 관리 요청을 `DASHBOARD`, `STATUS_CHANGE`, `CORRECT_SQL_INPUT`, `EXCEPTION`으로 분기한다.
 - 작업 대상 조회/현황/건수/실패/대기 작업 조회는 `DASHBOARD`로 분기하고, 대시보드 조회 결과를 활용해 답변한다.
-- `JOB_EXECUTION`은 실제 작업 실행 요청이다. 전체 pending 실행과 `map_id`/`sql_id`/`space_nm` 기반 단건 또는 복수건 실행을 모두 포함한다.
+- `JOB_EXECUTION`은 실제 작업 실행 요청이다. 전체 잔여 작업 실행과 `map_id`/`sql_id`/`space_nm` 기반 단건 또는 복수건 실행을 모두 포함한다.
 - `01 Request Classifier LLM`, `04 Management LLM Router`, `08 Job Target Router`는 LLM 기반 분기다. rule fallback, classifier mode, router mode는 사용하지 않는다.
 - LLM 프롬프트는 컴포넌트 코드 내부 상수로 관리하고 Langflow 입력값으로 받지 않는다.
-- `06 Get Pending Jobs`는 실행 라우팅에 필요한 count, 대상 식별자, 경량 메타데이터만 조회한다. CLOB/SQL 본문은 반환하지 않고, DB Migration은 `map_id`, `priority`, `prior_map_id`, NEXT_SQL_INFO 계열은 `space_nm + sql_id`, `priority`를 반환한다.
-- `08 Job Target Router`는 `06 Get Pending Jobs` 결과와 사용자 요청을 함께 보고 실행 도메인, 실행 모드, 대상 필터를 LLM으로 결정한다.
+- `06 Get Remaining Jobs`는 실행 라우팅에 필요한 count, 대상 식별자, 경량 메타데이터만 조회한다. CLOB/SQL 본문은 반환하지 않고, DB Migration은 `map_id`, `priority`, `prior_map_id`, NEXT_SQL_INFO 계열은 `space_nm + sql_id`, `priority`를 반환한다.
+- `08 Job Target Router`는 `06 Get Remaining Jobs` 결과와 사용자 요청을 함께 보고 실행 도메인, 실행 모드, 대상 필터를 LLM으로 결정한다.
 - 선행 작업이 남아 있는 경우는 `Prerequisite Required Message`, 요청 대상이 작업 대상에 없는 경우는 `No Runnable Target Message`로 분리한다.
 - 실행 전 `09 Execution Plan Summary`가 어떤 파이프라인에서 몇 개의 job을 실행할지 `Message`로 먼저 안내한다.
 - 각 pipeline은 현재 POC이므로 실제 DB Migration/SQL 변환/튜닝/포맷팅 로직을 실행하지 않고 테스트용 랜덤 결과와 로그를 반환한다.
@@ -25,7 +25,7 @@ flowchart TD
 
     C -->|general_chat| D["03 LLM Response"]
     C -->|management| E{"04 Management LLM Router"}
-    C -->|job_execution| G["06 Get Pending Jobs"]
+    C -->|job_execution| G["06 Get Remaining Jobs"]
 
     E -->|dashboard| E1["04 Dashboard"]
     E -->|status_change| E2["04 Status Change"]
@@ -47,13 +47,14 @@ flowchart TD
     P -->|payload / SQL_TUNING| T2["15 SQL Tuning Pipeline"]
     P -->|payload / SQL_FORMATTING| F2["17 SQL Formatting Pipeline"]
 
-    M0 --> ML{"10B Loop"}
+    M0 --> ML{"10B MIG Loop"}
     ML --> M1["10C MIG One Job POC Executor"]
     M1 --> M2["10D MIG Iteration Dashboard"]
     M2 --> MOUT["Chat Output<br/>MIG Iteration"]
     MOUT -->|json output| ML
-    ML -->|done| S3["13 Final Summary"]
-    C2 --> S3
+    ML -->|done data| ME["10E MIG Final Dashboard"]
+    ME --> MFINAL["Chat Output<br/>MIG Final Dashboard"]
+    C2 --> S3["13 Final Summary"]
     T2 --> S3
     F2 --> S3
 
@@ -76,23 +77,24 @@ flowchart TD
 | 6 | `04 Management LLM Router` | `Status Change` | `04 Status Change` | `payload_json` |
 | 7 | `04 Management LLM Router` | `Correct SQL Input` | `04 Correct SQL Input` | `payload_json` |
 | 8 | `04 Management LLM Router` | `Exception Message` | Chat Output | Message |
-| 9 | `02 Intent Conditional Router` | `Job Execution` | `06 Get Pending Jobs` | `payload_json` |
-| 10 | `06 Get Pending Jobs` | `payload` | `08 Job Target Router` | `payload_json` |
+| 9 | `02 Intent Conditional Router` | `Job Execution` | `06 Get Remaining Jobs` | `payload_json` |
+| 10 | `06 Get Remaining Jobs` | `payload` | `08 Job Target Router` | `payload_json` |
 | 11 | `08 Job Target Router` | executable target output | `09 Execution Plan Summary` | `payload_json` |
 | 12 | `09 Execution Plan Summary` | `Notice Message` | Chat Output | Message |
 | 13 | `09 Execution Plan Summary` | `Payload` | selected Pipeline 또는 `10A MIG Jobs To Loop Table` | `payload_json` |
-| 14 | `10A MIG Jobs To Loop Table` | `Jobs Table` | `10B Loop` | `Inputs` |
-| 15 | `10B Loop` | `Item` | `10C MIG One Job POC Executor` | `job_item` |
+| 14 | `10A MIG Jobs To Loop Table` | `Jobs Table` | `10B MIG Loop` | `MIG Jobs` |
+| 15 | `10B MIG Loop` | `Item` | `10C MIG One Job POC Executor` | `job_item` |
 | 16 | `10C MIG One Job POC Executor` | `Job Result` | `10D MIG Iteration Dashboard` | `job_result` |
 | 17 | `10D MIG Iteration Dashboard` | `Message` | Chat Output | Message |
-| 18 | Chat Output | `JSON Output` | `10B Loop` | loop feedback |
-| 19 | `10B Loop` | `Done` | `13 Final Summary` | `payload_json` |
-| 20 | `12 SQL Conversion Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
-| 21 | `15 SQL Tuning Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
-| 22 | `17 SQL Formatting Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
-| 23 | `08 Job Target Router` | `Prerequisite Required Message` | Chat Output | Message |
-| 24 | `08 Job Target Router` | `No Runnable Target Message` | Chat Output | Message |
-| 25 | `13 Final Summary` | `Result Message` | Chat Output | Message |
+| 18 | Chat Output | `JSON Output` | `10B MIG Loop` | loop feedback |
+| 19 | `10B MIG Loop` | `Done` | `10E MIG Final Dashboard` | `loop_result` |
+| 20 | `10E MIG Final Dashboard` | `Result Message` | Chat Output | Message |
+| 21 | `12 SQL Conversion Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
+| 22 | `15 SQL Tuning Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
+| 23 | `17 SQL Formatting Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
+| 24 | `08 Job Target Router` | `Prerequisite Required Message` | Chat Output | Message |
+| 25 | `08 Job Target Router` | `No Runnable Target Message` | Chat Output | Message |
+| 26 | `13 Final Summary` | `Result Message` | Chat Output | Message |
 
 ## 요청별 분기 기준
 
@@ -103,8 +105,8 @@ flowchart TD
 | `DB Migration 대상 목록 보여줘` | `MANAGEMENT` | `DASHBOARD` | `04 Dashboard` |
 | `map_id=101 priority 올려줘` | `MANAGEMENT` | `STATUS_CHANGE` | `04 Status Change` |
 | `sql_id=Q001 correct sql 저장해줘` | `MANAGEMENT` | `CORRECT_SQL_INPUT` | `04 Correct SQL Input` |
-| `DB Migration 전체 진행해줘` | `JOB_EXECUTION` | `all_pending / MIG` | `06 -> 08 -> 09 -> 10A -> Loop -> 10C -> 10D -> 13` |
-| `map_id=101 실행해줘` | `JOB_EXECUTION` | `targeted / MIG` | `06 -> 08 -> 09 -> 10A -> Loop -> 10C -> 10D -> 13` |
+| `DB Migration 전체 진행해줘` | `JOB_EXECUTION` | `all_pending / MIG` | `06 -> 08 -> 09 -> 10A -> 10B -> 10C -> 10D -> 10E` |
+| `map_id=101 실행해줘` | `JOB_EXECUTION` | `targeted / MIG` | `06 -> 08 -> 09 -> 10A -> 10B -> 10C -> 10D -> 10E` |
 | `sql_id=Q001 변환해줘` | `JOB_EXECUTION` | `targeted / SQL_CONVERSION` | `06 -> 08 -> 09 -> 12 -> 13` |
 | `space_nm=SALES 튜닝 진행해줘` | `JOB_EXECUTION` | `targeted / SQL_TUNING` | `06 -> 08 -> 09 -> 15 -> 13` |
 | `sql_id=Q001 포맷팅해줘` | `JOB_EXECUTION` | `targeted / SQL_FORMATTING` | `06 -> 08 -> 09 -> 17 -> 13` |
@@ -150,7 +152,7 @@ flowchart TD
     P -->|notice message| OUT_NOTICE["Chat Output<br/>Execution Plan Notice"]
     P -->|payload / MIG| MT["10A MIG Jobs To Loop Table"]
 
-    MT --> L{"10B Loop"}
+    MT --> L{"10B MIG Loop"}
 
     L -->|item: one MIG job| W["10C MIG One Job POC Executor"]
     W --> R{"internal retry loop"}
@@ -173,8 +175,8 @@ flowchart TD
     D -->|message + json payload| OUT_ITER["Chat Output<br/>Iteration Dashboard"]
     OUT_ITER -->|json output: iteration result| L
 
-    L -->|done: aggregated results| S["13 Final Summary"]
-    S -->|result message| OUT_FINAL["Chat Output<br/>Final Summary"]
+    L -->|done data: aggregated results| S["10E MIG Final Dashboard"]
+    S -->|result message| OUT_FINAL["Chat Output<br/>MIG Final Dashboard"]
 ```
 
 ### MIG Loop 컴포넌트 책임
@@ -183,11 +185,11 @@ flowchart TD
 |---|---|---|---|
 | `09 Execution Plan Summary` | 실행 전 안내 메시지 생성 | `08` payload | `Notice Message`, `Payload` |
 | `10A MIG Jobs To Loop Table` | `selected_jobs`를 Loop 입력 row 목록으로 변환 | `Payload` | `DataFrame` 또는 `list[Data]` |
-| `10B Loop` | MIG job을 1건씩 loop body로 전달하고 결과를 aggregate | job row list | `Item`, `Done` |
+| `10B MIG Loop` | MIG job을 1건씩 loop body로 전달하고 결과를 aggregate. `Done`은 Table이 아니라 aggregate `Data`를 반환 | job row list | `Item`, `Done Data` |
 | `10C MIG One Job POC Executor` | job 1건 실행 POC. DB 업데이트, 로그 적재, 내부 retry 처리 | one job `Data` | one job result `Data` |
 | `10D MIG Iteration Dashboard` | 작업 1건 완료 후 진행률/결과 메시지와 loop feedback payload 생성 | one job result `Data` | Chat Output 입력 payload |
 | `Chat Output - Iteration Dashboard` | 작업별 메시지를 화면에 출력하고 JSON output으로 iteration result 전달 | dashboard payload | `json output` |
-| `13 Final Summary` | 전체 loop 결과 최종 요약 | aggregated results | `Result Message` |
+| `10E MIG Final Dashboard` | 전체 loop 결과 최종 dashboard 요약 | aggregated results `Data` | `Result Message` |
 
 ### MIG POC 실행 정책
 
@@ -240,13 +242,13 @@ flowchart TD
 | 1 | `08 Job Target Router` | `MIG Targets` | `09 Execution Plan Summary` | `payload_json` |
 | 2 | `09 Execution Plan Summary` | `Notice Message` | `Chat Output - Execution Plan Notice` | Message |
 | 3 | `09 Execution Plan Summary` | `Payload` | `10A MIG Jobs To Loop Table` | `payload_json` |
-| 4 | `10A MIG Jobs To Loop Table` | `Jobs Table` | `10B Loop` | `Inputs` |
-| 5 | `10B Loop` | `Item` | `10C MIG One Job POC Executor` | `job_item` |
+| 4 | `10A MIG Jobs To Loop Table` | `Jobs Table` | `10B MIG Loop` | `MIG Jobs` |
+| 5 | `10B MIG Loop` | `Item` | `10C MIG One Job POC Executor` | `job_item` |
 | 6 | `10C MIG One Job POC Executor` | `Job Result` | `10D MIG Iteration Dashboard` | `job_result` |
 | 7 | `10D MIG Iteration Dashboard` | `Message/Payload` | `Chat Output - Iteration Dashboard` | Message |
-| 8 | `Chat Output - Iteration Dashboard` | `JSON Output` | `10B Loop` | loop feedback |
-| 9 | `10B Loop` | `Done` | `13 Final Summary` | `payload_json` |
-| 10 | `13 Final Summary` | `Result Message` | `Chat Output - Final Summary` | Message |
+| 8 | `Chat Output - Iteration Dashboard` | `JSON Output` | `10B MIG Loop` | loop feedback |
+| 9 | `10B MIG Loop` | `Done Data` | `10E MIG Final Dashboard` | `loop_result` |
+| 10 | `10E MIG Final Dashboard` | `Result Message` | `Chat Output - MIG Final Dashboard` | Message |
 
 ## Chat Output 연결 규칙
 
@@ -263,6 +265,7 @@ Chat Output으로 직접 연결되는 출력은 모두 `Message` 타입이다.
 | `08 Job Target Router` | `No Runnable Target Message` |
 | `09 Execution Plan Summary` | `Notice Message` |
 | `Chat Output - Iteration Dashboard` | user-visible message + JSON output |
+| `10E MIG Final Dashboard` | `Result Message` |
 | `13 Final Summary` | `Result Message` |
 
 ## 제거된 컴포넌트

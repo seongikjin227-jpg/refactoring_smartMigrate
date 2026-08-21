@@ -38,8 +38,8 @@ Management 소계: 7.5 WD
 
 | 구분 | Task | 파일 | 기간 |
 |---|---|---|---:|
-| 개발 | 전체 pending 작업 후보를 조회해서 domain별 context로 만드는 컴포넌트 정리 | `06_getPendingJobs.py` | 1.25 WD |
-| 테스트 | MIG/SQL Conversion/Tuning/Formatting 후보 조회 결과 구조 검증 | `06_getPendingJobs.py` | 0.75 WD |
+| 개발 | 전체 잔여 작업 후보를 조회해서 domain별 context로 만드는 컴포넌트 정리 | `06_getRemainingJobs.py` | 1.25 WD |
+| 테스트 | MIG/SQL Conversion/Tuning/Formatting 후보 조회 결과 구조 검증 | `06_getRemainingJobs.py` | 0.75 WD |
 | 개발 | 작업 실행 요청을 domain과 `all_pending`/`targeted` 실행 모드로 분기하는 Router 정리 | `08_jobExecutionRouter.py` | 1.25 WD |
 | 테스트 | `map_id`/`sql_id`/`space_nm` 단건 및 복수건 지정 대상 추출 검증 | `08_jobExecutionRouter.py` | 0.75 WD |
 | 테스트 | 각 domain route가 `09_executionPlanSummary`로 연결되는지 검증 | `08_jobExecutionRouter.py` | 0.5 WD |

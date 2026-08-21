@@ -83,7 +83,7 @@ class NewType09ExecutionPlanSummary(Component):
         selected_jobs = payload.get("selected_jobs")
         if isinstance(selected_jobs, list) and selected_jobs:
             return [dict(job) for job in selected_jobs if isinstance(job, dict)]
-        jobs = payload.get("pending_jobs") or {}
+        jobs = payload.get("remaining_jobs") or payload.get("pending_jobs") or {}
         if route == "MIG":
             return list(jobs.get("migration_jobs") or [])
         if route == "SQL_CONVERSION":
@@ -101,7 +101,7 @@ class NewType09ExecutionPlanSummary(Component):
             "SQL_CONVERSION": "run_sql_conversion_job",
             "SQL_TUNING": "run_sql_tuning_job",
             "SQL_FORMATTING": "run_sql_formatting_job",
-        }.get(route, "run_pending_jobs")
+        }.get(route, "run_remaining_jobs")
 
     def _next_node(self, route: str) -> str:
         # Resolve the next component name for a route.

@@ -21,7 +21,7 @@ JOB_EXECUTION_ROUTER_PROMPT = """당신은 SmartMigrate의 잔여 작업 실행 
 
 역할:
 - 사용자 실행 요청을 하나의 실행 도메인과 실행 모드로 분류합니다.
-- 06 Get Pending Jobs가 전달한 pending_summary와 pending_job_identifiers를 참고합니다.
+- 06 Get Remaining Jobs가 전달한 remaining_summary와 remaining_job_identifiers를 참고합니다.
 - 사용자 요청에 있는 map_id/sql_id/space_nm 값을 target_filter에 넣습니다.
 
 실행 도메인:
@@ -33,7 +33,7 @@ JOB_EXECUTION_ROUTER_PROMPT = """당신은 SmartMigrate의 잔여 작업 실행 
 - NO_RUNNABLE_JOB: 실행할 대상이 없다고 판단되는 경우.
 
 실행 모드:
-- all_pending: 사용자가 전체 pending/대기 작업 실행을 요청한 경우.
+- all_pending: 사용자가 전체 잔여/대기 작업 실행을 요청한 경우.
 - targeted: 사용자가 map_id/sql_id/space_nm으로 단건 또는 복수건 대상을 지정한 경우.
 
 반환 JSON schema:
@@ -49,19 +49,19 @@ JOB_EXECUTION_ROUTER_PROMPT = """당신은 SmartMigrate의 잔여 작업 실행 
 }
 
 규칙:
-- pending_summary의 count key는 migration_total, sql_conversion_total, sql_tuning_total, sql_formatting_total입니다.
+- remaining_summary의 count key는 migration_total, sql_conversion_total, sql_tuning_total, sql_formatting_total입니다.
 - map_id가 있으면 job_route는 MIG, run_mode는 targeted입니다.
 - sql_id 또는 space_nm이 있고 튜닝 요청이면 SQL_TUNING입니다.
 - sql_id 또는 space_nm이 있고 포맷팅 요청이면 SQL_FORMATTING입니다.
 - sql_id 또는 space_nm이 있고 튜닝/포맷팅이 아니면 SQL_CONVERSION입니다.
 - 명시 대상이 없고 전체/대기 작업 실행 요청이면 run_mode는 all_pending입니다.
-- SQL Conversion 실행 요청에서 pending_summary.migration_total이 1건 이상이면 PREREQUISITE_REQUIRED를 선택합니다.
-- SQL Tuning 실행 요청에서 pending_summary.migration_total 또는 pending_summary.sql_conversion_total이 1건 이상이면 PREREQUISITE_REQUIRED를 선택합니다.
-- SQL Formatting 실행 요청에서 pending_summary.migration_total, pending_summary.sql_conversion_total, pending_summary.sql_tuning_total 중 하나라도 1건 이상이면 PREREQUISITE_REQUIRED를 선택합니다.
+- SQL Conversion 실행 요청에서 remaining_summary.migration_total이 1건 이상이면 PREREQUISITE_REQUIRED를 선택합니다.
+- SQL Tuning 실행 요청에서 remaining_summary.migration_total 또는 remaining_summary.sql_conversion_total이 1건 이상이면 PREREQUISITE_REQUIRED를 선택합니다.
+- SQL Formatting 실행 요청에서 remaining_summary.migration_total, remaining_summary.sql_conversion_total, remaining_summary.sql_tuning_total 중 하나라도 1건 이상이면 PREREQUISITE_REQUIRED를 선택합니다.
 - targeted 요청에서 사용자가 요청한 잔여 작업은 있지만 PRIOR_MAP_ID 등 06 payload에서 확인 가능한 선행 조건이 남아 있으면 PREREQUISITE_REQUIRED를 선택합니다.
 - priority는 실행 정렬 기준일 뿐 선행 조건이 아닙니다. priority가 더 낮은 숫자인 작업이 실패했더라도 그것만으로 후속 작업을 PREREQUISITE_REQUIRED로 분류하지 않습니다.
-- targeted 요청에서 사용자가 요청한 map_id 또는 sql_id+space_nm 조합이 pending_job_identifiers에 없으면 NO_RUNNABLE_JOB을 선택합니다.
-- all_pending 요청에서 해당 도메인의 pending count가 0이면 NO_RUNNABLE_JOB을 선택합니다.
+- targeted 요청에서 사용자가 요청한 map_id 또는 sql_id+space_nm 조합이 remaining_job_identifiers에 없으면 NO_RUNNABLE_JOB을 선택합니다.
+- all_pending 요청에서 해당 도메인의 remaining count가 0이면 NO_RUNNABLE_JOB을 선택합니다.
 - PREREQUISITE_REQUIRED의 reason에는 어떤 선행 작업이 남았는지 사용자에게 보여줄 한국어 메시지를 작성합니다.
 """
 
@@ -191,14 +191,14 @@ class NewType08JobExecutionRouter(Component):
         targets = decision_hint["target_filter"]
         route = decision_hint["job_route"]
         requested_run_mode = decision_hint["run_mode"]
-        jobs = payload.get("pending_jobs") or {}
+        jobs = payload.get("remaining_jobs") or payload.get("pending_jobs") or {}
         counts = self._counts(jobs)
 
         if route is None:
             route = self._first_available_route(counts)
 
         if route is None:
-            decision = self._empty_decision("No explicit target and no runnable pending jobs found.", targets)
+            decision = self._empty_decision("No explicit target and no runnable remaining jobs found.", targets)
         elif route == "NO_RUNNABLE_JOB":
             decision = self._empty_decision(decision_hint.get("reason") or "No runnable job target selected by LLM.", targets)
         elif route == "PREREQUISITE_REQUIRED":
@@ -256,8 +256,8 @@ class NewType08JobExecutionRouter(Component):
                     "content": json.dumps(
                         {
                             "user_request": payload.get("user_request") or "",
-                            "pending_summary": payload.get("pending_summary") or {},
-                            "pending_job_identifiers": self._sample_jobs(payload),
+                            "remaining_summary": payload.get("remaining_summary") or payload.get("pending_summary") or {},
+                            "remaining_job_identifiers": self._sample_jobs(payload),
                         },
                         ensure_ascii=False,
                         default=str,
@@ -337,8 +337,8 @@ class NewType08JobExecutionRouter(Component):
         return out
 
     def _sample_jobs(self, payload: dict[str, Any]) -> dict[str, Any]:
-        # Build pending-job identifiers for LLM routing context.
-        jobs = payload.get("pending_jobs") or {}
+        # Build remaining-job identifiers for LLM routing context.
+        jobs = payload.get("remaining_jobs") or payload.get("pending_jobs") or {}
         return {
             "migration_jobs": list(jobs.get("migration_jobs") or []),
             "sql_conversion_jobs": list(jobs.get("sql_conversion_jobs") or jobs.get("sql_jobs") or []),
@@ -403,7 +403,7 @@ class NewType08JobExecutionRouter(Component):
 
     def _jobs_for_route(self, payload: dict[str, Any], route: str) -> list[dict[str, Any]]:
         # Select the planned jobs for the chosen execution route.
-        jobs = payload.get("pending_jobs") or {}
+        jobs = payload.get("remaining_jobs") or payload.get("pending_jobs") or {}
         if route == "MIG":
             return list(jobs.get("migration_jobs") or [])
         if route == "SQL_CONVERSION":
@@ -416,7 +416,7 @@ class NewType08JobExecutionRouter(Component):
 
     def _lookup_jobs_for_route(self, payload: dict[str, Any], route: str) -> list[dict[str, Any]]:
         # Return all lookup jobs for a specific route.
-        jobs = payload.get("pending_jobs") or {}
+        jobs = payload.get("remaining_jobs") or payload.get("pending_jobs") or {}
         lookup = list(jobs.get("job_lookup_jobs") or jobs.get("all_jobs") or [])
         return [job for job in lookup if str(job.get("job_route") or "").upper() == route]
 
@@ -474,7 +474,7 @@ class NewType08JobExecutionRouter(Component):
         return list(dict.fromkeys(values))
 
     def _counts(self, jobs: dict[str, Any]) -> dict[str, int]:
-        # Count runnable pending jobs by route.
+        # Count runnable remaining jobs by route.
         return {
             "MIG": len(jobs.get("migration_jobs") or []),
             "SQL_CONVERSION": len(jobs.get("sql_conversion_jobs") or jobs.get("sql_jobs") or []),

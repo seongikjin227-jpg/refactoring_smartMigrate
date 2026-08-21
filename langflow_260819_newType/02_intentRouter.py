@@ -44,7 +44,7 @@ class NewType02IntentRouter(Component):
             next_node = {
                 "GENERAL_CHAT": "03_llmResponse",
                 "MANAGEMENT": "04_managementRouter",
-                "JOB_EXECUTION": "06_getPendingJobs",
+                "JOB_EXECUTION": "06_getRemainingJobs",
             }.get(route, "03_llmResponse")
             if route != expected_route:
                 self.stop(output_name)

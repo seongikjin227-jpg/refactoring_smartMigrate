@@ -15,10 +15,10 @@ except Exception:
     DataInput = MessageTextInput
 
 
-class NewType06GetPendingJobs(Component):
-    display_name = "06 Get Pending Jobs"
-    description = "Loads runnable pending job candidates and minimal routing metadata."
-    name = "NewType06GetPendingJobs"
+class NewType06GetRemainingJobs(Component):
+    display_name = "06 Get Remaining Jobs"
+    description = "Loads remaining runnable jobs and minimal routing metadata."
+    name = "NewType06GetRemainingJobs"
     icon = "Database"
 
     inputs = [
@@ -31,18 +31,18 @@ class NewType06GetPendingJobs(Component):
         StrInput(name="system_schema", display_name="System Schema", required=False),
     ]
 
-    outputs = [Output(display_name="Payload", name="payload", method="get_pending_jobs")]
+    outputs = [Output(display_name="Payload", name="payload", method="get_remaining_jobs")]
 
-    def get_pending_jobs(self) -> Data:
-        # Load pending jobs and attach them to the routing payload.
+    def get_remaining_jobs(self) -> Data:
+        # Load remaining jobs and attach them to the routing payload.
         try:
             payload = self._parse_payload(getattr(self, "payload_json", ""))
             if not payload.get("should_execute", True):
-                payload.update({"component": "06_getPendingJobs", "next_node": "13_finalSummary"})
+                payload.update({"component": "06_getRemainingJobs", "next_node": "13_finalSummary"})
                 return Data(data=payload)
 
             if not self._has_db_config():
-                raise ValueError("DB connection settings are required for 06 Get Pending Jobs")
+                raise ValueError("DB connection settings are required for 06 Get Remaining Jobs")
             jobs = self._load_from_db()
             summary = {
                 "total": len(jobs.get("all_jobs", [])),
@@ -53,7 +53,9 @@ class NewType06GetPendingJobs(Component):
             }
             payload.update(
                 {
-                    "component": "06_getPendingJobs",
+                    "component": "06_getRemainingJobs",
+                    "remaining_jobs": jobs,
+                    "remaining_summary": summary,
                     "pending_jobs": jobs,
                     "pending_summary": summary,
                     "next_node": "08_jobExecutionRouter",
@@ -61,7 +63,7 @@ class NewType06GetPendingJobs(Component):
             )
             payload.setdefault("history", []).append(
                 {
-                    "step": "get_pending_jobs",
+                    "step": "get_remaining_jobs",
                     "message": (
                         f"total={summary['total']}, mig={summary['migration_total']}, "
                         f"sql_conversion={summary['sql_conversion_total']}"
@@ -71,12 +73,12 @@ class NewType06GetPendingJobs(Component):
             self.status = payload
             return Data(data=payload)
         except Exception as exc:
-            result = {"ok": False, "component": "06_getPendingJobs", "error": str(exc)}
+            result = {"ok": False, "component": "06_getRemainingJobs", "error": str(exc)}
             self.status = result
             return Data(data=result)
 
     def _load_from_db(self) -> dict[str, list[dict[str, Any]]]:
-        # Query only pending job identifiers and lightweight routing metadata.
+        # Query only remaining job identifiers and lightweight routing metadata.
         mig_table = self._qualify("NEXT_MIG_INFO")
         sql_table = self._qualify("NEXT_SQL_INFO")
         with self._connect() as conn:
