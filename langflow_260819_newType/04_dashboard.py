@@ -201,6 +201,7 @@ class NewType04Dashboard(Component):
             "target_condition": target_condition,
             "total": int(total or 0),
             "target_count": int(target_count or 0),
+            "remaining_count": int(target_count or 0),
             "pass_count": int(pass_count or 0),
             "fail_count": int(fail_count or 0),
             "other_count": max(
@@ -245,7 +246,7 @@ class NewType04Dashboard(Component):
         lines.append("")
         lines.append("## 작업 현황")
         lines.append("")
-        lines.append("| 실행순서 | 단계 | 전체 | 잔여 | 성공 | 실패 | 기타 | 진척률 | 성공률 |")
+        lines.append("| 실행순서 | 단계 | 작업 대상 | 잔여 | 성공 | 실패 | 기타 | 진척률 | 성공률 |")
         lines.append("|---:|---|---:|---:|---:|---:|---:|---:|---:|")
         for key, label in AGENT_ORDER:
             summary = agents.get(key) or {}
@@ -260,7 +261,7 @@ class NewType04Dashboard(Component):
                 f"{priority} | "
                 f"{label} | "
                 f"{self._num(summary.get('total'))} | "
-                f"{self._num(summary.get('target_count'))} | "
+                f"{self._num(summary.get('remaining_count', summary.get('target_count')))} | "
                 f"{self._num(summary.get('pass_count'))} | "
                 f"{self._num(summary.get('fail_count'))} | "
                 f"{self._num(summary.get('other_count'))} | "
@@ -283,6 +284,7 @@ class NewType04Dashboard(Component):
         lines.append("")
         lines.append("## 기준")
         lines.append("")
+        lines.append("- 작업 대상은 각 단계의 전체 대상 수이며, 이미 성공/실패 처리된 작업도 포함합니다.")
         lines.append("- 잔여는 각 단계에서 아직 처리되지 않아 실행 큐에 남아 있는 작업 수입니다.")
         lines.append("- 실행순서는 `DB Migration > SQL Conversion > SQL Tuning > SQL Formatting` 순서입니다.")
         lines.append("- 각 job의 `PRIORITY`는 실행 정렬 기준이며, 선행 작업 의존성은 `PRIOR_MAP_ID`로만 판단합니다.")
