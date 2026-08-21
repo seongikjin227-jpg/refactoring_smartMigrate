@@ -229,44 +229,6 @@ def check_dependencies(map_id: int, prior_map_id: int | None) -> str:
         return "ERROR"
 
 
-def check_target_priority_dependencies(map_id: int, to_table: str, priority: int) -> str:
-    logger.debug(
-        f"[Repository] map_id={map_id} | check same-target prior jobs "
-        f"(to_table={to_table}, priority<{priority})"
-    )
-
-    map_table = get_mapping_rule_table()
-    query = f"""
-        SELECT STATUS FROM {map_table}
-        WHERE DBMS_LOB.SUBSTR(TO_TABLE, 200, 1) = :1
-          AND PRIORITY < :2
-          AND MAP_ID != :3
-        ORDER BY PRIORITY DESC
-    """
-
-    try:
-        with get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(query, (to_table, priority, map_id))
-            rows = cursor.fetchall()
-
-            if not rows:
-                return "READY"
-
-            for row in rows:
-                status = (ensure_str(row[0]) or "").strip().upper()
-                if status != "PASS":
-                    logger.warning(
-                        f"[Repository] map_id={map_id} | same-target prior job status={status or 'NULL'}"
-                    )
-                    return status if status else "PENDING"
-
-            return "READY"
-    except Exception as e:
-        logger.error(f"[Repository] Same-target dependency check failed: {e}")
-        return "ERROR"
-
-
 def is_first_job_for_target(map_id: int, to_table: str, priority: int) -> bool:
     map_table = get_mapping_rule_table()
     query = f"""
@@ -274,6 +236,7 @@ def is_first_job_for_target(map_id: int, to_table: str, priority: int) -> bool:
         WHERE DBMS_LOB.SUBSTR(TO_TABLE, 200, 1) = :1
           AND PRIORITY < :2
           AND MAP_ID != :3
+          AND UPPER(TRIM(NVL(STATUS, ''))) = 'PASS'
     """
     try:
         with get_connection() as conn:

@@ -93,9 +93,10 @@ biz_retry_prepare
 담당 함수: `check_dependency_node()`
 
 1. `PRIOR_MAP_ID` 의존성을 확인합니다.
-2. 같은 `TO_TABLE`의 우선순위 dependency를 확인합니다.
-3. 선행 job이 실패하면 `SKIP`, 아직 준비되지 않았으면 `WAITING`으로 종료합니다.
-4. 실행 가능하면 `BATCH_CNT`를 증가시키고 `fetch_ddl`로 진행합니다.
+2. 선행 job이 실패하면 `SKIP`, 아직 준비되지 않았으면 `WAITING`으로 종료합니다.
+3. 실행 가능하면 `BATCH_CNT`를 증가시키고 `fetch_ddl`로 진행합니다.
+
+`PRIORITY`는 실행 정렬 기준이며 dependency가 아닙니다. 같은 `TO_TABLE`의 낮은 priority job이 실패했더라도 그 자체로 현재 job을 막지 않습니다.
 
 ### `fetch_ddl`
 

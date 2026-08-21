@@ -51,7 +51,7 @@ class NewType13FinalSummary(Component):
             return self._blocked_summary(payload)
         if route == "NO_RUNNABLE_JOB":
             summary = payload.get("pending_summary") or {}
-            reason = payload.get("routing_reason") or "실행 가능한 pending 작업이 없습니다."
+            reason = payload.get("routing_reason") or "실행 가능한 잔여 작업이 없습니다."
             return (
                 f"{reason} 현재 대기 작업: "
                 f"MIG={summary.get('migration_total', 0)}, "
@@ -69,7 +69,7 @@ class NewType13FinalSummary(Component):
         if blocker == "TARGET_NOT_RUNNABLE":
             blocked_jobs = list(payload.get("blocked_jobs") or [])
             lines = [
-                "요청한 작업 대상은 현재 실행 가능한 상태가 아닙니다.",
+                "요청한 잔여 작업은 현재 실행 가능한 상태가 아닙니다.",
                 "Management의 Status Change에서 USE_YN/status/priority를 먼저 조정한 뒤 다시 실행해주세요.",
             ]
             if blocked_jobs:
@@ -104,7 +104,7 @@ class NewType13FinalSummary(Component):
         failed = list(job_result.get("failed_jobs") or [])
         route = payload.get("job_route") or "MIG"
         run_mode = payload.get("run_mode") or job_result.get("run_mode") or "targeted"
-        mode_label = "전체 pending 작업" if run_mode == "all_pending" else "지정 작업"
+        mode_label = "전체 잔여 작업" if run_mode == "all_pending" else "지정 작업"
         status = job_result.get("status") or payload.get("pipeline_status")
         lines = [
             f"{route} {mode_label} 실행 완료",

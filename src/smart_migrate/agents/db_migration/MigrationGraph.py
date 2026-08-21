@@ -14,7 +14,6 @@ from smart_migrate.agents.db_migration.MigrationVerifyNode import execute_verifi
 from smart_migrate.repositories.MigrationJobRepository import (
     update_job_status,
     check_dependencies,
-    check_target_priority_dependencies,
     is_first_job_for_target,
     increment_batch_count,
 )
@@ -132,26 +131,6 @@ def check_dependency_node(state: MigrationState) -> dict:
             return {"status": "SKIP", "error_type": "DEPENDENCY_FAIL", "last_error": f"선행 MAP_ID={job.prior_map_id} 상태: {dep_status}"}
         logger.warning(f"[Graph:DEP] map_id={job.map_id} | PRIOR_MAP_ID={job.prior_map_id} 미통과 ({dep_status}). 다음 cycle까지 대기합니다.")
         return {"status": "WAITING", "error_type": "DEPENDENCY_WAIT", "last_error": f"선행 MAP_ID={job.prior_map_id} 상태: {dep_status}"}
-
-    target_dep_status = check_target_priority_dependencies(job.map_id, job.to_table, job.priority)
-    if target_dep_status != "READY":
-        if str(target_dep_status or "").strip().upper() in ("FAIL", "SKIP"):
-            logger.warning(
-                f"[Graph:DEP] map_id={job.map_id} | same-target prior job {target_dep_status}. Skip this job."
-            )
-            return {
-                "status": "SKIP",
-                "error_type": "DEPENDENCY_FAIL",
-                "last_error": f"same-target prior job status: {target_dep_status}",
-            }
-        logger.warning(
-            f"[Graph:DEP] map_id={job.map_id} | same-target prior job not ready ({target_dep_status}). Wait."
-        )
-        return {
-            "status": "WAITING",
-            "error_type": "DEPENDENCY_WAIT",
-            "last_error": f"same-target prior job status: {target_dep_status}",
-        }
 
     increment_batch_count(job.map_id)
     return {"error_type": _clear_error()}

@@ -47,7 +47,7 @@ user message = payload.user_request
 
 SmartMigrate가 수행할 수 있는 주요 기능:
 1. DB Migration 작업
-   - 전체 pending 작업 실행
+   - 전체 잔여 작업 실행
    - map_id 기반 단건 또는 복수건 실행
    - 작업 대상/남은 작업/상태 조회는 Dashboard 관리 기능으로 처리
    - priority, status, USE_YN 변경은 Management Status Change로 처리
@@ -105,7 +105,7 @@ JSON이나 markdown table은 사용자가 요청한 경우에만 사용합니다
 응답:
 
 ```text
-SmartMigrate에서는 DB Migration, SQL Conversion, SQL Tuning, SQL Formatting 작업을 조회하거나 실행할 수 있습니다. 작업 대상 조회는 Dashboard 관리 기능으로 처리하고, 실제 실행 요청은 pending 작업 또는 특정 map_id/sql_id/space_nm 기준으로 실행할 수 있습니다.
+SmartMigrate에서는 DB Migration, SQL Conversion, SQL Tuning, SQL Formatting 작업을 조회하거나 실행할 수 있습니다. 잔여 작업 조회는 Dashboard 관리 기능으로 처리하고, 실제 실행 요청은 잔여 작업 또는 특정 map_id/sql_id/space_nm 기준으로 실행할 수 있습니다.
 
 예를 들어 "DB Migration 작업 남은거 있어? 작업 대상 조회해줘", "DB Migration 전체 진행해줘", "map_id=101 실행해줘", "sql_id=Q001 변환해줘"처럼 요청할 수 있습니다.
 ```

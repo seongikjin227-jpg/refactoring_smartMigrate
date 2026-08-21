@@ -130,6 +130,111 @@ POC에서 위 데이터가 없으면 실제 조회 결과가 아직 연결되지
 
 `Notice Message`는 Chat Output으로 바로 연결하고, `Payload`는 선택된 pipeline으로 연결한다.
 
+## MIG PIPELINE 흐름도
+
+첫 POC는 DB Migration만 Loop 기반으로 구현한다. `08 Job Target Router` 이후 MIG branch는 `selected_jobs`를 한 번에 처리하지 않고, Loop가 job 1건씩 `10 MIG One Job POC Executor`에 전달한다. 실제 LLM SQL 생성/실행은 아직 연결하지 않지만, DB 상태 업데이트와 로그 저장은 실제로 수행한다.
+
+```mermaid
+flowchart TD
+    H{"08 Job Target Router"} -->|MIG targets| P["09 Execution Plan Summary"]
+    P -->|notice message| OUT_NOTICE["Chat Output<br/>Execution Plan Notice"]
+    P -->|payload / MIG| MT["10A MIG Jobs To Loop Table"]
+
+    MT --> L{"10B Loop"}
+
+    L -->|item: one MIG job| W["10C MIG One Job POC Executor"]
+    W --> R{"internal retry loop"}
+
+    R -->|attempt start| U1["Update NEXT_MIG_INFO<br/>STATUS=RUNNING<br/>BATCH_CNT+1"]
+    U1 --> X["POC random stage result<br/>TRUNCATE / GENERATE_SQL / INSERT / VERIFY"]
+    X -->|fail and retry remains| U2["Insert NEXT_MIG_LOG<br/>STATUS=RETRY<br/>RETRY_COUNT+1"]
+    U2 --> R
+
+    X -->|final fail| U3["Update NEXT_MIG_INFO<br/>STATUS=FAIL-*<br/>RETRY_COUNT / ELAPSED_SECONDS"]
+    X -->|pass| U4["Update NEXT_MIG_INFO<br/>STATUS=PASS<br/>RETRY_COUNT / ELAPSED_SECONDS"]
+
+    U3 --> LOGF["Insert NEXT_MIG_LOG<br/>final fail log"]
+    U4 --> LOGP["Insert NEXT_MIG_LOG<br/>pass log"]
+
+    LOGF --> D["10D MIG Iteration Dashboard"]
+    LOGP --> D
+
+    D -->|message + json payload| OUT_ITER["Chat Output<br/>Iteration Dashboard"]
+    OUT_ITER -->|json output: iteration result| L
+
+    L -->|done: aggregated results| S["13 Final Summary"]
+    S -->|result message| OUT_FINAL["Chat Output<br/>Final Summary"]
+```
+
+### MIG Loop 컴포넌트 책임
+
+| 컴포넌트 | 역할 | 입력 | 출력 |
+|---|---|---|---|
+| `09 Execution Plan Summary` | 실행 전 안내 메시지 생성 | `08` payload | `Notice Message`, `Payload` |
+| `10A MIG Jobs To Loop Table` | `selected_jobs`를 Loop 입력 row 목록으로 변환 | `Payload` | `DataFrame` 또는 `list[Data]` |
+| `10B Loop` | MIG job을 1건씩 loop body로 전달하고 결과를 aggregate | job row list | `Item`, `Done` |
+| `10C MIG One Job POC Executor` | job 1건 실행 POC. DB 업데이트, 로그 적재, 내부 retry 처리 | one job `Data` | one job result `Data` |
+| `10D MIG Iteration Dashboard` | 작업 1건 완료 후 진행률/결과 메시지와 loop feedback payload 생성 | one job result `Data` | Chat Output 입력 payload |
+| `Chat Output - Iteration Dashboard` | 작업별 메시지를 화면에 출력하고 JSON output으로 iteration result 전달 | dashboard payload | `json output` |
+| `13 Final Summary` | 전체 loop 결과 최종 요약 | aggregated results | `Result Message` |
+
+### MIG POC 실행 정책
+
+- `PRIORITY`는 실행 정렬 기준이다. 낮은 숫자의 priority job이 실패해도 그 자체로 다음 job을 막지 않는다.
+- 선행 의존성은 `PRIOR_MAP_ID`만 사용한다. `PRIOR_MAP_ID`가 있고 선행 job이 `PASS`가 아니면 해당 job은 실행하지 않고 dependency 결과로 남긴다.
+- retry는 우선 `10C MIG One Job POC Executor` 내부에서 처리한다. Langflow Loop는 job 목록 반복만 담당한다.
+- POC 랜덤 결과는 seed 기반으로 만든다. 같은 `run_id + map_id + attempt` 조합이면 같은 결과가 나오도록 해 재현성을 확보한다.
+- 실제 SQL 생성/실행 위치는 `POC random stage result` 자리에 나중에 삽입한다.
+
+### MIG POC DB 업데이트 계약
+
+| 시점 | 대상 | 업데이트 |
+|---|---|---|
+| job 시작 | `NEXT_MIG_INFO` | `STATUS='RUNNING'`, `BATCH_CNT=BATCH_CNT+1`, `UPD_TS=CURRENT_TIMESTAMP` |
+| attempt 실패, retry 남음 | `NEXT_MIG_LOG` | `LOG_TYPE='POC_RETRY'`, `STEP_NAME`, `STATUS='RETRY'`, `RETRY_COUNT`, `MESSAGE` |
+| 최종 실패 | `NEXT_MIG_INFO` | `STATUS='FAIL-*'`, `RETRY_COUNT`, `ELAPSED_SECONDS`, `UPD_TS=CURRENT_TIMESTAMP` |
+| 최종 실패 | `NEXT_MIG_LOG` | `LOG_TYPE='POC_FINAL'`, `STATUS='FAIL-*'`, 실패 stage/message |
+| 성공 | `NEXT_MIG_INFO` | `STATUS='PASS'`, `RETRY_COUNT`, `ELAPSED_SECONDS`, `UPD_TS=CURRENT_TIMESTAMP` |
+| 성공 | `NEXT_MIG_LOG` | `LOG_TYPE='POC_FINAL'`, `STATUS='PASS'`, 성공 message |
+
+### 작업별 Dashboard Message 예시
+
+```md
+## MIG 진행 현황
+
+- 실행 작업: map_id=101
+- 전체 진행: 3/10건, 30.0%
+- 현재 결과: PASS
+- retry: 1/3
+- 소요시간: 12초
+
+| 구분 | 건수 |
+|---|---:|
+| 완료 | 3 |
+| 성공 | 2 |
+| 실패 | 1 |
+| 잔여 | 7 |
+
+최근 로그:
+- attempt 1: FAIL-TEST
+- attempt 2: PASS
+```
+
+### MIG POC 예상 연결
+
+| 순서 | From | Output | To | Input |
+|---:|---|---|---|---|
+| 1 | `08 Job Target Router` | `MIG Targets` | `09 Execution Plan Summary` | `payload_json` |
+| 2 | `09 Execution Plan Summary` | `Notice Message` | `Chat Output - Execution Plan Notice` | Message |
+| 3 | `09 Execution Plan Summary` | `Payload` | `10A MIG Jobs To Loop Table` | `payload_json` |
+| 4 | `10A MIG Jobs To Loop Table` | `Jobs Table` | `10B Loop` | `Inputs` |
+| 5 | `10B Loop` | `Item` | `10C MIG One Job POC Executor` | `job_item` |
+| 6 | `10C MIG One Job POC Executor` | `Job Result` | `10D MIG Iteration Dashboard` | `job_result` |
+| 7 | `10D MIG Iteration Dashboard` | `Message/Payload` | `Chat Output - Iteration Dashboard` | Message |
+| 8 | `Chat Output - Iteration Dashboard` | `JSON Output` | `10B Loop` | loop feedback |
+| 9 | `10B Loop` | `Done` | `13 Final Summary` | `payload_json` |
+| 10 | `13 Final Summary` | `Result Message` | `Chat Output - Final Summary` | Message |
+
 ## Chat Output 연결 규칙
 
 Chat Output으로 직접 연결되는 출력은 모두 `Message` 타입이다.
@@ -144,6 +249,7 @@ Chat Output으로 직접 연결되는 출력은 모두 `Message` 타입이다.
 | `08 Job Target Router` | `Prerequisite Required Message` |
 | `08 Job Target Router` | `No Runnable Target Message` |
 | `09 Execution Plan Summary` | `Notice Message` |
+| `Chat Output - Iteration Dashboard` | user-visible message + JSON output |
 | `13 Final Summary` | `Result Message` |
 
 ## 제거된 컴포넌트

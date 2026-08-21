@@ -39,7 +39,7 @@ fetch_ddl -> check_dependency -> generate -> execute -> verify -> finalize
 - migration SQL과 verification SQL을 생성합니다.
 - migration SQL을 실제 실행합니다.
 - verification SQL로 데이터 정합성을 확인합니다.
-- dependency, same-target priority, business retry가 LangGraph에 포함되어 있습니다.
+- `PRIOR_MAP_ID` dependency와 business retry가 LangGraph에 포함되어 있습니다. `PRIORITY`는 실행 정렬 기준이며 dependency가 아닙니다.
 
 ### `sql_conversion/`
 

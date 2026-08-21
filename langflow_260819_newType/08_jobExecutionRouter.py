@@ -17,7 +17,7 @@ except Exception:
     DataInput = MessageTextInput
 
 
-JOB_EXECUTION_ROUTER_PROMPT = """당신은 SmartMigrate의 작업 대상 실행 라우터입니다. 반드시 JSON 객체만 반환하세요.
+JOB_EXECUTION_ROUTER_PROMPT = """당신은 SmartMigrate의 잔여 작업 실행 라우터입니다. 반드시 JSON 객체만 반환하세요.
 
 역할:
 - 사용자 실행 요청을 하나의 실행 도메인과 실행 모드로 분류합니다.
@@ -29,7 +29,7 @@ JOB_EXECUTION_ROUTER_PROMPT = """당신은 SmartMigrate의 작업 대상 실행 
 - SQL_CONVERSION: SQL Conversion 작업. 보통 sql_id 또는 space_nm으로 식별합니다.
 - SQL_TUNING: SQL Tuning 작업.
 - SQL_FORMATTING: SQL Formatting 작업.
-- PREREQUISITE_REQUIRED: 작업 대상은 있지만 선행 작업이 남아 있어 지금 실행하면 안 되는 경우.
+- PREREQUISITE_REQUIRED: 잔여 작업은 있지만 선행 단계 또는 PRIOR_MAP_ID 의존성이 남아 있어 지금 실행하면 안 되는 경우.
 - NO_RUNNABLE_JOB: 실행할 대상이 없다고 판단되는 경우.
 
 실행 모드:
@@ -58,7 +58,8 @@ JOB_EXECUTION_ROUTER_PROMPT = """당신은 SmartMigrate의 작업 대상 실행 
 - SQL Conversion 실행 요청에서 pending_summary.migration_total이 1건 이상이면 PREREQUISITE_REQUIRED를 선택합니다.
 - SQL Tuning 실행 요청에서 pending_summary.migration_total 또는 pending_summary.sql_conversion_total이 1건 이상이면 PREREQUISITE_REQUIRED를 선택합니다.
 - SQL Formatting 실행 요청에서 pending_summary.migration_total, pending_summary.sql_conversion_total, pending_summary.sql_tuning_total 중 하나라도 1건 이상이면 PREREQUISITE_REQUIRED를 선택합니다.
-- targeted 요청에서 사용자가 요청한 작업 대상은 있지만 priority/prior_map_id 등 06 payload에서 확인 가능한 선행 조건이 남아 있으면 PREREQUISITE_REQUIRED를 선택합니다.
+- targeted 요청에서 사용자가 요청한 잔여 작업은 있지만 PRIOR_MAP_ID 등 06 payload에서 확인 가능한 선행 조건이 남아 있으면 PREREQUISITE_REQUIRED를 선택합니다.
+- priority는 실행 정렬 기준일 뿐 선행 조건이 아닙니다. priority가 더 낮은 숫자인 작업이 실패했더라도 그것만으로 후속 작업을 PREREQUISITE_REQUIRED로 분류하지 않습니다.
 - targeted 요청에서 사용자가 요청한 map_id 또는 sql_id+space_nm 조합이 pending_job_identifiers에 없으면 NO_RUNNABLE_JOB을 선택합니다.
 - all_pending 요청에서 해당 도메인의 pending count가 0이면 NO_RUNNABLE_JOB을 선택합니다.
 - PREREQUISITE_REQUIRED의 reason에는 어떤 선행 작업이 남았는지 사용자에게 보여줄 한국어 메시지를 작성합니다.
@@ -140,7 +141,7 @@ class NewType08JobExecutionRouter(Component):
             self.status = {**routed, "answer_text": message}
             return Message(text=message)
         except Exception as exc:
-            message = f"component=08_jobExecutionRouter\n작업 대상 라우팅 중 오류가 발생했습니다.\n오류: {exc}"
+            message = f"component=08_jobExecutionRouter\n잔여 작업 라우팅 중 오류가 발생했습니다.\n오류: {exc}"
             self.status = {"ok": False, "component": "08_jobExecutionRouter", "error": str(exc), "answer_text": message}
             return Message(text=message)
 
@@ -154,14 +155,14 @@ class NewType08JobExecutionRouter(Component):
         if route == "PREREQUISITE_REQUIRED":
             message = reason or f"{target_label}은 선행 작업이 남아 있어 지금 실행할 수 없습니다."
         else:
-            message = reason or f"{target_label}이 작업 대상에서 조회되지 않았습니다."
+            message = reason or f"{target_label}이 잔여 작업에서 조회되지 않았습니다."
         lines = [message]
         if user_request:
             lines.append(f"요청: {user_request}")
         if route == "PREREQUISITE_REQUIRED":
             lines.append("선행 작업을 먼저 완료한 뒤 다시 실행해주세요.")
         else:
-            lines.append("대상 상태를 변경하거나 Dashboard에서 작업 대상을 먼저 확인해주세요.")
+            lines.append("대상 상태를 변경하거나 Dashboard에서 잔여 작업을 먼저 확인해주세요.")
         return "\n".join(lines)
 
     def _target_label(self, targets: dict[str, Any]) -> str:

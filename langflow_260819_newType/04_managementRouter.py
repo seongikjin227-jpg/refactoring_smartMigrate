@@ -20,15 +20,15 @@ except Exception:
 MANAGEMENT_ROUTER_PROMPT = """당신은 SmartMigrate의 Management 라우터입니다. 반드시 JSON 객체만 반환하세요.
 
 Management route:
-- DASHBOARD: Dashboard, 상태/현황/건수/실패/대기 작업/남은 작업/작업 대상 조회. DB Migration, SQL Conversion, SQL Tuning, SQL Formatting 대상 조회를 포함합니다.
+- DASHBOARD: Dashboard, 상태/현황/건수/실패/잔여 작업/대기 작업 조회. DB Migration, SQL Conversion, SQL Tuning, SQL Formatting 잔여 조회를 포함합니다.
 - STATUS_CHANGE: status, priority, USE_YN, retry 상태, 포함/제외, 실행 대상 순서 변경.
 - CORRECT_SQL_INPUT: 사용자가 수정 SQL을 입력하거나 Correct SQL 저장을 요청하는 경우.
 - EXCEPTION: Management로 들어왔지만 위 세 가지 중 하나로 판단하기 어려운 경우.
 
 주의:
 - 실제 작업 실행 요청은 이 컴포넌트가 처리하지 않습니다. 그런 요청은 01 Request Classifier가 JOB_EXECUTION으로 보내야 합니다.
-- "DB Migration 작업 남은거 있어? 작업 대상 조회해줘", "SQL Conversion 작업 대상 조회", "SQL Tuning 대상 보여줘", "Formatting 대기 작업 몇 건이야" 같은 읽기 요청은 DASHBOARD입니다.
-- "남은거 있어?", "남은 작업 있어?", "작업 대상 조회", "대상 목록", "대기 작업 몇 건이야"는 DASHBOARD입니다.
+- "DB Migration 작업 남은거 있어?", "SQL Conversion 잔여 작업 조회", "SQL Tuning 잔여 보여줘", "Formatting 대기 작업 몇 건이야" 같은 읽기 요청은 DASHBOARD입니다.
+- "남은거 있어?", "남은 작업 있어?", "잔여 작업 조회", "대기 작업 몇 건이야"는 DASHBOARD입니다.
 - 애매하면 억지로 Dashboard나 Status Change로 보내지 말고 EXCEPTION을 반환하세요.
 
 반환 JSON schema:
@@ -42,7 +42,7 @@ Management route:
 
 EXCEPTION_MESSAGE = """Management 요청을 분류할 수 없습니다.
 Dashboard 조회, Status/priority/USE_YN 변경, Correct SQL 입력 중 어떤 작업인지 다시 요청해주세요.
-실행 요청이라면 "map_id=101 실행"처럼 작업 대상과 실행 의도를 함께 입력해주세요."""
+실행 요청이라면 "map_id=101 실행"처럼 실행할 식별자와 실행 의도를 함께 입력해주세요."""
 
 
 class NewType04ManagementRouter(Component):

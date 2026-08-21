@@ -120,7 +120,7 @@ class NewType09ExecutionPlanSummary(Component):
             "SQL_TUNING": "SQL Tuning",
             "SQL_FORMATTING": "SQL Formatting",
         }.get(route, route or "Unknown")
-        mode_label = "전체 pending 작업" if run_mode == "all_pending" else "지정 작업"
+        mode_label = "전체 잔여 작업" if run_mode == "all_pending" else "지정 작업"
         lines = [
             "component=09_executionPlanSummary",
             f"{label} {mode_label}을 시작합니다.",
@@ -140,7 +140,7 @@ class NewType09ExecutionPlanSummary(Component):
             [
                 "아래 실행 계획을 사용자에게 한국어로 짧고 명확하게 안내하세요.",
                 "실제 실행 결과가 아니라 실행 전 계획임을 분명히 말하세요.",
-                "사용자가 지정한 작업이면 지정 작업이라고 말하고, 전체 대기 작업이면 전체 pending 작업이라고 말하세요.",
+                "사용자가 지정한 작업이면 지정 작업이라고 말하고, 전체 대기 작업이면 전체 잔여 작업이라고 말하세요.",
                 "불필요한 설명은 하지 말고 실행 도메인, 실행 모드, 실행 예정 건수, 작업 목록만 포함하세요.",
                 "",
                 "실행 계획:",
