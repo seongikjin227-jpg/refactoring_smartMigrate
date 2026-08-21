@@ -42,12 +42,17 @@ flowchart TD
     H -->|no_runnable_target message| OUT
 
     P -->|notice message| OUT
-    P -->|payload / MIG| M["10 MIG Pipeline"]
+    P -->|payload / MIG| M0["10A MIG Jobs To Loop Table"]
     P -->|payload / SQL_CONVERSION| C2["12 SQL Conversion Pipeline"]
     P -->|payload / SQL_TUNING| T2["15 SQL Tuning Pipeline"]
     P -->|payload / SQL_FORMATTING| F2["17 SQL Formatting Pipeline"]
 
-    M --> S3["13 Final Summary"]
+    M0 --> ML{"10B Loop"}
+    ML --> M1["10C MIG One Job POC Executor"]
+    M1 --> M2["10D MIG Iteration Dashboard"]
+    M2 --> MOUT["Chat Output<br/>MIG Iteration"]
+    MOUT -->|json output| ML
+    ML -->|done| S3["13 Final Summary"]
     C2 --> S3
     T2 --> S3
     F2 --> S3
@@ -75,14 +80,19 @@ flowchart TD
 | 10 | `06 Get Pending Jobs` | `payload` | `08 Job Target Router` | `payload_json` |
 | 11 | `08 Job Target Router` | executable target output | `09 Execution Plan Summary` | `payload_json` |
 | 12 | `09 Execution Plan Summary` | `Notice Message` | Chat Output | Message |
-| 13 | `09 Execution Plan Summary` | `Payload` | selected Pipeline | `payload_json` |
-| 14 | `10 MIG Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
-| 15 | `12 SQL Conversion Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
-| 16 | `15 SQL Tuning Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
-| 17 | `17 SQL Formatting Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
-| 18 | `08 Job Target Router` | `Prerequisite Required Message` | Chat Output | Message |
-| 19 | `08 Job Target Router` | `No Runnable Target Message` | Chat Output | Message |
-| 20 | `13 Final Summary` | `Result Message` | Chat Output | Message |
+| 13 | `09 Execution Plan Summary` | `Payload` | selected Pipeline 또는 `10A MIG Jobs To Loop Table` | `payload_json` |
+| 14 | `10A MIG Jobs To Loop Table` | `Jobs Table` | `10B Loop` | `Inputs` |
+| 15 | `10B Loop` | `Item` | `10C MIG One Job POC Executor` | `job_item` |
+| 16 | `10C MIG One Job POC Executor` | `Job Result` | `10D MIG Iteration Dashboard` | `job_result` |
+| 17 | `10D MIG Iteration Dashboard` | `Message` | Chat Output | Message |
+| 18 | Chat Output | `JSON Output` | `10B Loop` | loop feedback |
+| 19 | `10B Loop` | `Done` | `13 Final Summary` | `payload_json` |
+| 20 | `12 SQL Conversion Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
+| 21 | `15 SQL Tuning Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
+| 22 | `17 SQL Formatting Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
+| 23 | `08 Job Target Router` | `Prerequisite Required Message` | Chat Output | Message |
+| 24 | `08 Job Target Router` | `No Runnable Target Message` | Chat Output | Message |
+| 25 | `13 Final Summary` | `Result Message` | Chat Output | Message |
 
 ## 요청별 분기 기준
 
@@ -93,8 +103,8 @@ flowchart TD
 | `DB Migration 대상 목록 보여줘` | `MANAGEMENT` | `DASHBOARD` | `04 Dashboard` |
 | `map_id=101 priority 올려줘` | `MANAGEMENT` | `STATUS_CHANGE` | `04 Status Change` |
 | `sql_id=Q001 correct sql 저장해줘` | `MANAGEMENT` | `CORRECT_SQL_INPUT` | `04 Correct SQL Input` |
-| `DB Migration 전체 진행해줘` | `JOB_EXECUTION` | `all_pending / MIG` | `06 -> 08 -> 09 -> 10 -> 13` |
-| `map_id=101 실행해줘` | `JOB_EXECUTION` | `targeted / MIG` | `06 -> 08 -> 09 -> 10 -> 13` |
+| `DB Migration 전체 진행해줘` | `JOB_EXECUTION` | `all_pending / MIG` | `06 -> 08 -> 09 -> 10A -> Loop -> 10C -> 10D -> 13` |
+| `map_id=101 실행해줘` | `JOB_EXECUTION` | `targeted / MIG` | `06 -> 08 -> 09 -> 10A -> Loop -> 10C -> 10D -> 13` |
 | `sql_id=Q001 변환해줘` | `JOB_EXECUTION` | `targeted / SQL_CONVERSION` | `06 -> 08 -> 09 -> 12 -> 13` |
 | `space_nm=SALES 튜닝 진행해줘` | `JOB_EXECUTION` | `targeted / SQL_TUNING` | `06 -> 08 -> 09 -> 15 -> 13` |
 | `sql_id=Q001 포맷팅해줘` | `JOB_EXECUTION` | `targeted / SQL_FORMATTING` | `06 -> 08 -> 09 -> 17 -> 13` |
@@ -147,10 +157,11 @@ flowchart TD
 
     R -->|attempt start| U1["Update NEXT_MIG_INFO<br/>STATUS=RUNNING<br/>BATCH_CNT+1"]
     U1 --> X["POC random stage result<br/>TRUNCATE / GENERATE_SQL / INSERT / VERIFY"]
-    X -->|fail and retry remains| U2["Insert NEXT_MIG_LOG<br/>STATUS=RETRY<br/>RETRY_COUNT+1"]
-    U2 --> R
+    X -->|fail and retry_count < max_retry| U2["Update NEXT_MIG_INFO<br/>STATUS=FAIL-*<br/>RETRY_COUNT+1"]
+    U2 --> LOGR["Insert NEXT_MIG_LOG<br/>STATUS=FAIL-*<br/>retry log"]
+    LOGR --> R
 
-    X -->|final fail| U3["Update NEXT_MIG_INFO<br/>STATUS=FAIL-*<br/>RETRY_COUNT / ELAPSED_SECONDS"]
+    X -->|fail and retry_count >= max_retry| U3["Update NEXT_MIG_INFO<br/>STATUS=FAIL-*<br/>RETRY_COUNT / ELAPSED_SECONDS"]
     X -->|pass| U4["Update NEXT_MIG_INFO<br/>STATUS=PASS<br/>RETRY_COUNT / ELAPSED_SECONDS"]
 
     U3 --> LOGF["Insert NEXT_MIG_LOG<br/>final fail log"]
@@ -183,6 +194,7 @@ flowchart TD
 - `PRIORITY`는 실행 정렬 기준이다. 낮은 숫자의 priority job이 실패해도 그 자체로 다음 job을 막지 않는다.
 - 선행 의존성은 `PRIOR_MAP_ID`만 사용한다. `PRIOR_MAP_ID`가 있고 선행 job이 `PASS`가 아니면 해당 job은 실행하지 않고 dependency 결과로 남긴다.
 - retry는 우선 `10C MIG One Job POC Executor` 내부에서 처리한다. Langflow Loop는 job 목록 반복만 담당한다.
+- retry 여부는 `STATUS` 값이 아니라 `RETRY_COUNT < max_retry` 조건으로 판단한다. 중간 실패와 최종 실패 모두 stage별 `FAIL-*` 상태를 저장한다.
 - POC 랜덤 결과는 seed 기반으로 만든다. 같은 `run_id + map_id + attempt` 조합이면 같은 결과가 나오도록 해 재현성을 확보한다.
 - 실제 SQL 생성/실행 위치는 `POC random stage result` 자리에 나중에 삽입한다.
 
@@ -191,7 +203,8 @@ flowchart TD
 | 시점 | 대상 | 업데이트 |
 |---|---|---|
 | job 시작 | `NEXT_MIG_INFO` | `STATUS='RUNNING'`, `BATCH_CNT=BATCH_CNT+1`, `UPD_TS=CURRENT_TIMESTAMP` |
-| attempt 실패, retry 남음 | `NEXT_MIG_LOG` | `LOG_TYPE='POC_RETRY'`, `STEP_NAME`, `STATUS='RETRY'`, `RETRY_COUNT`, `MESSAGE` |
+| attempt 실패, retry 남음 | `NEXT_MIG_INFO` | `STATUS='FAIL-*'`, `RETRY_COUNT=RETRY_COUNT+1`, `UPD_TS=CURRENT_TIMESTAMP` |
+| attempt 실패, retry 남음 | `NEXT_MIG_LOG` | `LOG_TYPE='POC_RETRY'`, `STEP_NAME`, `STATUS='FAIL-*'`, `RETRY_COUNT`, `MESSAGE` |
 | 최종 실패 | `NEXT_MIG_INFO` | `STATUS='FAIL-*'`, `RETRY_COUNT`, `ELAPSED_SECONDS`, `UPD_TS=CURRENT_TIMESTAMP` |
 | 최종 실패 | `NEXT_MIG_LOG` | `LOG_TYPE='POC_FINAL'`, `STATUS='FAIL-*'`, 실패 stage/message |
 | 성공 | `NEXT_MIG_INFO` | `STATUS='PASS'`, `RETRY_COUNT`, `ELAPSED_SECONDS`, `UPD_TS=CURRENT_TIMESTAMP` |

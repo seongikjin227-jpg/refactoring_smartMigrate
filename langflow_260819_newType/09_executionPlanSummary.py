@@ -106,7 +106,7 @@ class NewType09ExecutionPlanSummary(Component):
     def _next_node(self, route: str) -> str:
         # Resolve the next component name for a route.
         return {
-            "MIG": "10_migPipeline",
+            "MIG": "10A_migJobsToLoopTable",
             "SQL_CONVERSION": "12_sqlConversionPipeline",
             "SQL_TUNING": "15_sqlTuningPipeline",
             "SQL_FORMATTING": "17_sqlFormattingPipeline",
