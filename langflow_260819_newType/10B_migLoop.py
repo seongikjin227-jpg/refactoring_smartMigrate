@@ -41,8 +41,9 @@ class NewType10BMigLoop(Component):
             display_name="Item",
             name="item",
             method="item_output",
+            types=["Message"],
             allows_loop=True,
-            loop_types=["Data"],
+            loop_types=["Message"],
             group_outputs=True,
         ),
         Output(
@@ -149,12 +150,13 @@ class NewType10BMigLoop(Component):
         self.update_ctx({f"{self._id}_aggregated": aggregated_results, f"{self._id}_iterated": True})
         return aggregated_results
 
-    async def item_output(self) -> Data:
+    async def item_output(self) -> Message:
         self.stop("item")
         if self._vertex is not None and "done" not in self._vertex.edges_source_names:
             await self._iterate()
         data_list = self.ctx.get(f"{self._id}_data", [])
-        return Data(data={"count": len(data_list), "items": [self._data_dict(item) for item in data_list]})
+        payload = {"count": len(data_list), "items": [self._data_dict(item) for item in data_list]}
+        return Message(text=self._json_text(payload))
 
     async def done_output(self) -> Data:
         aggregated_results = await self._iterate()
@@ -183,8 +185,30 @@ class NewType10BMigLoop(Component):
         if isinstance(item, Data):
             return dict(item.data or {})
         if isinstance(item, Message):
+            parsed = self._parse_json_text(item.text)
+            if parsed is not None:
+                return parsed
             data = self._convert_message_to_data(item)
             return dict(data.data or {})
         if isinstance(item, dict):
             return dict(item)
         return {"value": item}
+
+    def _json_text(self, payload: dict[str, Any]) -> str:
+        import json
+
+        return json.dumps(payload, ensure_ascii=False, default=str)
+
+    def _parse_json_text(self, text: Any) -> dict[str, Any] | None:
+        import json
+        import re
+
+        value = str(text or "").strip()
+        if value.startswith("```"):
+            value = re.sub(r"^```(?:json)?\s*", "", value, flags=re.I)
+            value = re.sub(r"\s*```$", "", value)
+        try:
+            parsed = json.loads(value) if value else None
+        except Exception:
+            return None
+        return parsed if isinstance(parsed, dict) else None

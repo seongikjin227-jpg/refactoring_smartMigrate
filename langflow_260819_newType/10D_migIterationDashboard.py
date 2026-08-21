@@ -9,11 +9,6 @@ from lfx.io import MessageTextInput, Output
 from lfx.schema.data import Data
 from lfx.schema.message import Message
 
-try:
-    from lfx.io import DataInput
-except Exception:
-    DataInput = MessageTextInput
-
 
 class NewType10DMigIterationDashboard(Component):
     display_name = "10D MIG Iteration Dashboard"
@@ -21,10 +16,10 @@ class NewType10DMigIterationDashboard(Component):
     name = "NewType10DMigIterationDashboard"
     icon = "Gauge"
 
-    inputs = [DataInput(name="job_result", display_name="Job Result", required=True)]
+    inputs = [MessageTextInput(name="job_result", display_name="Job Result JSON", required=True)]
     outputs = [
         Output(display_name="Message", name="message", method="build_message", types=["Message"]),
-        Output(display_name="Loop Result", name="loop_result", method="build_loop_result"),
+        Output(display_name="Loop Result", name="loop_result", method="build_loop_result", types=["Message"]),
     ]
 
     def build_message(self) -> Message:
@@ -32,10 +27,10 @@ class NewType10DMigIterationDashboard(Component):
         self.status = payload
         return Message(text=str(payload.get("answer_text") or ""))
 
-    def build_loop_result(self) -> Data:
+    def build_loop_result(self) -> Message:
         payload = self._build()
         self.status = payload
-        return Data(data=payload.get("loop_result") or payload)
+        return Message(text=json.dumps(payload.get("loop_result") or payload, ensure_ascii=False, default=str))
 
     def _build(self) -> dict[str, Any]:
         cached = getattr(self, "_cached_payload", None)
@@ -131,6 +126,8 @@ class NewType10DMigIterationDashboard(Component):
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):
             return dict(raw.data or {})
+        if isinstance(raw, Message):
+            raw = raw.text
         if isinstance(raw, dict):
             return dict(raw)
         text = str(raw or "").strip()
