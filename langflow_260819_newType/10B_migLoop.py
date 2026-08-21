@@ -4,10 +4,10 @@ from typing import Any
 
 from lfx.custom.custom_component.component import Component
 from lfx.inputs.inputs import HandleInput
+from lfx.io import Output
 from lfx.schema.data import Data
 from lfx.schema.dataframe import DataFrame
 from lfx.schema.message import Message
-from lfx.template.field.base import Output
 
 from lfx.base.flow_controls.loop_utils import (
     execute_loop_body,
@@ -41,7 +41,6 @@ class NewType10BMigLoop(Component):
             display_name="Item",
             name="item",
             method="item_output",
-            types=["Data"],
             allows_loop=True,
             loop_types=["Data"],
             group_outputs=True,
@@ -50,7 +49,6 @@ class NewType10BMigLoop(Component):
             display_name="Done",
             name="done",
             method="done_output",
-            types=["Data"],
             group_outputs=True,
         ),
     ]

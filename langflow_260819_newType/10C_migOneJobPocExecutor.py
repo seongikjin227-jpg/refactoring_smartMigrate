@@ -8,9 +8,13 @@ from contextlib import contextmanager
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
-from lfx.inputs.inputs import HandleInput
 from lfx.io import IntInput, MessageTextInput, Output
 from lfx.schema.data import Data
+
+try:
+    from lfx.io import DataInput
+except Exception:
+    DataInput = MessageTextInput
 
 
 class NewType10CMigOneJobPocExecutor(Component):
@@ -20,12 +24,7 @@ class NewType10CMigOneJobPocExecutor(Component):
     icon = "DatabaseZap"
 
     inputs = [
-        HandleInput(
-            name="job_item",
-            display_name="Job Item",
-            input_types=["Data"],
-            required=True,
-        ),
+        DataInput(name="job_item", display_name="Job Item", required=True),
         IntInput(name="max_retry", display_name="Max Retry", value=3, required=False),
     ]
 
