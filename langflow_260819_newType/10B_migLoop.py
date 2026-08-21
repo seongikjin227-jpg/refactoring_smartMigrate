@@ -159,6 +159,8 @@ class NewType10BMigLoop(Component):
         return Data(data={"count": len(data_list), "items": [self._data_dict(item) for item in data_list]})
 
     async def done_output(self) -> Data:
+        self.stop("item")
+        self.start("done")
         aggregated_results = await self._iterate()
         data_list = self.ctx.get(f"{self._id}_data", [])
         result_rows = [self._data_dict(item) for item in aggregated_results]
