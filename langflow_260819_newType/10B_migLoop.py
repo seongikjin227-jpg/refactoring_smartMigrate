@@ -22,7 +22,7 @@ from lfx.components.processing.converter import convert_to_data
 
 class NewType10BMigLoop(Component):
     display_name = "10B MIG Loop"
-    description = "MIG-specific loop that iterates jobs and returns aggregate Data instead of a Table."
+    description = "MIG-specific loop that iterates jobs and returns a DataFrame on Done."
     documentation = "https://docs.langflow.org/loop"
     name = "NewType10BMigLoop"
     icon = "Infinity"
@@ -50,7 +50,7 @@ class NewType10BMigLoop(Component):
             display_name="Done",
             name="done",
             method="done_output",
-            types=["Data"],
+            types=["DataFrame", "Table"],
             group_outputs=True,
         ),
     ]
@@ -158,31 +158,13 @@ class NewType10BMigLoop(Component):
         data_list = self.ctx.get(f"{self._id}_data", [])
         return Data(data={"count": len(data_list), "items": [self._data_dict(item) for item in data_list]})
 
-    async def done_output(self) -> Data:
+    async def done_output(self) -> DataFrame:
         self.stop("item")
         self.start("done")
         aggregated_results = await self._iterate()
-        data_list = self.ctx.get(f"{self._id}_data", [])
-        result_rows = [self._data_dict(item) for item in aggregated_results]
-        total = len(data_list)
-        success = len([item for item in result_rows if item.get("ok") is True or str(item.get("status") or "").upper() == "PASS"])
-        failed = len([item for item in result_rows if item.get("ok") is False and str(item.get("status") or "").upper() != "WAITING"])
-        waiting = len([item for item in result_rows if str(item.get("status") or "").upper() == "WAITING"])
-        payload = {
-            "component": "10B_migLoop",
-            "pipeline_status": "DONE_WITH_FAILURES" if failed else "DONE",
-            "job_route": "MIG",
-            "total_jobs": total,
-            "success_count": success,
-            "failed_count": failed,
-            "waiting_count": waiting,
-            "processed_jobs": result_rows,
-            "completed_jobs": [item for item in result_rows if item.get("ok") is True],
-            "failed_jobs": [item for item in result_rows if item.get("ok") is False],
-            "next_node": "10E_migFinalDashboard",
-        }
-        self.status = payload
-        return Data(data=payload)
+        result_rows = [Data(data=self._data_dict(item)) for item in aggregated_results]
+        self.status = {"component": "10B_migLoop", "pipeline_status": "DONE", "row_count": len(result_rows)}
+        return DataFrame(result_rows)
 
     def _data_dict(self, item: Any) -> dict[str, Any]:
         if isinstance(item, Data):

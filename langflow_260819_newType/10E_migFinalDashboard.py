@@ -5,14 +5,11 @@ import re
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
+from lfx.inputs.inputs import HandleInput
 from lfx.io import MessageTextInput, Output
 from lfx.schema.data import Data
+from lfx.schema.dataframe import DataFrame
 from lfx.schema.message import Message
-
-try:
-    from lfx.io import DataInput
-except Exception:
-    DataInput = MessageTextInput
 
 
 class NewType10EMigFinalDashboard(Component):
@@ -21,7 +18,14 @@ class NewType10EMigFinalDashboard(Component):
     name = "NewType10EMigFinalDashboard"
     icon = "ClipboardCheck"
 
-    inputs = [DataInput(name="loop_result", display_name="Loop Result", required=True)]
+    inputs = [
+        HandleInput(
+            name="loop_result",
+            display_name="Loop Result",
+            input_types=["DataFrame", "Table", "Data"],
+            required=True,
+        )
+    ]
     outputs = [Output(display_name="Result Message", name="result", method="build_result", types=["Message"])]
 
     def build_result(self) -> Message:
@@ -76,8 +80,16 @@ class NewType10EMigFinalDashboard(Component):
         return f"{'🟩' * filled}{'⬜' * (width - filled)} `{percent:.1f}%`"
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
+        if isinstance(raw, DataFrame):
+            rows = [dict(item.data or {}) for item in raw.to_data_list()]
+            return self._aggregate_rows(rows)
         if isinstance(raw, Data):
-            return dict(raw.data or {})
+            data = dict(raw.data or {})
+            if "processed_jobs" in data:
+                return data
+            if "map_id" in data or "status" in data:
+                return self._aggregate_rows([data])
+            return data
         if isinstance(raw, dict):
             return dict(raw)
         text = str(raw or "").strip()
@@ -88,3 +100,21 @@ class NewType10EMigFinalDashboard(Component):
         if not isinstance(parsed, dict):
             raise ValueError("loop_result must be a JSON object")
         return parsed
+
+    def _aggregate_rows(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        total = len(rows)
+        success = len([item for item in rows if item.get("ok") is True or str(item.get("status") or "").upper() == "PASS"])
+        failed = len([item for item in rows if item.get("ok") is False and str(item.get("status") or "").upper() != "WAITING"])
+        waiting = len([item for item in rows if str(item.get("status") or "").upper() == "WAITING"])
+        return {
+            "component": "10E_migFinalDashboard",
+            "pipeline_status": "DONE_WITH_FAILURES" if failed else "DONE",
+            "job_route": "MIG",
+            "total_jobs": total,
+            "success_count": success,
+            "failed_count": failed,
+            "waiting_count": waiting,
+            "processed_jobs": rows,
+            "completed_jobs": [item for item in rows if item.get("ok") is True],
+            "failed_jobs": [item for item in rows if item.get("ok") is False],
+        }
