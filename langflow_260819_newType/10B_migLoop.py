@@ -43,7 +43,7 @@ class NewType10BMigLoop(Component):
             method="item_output",
             types=["Data"],
             allows_loop=True,
-            loop_types=["Message", "Data"],
+            loop_types=["Data"],
             group_outputs=True,
         ),
         Output(
