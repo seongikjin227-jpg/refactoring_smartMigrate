@@ -55,6 +55,10 @@ class NewType10DMigIterationDashboard(Component):
             "total_jobs": result.get("total_jobs", 1),
             "completed_count": result.get("completed_count", result.get("job_index", 1)),
             "remaining_count": result.get("remaining_count", 0),
+            "requested_success_count": result.get("requested_success_count", 0),
+            "requested_failed_count": result.get("requested_failed_count", 0),
+            "requested_waiting_count": result.get("requested_waiting_count", 0),
+            "requested_processed_count": result.get("requested_processed_count", result.get("completed_count", result.get("job_index", 1))),
             "message": result.get("message") or "",
             "attempts": result.get("attempts") or [],
         }
@@ -74,16 +78,9 @@ class NewType10DMigIterationDashboard(Component):
         completed = int(result.get("completed_count") or index)
         remaining = max(int(result.get("remaining_count") or (total - completed)), 0)
         attempts = list(result.get("attempts") or [])
-        history = list(result.get("history") or [])
-        success_so_far = len(
-            [
-                item
-                for item in history
-                if item.get("ok") is True or str(item.get("status") or "").upper() == "PASS"
-            ]
-        )
-        if result.get("ok") is True or str(result.get("status") or "").upper() == "PASS":
-            success_so_far += 1
+        success_so_far = int(result.get("requested_success_count") or 0)
+        if success_so_far <= 0 and (result.get("ok") is True or str(result.get("status") or "").upper() == "PASS"):
+            success_so_far = 1
         progress_rate = (completed / total * 100) if total else 0.0
         advancement_rate = (success_so_far / total * 100) if total else 0.0
         success_count = 1 if result.get("ok") else 0

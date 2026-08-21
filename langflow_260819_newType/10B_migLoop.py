@@ -9,7 +9,14 @@ from lfx.schema.data import Data
 from lfx.schema.dataframe import DataFrame
 from lfx.schema.message import Message
 
-from lfx.base.flow_controls.loop_utils import validate_data_input
+from lfx.base.flow_controls.loop_utils import (
+    execute_loop_body,
+    extract_loop_output,
+    get_loop_body_start_edge,
+    get_loop_body_start_vertex,
+    get_loop_body_vertices,
+    validate_data_input,
+)
 from lfx.components.processing.converter import convert_to_data
 
 
@@ -56,8 +63,6 @@ class NewType10BMigLoop(Component):
             {
                 f"{self._id}_data": data_list,
                 f"{self._id}_index": 0,
-                f"{self._id}_aggregated": [],
-                f"{self._id}_last_feedback_key": "",
                 f"{self._id}_initialized": True,
             }
         )
@@ -80,36 +85,87 @@ class NewType10BMigLoop(Component):
             data = normalized
         return validate_data_input(data)
 
+    def get_loop_body_vertices(self) -> set[str]:
+        if not hasattr(self, "_vertex") or self._vertex is None:
+            return set()
+        return get_loop_body_vertices(
+            vertex=self._vertex,
+            graph=self.graph,
+            get_incoming_edge_by_target_param_fn=self.get_incoming_edge_by_target_param,
+        )
+
+    def _get_loop_body_start_vertex(self) -> str | None:
+        if not hasattr(self, "_vertex") or self._vertex is None:
+            return None
+        return get_loop_body_start_vertex(vertex=self._vertex)
+
+    def _extract_loop_output(self, results: list[Any]) -> Data:
+        end_vertex_id = self.get_incoming_edge_by_target_param("item")
+        return extract_loop_output(results=results, end_vertex_id=end_vertex_id)
+
+    async def execute_loop_body(self, data_list: list[Data], event_manager=None) -> list[Data]:
+        loop_body_vertex_ids = self.get_loop_body_vertices()
+        start_vertex_id = self._get_loop_body_start_vertex()
+        start_edge = get_loop_body_start_edge(self._vertex)
+        end_vertex_id = self.get_incoming_edge_by_target_param("item")
+        return await execute_loop_body(
+            graph=self.graph,
+            data_list=data_list,
+            loop_body_vertex_ids=loop_body_vertex_ids,
+            start_vertex_id=start_vertex_id,
+            start_edge=start_edge,
+            end_vertex_id=end_vertex_id,
+            event_manager=event_manager,
+        )
+
+    async def _iterate(self) -> list[Data]:
+        if self.ctx.get(f"{self._id}_iterated", False):
+            cached_error = self.ctx.get(f"{self._id}_iteration_error")
+            if cached_error is not None:
+                raise cached_error
+            return self.ctx.get(f"{self._id}_aggregated", [])
+
+        import time
+
+        started_at = time.perf_counter()
+        try:
+            self.initialize_data()
+            data_list = self.ctx.get(f"{self._id}_data", [])
+            self.log(f"Starting MIG loop over {len(data_list)} job(s)", name="Start")
+            if not data_list:
+                self.update_ctx({f"{self._id}_aggregated": [], f"{self._id}_iterated": True})
+                self.log("No MIG jobs to iterate", name="Skipped")
+                return []
+            aggregated_results = await self.execute_loop_body(data_list, event_manager=self._event_manager)
+        except Exception as exc:
+            from lfx.log.logger import logger
+
+            elapsed = time.perf_counter() - started_at
+            self.log(f"MIG loop failed after {elapsed:.3f}s: {exc}", name="Error")
+            await logger.aexception(f"MIG loop {self._id} failed while executing loop body")
+            self.update_ctx({f"{self._id}_iteration_error": exc, f"{self._id}_iterated": True})
+            raise
+
+        elapsed = time.perf_counter() - started_at
+        self.log(f"Completed {len(aggregated_results)} MIG iteration(s) in {elapsed:.3f}s", name="Complete")
+        self.update_ctx({f"{self._id}_aggregated": aggregated_results, f"{self._id}_iterated": True})
+        return aggregated_results
+
     async def item_output(self) -> Data:
-        self.initialize_data()
-        self._consume_loop_feedback()
+        self.stop("item")
+        if self._vertex is not None and "done" not in self._vertex.edges_source_names:
+            await self._iterate()
         data_list = self.ctx.get(f"{self._id}_data", [])
-        index = int(self.ctx.get(f"{self._id}_index", 0) or 0)
-        if index >= len(data_list):
-            self.stop("item")
-            self.start("done")
-            return Data(data={"done": True, "total_jobs": len(data_list)})
-        item = data_list[index]
-        item_data = self._data_dict(item)
-        item_data["history"] = list(self.ctx.get(f"{self._id}_aggregated", []) or [])
-        self.update_ctx({f"{self._id}_index": index + 1})
-        self.stop("done")
-        return Data(data=item_data)
+        return Data(data={"count": len(data_list), "items": [self._data_dict(item) for item in data_list]})
 
     async def done_output(self) -> Data:
-        self.initialize_data()
-        self._consume_loop_feedback()
+        aggregated_results = await self._iterate()
         data_list = self.ctx.get(f"{self._id}_data", [])
-        result_rows = list(self.ctx.get(f"{self._id}_aggregated", []) or [])
+        result_rows = [self._data_dict(item) for item in aggregated_results]
         total = len(data_list)
         success = len([item for item in result_rows if item.get("ok") is True or str(item.get("status") or "").upper() == "PASS"])
         failed = len([item for item in result_rows if item.get("ok") is False and str(item.get("status") or "").upper() != "WAITING"])
         waiting = len([item for item in result_rows if str(item.get("status") or "").upper() == "WAITING"])
-        if len(result_rows) < total:
-            self.stop("done")
-            return Data(data={"component": "10B_migLoop", "pipeline_status": "RUNNING", "total_jobs": total, "processed_jobs": result_rows})
-        self.stop("item")
-        self.start("done")
         payload = {
             "component": "10B_migLoop",
             "pipeline_status": "DONE_WITH_FAILURES" if failed else "DONE",
@@ -125,38 +181,6 @@ class NewType10BMigLoop(Component):
         }
         self.status = payload
         return Data(data=payload)
-
-    def _consume_loop_feedback(self) -> None:
-        feedback = getattr(self, "item", None)
-        if feedback in (None, ""):
-            return
-        row = self._data_dict(feedback)
-        if not row or row.get("done"):
-            return
-        if row.get("map_id") is None and row.get("status") is None:
-            return
-        key = self._feedback_key(row)
-        if key == self.ctx.get(f"{self._id}_last_feedback_key"):
-            return
-        aggregated = list(self.ctx.get(f"{self._id}_aggregated", []) or [])
-        aggregated.append(row)
-        self.update_ctx(
-            {
-                f"{self._id}_aggregated": aggregated,
-                f"{self._id}_last_feedback_key": key,
-            }
-        )
-
-    def _feedback_key(self, row: dict[str, Any]) -> str:
-        return "|".join(
-            [
-                str(row.get("map_id") or ""),
-                str(row.get("job_index") or ""),
-                str(row.get("status") or ""),
-                str(row.get("attempt_count") or ""),
-                str(row.get("retry_count") or ""),
-            ]
-        )
 
     def _data_dict(self, item: Any) -> dict[str, Any]:
         if isinstance(item, Data):

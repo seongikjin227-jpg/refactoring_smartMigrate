@@ -39,6 +39,7 @@ class NewType10AMigJobsToLoopTable(Component):
         jobs = self._mig_jobs(payload)
         total = len(jobs)
         db_config = self._db_config()
+        requested_map_ids = [job.get("map_id") for job in jobs if job.get("map_id") is not None]
         rows: list[Data] = []
         for index, job in enumerate(jobs, start=1):
             row = {
@@ -49,6 +50,7 @@ class NewType10AMigJobsToLoopTable(Component):
                 "run_mode": payload.get("run_mode") or "targeted",
                 "job_index": index,
                 "total_jobs": total,
+                "requested_map_ids": requested_map_ids,
                 "completed_before": index - 1,
                 "db_config": db_config,
                 "history": list(payload.get("history") or []),
