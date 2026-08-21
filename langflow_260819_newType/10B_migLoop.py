@@ -153,11 +153,14 @@ class NewType10BMigLoop(Component):
 
     async def item_output(self) -> Data:
         self.stop("item")
-        if self._vertex is not None and "done" not in self._vertex.edges_source_names:
-            await self._iterate()
+        self.initialize_data()
         data_list = self.ctx.get(f"{self._id}_data", [])
-        payload = {"count": len(data_list), "items": [self._data_dict(item) for item in data_list]}
-        return Data(data=payload)
+        index = int(self.ctx.get(f"{self._id}_index", 0) or 0)
+        if index >= len(data_list):
+            return Data(data={"done": True, "total_jobs": len(data_list)})
+        item = data_list[index]
+        self.update_ctx({f"{self._id}_index": index + 1})
+        return Data(data=self._data_dict(item))
 
     async def done_output(self) -> Data:
         aggregated_results = await self._iterate()
@@ -194,11 +197,6 @@ class NewType10BMigLoop(Component):
         if isinstance(item, dict):
             return dict(item)
         return {"value": item}
-
-    def _json_text(self, payload: dict[str, Any]) -> str:
-        import json
-
-        return json.dumps(payload, ensure_ascii=False, default=str)
 
     def _parse_json_text(self, text: Any) -> dict[str, Any] | None:
         import json

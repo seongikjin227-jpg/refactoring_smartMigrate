@@ -387,6 +387,14 @@ class NewType10CMigOneJobPocExecutor(Component):
             row = cur.fetchone()
             if not row:
                 raise ValueError(f"NEXT_MIG_INFO row not found: map_id={map_id}")
+            map_type = self._lob_to_str(row[0]) or "TABLE"
+            fr_table = self._lob_to_str(row[1])
+            to_table = self._lob_to_str(row[2])
+            trunc_yn = self._lob_to_str(row[3])
+            condition = self._lob_to_str(row[4])
+            saved_migration_sql = self._lob_to_str(row[5])
+            saved_verification_sql = self._lob_to_str(row[6])
+            user_edited = self._lob_to_str(row[7])
             cur.execute(
                 f"""
                 SELECT MAP_DTL,
@@ -398,28 +406,23 @@ class NewType10CMigOneJobPocExecutor(Component):
                 """,
                 [map_id],
             )
-            detail_rows = cur.fetchall()
-
-        map_type = self._lob_to_str(row[0]) or "TABLE"
-        fr_table = self._lob_to_str(row[1])
-        to_table = self._lob_to_str(row[2])
-        details = [
-            {
-                "map_dtl": item[0],
-                "fr_col": self._lob_to_str(item[1]),
-                "to_col": self._lob_to_str(item[2]),
-            }
-            for item in detail_rows
-        ]
+            details = [
+                {
+                    "map_dtl": item[0],
+                    "fr_col": self._lob_to_str(item[1]),
+                    "to_col": self._lob_to_str(item[2]),
+                }
+                for item in cur.fetchall()
+            ]
         return {
             "map_type": map_type,
             "fr_table": fr_table,
             "to_table": to_table,
-            "trunc_yn": self._lob_to_str(row[3]),
-            "condition": self._lob_to_str(row[4]),
-            "saved_migration_sql": self._lob_to_str(row[5]),
-            "saved_verification_sql": self._lob_to_str(row[6]),
-            "user_edited": self._lob_to_str(row[7]),
+            "trunc_yn": trunc_yn,
+            "condition": condition,
+            "saved_migration_sql": saved_migration_sql,
+            "saved_verification_sql": saved_verification_sql,
+            "user_edited": user_edited,
             "mapping_details": details,
             "source_ddl": self._fetch_table_columns(db_config, fr_table) if self._looks_like_table(fr_table) else [],
             "target_ddl": self._fetch_table_columns(db_config, to_table) if self._looks_like_table(to_table) else [],
