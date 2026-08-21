@@ -56,64 +56,56 @@ class NewType10CMigOneJobPocExecutor(Component):
                 return Data(data=result)
 
             self._mark_running(db_config, map_id)
+            base_context = {"job": job, "map_id": map_id, "attempt": 1}
+            fetch_step = self._node_fetch_ddl(base_context)
+            if fetch_step.get("status") != "PASS":
+                raise ValueError(fetch_step.get("message") or "FETCH_DDL failed")
+            self._insert_log(
+                db_config,
+                map_id,
+                "POC_STEP",
+                "INFO",
+                "FETCH_DDL",
+                "PASS",
+                fetch_step.get("message") or "FETCH_DDL completed",
+                0,
+                "",
+            )
+            pipeline_context = {**base_context, **(fetch_step.get("outputs") or {})}
+            graph_result = self._run_poc_graph(pipeline_context, db_config, max_retry)
+            attempts = list(graph_result.get("attempts") or [])
+            final_status = str(graph_result.get("final_status") or "FAIL-TEST")
+            final_ok = final_status == "PASS"
+            retry_count = max(0, int(graph_result.get("db_attempts") or 1) - 1)
+            message = str(graph_result.get("message") or "")
 
-            final_status = "FAIL-TEST"
-            final_ok = False
-            retry_count = 0
-            message = ""
-            for attempt in range(1, max_retry + 2):
-                attempt_result = self._run_pipeline_attempt(job, map_id, attempt)
-                retry_count = attempt - 1
-                attempts.append(attempt_result)
-                final_status = attempt_result["status"]
-                final_ok = bool(attempt_result["ok"])
-                message = str(attempt_result["message"])
-
-                if final_ok:
-                    elapsed = int(time.perf_counter() - started)
-                    self._update_job(db_config, map_id, "PASS", elapsed, retry_count)
-                    self._insert_log(
-                        db_config,
-                        map_id,
-                        "POC_FINAL",
-                        "INFO",
-                        "VERIFY",
-                        "PASS",
-                        message,
-                        retry_count,
-                        attempt_result.get("migration_sql", ""),
-                    )
-                    break
-
-                if retry_count < max_retry:
-                    self._update_job(db_config, map_id, final_status, 0, retry_count + 1)
-                    self._insert_log(
-                        db_config,
-                        map_id,
-                        "POC_RETRY",
-                        "WARN",
-                        attempt_result["failed_stage"],
-                        final_status,
-                        message,
-                        retry_count + 1,
-                        attempt_result.get("migration_sql", ""),
-                    )
-                    continue
-
-                elapsed = int(time.perf_counter() - started)
+            elapsed = int(time.perf_counter() - started)
+            if final_ok:
+                self._update_job(db_config, map_id, "PASS", elapsed, retry_count)
+                self._insert_log(
+                    db_config,
+                    map_id,
+                    "POC_FINAL",
+                    "INFO",
+                    "VERIFY",
+                    "PASS",
+                    message,
+                    retry_count,
+                    graph_result.get("verification_sql", ""),
+                )
+            else:
                 self._update_job(db_config, map_id, final_status, elapsed, retry_count)
                 self._insert_log(
                     db_config,
                     map_id,
                     "POC_FINAL",
                     "ERROR",
-                    attempt_result["failed_stage"],
+                    "FINAL",
                     final_status,
                     message,
                     retry_count,
-                    attempt_result.get("migration_sql", ""),
+                    graph_result.get("stage_sql", ""),
                 )
-                break
 
             elapsed = int(time.perf_counter() - started)
             result = self._result(job, ok=final_ok, status="PASS" if final_ok else final_status, elapsed=elapsed, attempts=attempts)
@@ -133,47 +125,229 @@ class NewType10CMigOneJobPocExecutor(Component):
             self.status = result
             return Data(data=result)
 
-    def _run_pipeline_attempt(
-        self,
-        job: dict[str, Any],
-        map_id: int,
-        attempt: int,
-    ) -> dict[str, Any]:
-        # Dependency and DDL loading are real. Generation/execution/verification are POC stubs.
-        steps: list[dict[str, Any]] = []
-        context: dict[str, Any] = {"job": job, "map_id": map_id, "attempt": attempt}
+    def _run_poc_graph(self, context: dict[str, Any], db_config: dict[str, Any], max_retry: int) -> dict[str, Any]:
+        from langgraph.graph import END, StateGraph
 
-        for node in (
-            self._node_fetch_ddl,
-            self._node_generate_sql,
-            self._node_execute_sql,
-            self._node_verify,
-        ):
-            step = node(context)
-            steps.append(step)
-            context.update(step.get("outputs") or {})
-            if step.get("status") != "PASS":
-                return {
-                    "attempt": attempt,
-                    "ok": False,
-                    "failed_stage": step["stage"],
-                    "status": step["status"],
-                    "message": step["message"],
-                    "migration_sql": context.get("migration_sql", ""),
-                    "verification_sql": context.get("verification_sql", ""),
-                    "steps": steps,
+        def generate_node(state: dict[str, Any]) -> dict[str, Any]:
+            step = self._node_generate_sql(state)
+            return self._apply_step(state, step)
+
+        def execute_node(state: dict[str, Any]) -> dict[str, Any]:
+            step = self._node_execute_sql(state)
+            next_state = self._apply_step(state, step)
+            if step.get("status") == "PASS":
+                next_state.update({"status": "EXECUTED", "error_type": "", "failure_status": ""})
+            return next_state
+
+        def verify_node(state: dict[str, Any]) -> dict[str, Any]:
+            step = self._node_verify(state)
+            return self._apply_step(state, step)
+
+        def retry_prepare_node(state: dict[str, Any]) -> dict[str, Any]:
+            attempt = self._attempt_result_from_state(state, ok=False)
+            retry_count = int(state.get("db_attempts") or 1)
+            self._update_job(db_config, int(state["map_id"]), attempt["status"], 0, retry_count)
+            self._insert_log(
+                db_config,
+                int(state["map_id"]),
+                "POC_RETRY",
+                "WARN",
+                attempt["failed_stage"],
+                attempt["status"],
+                attempt["message"],
+                retry_count,
+                attempt.get("migration_sql", ""),
+            )
+            next_status = "EXECUTED" if attempt["status"] == "FAIL-TEST" else ""
+            return {
+                **state,
+                "attempts": [*(state.get("attempts") or []), attempt],
+                "current_steps": [],
+                "db_attempts": retry_count + 1,
+                "attempt": retry_count + 1,
+                "error_type": "",
+                "status": next_status,
+                "failure_status": attempt["status"],
+            }
+
+        def finalize_node(state: dict[str, Any]) -> dict[str, Any]:
+            attempts = list(state.get("attempts") or [])
+            if state.get("current_steps"):
+                attempts.append(self._attempt_result_from_state(state, ok=state.get("status") == "PASS"))
+            final_status = "PASS" if state.get("status") == "PASS" else self._failure_status_from_state(state)
+            return {
+                **state,
+                "attempts": attempts,
+                "final_status": final_status,
+                "message": "Migration Success" if final_status == "PASS" else f"Max Attempts Reached after {final_status}: {state.get('last_error') or ''}",
+                "stage_sql": self._stage_sql_from_state(state, final_status),
+            }
+
+        def should_continue(state: dict[str, Any]) -> str:
+            if state.get("status") == "PASS":
+                return "finalize"
+            if state.get("error_type") == "BIZ_RETRY":
+                return "retry_prepare" if int(state.get("db_attempts") or 1) < int(state.get("max_attempts") or 1) else "finalize"
+            if state.get("status") == "EXECUTED":
+                return "verify"
+            if not state.get("current_migration_sql"):
+                return "generate"
+            return "execute"
+
+        def after_retry_prepare(state: dict[str, Any]) -> str:
+            return "execute" if state.get("failure_status") == "FAIL-TRUNCATE" else "generate"
+
+        workflow = StateGraph(dict)
+        workflow.add_node("generate", generate_node)
+        workflow.add_node("execute", execute_node)
+        workflow.add_node("verify", verify_node)
+        workflow.add_node("retry_prepare", retry_prepare_node)
+        workflow.add_node("finalize", finalize_node)
+        workflow.set_entry_point("generate")
+        workflow.add_conditional_edges("generate", should_continue, {"execute": "execute", "verify": "verify", "retry_prepare": "retry_prepare", "finalize": "finalize", "generate": "generate"})
+        workflow.add_conditional_edges("execute", should_continue, {"verify": "verify", "retry_prepare": "retry_prepare", "finalize": "finalize", "generate": "generate", "execute": "execute"})
+        workflow.add_conditional_edges("verify", should_continue, {"finalize": "finalize", "retry_prepare": "retry_prepare", "generate": "generate"})
+        workflow.add_conditional_edges("retry_prepare", after_retry_prepare, {"generate": "generate", "execute": "execute"})
+        workflow.add_edge("finalize", END)
+        graph = workflow.compile()
+        initial_state = {
+            **context,
+            "db_attempts": 1,
+            "db_config": db_config,
+            "max_attempts": max_retry + 1,
+            "current_steps": [],
+            "attempts": [],
+            "current_migration_sql": context.get("migration_sql", ""),
+            "current_v_sql": context.get("verification_sql", ""),
+            "last_error": "",
+            "last_sql": "",
+            "error_type": "",
+            "failure_status": "",
+            "status": "",
+        }
+        return dict(graph.invoke(initial_state))
+
+    def _apply_step(self, state: dict[str, Any], step: dict[str, Any]) -> dict[str, Any]:
+        outputs = dict(step.get("outputs") or {})
+        next_state = {
+            **state,
+            **outputs,
+            "current_steps": [*(state.get("current_steps") or []), step],
+            "attempt": state.get("db_attempts", state.get("attempt", 1)),
+        }
+        if step.get("status") == "PASS":
+            next_state.update(
+                {
+                    "error_type": "",
+                    "failure_status": "",
+                    "last_error": "",
+                    "last_sql": outputs.get("migration_sql") or state.get("current_migration_sql") or state.get("last_sql") or "",
+                    "current_migration_sql": outputs.get("migration_sql") or state.get("current_migration_sql") or "",
+                    "current_v_sql": outputs.get("verification_sql") or state.get("current_v_sql") or "",
                 }
+            )
+            if step.get("stage") == "VERIFY":
+                next_state["status"] = "PASS"
+            elif step.get("stage") == "GENERATE_SQL" and state.get("failure_status") == "FAIL-TEST":
+                next_state["status"] = "EXECUTED"
+            self._insert_step_log(next_state, step)
+            return next_state
 
+        status = str(step.get("status") or "FAIL")
+        next_state.update(
+            {
+                "status": "",
+                "error_type": "BIZ_RETRY",
+                "failure_status": status,
+                "last_error": str(step.get("message") or ""),
+                "last_sql": self._step_sql_for_status(next_state, status),
+                "current_migration_sql": outputs.get("migration_sql") or state.get("current_migration_sql") or "",
+                "current_v_sql": outputs.get("verification_sql") or state.get("current_v_sql") or "",
+            }
+        )
+        self._insert_step_log(next_state, step)
+        return next_state
+
+    def _attempt_result_from_state(self, state: dict[str, Any], *, ok: bool) -> dict[str, Any]:
+        steps = list(state.get("current_steps") or [])
+        failed_step = next((step for step in reversed(steps) if step.get("status") != "PASS"), None)
+        status = "PASS" if ok else self._failure_status_from_state(state)
+        failed_stage = "" if ok else str((failed_step or {}).get("stage") or "FINAL")
+        message = (
+            f"[POC] map_id={state.get('map_id')} attempt={state.get('db_attempts')} migration pipeline passed"
+            if ok
+            else str(state.get("last_error") or (failed_step or {}).get("message") or "")
+        )
         return {
-            "attempt": attempt,
-            "ok": True,
-            "failed_stage": "",
-            "status": "PASS",
-            "message": f"[POC] map_id={map_id} attempt={attempt} migration pipeline passed",
-            "migration_sql": context.get("migration_sql", ""),
-            "verification_sql": context.get("verification_sql", ""),
+            "attempt": int(state.get("db_attempts") or 1),
+            "ok": ok,
+            "failed_stage": failed_stage,
+            "failed_stage_status": "" if ok else status,
+            "status": status,
+            "message": message,
+            "migration_sql": state.get("current_migration_sql", ""),
+            "verification_sql": state.get("current_v_sql", ""),
+            "outputs": self._attempt_outputs(state),
             "steps": steps,
         }
+
+    def _failure_status_from_state(self, state: dict[str, Any]) -> str:
+        explicit = str(state.get("failure_status") or "").strip()
+        if explicit:
+            return explicit
+        if state.get("status") == "EXECUTED":
+            return "FAIL-TEST"
+        return "FAIL"
+
+    def _stage_sql_from_state(self, state: dict[str, Any], failure_status: str | None = None) -> str:
+        status = failure_status or self._failure_status_from_state(state)
+        if status == "FAIL-TEST":
+            return str(state.get("current_v_sql") or "")
+        return str(state.get("current_migration_sql") or state.get("last_sql") or "")
+
+    def _step_sql_for_status(self, state: dict[str, Any], status: str) -> str:
+        if status == "FAIL-TEST":
+            return str(state.get("current_v_sql") or "")
+        return str(state.get("current_migration_sql") or state.get("migration_sql") or "")
+
+    def _insert_step_log(self, state: dict[str, Any], step: dict[str, Any]) -> None:
+        db_config = dict(state.get("db_config") or {})
+        map_id = self._to_int(state.get("map_id"))
+        if map_id is None:
+            return
+        status = str(step.get("status") or "")
+        stage = str(step.get("stage") or "UNKNOWN")
+        retry_count = max(0, int(state.get("db_attempts") or 1) - 1)
+        log_level = "INFO" if status == "PASS" else "WARN"
+        stage_sql = self._log_sql_for_step(state, step)
+        route_note = self._route_note(state, step)
+        message = f"attempt={state.get('db_attempts')} stage={stage} status={status}; {step.get('message') or ''}{route_note}"
+        self._insert_log(db_config, map_id, "POC_STEP", log_level, stage, status, message, retry_count, stage_sql)
+
+    def _log_sql_for_step(self, state: dict[str, Any], step: dict[str, Any]) -> str:
+        stage = str(step.get("stage") or "")
+        if stage == "VERIFY":
+            return str(state.get("current_v_sql") or "")
+        if stage == "GENERATE_SQL" and state.get("status") == "EXECUTED":
+            return str(state.get("current_v_sql") or "")
+        return self._stage_sql_from_state(state, str(step.get("status") or ""))
+
+    def _route_note(self, state: dict[str, Any], step: dict[str, Any]) -> str:
+        if step.get("stage") == "GENERATE_SQL" and state.get("status") == "EXECUTED":
+            return "; route=verify_retry_generate_only,next=VERIFY"
+        if step.get("stage") == "GENERATE_SQL" and step.get("status") == "PASS":
+            return "; route=normal,next=EXECUTE_SQL"
+        if step.get("stage") == "EXECUTE_SQL" and step.get("status") == "PASS":
+            return "; route=normal,next=VERIFY"
+        if step.get("status") == "FAIL-TEST":
+            return "; route=retry,next=GENERATE_SQL_VERIFY_ONLY"
+        if step.get("status") == "FAIL-TRUNCATE":
+            return "; route=retry,next=EXECUTE_SQL"
+        if str(step.get("status") or "").startswith("FAIL"):
+            return "; route=retry,next=GENERATE_SQL"
+        if step.get("status") == "PASS":
+            return "; route=finalize"
+        return ""
 
     def _node_fetch_ddl(self, context: dict[str, Any]) -> dict[str, Any]:
         map_id = self._to_int(context.get("map_id"))
@@ -196,27 +370,34 @@ class NewType10CMigOneJobPocExecutor(Component):
                 "stage": "GENERATE_SQL",
                 "status": "FAIL-INSERT",
                 "message": "[POC] migration SQL generation failed",
-                "outputs": {"migration_sql": "", "verification_sql": ""},
+                "outputs": {
+                    "migration_sql": context.get("migration_sql", ""),
+                    "verification_sql": context.get("verification_sql", ""),
+                },
             }
         map_id = job.get("map_id")
         target_table = context.get("to_table") or job.get("to_table") or "POC_TARGET"
         source_table = context.get("fr_table") or job.get("fr_table") or "POC_SOURCE"
-        mapped_columns = self._mapped_columns(context.get("mapping_details") or [])
-        if mapped_columns:
-            to_cols = ", ".join(item["to_col"] for item in mapped_columns)
-            fr_cols = ", ".join(item["fr_col"] for item in mapped_columns)
-            migration_sql = f"INSERT INTO {target_table} ({to_cols}) SELECT {fr_cols} FROM {source_table} /* POC map_id={map_id} */"
-        else:
-            migration_sql = f"INSERT INTO {target_table} SELECT * FROM {source_table} /* POC map_id={map_id} */"
-        verification_sql = f"SELECT 0 AS DIFF_TOT FROM DUAL /* POC verify map_id={map_id} */"
+        verify_only = context.get("failure_status") == "FAIL-TEST"
+        migration_sql = context.get("migration_sql") or self._build_poc_migration_sql(context, source_table, target_table, map_id)
+        verification_sql = f"SELECT 0 AS DIFF_TOT FROM DUAL /* POC verify map_id={map_id} attempt={context.get('attempt')} */"
         return {
             "stage": "GENERATE_SQL",
             "status": "PASS",
-            "message": "[POC] migration and verification SQL generated",
+            "message": "[POC] verification SQL regenerated" if verify_only else "[POC] migration and verification SQL generated",
             "outputs": {"migration_sql": migration_sql, "verification_sql": verification_sql},
         }
 
     def _node_execute_sql(self, context: dict[str, Any]) -> dict[str, Any]:
+        if str(context.get("trunc_yn") or "").strip().upper() == "Y":
+            truncate_rng = self._rng(context, "TRUNCATE")
+            if truncate_rng.random() < self._fail_probability(context["attempt"], "TRUNCATE"):
+                return {
+                    "stage": "TRUNCATE",
+                    "status": "FAIL-TRUNCATE",
+                    "message": "[POC] target truncate failed",
+                    "outputs": {"affected_rows": 0},
+                }
         rng = self._rng(context, "EXECUTE_SQL")
         if rng.random() < self._fail_probability(context["attempt"], "EXECUTE_SQL"):
             return {
@@ -255,11 +436,28 @@ class NewType10CMigOneJobPocExecutor(Component):
 
     def _fail_probability(self, attempt: int, node_name: str) -> float:
         base = {
+            "TRUNCATE": 0.20,
             "GENERATE_SQL": 0.25,
             "EXECUTE_SQL": 0.35,
             "VERIFY": 0.30,
         }.get(node_name, 0.0)
         return max(0.05, base - ((attempt - 1) * 0.15))
+
+    def _build_poc_migration_sql(self, context: dict[str, Any], source_table: str, target_table: str, map_id: Any) -> str:
+        mapped_columns = self._mapped_columns(context.get("mapping_details") or [])
+        if mapped_columns:
+            to_cols = ", ".join(item["to_col"] for item in mapped_columns)
+            fr_cols = ", ".join(item["fr_col"] for item in mapped_columns)
+            return f"INSERT INTO {target_table} ({to_cols}) SELECT {fr_cols} FROM {source_table} /* POC map_id={map_id} */"
+        return f"INSERT INTO {target_table} SELECT * FROM {source_table} /* POC map_id={map_id} */"
+
+    def _attempt_outputs(self, context: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "migration_sql": context.get("migration_sql", ""),
+            "verification_sql": context.get("verification_sql", ""),
+            "affected_rows": context.get("affected_rows", 0),
+            "diff_count": context.get("diff_count", 0),
+        }
 
     def _result(self, job: dict[str, Any], *, ok: bool, status: str, elapsed: int, attempts: list[dict[str, Any]]) -> dict[str, Any]:
         total = int(job.get("total_jobs") or 1)
