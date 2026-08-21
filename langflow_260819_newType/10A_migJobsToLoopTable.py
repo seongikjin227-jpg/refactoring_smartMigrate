@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
@@ -30,7 +29,6 @@ class NewType10AMigJobsToLoopTable(Component):
         StrInput(name="db_username", display_name="DB Username", required=False),
         SecretStrInput(name="db_password", display_name="DB Password", required=False),
         StrInput(name="system_schema", display_name="System Schema", required=False),
-        StrInput(name="migration_log_sequence", display_name="Migration Log Sequence", value="MIGRATION_LOG_SEQ", required=False),
     ]
 
     outputs = [Output(display_name="Jobs Table", name="jobs_table", method="build_jobs_table")]
@@ -39,7 +37,6 @@ class NewType10AMigJobsToLoopTable(Component):
         # Build a Loop-compatible DataFrame where each row is one MIG job.
         payload = self._parse_payload(getattr(self, "payload_json", ""))
         jobs = self._mig_jobs(payload)
-        run_id = str(payload.get("run_id") or f"MIG-POC-{int(time.time())}")
         total = len(jobs)
         db_config = self._db_config()
         rows: list[Data] = []
@@ -49,7 +46,6 @@ class NewType10AMigJobsToLoopTable(Component):
                 "component": "10A_migJobsToLoopTable",
                 "job_route": "MIG",
                 "job_type": "MIG",
-                "run_id": run_id,
                 "run_mode": payload.get("run_mode") or "targeted",
                 "job_index": index,
                 "total_jobs": total,
@@ -61,7 +57,6 @@ class NewType10AMigJobsToLoopTable(Component):
         status = {
             **payload,
             "component": "10A_migJobsToLoopTable",
-            "run_id": run_id,
             "loop_job_count": total,
             "next_node": "10B_migLoop",
         }
@@ -86,7 +81,6 @@ class NewType10AMigJobsToLoopTable(Component):
             "db_username": str(getattr(self, "db_username", "") or "").strip(),
             "db_password": self._secret_to_str(getattr(self, "db_password", None)),
             "system_schema": str(getattr(self, "system_schema", "") or "").strip(),
-            "migration_log_sequence": str(getattr(self, "migration_log_sequence", "") or "MIGRATION_LOG_SEQ").strip(),
         }
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:

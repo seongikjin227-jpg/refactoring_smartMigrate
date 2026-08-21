@@ -37,15 +37,20 @@ class NewType10EMigFinalDashboard(Component):
         success = int(payload.get("success_count") or 0)
         failed = int(payload.get("failed_count") or 0)
         waiting = int(payload.get("waiting_count") or 0)
-        rate = (success / total * 100) if total else 0.0
+        completed = len(processed)
+        progress_rate = (completed / total * 100) if total else 0.0
+        advancement_rate = (success / total * 100) if total else 0.0
         lines = [
             "## MIG 전체 진행 결과",
             "",
             f"- 전체 작업: {total}건",
+            f"- 진행률: {completed}/{total}건, {progress_rate:.1f}%",
+            self._bar(completed, total),
+            f"- 진척률: {success}/{total}건 PASS, {advancement_rate:.1f}%",
+            self._bar(success, total),
             f"- 성공: {success}건",
             f"- 실패: {failed}건",
             f"- 대기: {waiting}건",
-            f"- 성공률: {rate:.1f}%",
             f"- 상태: {payload.get('pipeline_status') or '-'}",
         ]
         if processed:
@@ -63,6 +68,12 @@ class NewType10EMigFinalDashboard(Component):
             for item in failed_jobs[:20]:
                 lines.append(f"- map_id={item.get('map_id')}: {item.get('status')} / {item.get('message') or '-'}")
         return "\n".join(lines)
+
+    def _bar(self, value: int, total: int, width: int = 20) -> str:
+        clamped = max(0, min(value, total))
+        filled = round(clamped / total * width) if total > 0 else 0
+        percent = (clamped / total * 100) if total > 0 else 0.0
+        return f"{'🟩' * filled}{'⬜' * (width - filled)} `{percent:.1f}%`"
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):

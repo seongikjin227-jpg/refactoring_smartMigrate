@@ -57,7 +57,6 @@ class NewType10DMigIterationDashboard(Component):
             "remaining_count": result.get("remaining_count", 0),
             "message": result.get("message") or "",
             "attempts": result.get("attempts") or [],
-            "run_id": result.get("run_id"),
         }
         payload = {
             **result,
@@ -74,15 +73,29 @@ class NewType10DMigIterationDashboard(Component):
         total = int(result.get("total_jobs") or 1)
         completed = int(result.get("completed_count") or index)
         remaining = max(int(result.get("remaining_count") or (total - completed)), 0)
-        rate = (completed / total * 100) if total else 0.0
         attempts = list(result.get("attempts") or [])
+        history = list(result.get("history") or [])
+        success_so_far = len(
+            [
+                item
+                for item in history
+                if item.get("ok") is True or str(item.get("status") or "").upper() == "PASS"
+            ]
+        )
+        if result.get("ok") is True or str(result.get("status") or "").upper() == "PASS":
+            success_so_far += 1
+        progress_rate = (completed / total * 100) if total else 0.0
+        advancement_rate = (success_so_far / total * 100) if total else 0.0
         success_count = 1 if result.get("ok") else 0
         fail_count = 0 if result.get("ok") else 1
         lines = [
             "## MIG 진행 현황",
             "",
             f"- 실행 작업: map_id={result.get('map_id')}",
-            f"- 전체 진행: {completed}/{total}건, {rate:.1f}%",
+            f"- 진행률: {completed}/{total}건, {progress_rate:.1f}%",
+            self._bar(completed, total),
+            f"- 진척률: {success_so_far}/{total}건 PASS, {advancement_rate:.1f}%",
+            self._bar(success_so_far, total),
             f"- 현재 결과: {result.get('status')}",
             f"- retry: {result.get('retry_count', 0)}",
             f"- 소요시간: {result.get('elapsed_seconds', 0)}초",
@@ -97,14 +110,23 @@ class NewType10DMigIterationDashboard(Component):
         if attempts:
             lines.extend(["", "최근 로그:"])
             for attempt in attempts[-5:]:
+                stage = attempt.get("failed_stage") or "VERIFY"
                 lines.append(
                     f"- attempt {attempt.get('attempt')}: {attempt.get('status')} "
-                    f"({attempt.get('stage')}, {attempt.get('trace_id')})"
+                    f"({stage})"
                 )
+                for step in list(attempt.get("steps") or [])[-4:]:
+                    lines.append(f"  - {step.get('stage')}: {step.get('status')}")
         message = str(result.get("message") or "").strip()
         if message:
             lines.extend(["", f"메시지: {message}"])
         return "\n".join(lines)
+
+    def _bar(self, value: int, total: int, width: int = 20) -> str:
+        clamped = max(0, min(value, total))
+        filled = round(clamped / total * width) if total > 0 else 0
+        percent = (clamped / total * 100) if total > 0 else 0.0
+        return f"{'🟩' * filled}{'⬜' * (width - filled)} `{percent:.1f}%`"
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):

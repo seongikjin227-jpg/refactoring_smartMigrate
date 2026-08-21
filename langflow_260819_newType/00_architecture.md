@@ -3,15 +3,15 @@
 ## 핵심 원칙
 
 - `01 Request Classifier LLM`은 `01_requestClassifierPrompt.md`를 사용해 사용자 요청을 `GENERAL_CHAT`, `MANAGEMENT`, `JOB_EXECUTION`으로 1차 분류한다.
-- `SQL Conversion 작업 대상 조회`, `SQL Tuning 대상 보여줘`, `Formatting 대기 작업 몇 건이야`, `DB Migration 대상 목록`처럼 읽기성 작업 대상 조회 요청은 `MANAGEMENT`로 보낸다.
+- `SQL Conversion 잔여 작업 조회`, `SQL Tuning 잔여 보여줘`, `Formatting 대기 작업 몇 건이야`, `DB Migration 잔여 목록`처럼 읽기성 잔여 작업 조회 요청은 `MANAGEMENT`로 보낸다.
 - `04 Management LLM Router`는 관리 요청을 `DASHBOARD`, `STATUS_CHANGE`, `CORRECT_SQL_INPUT`, `EXCEPTION`으로 분기한다.
-- 작업 대상 조회/현황/건수/실패/대기 작업 조회는 `DASHBOARD`로 분기하고, 대시보드 조회 결과를 활용해 답변한다.
+- 잔여 작업 조회/현황/건수/실패/대기 작업 조회는 `DASHBOARD`로 분기하고, 대시보드 조회 결과를 활용해 답변한다.
 - `JOB_EXECUTION`은 실제 작업 실행 요청이다. 전체 잔여 작업 실행과 `map_id`/`sql_id`/`space_nm` 기반 단건 또는 복수건 실행을 모두 포함한다.
 - `01 Request Classifier LLM`, `04 Management LLM Router`, `08 Job Target Router`는 LLM 기반 분기다. rule fallback, classifier mode, router mode는 사용하지 않는다.
 - LLM 프롬프트는 컴포넌트 코드 내부 상수로 관리하고 Langflow 입력값으로 받지 않는다.
 - `06 Get Remaining Jobs`는 실행 라우팅에 필요한 count, 대상 식별자, 경량 메타데이터만 조회한다. CLOB/SQL 본문은 반환하지 않고, DB Migration은 `map_id`, `priority`, `prior_map_id`, NEXT_SQL_INFO 계열은 `space_nm + sql_id`, `priority`를 반환한다.
 - `08 Job Target Router`는 `06 Get Remaining Jobs` 결과와 사용자 요청을 함께 보고 실행 도메인, 실행 모드, 대상 필터를 LLM으로 결정한다.
-- 선행 작업이 남아 있는 경우는 `Prerequisite Required Message`, 요청 대상이 작업 대상에 없는 경우는 `No Runnable Target Message`로 분리한다.
+- 선행 작업이 남아 있는 경우는 `Prerequisite Required Message`, 요청 대상이 잔여 작업에 없는 경우는 `No Runnable Target Message`로 분리한다.
 - 실행 전 `09 Execution Plan Summary`가 어떤 파이프라인에서 몇 개의 job을 실행할지 `Message`로 먼저 안내한다.
 - 각 pipeline은 현재 POC이므로 실제 DB Migration/SQL 변환/튜닝/포맷팅 로직을 실행하지 않고 테스트용 랜덤 결과와 로그를 반환한다.
 - Chat Output에 직접 연결되는 출력은 모두 `Message` 타입이다.
@@ -101,7 +101,7 @@ flowchart TD
 | 사용자 요청 예시 | 1차 route | 2차 route / 실행 모드 | 연결 |
 |---|---|---|---|
 | `안녕`, `이 구조 설명해줘` | `GENERAL_CHAT` | - | `03 LLM Response` |
-| `SQL Conversion 작업 대상 조회해줘` | `MANAGEMENT` | `DASHBOARD` | `04 Dashboard` |
+| `SQL Conversion 잔여 작업 조회해줘` | `MANAGEMENT` | `DASHBOARD` | `04 Dashboard` |
 | `DB Migration 대상 목록 보여줘` | `MANAGEMENT` | `DASHBOARD` | `04 Dashboard` |
 | `map_id=101 priority 올려줘` | `MANAGEMENT` | `STATUS_CHANGE` | `04 Status Change` |
 | `sql_id=Q001 correct sql 저장해줘` | `MANAGEMENT` | `CORRECT_SQL_INPUT` | `04 Correct SQL Input` |
@@ -110,8 +110,8 @@ flowchart TD
 | `sql_id=Q001 변환해줘` | `JOB_EXECUTION` | `targeted / SQL_CONVERSION` | `06 -> 08 -> 09 -> 12 -> 13` |
 | `space_nm=SALES 튜닝 진행해줘` | `JOB_EXECUTION` | `targeted / SQL_TUNING` | `06 -> 08 -> 09 -> 15 -> 13` |
 | `sql_id=Q001 포맷팅해줘` | `JOB_EXECUTION` | `targeted / SQL_FORMATTING` | `06 -> 08 -> 09 -> 17 -> 13` |
-| `SQL Conversion 전체 실행해줘` + DB Migration pending 존재 | `JOB_EXECUTION` | `PREREQUISITE_REQUIRED` | `06 -> 08 -> Chat Output` |
-| `map_id=999 실행해줘` + 작업 대상 없음 | `JOB_EXECUTION` | `NO_RUNNABLE_JOB` | `06 -> 08 -> Chat Output` |
+| `SQL Conversion 전체 실행해줘` + DB Migration 잔여 존재 | `JOB_EXECUTION` | `PREREQUISITE_REQUIRED` | `06 -> 08 -> Chat Output` |
+| `map_id=999 실행해줘` + 잔여 작업 없음 | `JOB_EXECUTION` | `NO_RUNNABLE_JOB` | `06 -> 08 -> Chat Output` |
 
 ## Dashboard 응답 계약
 
@@ -135,7 +135,7 @@ POC에서 위 데이터가 없으면 실제 조회 결과가 아직 연결되지
 
 ```text
 실행 파이프라인
-실행 모드: all_pending 또는 targeted
+실행 모드: all_pending(전체 잔여) 또는 targeted(지정)
 실행 예정 job 수
 실행 예정 job list
 ```
@@ -144,7 +144,7 @@ POC에서 위 데이터가 없으면 실제 조회 결과가 아직 연결되지
 
 ## MIG PIPELINE 흐름도
 
-첫 POC는 DB Migration만 Loop 기반으로 구현한다. `08 Job Target Router` 이후 MIG branch는 `selected_jobs`를 한 번에 처리하지 않고, Loop가 job 1건씩 `10 MIG One Job POC Executor`에 전달한다. 실제 LLM SQL 생성/실행은 아직 연결하지 않지만, DB 상태 업데이트와 로그 저장은 실제로 수행한다.
+첫 POC는 DB Migration만 Loop 기반으로 구현한다. `08 Job Target Router` 이후 MIG branch는 `selected_jobs`를 한 번에 처리하지 않고, Loop가 job 1건씩 `10C MIG One Job POC Executor`에 전달한다. `PRIOR_MAP_ID` dependency와 DDL 조회는 실제 DB 기준으로 수행하고, SQL 생성/실행/검증은 나중에 실제 LLM/SQL 실행 로직을 넣을 수 있도록 node 껍데기를 유지한 채 POC 랜덤 결과만 반환한다. DB 상태 업데이트와 로그 저장은 실제로 수행한다.
 
 ```mermaid
 flowchart TD
@@ -155,16 +155,24 @@ flowchart TD
     MT --> L{"10B MIG Loop"}
 
     L -->|item: one MIG job| W["10C MIG One Job POC Executor"]
-    W --> R{"internal retry loop"}
+    W --> U1["Update NEXT_MIG_INFO<br/>STATUS=RUNNING<br/>BATCH_CNT+1"]
+    U1 --> R{"internal retry loop"}
 
-    R -->|attempt start| U1["Update NEXT_MIG_INFO<br/>STATUS=RUNNING<br/>BATCH_CNT+1"]
-    U1 --> X["POC random stage result<br/>TRUNCATE / GENERATE_SQL / INSERT / VERIFY"]
-    X -->|fail and retry_count < max_retry| U2["Update NEXT_MIG_INFO<br/>STATUS=FAIL-*<br/>RETRY_COUNT+1"]
+    R -->|attempt start| F["FETCH_DDL<br/>real mapping + DDL lookup"]
+    F --> G["GENERATE_SQL<br/>POC random PASS / FAIL-INSERT"]
+    G -->|PASS| E["EXECUTE_SQL<br/>POC random PASS / FAIL-INSERT"]
+    E -->|PASS| V["VERIFY<br/>POC random PASS / FAIL-TEST"]
+    G -->|FAIL-INSERT| X["stage fail"]
+    E -->|FAIL-INSERT| X
+    V -->|FAIL-TEST| X
+    V -->|PASS| OK["pipeline pass"]
+
+    X -->|retry_count < max_retry| U2["Update NEXT_MIG_INFO<br/>STATUS=FAIL-*<br/>RETRY_COUNT+1"]
     U2 --> LOGR["Insert NEXT_MIG_LOG<br/>STATUS=FAIL-*<br/>retry log"]
     LOGR --> R
 
     X -->|fail and retry_count >= max_retry| U3["Update NEXT_MIG_INFO<br/>STATUS=FAIL-*<br/>RETRY_COUNT / ELAPSED_SECONDS"]
-    X -->|pass| U4["Update NEXT_MIG_INFO<br/>STATUS=PASS<br/>RETRY_COUNT / ELAPSED_SECONDS"]
+    OK --> U4["Update NEXT_MIG_INFO<br/>STATUS=PASS<br/>RETRY_COUNT / ELAPSED_SECONDS"]
 
     U3 --> LOGF["Insert NEXT_MIG_LOG<br/>final fail log"]
     U4 --> LOGP["Insert NEXT_MIG_LOG<br/>pass log"]
@@ -186,7 +194,7 @@ flowchart TD
 | `09 Execution Plan Summary` | 실행 전 안내 메시지 생성 | `08` payload | `Notice Message`, `Payload` |
 | `10A MIG Jobs To Loop Table` | `selected_jobs`를 Loop 입력 row 목록으로 변환 | `Payload` | `DataFrame` 또는 `list[Data]` |
 | `10B MIG Loop` | MIG job을 1건씩 loop body로 전달하고 결과를 aggregate. `Done`은 Table이 아니라 aggregate `Data`를 반환 | job row list | `Item`, `Done Data` |
-| `10C MIG One Job POC Executor` | job 1건 실행 POC. DB 업데이트, 로그 적재, 내부 retry 처리 | one job `Data` | one job result `Data` |
+| `10C MIG One Job POC Executor` | job 1건 실행 POC. dependency/FETCH_DDL은 실제 DB 조회, GENERATE_SQL/EXECUTE_SQL/VERIFY는 랜덤 결과, DB 업데이트, 로그 적재, 내부 retry 처리 | one job `Data` | one job result `Data` |
 | `10D MIG Iteration Dashboard` | 작업 1건 완료 후 진행률/결과 메시지와 loop feedback payload 생성 | one job result `Data` | Chat Output 입력 payload |
 | `Chat Output - Iteration Dashboard` | 작업별 메시지를 화면에 출력하고 JSON output으로 iteration result 전달 | dashboard payload | `json output` |
 | `10E MIG Final Dashboard` | 전체 loop 결과 최종 dashboard 요약 | aggregated results `Data` | `Result Message` |
@@ -197,8 +205,9 @@ flowchart TD
 - 선행 의존성은 `PRIOR_MAP_ID`만 사용한다. `PRIOR_MAP_ID`가 있고 선행 job이 `PASS`가 아니면 해당 job은 실행하지 않고 dependency 결과로 남긴다.
 - retry는 우선 `10C MIG One Job POC Executor` 내부에서 처리한다. Langflow Loop는 job 목록 반복만 담당한다.
 - retry 여부는 `STATUS` 값이 아니라 `RETRY_COUNT < max_retry` 조건으로 판단한다. 중간 실패와 최종 실패 모두 stage별 `FAIL-*` 상태를 저장한다.
-- POC 랜덤 결과는 seed 기반으로 만든다. 같은 `run_id + map_id + attempt` 조합이면 같은 결과가 나오도록 해 재현성을 확보한다.
-- 실제 SQL 생성/실행 위치는 `POC random stage result` 자리에 나중에 삽입한다.
+- `FETCH_DDL`은 `NEXT_MIG_INFO`, `NEXT_MIG_INFO_DTL`, Oracle catalog(`USER_TAB_COLUMNS`/`ALL_TAB_COLUMNS`)를 실제 조회한다.
+- POC 랜덤 결과는 `GENERATE_SQL`, `EXECUTE_SQL`, `VERIFY` node에서만 만든다. seed 입력 파라미터는 두지 않고 내부에서 `map_id + job_index + attempt + node_name` 기준으로 같은 job/attempt/node는 같은 결과가 나오게 한다.
+- 실제 LLM SQL 생성은 `GENERATE_SQL` node 내부에, 실제 SQL 실행은 `EXECUTE_SQL` node 내부에, 실제 검증 SQL 실행은 `VERIFY` node 내부에 나중에 삽입한다.
 
 ### MIG POC DB 업데이트 계약
 
