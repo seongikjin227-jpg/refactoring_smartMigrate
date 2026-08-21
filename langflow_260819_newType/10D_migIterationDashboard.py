@@ -133,6 +133,8 @@ class NewType10DMigIterationDashboard(Component):
                     f"- 성공: {success_so_far}건",
                     f"- 실패: {failed_so_far}건",
                     f"- 대기: {waiting_so_far}건",
+                    "",
+                    "요청하신 작업이 완료됐습니다.",
                 ]
             )
         return "\n".join(lines)

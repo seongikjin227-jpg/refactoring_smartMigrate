@@ -22,7 +22,7 @@ from lfx.components.processing.converter import convert_to_data
 
 class NewType10BMigLoop(Component):
     display_name = "10B MIG Loop"
-    description = "MIG-specific loop that iterates jobs and returns a DataFrame on Done."
+    description = "MIG-specific loop that iterates jobs; final summary is emitted by the last 10D dashboard."
     documentation = "https://docs.langflow.org/loop"
     name = "NewType10BMigLoop"
     icon = "Infinity"
@@ -45,14 +45,7 @@ class NewType10BMigLoop(Component):
             allows_loop=True,
             loop_types=["Data"],
             group_outputs=True,
-        ),
-        Output(
-            display_name="Done",
-            name="done",
-            method="done_output",
-            types=["Message"],
-            group_outputs=True,
-        ),
+        )
     ]
 
     def initialize_data(self) -> None:
@@ -153,17 +146,10 @@ class NewType10BMigLoop(Component):
 
     async def item_output(self) -> Data:
         self.stop("item")
-        if self._vertex is not None and "done" not in self._vertex.edges_source_names:
+        if self._vertex is not None:
             await self._iterate()
         data_list = self.ctx.get(f"{self._id}_data", [])
         return Data(data={"count": len(data_list), "items": [self._data_dict(item) for item in data_list]})
-
-    async def done_output(self) -> Message:
-        self.stop("item")
-        self.start("done")
-        aggregated_results = await self._iterate()
-        self.status = {"component": "10B_migLoop", "pipeline_status": "DONE", "row_count": len(aggregated_results)}
-        return Message(text="요청하신 작업이 완료됐습니다.")
 
     def _data_dict(self, item: Any) -> dict[str, Any]:
         if isinstance(item, Data):

@@ -52,8 +52,6 @@ flowchart TD
     M1 --> M2["10D MIG Iteration Dashboard"]
     M2 --> MOUT["Chat Output<br/>MIG Iteration"]
     MOUT -->|json output| ML
-    ML -->|done data| ME["10E MIG Final Dashboard"]
-    ME --> MFINAL["Chat Output<br/>MIG Final Dashboard"]
     C2 --> S3["13 Final Summary"]
     T2 --> S3
     F2 --> S3
@@ -87,14 +85,12 @@ flowchart TD
 | 16 | `10C MIG One Job POC Executor` | `Job Result` | `10D MIG Iteration Dashboard` | `job_result` |
 | 17 | `10D MIG Iteration Dashboard` | `Message` | Chat Output | Message |
 | 18 | Chat Output | `JSON Output` | `10B MIG Loop` | loop feedback |
-| 19 | `10B MIG Loop` | `Done` | `10E MIG Final Dashboard` | `loop_result` |
-| 20 | `10E MIG Final Dashboard` | `Result Message` | Chat Output | Message |
-| 21 | `12 SQL Conversion Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
-| 22 | `15 SQL Tuning Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
-| 23 | `17 SQL Formatting Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
-| 24 | `08 Job Target Router` | `Prerequisite Required Message` | Chat Output | Message |
-| 25 | `08 Job Target Router` | `No Runnable Target Message` | Chat Output | Message |
-| 26 | `13 Final Summary` | `Result Message` | Chat Output | Message |
+| 19 | `12 SQL Conversion Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
+| 20 | `15 SQL Tuning Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
+| 21 | `17 SQL Formatting Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
+| 22 | `08 Job Target Router` | `Prerequisite Required Message` | Chat Output | Message |
+| 23 | `08 Job Target Router` | `No Runnable Target Message` | Chat Output | Message |
+| 24 | `13 Final Summary` | `Result Message` | Chat Output | Message |
 
 ## 요청별 분기 기준
 
@@ -105,8 +101,8 @@ flowchart TD
 | `DB Migration 대상 목록 보여줘` | `MANAGEMENT` | `DASHBOARD` | `04 Dashboard` |
 | `map_id=101 priority 올려줘` | `MANAGEMENT` | `STATUS_CHANGE` | `04 Status Change` |
 | `sql_id=Q001 correct sql 저장해줘` | `MANAGEMENT` | `CORRECT_SQL_INPUT` | `04 Correct SQL Input` |
-| `DB Migration 전체 진행해줘` | `JOB_EXECUTION` | `all_pending / MIG` | `06 -> 08 -> 09 -> 10A -> 10B -> 10C -> 10D -> 10E` |
-| `map_id=101 실행해줘` | `JOB_EXECUTION` | `targeted / MIG` | `06 -> 08 -> 09 -> 10A -> 10B -> 10C -> 10D -> 10E` |
+| `DB Migration 전체 진행해줘` | `JOB_EXECUTION` | `all_pending / MIG` | `06 -> 08 -> 09 -> 10A -> 10B -> 10C -> 10D` |
+| `map_id=101 실행해줘` | `JOB_EXECUTION` | `targeted / MIG` | `06 -> 08 -> 09 -> 10A -> 10B -> 10C -> 10D` |
 | `sql_id=Q001 변환해줘` | `JOB_EXECUTION` | `targeted / SQL_CONVERSION` | `06 -> 08 -> 09 -> 12 -> 13` |
 | `space_nm=SALES 튜닝 진행해줘` | `JOB_EXECUTION` | `targeted / SQL_TUNING` | `06 -> 08 -> 09 -> 15 -> 13` |
 | `sql_id=Q001 포맷팅해줘` | `JOB_EXECUTION` | `targeted / SQL_FORMATTING` | `06 -> 08 -> 09 -> 17 -> 13` |
@@ -183,8 +179,6 @@ flowchart TD
     D -->|message + json payload| OUT_ITER["Chat Output<br/>Iteration Dashboard"]
     OUT_ITER -->|json output: iteration result| L
 
-    L -->|done data: aggregated results| S["10E MIG Final Dashboard"]
-    S -->|result message| OUT_FINAL["Chat Output<br/>MIG Final Dashboard"]
 ```
 
 ### MIG Loop 컴포넌트 책임
@@ -193,11 +187,10 @@ flowchart TD
 |---|---|---|---|
 | `09 Execution Plan Summary` | 실행 전 안내 메시지 생성 | `08` payload | `Notice Message`, `Payload` |
 | `10A MIG Jobs To Loop Table` | `selected_jobs`를 Loop 입력 row 목록으로 변환 | `Payload` | `DataFrame` 또는 `list[Data]` |
-| `10B MIG Loop` | MIG job을 1건씩 loop body로 전달하고 결과를 aggregate. `Done`은 Table이 아니라 aggregate `Data`를 반환 | job row list | `Item`, `Done Data` |
+| `10B MIG Loop` | MIG job을 1건씩 loop body로 전달한다. 마지막 요약은 마지막 `10D` 메시지에서 출력한다 | job row list | `Item` |
 | `10C MIG One Job POC Executor` | job 1건 실행 POC. dependency/FETCH_DDL은 실제 DB 조회, GENERATE_SQL/EXECUTE_SQL/VERIFY는 랜덤 결과, DB 업데이트, 로그 적재, 내부 retry 처리 | one job `Data` | one job result `Data` |
-| `10D MIG Iteration Dashboard` | 작업 1건 완료 후 진행률/결과 메시지와 loop feedback payload 생성 | one job result `Data` | Chat Output 입력 payload |
+| `10D MIG Iteration Dashboard` | 작업 1건 완료 후 진행률/결과 메시지와 loop feedback payload 생성. 마지막 job이면 최종 요약과 완료 메시지도 함께 출력 | one job result `Data` | Chat Output 입력 payload |
 | `Chat Output - Iteration Dashboard` | 작업별 메시지를 화면에 출력하고 JSON output으로 iteration result 전달 | dashboard payload | `json output` |
-| `10E MIG Final Dashboard` | 전체 loop 결과 최종 dashboard 요약 | aggregated results `Data` | `Result Message` |
 
 ### MIG POC 실행 정책
 
@@ -256,8 +249,6 @@ flowchart TD
 | 6 | `10C MIG One Job POC Executor` | `Job Result` | `10D MIG Iteration Dashboard` | `job_result` |
 | 7 | `10D MIG Iteration Dashboard` | `Message/Payload` | `Chat Output - Iteration Dashboard` | Message |
 | 8 | `Chat Output - Iteration Dashboard` | `JSON Output` | `10B MIG Loop` | loop feedback |
-| 9 | `10B MIG Loop` | `Done Data` | `10E MIG Final Dashboard` | `loop_result` |
-| 10 | `10E MIG Final Dashboard` | `Result Message` | `Chat Output - MIG Final Dashboard` | Message |
 
 ## Chat Output 연결 규칙
 
@@ -274,7 +265,6 @@ Chat Output으로 직접 연결되는 출력은 모두 `Message` 타입이다.
 | `08 Job Target Router` | `No Runnable Target Message` |
 | `09 Execution Plan Summary` | `Notice Message` |
 | `Chat Output - Iteration Dashboard` | user-visible message + JSON output |
-| `10E MIG Final Dashboard` | `Result Message` |
 | `13 Final Summary` | `Result Message` |
 
 ## 제거된 컴포넌트
