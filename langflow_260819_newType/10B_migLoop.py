@@ -50,7 +50,7 @@ class NewType10BMigLoop(Component):
             display_name="Done",
             name="done",
             method="done_output",
-            types=["DataFrame", "Table"],
+            types=["Message"],
             group_outputs=True,
         ),
     ]
@@ -158,13 +158,12 @@ class NewType10BMigLoop(Component):
         data_list = self.ctx.get(f"{self._id}_data", [])
         return Data(data={"count": len(data_list), "items": [self._data_dict(item) for item in data_list]})
 
-    async def done_output(self) -> DataFrame:
+    async def done_output(self) -> Message:
         self.stop("item")
         self.start("done")
         aggregated_results = await self._iterate()
-        result_rows = [Data(data=self._data_dict(item)) for item in aggregated_results]
-        self.status = {"component": "10B_migLoop", "pipeline_status": "DONE", "row_count": len(result_rows)}
-        return DataFrame(result_rows)
+        self.status = {"component": "10B_migLoop", "pipeline_status": "DONE", "row_count": len(aggregated_results)}
+        return Message(text="요청하신 작업이 완료됐습니다.")
 
     def _data_dict(self, item: Any) -> dict[str, Any]:
         if isinstance(item, Data):

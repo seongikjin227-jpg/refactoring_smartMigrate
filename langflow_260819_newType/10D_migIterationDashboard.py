@@ -117,6 +117,24 @@ class NewType10DMigIterationDashboard(Component):
         message = str(result.get("message") or "").strip()
         if message:
             lines.extend(["", f"메시지: {message}"])
+        if completed >= total:
+            failed_so_far = int(result.get("requested_failed_count") or 0)
+            waiting_so_far = int(result.get("requested_waiting_count") or 0)
+            lines.extend(
+                [
+                    "",
+                    "## MIG 요청 작업 최종 요약",
+                    "",
+                    f"- 작업 대상: {total}건",
+                    f"- 진행률: {completed}/{total}건, {progress_rate:.1f}%",
+                    self._bar(completed, total),
+                    f"- 진척률: {success_so_far}/{total}건 PASS, {advancement_rate:.1f}%",
+                    self._bar(success_so_far, total),
+                    f"- 성공: {success_so_far}건",
+                    f"- 실패: {failed_so_far}건",
+                    f"- 대기: {waiting_so_far}건",
+                ]
+            )
         return "\n".join(lines)
 
     def _bar(self, value: int, total: int, width: int = 20) -> str:
