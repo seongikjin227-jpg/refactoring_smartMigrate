@@ -41,15 +41,16 @@ class NewType10BMigLoop(Component):
             display_name="Item",
             name="item",
             method="item_output",
-            types=["Message"],
+            types=["Data"],
             allows_loop=True,
-            loop_types=["Message"],
+            loop_types=["Data"],
             group_outputs=True,
         ),
         Output(
             display_name="Done",
             name="done",
             method="done_output",
+            types=["Data"],
             group_outputs=True,
         ),
     ]
@@ -150,13 +151,13 @@ class NewType10BMigLoop(Component):
         self.update_ctx({f"{self._id}_aggregated": aggregated_results, f"{self._id}_iterated": True})
         return aggregated_results
 
-    async def item_output(self) -> Message:
+    async def item_output(self) -> Data:
         self.stop("item")
         if self._vertex is not None and "done" not in self._vertex.edges_source_names:
             await self._iterate()
         data_list = self.ctx.get(f"{self._id}_data", [])
         payload = {"count": len(data_list), "items": [self._data_dict(item) for item in data_list]}
-        return Message(text=self._json_text(payload))
+        return Data(data=payload)
 
     async def done_output(self) -> Data:
         aggregated_results = await self._iterate()

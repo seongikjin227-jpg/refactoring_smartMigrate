@@ -12,6 +12,11 @@ from lfx.io import IntInput, MessageTextInput, Output
 from lfx.schema.data import Data
 from lfx.schema.message import Message
 
+try:
+    from lfx.io import DataInput
+except Exception:
+    DataInput = MessageTextInput
+
 
 class NewType10CMigOneJobPocExecutor(Component):
     display_name = "10C MIG One Job POC Executor"
@@ -20,13 +25,13 @@ class NewType10CMigOneJobPocExecutor(Component):
     icon = "DatabaseZap"
 
     inputs = [
-        MessageTextInput(name="job_item", display_name="Job Item JSON", required=True),
+        DataInput(name="job_item", display_name="Job Item", required=True),
         IntInput(name="max_retry", display_name="Max Retry", value=3, required=False),
     ]
 
-    outputs = [Output(display_name="Job Result", name="job_result", method="run_job", types=["Message"])]
+    outputs = [Output(display_name="Job Result", name="job_result", method="run_job", types=["Data"])]
 
-    def run_job(self) -> Message:
+    def run_job(self) -> Data:
         started = time.perf_counter()
         job = self._parse_payload(getattr(self, "job_item", ""))
         map_id = self._to_int(job.get("map_id"))
@@ -48,7 +53,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                     }
                 )
                 self.status = result
-                return self._message(result)
+                return Data(data=result)
 
             self._mark_running(db_config, map_id)
 
@@ -120,13 +125,13 @@ class NewType10CMigOneJobPocExecutor(Component):
                 }
             )
             self.status = result
-            return self._message(result)
+            return Data(data=result)
         except Exception as exc:
             elapsed = int(time.perf_counter() - started)
             result = self._result(job, ok=False, status="ERROR", elapsed=elapsed, attempts=attempts)
             result.update({"error": str(exc), "message": f"POC executor error: {exc}"})
             self.status = result
-            return self._message(result)
+            return Data(data=result)
 
     def _run_pipeline_attempt(
         self,
@@ -560,8 +565,6 @@ class NewType10CMigOneJobPocExecutor(Component):
             raise ValueError("job_item must be a JSON object")
         return parsed
 
-    def _message(self, payload: dict[str, Any]) -> Message:
-        return Message(text=json.dumps(payload, ensure_ascii=False, default=str))
 
     def _to_int(self, value: Any) -> int | None:
         try:

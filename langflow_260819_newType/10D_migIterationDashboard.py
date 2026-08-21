@@ -9,6 +9,11 @@ from lfx.io import MessageTextInput, Output
 from lfx.schema.data import Data
 from lfx.schema.message import Message
 
+try:
+    from lfx.io import DataInput
+except Exception:
+    DataInput = MessageTextInput
+
 
 class NewType10DMigIterationDashboard(Component):
     display_name = "10D MIG Iteration Dashboard"
@@ -16,10 +21,10 @@ class NewType10DMigIterationDashboard(Component):
     name = "NewType10DMigIterationDashboard"
     icon = "Gauge"
 
-    inputs = [MessageTextInput(name="job_result", display_name="Job Result JSON", required=True)]
+    inputs = [DataInput(name="job_result", display_name="Job Result", required=True)]
     outputs = [
         Output(display_name="Message", name="message", method="build_message", types=["Message"]),
-        Output(display_name="Loop Result", name="loop_result", method="build_loop_result", types=["Message"]),
+        Output(display_name="Loop Result", name="loop_result", method="build_loop_result", types=["Data"]),
     ]
 
     def build_message(self) -> Message:
@@ -27,10 +32,10 @@ class NewType10DMigIterationDashboard(Component):
         self.status = payload
         return Message(text=str(payload.get("answer_text") or ""))
 
-    def build_loop_result(self) -> Message:
+    def build_loop_result(self) -> Data:
         payload = self._build()
         self.status = payload
-        return Message(text=json.dumps(payload.get("loop_result") or payload, ensure_ascii=False, default=str))
+        return Data(data=payload.get("loop_result") or payload)
 
     def _build(self) -> dict[str, Any]:
         cached = getattr(self, "_cached_payload", None)
