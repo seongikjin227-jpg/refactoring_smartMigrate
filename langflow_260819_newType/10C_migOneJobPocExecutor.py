@@ -32,6 +32,7 @@ class NewType10CMigOneJobPocExecutor(Component):
     outputs = [Output(display_name="Job Result", name="job_result", method="run_job", types=["Data"])]
 
     def run_job(self) -> Data:
+        """Run one migration job and return the final job result payload."""
         started = time.perf_counter()
         job = self._parse_payload(getattr(self, "job_item", ""))
         map_id = self._to_int(job.get("map_id"))
@@ -126,19 +127,22 @@ class NewType10CMigOneJobPocExecutor(Component):
             return Data(data=result)
         except Exception as exc:
             elapsed = int(time.perf_counter() - started)
-            result = self._result(job, ok=False, status="ERROR", elapsed=elapsed, attempts=attempts)
-            result.update({"error": str(exc), "message": f"POC executor error: {exc}"})
+            result = self._result(job, ok=False, status="FAIL-INSERT", elapsed=elapsed, attempts=attempts)
+            result.update({"error_type": "SYSTEM_ERROR", "error": str(exc), "message": f"POC executor error: {exc}"})
             self.status = result
             return Data(data=result)
 
     def _run_poc_graph(self, context: dict[str, Any], db_config: dict[str, Any], max_retry: int) -> dict[str, Any]:
+        """Build and execute the internal retry graph for one migration job."""
         from langgraph.graph import END, StateGraph
 
         def generate_node(state: dict[str, Any]) -> dict[str, Any]:
+            """Run the migration SQL generation node."""
             step = self._node_generate_sql(state)
             return self._apply_step(state, step)
 
         def execute_node(state: dict[str, Any]) -> dict[str, Any]:
+            """Run truncate and migration SQL execution for the current attempt."""
             step = self._node_execute_sql(state)
             next_state = self._apply_step(state, step)
             if step.get("status") == "PASS":
@@ -146,10 +150,12 @@ class NewType10CMigOneJobPocExecutor(Component):
             return next_state
 
         def verify_node(state: dict[str, Any]) -> dict[str, Any]:
+            """Run verification SQL for the current attempt."""
             step = self._node_verify(state)
             return self._apply_step(state, step)
 
         def retry_prepare_node(state: dict[str, Any]) -> dict[str, Any]:
+            """Persist the failed attempt and prepare the next retry state."""
             attempt = self._attempt_result_from_state(state, ok=False)
             retry_count = int(state.get("db_attempts") or 1)
             self._update_job(db_config, int(state["map_id"]), attempt["status"], 0, retry_count)
@@ -177,6 +183,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             }
 
         def finalize_node(state: dict[str, Any]) -> dict[str, Any]:
+            """Build the graph terminal state after success or retry exhaustion."""
             attempts = list(state.get("attempts") or [])
             if state.get("current_steps"):
                 attempts.append(self._attempt_result_from_state(state, ok=state.get("status") == "PASS"))
@@ -190,6 +197,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             }
 
         def should_continue(state: dict[str, Any]) -> str:
+            """Route the graph based on the current status and retry budget."""
             if state.get("status") == "PASS":
                 return "finalize"
             if state.get("error_type") == "BIZ_RETRY":
@@ -201,6 +209,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             return "execute"
 
         def after_retry_prepare(state: dict[str, Any]) -> str:
+            """Choose the next node after a retry is scheduled."""
             return "execute" if state.get("failure_status") == "FAIL-TRUNCATE" else "generate"
 
         workflow = StateGraph(dict)
@@ -220,6 +229,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             **context,
             "db_attempts": 1,
             "db_config": db_config,
+            # max_retry means retries after the first attempt, so total attempts are max_retry + 1.
             "max_attempts": max_retry + 1,
             "current_steps": [],
             "attempts": [],
@@ -234,6 +244,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         return dict(graph.invoke(initial_state))
 
     def _apply_step(self, state: dict[str, Any], step: dict[str, Any]) -> dict[str, Any]:
+        """Merge one node result into graph state and persist its step log."""
         outputs = dict(step.get("outputs") or {})
         next_state = {
             **state,
@@ -259,7 +270,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             self._insert_step_log(next_state, step)
             return next_state
 
-        status = str(step.get("status") or "FAIL")
+        status = str(step.get("status") or "FAIL-INSERT")
         next_state.update(
             {
                 "status": "",
@@ -275,6 +286,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         return next_state
 
     def _attempt_result_from_state(self, state: dict[str, Any], *, ok: bool) -> dict[str, Any]:
+        """Create the public attempt record from the current graph state."""
         steps = list(state.get("current_steps") or [])
         failed_step = next((step for step in reversed(steps) if step.get("status") != "PASS"), None)
         status = "PASS" if ok else self._failure_status_from_state(state)
@@ -298,25 +310,31 @@ class NewType10CMigOneJobPocExecutor(Component):
         }
 
     def _failure_status_from_state(self, state: dict[str, Any]) -> str:
+        """Resolve the final business failure status for a graph state."""
         explicit = str(state.get("failure_status") or "").strip()
         if explicit:
             return explicit
         if state.get("status") == "EXECUTED":
             return "FAIL-TEST"
-        return "FAIL"
+        steps = list(state.get("current_steps") or [])
+        failed_step = next((step for step in reversed(steps) if step.get("status") != "PASS"), None)
+        return str((failed_step or {}).get("status") or "FAIL-INSERT")
 
     def _stage_sql_from_state(self, state: dict[str, Any], failure_status: str | None = None) -> str:
+        """Return the SQL text most relevant to the given failure status."""
         status = failure_status or self._failure_status_from_state(state)
         if status == "FAIL-TEST":
             return str(state.get("current_v_sql") or "")
         return str(state.get("current_migration_sql") or state.get("last_sql") or "")
 
     def _step_sql_for_status(self, state: dict[str, Any], status: str) -> str:
+        """Return the SQL text that should be logged for one failed step."""
         if status == "FAIL-TEST":
             return str(state.get("current_v_sql") or "")
         return str(state.get("current_migration_sql") or state.get("migration_sql") or "")
 
     def _insert_step_log(self, state: dict[str, Any], step: dict[str, Any]) -> None:
+        """Insert a POC step log for the current graph node result."""
         db_config = dict(state.get("db_config") or {})
         map_id = self._to_int(state.get("map_id"))
         if map_id is None:
@@ -331,6 +349,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         self._insert_log(db_config, map_id, "POC_STEP", log_level, stage, status, message, retry_count, stage_sql)
 
     def _log_sql_for_step(self, state: dict[str, Any], step: dict[str, Any]) -> str:
+        """Choose the SQL snippet that matches the step being logged."""
         stage = str(step.get("stage") or "")
         if stage == "VERIFY":
             return str(state.get("current_v_sql") or "")
@@ -339,6 +358,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         return self._stage_sql_from_state(state, str(step.get("status") or ""))
 
     def _route_note(self, state: dict[str, Any], step: dict[str, Any]) -> str:
+        """Describe the graph route selected after a step result."""
         if step.get("stage") == "GENERATE_SQL" and state.get("status") == "EXECUTED":
             return "; route=verify_retry_generate_only,next=VERIFY"
         if step.get("stage") == "GENERATE_SQL" and step.get("status") == "PASS":
@@ -355,7 +375,17 @@ class NewType10CMigOneJobPocExecutor(Component):
             return "; route=finalize"
         return ""
 
+    # ------------------------------------------------------------------
+    # Future development area: replace these POC stubs with real nodes.
+    # - _node_generate_sql: connect to the LLM and generate MIG_SQL / VERIFY_SQL.
+    # - _node_execute_sql: run TRUNCATE and INSERT against the target database.
+    # - _node_verify: run verification SQL and classify validation failures.
+    # Keep the returned business statuses limited to:
+    # PASS, FAIL-TRUNCATE, FAIL-INSERT, FAIL-TEST.
+    # ------------------------------------------------------------------
+
     def _node_fetch_ddl(self, context: dict[str, Any]) -> dict[str, Any]:
+        """Load mapping metadata and source/target DDL for SQL generation."""
         map_id = self._to_int(context.get("map_id"))
         db_config = self._db_config(context["job"])
         metadata = self._load_mig_metadata(db_config, map_id)
@@ -369,6 +399,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         }
 
     def _node_generate_sql(self, context: dict[str, Any]) -> dict[str, Any]:
+        """POC stub for LLM-based migration and verification SQL generation."""
         job = context["job"]
         rng = self._rng(context, "GENERATE_SQL")
         if rng.random() < self._fail_probability(context["attempt"], "GENERATE_SQL"):
@@ -395,6 +426,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         }
 
     def _node_execute_sql(self, context: dict[str, Any]) -> dict[str, Any]:
+        """POC stub for target truncate and migration INSERT execution."""
         if str(context.get("trunc_yn") or "").strip().upper() == "Y":
             truncate_rng = self._rng(context, "TRUNCATE")
             if truncate_rng.random() < self._fail_probability(context["attempt"], "TRUNCATE"):
@@ -420,6 +452,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         }
 
     def _node_verify(self, context: dict[str, Any]) -> dict[str, Any]:
+        """POC stub for verification SQL execution and result validation."""
         rng = self._rng(context, "VERIFY")
         if rng.random() < self._fail_probability(context["attempt"], "VERIFY"):
             return {
@@ -436,11 +469,13 @@ class NewType10CMigOneJobPocExecutor(Component):
         }
 
     def _rng(self, context: dict[str, Any], node_name: str) -> random.Random:
+        """Create deterministic pseudo-randomness for repeatable POC behavior."""
         job = context["job"]
         seed = f"MIG:{job.get('map_id')}:{job.get('job_index')}:{context.get('attempt')}:{node_name}"
         return random.Random(seed)
 
     def _fail_probability(self, attempt: int, node_name: str) -> float:
+        """Return the POC failure probability for a node and attempt number."""
         base = {
             "TRUNCATE": 0.20,
             "GENERATE_SQL": 0.25,
@@ -450,6 +485,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         return max(0.05, base - ((attempt - 1) * 0.15))
 
     def _build_poc_migration_sql(self, context: dict[str, Any], source_table: str, target_table: str, map_id: Any) -> str:
+        """Build a simple deterministic INSERT SQL for the POC executor."""
         mapped_columns = self._mapped_columns(context.get("mapping_details") or [])
         if mapped_columns:
             to_cols = ", ".join(item["to_col"] for item in mapped_columns)
@@ -458,6 +494,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         return f"INSERT INTO {target_table} SELECT * FROM {source_table} /* POC map_id={map_id} */"
 
     def _attempt_outputs(self, context: dict[str, Any]) -> dict[str, Any]:
+        """Collect the key output values recorded for one attempt."""
         return {
             "migration_sql": context.get("migration_sql", ""),
             "verification_sql": context.get("verification_sql", ""),
@@ -466,6 +503,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         }
 
     def _result(self, job: dict[str, Any], *, ok: bool, status: str, elapsed: int, attempts: list[dict[str, Any]]) -> dict[str, Any]:
+        """Build the Langflow output payload for the current job."""
         total = int(job.get("total_jobs") or 1)
         index = int(job.get("job_index") or 1)
         return {
@@ -485,6 +523,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         }
 
     def _dependency_status(self, db_config: dict[str, Any], map_id: int, prior_map_id: Any) -> str:
+        """Return READY only when the prior migration job has passed."""
         prior = self._to_int(prior_map_id)
         if prior is None or prior <= 0:
             return "READY"
@@ -499,6 +538,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         return "READY" if status == "PASS" else (status or "PENDING")
 
     def _mark_running(self, db_config: dict[str, Any], map_id: int) -> None:
+        """Mark a migration job as running in NEXT_MIG_INFO."""
         table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
         with self._connect(db_config) as conn:
             cur = conn.cursor()
@@ -515,6 +555,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             conn.commit()
 
     def _update_job(self, db_config: dict[str, Any], map_id: int, status: str, elapsed: int, retry_count: int) -> None:
+        """Persist the current job status, elapsed time, and retry count."""
         table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
         with self._connect(db_config) as conn:
             cur = conn.cursor()
@@ -532,6 +573,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             conn.commit()
 
     def _requested_progress_counts(self, db_config: dict[str, Any], map_ids: list[Any]) -> dict[str, int]:
+        """Count pass, fail, waiting, and processed jobs for the requested map ids."""
         ids = [self._to_int(value) for value in map_ids]
         ids = [value for value in ids if value is not None]
         if not ids:
@@ -575,6 +617,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         retry_count: int,
         generated_sql: str = "",
     ) -> None:
+        """Insert one migration execution log row into NEXT_MIG_LOG."""
         table = self._qualify("NEXT_MIG_LOG", db_config.get("system_schema"))
         sequence = self._qualify("MIGRATION_LOG_SEQ", db_config.get("system_schema"))
         columns = self._table_columns(db_config, table)
@@ -599,6 +642,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             conn.commit()
 
     def _load_mig_metadata(self, db_config: dict[str, Any], map_id: int | None) -> dict[str, Any]:
+        """Load NEXT_MIG_INFO and NEXT_MIG_INFO_DTL metadata for one map id."""
         if map_id is None:
             raise ValueError("FETCH_DDL requires map_id")
         info_table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
@@ -665,6 +709,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         }
 
     def _fetch_table_columns(self, db_config: dict[str, Any], table: str) -> list[dict[str, Any]]:
+        """Read Oracle column metadata for a source or target table."""
         owner, table_name = self._split_table_owner_and_name(table)
         if owner:
             sql = """
@@ -699,6 +744,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             ]
 
     def _mapped_columns(self, details: list[dict[str, Any]]) -> list[dict[str, str]]:
+        """Return only complete source-to-target column mappings."""
         columns: list[dict[str, str]] = []
         for item in details:
             fr_col = str(item.get("fr_col") or "").strip()
@@ -708,6 +754,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         return columns
 
     def _looks_like_table(self, value: Any) -> bool:
+        """Return True when a value is a plain Oracle table identifier."""
         text = str(value or "").strip()
         if not text:
             return False
@@ -717,11 +764,13 @@ class NewType10CMigOneJobPocExecutor(Component):
         return all(re.fullmatch(r"[A-Za-z][A-Za-z0-9_$#]*", part.strip()) for part in parts)
 
     def _lob_to_str(self, value: Any) -> str:
+        """Convert Oracle LOB and nullable values to strings."""
         if value is not None and hasattr(value, "read"):
             return str(value.read())
         return "" if value is None else str(value)
 
     def _table_columns(self, db_config: dict[str, Any], table: str) -> set[str]:
+        """Return the upper-case column names available on a table."""
         owner, table_name = self._split_table_owner_and_name(table)
         if owner:
             sql = "SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS WHERE OWNER = :1 AND TABLE_NAME = :2"
@@ -736,6 +785,7 @@ class NewType10CMigOneJobPocExecutor(Component):
 
     @contextmanager
     def _connect(self, db_config: dict[str, Any]):
+        """Open and close an Oracle database connection."""
         import oracledb
 
         dsn = oracledb.makedsn(
@@ -754,6 +804,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             conn.close()
 
     def _db_config(self, job: dict[str, Any]) -> dict[str, Any]:
+        """Extract the Oracle connection settings from the job payload."""
         item_config = dict(job.get("db_config") or {})
         return {
             "db_host": str(item_config.get("db_host") or "").strip(),
@@ -765,6 +816,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         }
 
     def _qualify(self, table_name: str, schema: Any) -> str:
+        """Return a validated schema-qualified Oracle table name."""
         value = str(table_name or "").strip().upper()
         if "." in value:
             return value
@@ -776,12 +828,14 @@ class NewType10CMigOneJobPocExecutor(Component):
         return clean_table
 
     def _clean_identifier(self, value: str) -> str:
+        """Validate and normalize an Oracle identifier."""
         clean = str(value or "").strip().upper()
         if not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", clean):
             raise ValueError(f"Invalid identifier: {clean}")
         return clean
 
     def _split_table_owner_and_name(self, table: str) -> tuple[str | None, str]:
+        """Split an optional owner-qualified table identifier."""
         value = str(table or "").strip().upper()
         if "." in value:
             owner, name = value.split(".", 1)
@@ -789,6 +843,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         return None, value
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
+        """Parse a Langflow Data, Message, dict, or JSON string payload."""
         if isinstance(raw, Data):
             return dict(raw.data or {})
         if isinstance(raw, Message):
@@ -804,8 +859,8 @@ class NewType10CMigOneJobPocExecutor(Component):
             raise ValueError("job_item must be a JSON object")
         return parsed
 
-
     def _to_int(self, value: Any) -> int | None:
+        """Convert a value to int, returning None for invalid input."""
         try:
             return int(value)
         except (TypeError, ValueError):

@@ -40,8 +40,10 @@ class NewType10AMigJobsToLoopTable(Component):
         total = len(jobs)
         db_config = self._db_config()
         requested_map_ids = [job.get("map_id") for job in jobs if job.get("map_id") is not None]
-        rows: list[Data] = []
+        rows: list[dict[str, Any]] = []
         for index, job in enumerate(jobs, start=1):
+            if job.get("map_id") is None or str(job.get("map_id")).strip() == "":
+                raise ValueError(f"10A MIG job row {index} requires map_id")
             row = {
                 **job,
                 "component": "10A_migJobsToLoopTable",
@@ -55,7 +57,7 @@ class NewType10AMigJobsToLoopTable(Component):
                 "db_config": db_config,
                 "history": list(payload.get("history") or []),
             }
-            rows.append(Data(data=row))
+            rows.append(row)
         status = {
             **payload,
             "component": "10A_migJobsToLoopTable",

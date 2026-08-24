@@ -52,6 +52,14 @@ class NewType10BMigLoop(Component):
         if self.ctx.get(f"{self._id}_initialized", False):
             return
         data_list = self._validate_data(self.data)
+        map_ids: list[int] = []
+        for index, item in enumerate(data_list, start=1):
+            payload = self._data_dict(item)
+            try:
+                map_ids.append(int(payload.get("map_id")))
+            except (TypeError, ValueError):
+                raise ValueError(f"10B MIG job row {index} requires map_id") from None
+        self.log(f"Normalized MIG loop map_ids={map_ids}", name="Input")
         self.update_ctx(
             {
                 f"{self._id}_data": data_list,
@@ -145,9 +153,17 @@ class NewType10BMigLoop(Component):
         return aggregated_results
 
     async def item_output(self) -> Data:
+        # The Item output is only the loop-body entry point. Its normal return
+        # value must never continue through the outer graph into 10C.
         self.stop("item")
-        if self._vertex is not None:
-            await self._iterate()
+        try:
+            if self._vertex is not None:
+                await self._iterate()
+        finally:
+            # Running the loop body builds a nested graph. Re-assert the stop
+            # after it finishes so the inspection payload below cannot be
+            # dispatched to 10C as one additional job.
+            self.stop("item")
         data_list = self.ctx.get(f"{self._id}_data", [])
         return Data(data={"count": len(data_list), "items": [self._data_dict(item) for item in data_list]})
 
