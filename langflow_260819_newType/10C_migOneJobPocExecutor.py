@@ -108,18 +108,12 @@ class NewType10CMigOneJobPocExecutor(Component):
                     graph_result.get("stage_sql", ""),
                 )
 
-            progress_counts = self._requested_progress_counts(db_config, job.get("requested_map_ids") or [map_id])
-
             elapsed = int(time.perf_counter() - started)
             result = self._result(job, ok=final_ok, status="PASS" if final_ok else final_status, elapsed=elapsed, attempts=attempts)
             result.update(
                 {
                     "retry_count": retry_count,
                     "message": message,
-                    "requested_success_count": progress_counts["success_count"],
-                    "requested_failed_count": progress_counts["failed_count"],
-                    "requested_waiting_count": progress_counts["waiting_count"],
-                    "requested_processed_count": progress_counts["processed_count"],
                     "next_node": "10D_migIterationDashboard",
                 }
             )
@@ -571,39 +565,6 @@ class NewType10CMigOneJobPocExecutor(Component):
                 [status, elapsed, retry_count, map_id],
             )
             conn.commit()
-
-    def _requested_progress_counts(self, db_config: dict[str, Any], map_ids: list[Any]) -> dict[str, int]:
-        """Count pass, fail, waiting, and processed jobs for the requested map ids."""
-        ids = [self._to_int(value) for value in map_ids]
-        ids = [value for value in ids if value is not None]
-        if not ids:
-            return {"success_count": 0, "failed_count": 0, "waiting_count": 0, "processed_count": 0}
-        table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
-        binds = ", ".join(f":{index}" for index in range(1, len(ids) + 1))
-        with self._connect(db_config) as conn:
-            cur = conn.cursor()
-            cur.execute(
-                f"""
-                SELECT UPPER(TRIM(NVL(STATUS, ''))) AS STATUS_VALUE,
-                       COUNT(*) AS CNT
-                  FROM {table}
-                 WHERE MAP_ID IN ({binds})
-                 GROUP BY UPPER(TRIM(NVL(STATUS, '')))
-                """,
-                ids,
-            )
-            rows = cur.fetchall()
-        counts = {str(row[0] or ""): int(row[1] or 0) for row in rows}
-        success = counts.get("PASS", 0)
-        waiting = counts.get("", 0) + counts.get("WAITING", 0) + counts.get("RUNNING", 0)
-        failed = sum(count for status, count in counts.items() if status.startswith("FAIL") or status == "ERROR")
-        processed = max(0, len(ids) - counts.get("", 0) - counts.get("RUNNING", 0))
-        return {
-            "success_count": success,
-            "failed_count": failed,
-            "waiting_count": waiting,
-            "processed_count": processed,
-        }
 
     def _insert_log(
         self,

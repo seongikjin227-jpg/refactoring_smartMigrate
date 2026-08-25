@@ -22,7 +22,7 @@ from lfx.components.processing.converter import convert_to_data
 
 class NewType10BMigLoop(Component):
     display_name = "10B MIG Loop"
-    description = "MIG-specific loop that iterates jobs; final summary is emitted by the last 10D dashboard."
+    description = "MIG-specific loop that iterates jobs and emits a Done signal for the final MIG message."
     documentation = "https://docs.langflow.org/loop"
     name = "NewType10BMigLoop"
     icon = "Infinity"
@@ -45,7 +45,8 @@ class NewType10BMigLoop(Component):
             allows_loop=True,
             loop_types=["Data"],
             group_outputs=True,
-        )
+        ),
+        Output(display_name="Done", name="done", method="done_output", types=["Data"]),
     ]
 
     def initialize_data(self) -> None:
@@ -166,6 +167,22 @@ class NewType10BMigLoop(Component):
             self.stop("item")
         data_list = self.ctx.get(f"{self._id}_data", [])
         return Data(data={"count": len(data_list), "items": [self._data_dict(item) for item in data_list]})
+
+    async def done_output(self) -> Data:
+        # The Done output is the post-loop path. Connect it to 11.
+        if self._vertex is not None:
+            await self._iterate()
+        data_list = self.ctx.get(f"{self._id}_data", [])
+        first_payload = self._data_dict(data_list[0]) if data_list else {}
+        payload = {
+            "component": "10B_migLoop",
+            "job_route": "MIG",
+            "loop_done": True,
+            "db_config": dict(first_payload.get("db_config") or {}),
+            "next_node": "11_finalDashboard",
+        }
+        self.status = payload
+        return Data(data=payload)
 
     def _data_dict(self, item: Any) -> dict[str, Any]:
         if isinstance(item, Data):

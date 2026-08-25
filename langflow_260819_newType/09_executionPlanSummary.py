@@ -17,15 +17,12 @@ except Exception:
 
 class NewType09ExecutionPlanSummary(Component):
     display_name = "09 Execution Plan Summary"
-    description = "Builds a pre-execution summary before a job-target pipeline starts."
+    description = "Builds a parallel pre-execution notice from the 08 router payload."
     name = "NewType09ExecutionPlanSummary"
     icon = "ListChecks"
 
     inputs = [DataInput(name="payload_json", display_name="Payload JSON", required=True)]
-    outputs = [
-        Output(display_name="Notice Message", name="notice", method="build_notice", types=["Message"]),
-        Output(display_name="Payload", name="payload", method="build_payload"),
-    ]
+    outputs = [Output(display_name="Notice Message", name="notice", method="build_notice", types=["Message"])]
 
     def build_notice(self) -> Message:
         # Build the execution-plan notice message.
@@ -39,14 +36,8 @@ class NewType09ExecutionPlanSummary(Component):
         }
         return notice
 
-    def build_payload(self) -> Data:
-        # Build the execution-plan payload for the selected pipeline.
-        payload = self._build()
-        self.status = payload
-        return Data(data=payload)
-
     def _build(self) -> dict[str, Any]:
-        # Create and cache the execution-plan data structure.
+        # Create and cache the display-only execution-plan data structure.
         cached = getattr(self, "_cached_payload", None)
         if cached is not None:
             return cached
@@ -70,7 +61,8 @@ class NewType09ExecutionPlanSummary(Component):
             "planned_jobs": jobs,
             "execution_plan_message": self._message(route, run_mode, jobs),
             "execution_plan_prompt": self._llm_prompt(route, run_mode, jobs),
-            "next_node": self._next_node(route),
+            "notice_only": True,
+            "next_node": "chat_output",
         }
         out.setdefault("history", []).append(
             {"step": "execution_plan_summary", "message": f"route={route}, count={len(jobs)}"}
@@ -102,15 +94,6 @@ class NewType09ExecutionPlanSummary(Component):
             "SQL_TUNING": "run_sql_tuning_job",
             "SQL_FORMATTING": "run_sql_formatting_job",
         }.get(route, "run_remaining_jobs")
-
-    def _next_node(self, route: str) -> str:
-        # Resolve the next component name for a route.
-        return {
-            "MIG": "10A_migJobsToLoopTable",
-            "SQL_CONVERSION": "12_sqlConversionPipeline",
-            "SQL_TUNING": "15_sqlTuningPipeline",
-            "SQL_FORMATTING": "17_sqlFormattingPipeline",
-        }.get(route, "13_finalSummary")
 
     def _message(self, route: str, run_mode: str, jobs: list[dict[str, Any]]) -> str:
         # Format the execution-plan notice text.

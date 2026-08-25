@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
-from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
+from lfx.io import MessageTextInput, Output
 from lfx.schema.data import Data
 from lfx.schema.message import Message
 
@@ -24,46 +24,37 @@ AGENT_ORDER = [
 ]
 
 
-class NewType04Dashboard(Component):
-    display_name = "04 Dashboard"
-    description = "Queries dashboard counts/progress and formats a concise Gaia output message."
-    name = "NewType04Dashboard"
-    icon = "Gauge"
+class NewType11FinalDashboard(Component):
+    display_name = "11 Final Dashboard"
+    description = "Queries the full dashboard after any loop Done signal."
+    name = "NewType11FinalDashboard"
+    icon = "ClipboardCheck"
 
-    inputs = [
-        DataInput(name="payload_json", display_name="Payload JSON", required=True),
-        StrInput(name="db_host", display_name="DB Host", required=False),
-        IntInput(name="db_port", display_name="DB Port", value=1521, required=False),
-        StrInput(name="db_service_name", display_name="DB Service Name", required=False),
-        StrInput(name="db_username", display_name="DB Username", required=False),
-        SecretStrInput(name="db_password", display_name="DB Password", required=False),
-        StrInput(name="system_schema", display_name="System Schema", required=False),
-    ]
-    outputs = [Output(display_name="Result Message", name="result", method="run", types=["Message"])]
+    inputs = [DataInput(name="loop_done", display_name="Loop Done", required=True)]
+    outputs = [Output(display_name="Result Message", name="result", method="build_result", types=["Message"])]
 
-    def run(self) -> Message:
-        # Execute the component and return a Langflow message.
+    def build_result(self) -> Message:
         try:
-            payload = self._parse_payload(getattr(self, "payload_json", ""))
+            payload = self._parse_payload(getattr(self, "loop_done", ""))
+            self._db_config = dict(payload.get("db_config") or {})
             dashboard = self._query_dashboard()
-            answer = self._build_answer(payload, dashboard)
+            answer = self._build_answer(dashboard)
             self.status = {
                 **payload,
-                "component": "04_dashboard",
+                "component": "11_finalDashboard",
                 "dashboard_data": dashboard,
                 "answer_text": answer,
                 "final": True,
             }
             return Message(text=answer)
         except Exception as exc:
-            answer = f"[Dashboard 조회 결과]\nDashboard 조회 중 오류가 발생했습니다.\n오류: {exc}"
-            self.status = {"ok": False, "component": "04_dashboard", "error": str(exc), "answer_text": answer}
+            answer = f"## Final Dashboard\n\nDashboard refresh failed after loop completion.\n\nError: {exc}"
+            self.status = {"ok": False, "component": "11_finalDashboard", "error": str(exc), "answer_text": answer}
             return Message(text=answer)
 
     def _query_dashboard(self) -> dict[str, Any]:
-        # Query all dashboard metrics from the configured database.
         if not self._has_db_config():
-            raise ValueError("DB connection settings are required for 04 Dashboard")
+            raise ValueError("db_config is required from 10B Done output")
         agents = {
             "db_migration": self._migration_summary(),
             "sql_conversion": self._sql_conversion_summary(),
@@ -73,7 +64,6 @@ class NewType04Dashboard(Component):
         return {"ok": True, "agents": agents, "recommendation": self._recommendation(agents)}
 
     def _migration_summary(self) -> dict[str, Any]:
-        # Build DB Migration dashboard counts and rates.
         table = self._qualify("NEXT_MIG_INFO")
         total = self._count(table)
         target = self._count(table, "UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y' AND STATUS IS NULL")
@@ -95,7 +85,6 @@ class NewType04Dashboard(Component):
         )
 
     def _sql_conversion_summary(self) -> dict[str, Any]:
-        # Build SQL Conversion dashboard counts and rates.
         table = self._qualify("NEXT_SQL_INFO")
         total = self._count(table)
         target = self._count(table, "STATUS_CONVERSION IS NULL")
@@ -120,7 +109,6 @@ class NewType04Dashboard(Component):
         )
 
     def _sql_tuning_summary(self) -> dict[str, Any]:
-        # Build SQL Tuning dashboard counts and rates.
         table = self._qualify("NEXT_SQL_INFO")
         columns = self._available_columns("NEXT_SQL_INFO")
         missing = [col for col in ("STATUS_TUNING", "STATUS_CONVERSION") if col not in columns]
@@ -150,7 +138,6 @@ class NewType04Dashboard(Component):
         )
 
     def _sql_formatting_summary(self) -> dict[str, Any]:
-        # Build SQL Formatting dashboard counts and rates.
         table = self._qualify("NEXT_SQL_INFO")
         columns = self._available_columns("NEXT_SQL_INFO")
         missing = [col for col in ("STATUS_TUNING", "FORMATTED_SQL") if col not in columns]
@@ -193,7 +180,6 @@ class NewType04Dashboard(Component):
         fail_count: int,
         status_counts: dict[str, int],
     ) -> dict[str, Any]:
-        # Assemble a normalized dashboard summary for one stage.
         return {
             "agent": agent,
             "available": True,
@@ -204,99 +190,75 @@ class NewType04Dashboard(Component):
             "remaining_count": int(target_count or 0),
             "pass_count": int(pass_count or 0),
             "fail_count": int(fail_count or 0),
-            "other_count": max(
-                int(total or 0) - int(target_count or 0) - int(pass_count or 0) - int(fail_count or 0),
-                0,
-            ),
-            "progress": {
-                "count": int(progress_count or 0),
-                "base": int(progress_base or 0),
-                "rate": self._pct(progress_count, progress_base),
-            },
-            "success": {
-                "count": int(success_count or 0),
-                "base": int(success_base or 0),
-                "rate": self._pct(success_count, success_base),
-            },
+            "other_count": max(int(total or 0) - int(target_count or 0) - int(pass_count or 0) - int(fail_count or 0), 0),
+            "progress": {"count": int(progress_count or 0), "base": int(progress_base or 0), "rate": self._pct(progress_count, progress_base)},
+            "success": {"count": int(success_count or 0), "base": int(success_base or 0), "rate": self._pct(success_count, success_base)},
             "status_counts": status_counts,
         }
 
-    def _build_answer(self, payload: dict[str, Any], dashboard: dict[str, Any]) -> str:
-        # Format dashboard data into a Markdown user-facing message.
-        user_request = str(payload.get("user_request") or payload.get("original_request") or "").strip()
+    def _build_answer(self, dashboard: dict[str, Any]) -> str:
         agents = dashboard.get("agents") or {}
         recommendation = dashboard.get("recommendation") or {}
-
-        lines = ["# SmartMigrate Dashboard"]
-        if user_request:
-            lines.append("")
-            lines.append(f"> 요청: {user_request}")
-        lines.append("")
+        lines = ["# SmartMigrate Dashboard", "", "DB Migration 작업이 완료됐습니다. 현재 전체 작업 현황은 아래와 같습니다."]
         if recommendation:
-            lines.append("## 우선 진행")
-            lines.append("")
-            lines.append(
-                f"- **{recommendation.get('label')}** 잔여 작업이 **{recommendation.get('target_count')}건** 남아 있습니다."
-            )
+            lines.extend(["", "## 다음 추천 작업", "", f"- **{recommendation.get('label')}** 잔여 작업이 **{recommendation.get('target_count')}건** 남아 있습니다."])
         else:
-            lines.append("## 우선 진행")
-            lines.append("")
-            lines.append("- 현재 잔여 작업이 없습니다.")
-
-        lines.append("")
-        lines.append("## 작업 현황")
-        lines.append("")
-        lines.append("| 실행순서 | 단계 | 작업 대상 | 잔여 | 성공 | 실패 | 기타 | 진척률 | 성공률 |")
-        lines.append("|---:|---|---:|---:|---:|---:|---:|---:|---:|")
+            lines.extend(["", "## 다음 추천 작업", "", "- 현재 잔여 작업이 없습니다."])
+        lines.extend(
+            [
+                "",
+                "## 작업 현황",
+                "",
+                "| 순서 | 단계 | 작업 대상 | 잔여 | 성공 | 실패 | 기타 | 진척률 | 성공률 |",
+                "|---:|---|---:|---:|---:|---:|---:|---:|---:|",
+            ]
+        )
         for key, label in AGENT_ORDER:
             summary = agents.get(key) or {}
             priority = AGENT_ORDER.index((key, label)) + 1
             if not summary.get("available", True):
                 lines.append(f"| {priority} | {label} | - | - | - | - | - | - | - |")
                 continue
-            progress = summary.get("progress") or {}
-            success = summary.get("success") or {}
             lines.append(
                 "| "
-                f"{priority} | "
-                f"{label} | "
-                f"{self._num(summary.get('total'))} | "
+                f"{priority} | {label} | {self._num(summary.get('total'))} | "
                 f"{self._num(summary.get('remaining_count', summary.get('target_count')))} | "
-                f"{self._num(summary.get('pass_count'))} | "
-                f"{self._num(summary.get('fail_count'))} | "
-                f"{self._num(summary.get('other_count'))} | "
-                f"{self._rate(progress)} | "
-                f"{self._rate(success)} |"
+                f"{self._num(summary.get('pass_count'))} | {self._num(summary.get('fail_count'))} | "
+                f"{self._num(summary.get('other_count'))} | {self._rate(summary.get('progress') or {})} | "
+                f"{self._rate(summary.get('success') or {})} |"
             )
-
-        lines.append("")
-        lines.append("## Progress Graph")
-        lines.append("")
-        lines.append(self._mermaid_rates_chart(agents))
-
-        unavailable = [
-            (label, (agents.get(key) or {}).get("reason"))
-            for key, label in AGENT_ORDER
-            if not (agents.get(key) or {}).get("available", True)
-        ]
-        if unavailable:
-            lines.append("")
-            lines.append("## 조회 불가")
-            lines.append("")
-            for label, reason in unavailable:
-                lines.append(f"- **{label}**: {reason}")
-
-        lines.append("")
-        lines.append("## 기준")
-        lines.append("")
-        lines.append("- 작업 대상은 각 단계에서 관리하는 전체 작업 수이며, 이미 성공/실패 처리된 작업도 포함합니다.")
-        lines.append("- 잔여는 아직 성공/실패로 끝나지 않아 앞으로 실행해야 하는 작업 수입니다.")
-        lines.append("- 실행순서는 `DB Migration > SQL Conversion > SQL Tuning > SQL Formatting` 순서입니다.")
-        lines.append("- 각 job의 `PRIORITY`는 실행 정렬 기준이며, 선행 작업 의존성은 `PRIOR_MAP_ID`로만 판단합니다.")
+        lines.extend(["", "## Progress Graph", "", self._mermaid_rates_chart(agents), "", "추가로 진행할 작업이 있으면 Dashboard 기준으로 다음 실행 대상을 선택해 주세요."])
         return "\n".join(lines)
 
+    def _mermaid_rates_chart(self, agents: dict[str, Any]) -> str:
+        labels: list[str] = []
+        progress_values: list[float] = []
+        success_values: list[float] = []
+        for key, label in AGENT_ORDER:
+            summary = agents.get(key) or {}
+            if not summary.get("available", True):
+                continue
+            labels.append(label)
+            progress = summary.get("progress") or {}
+            success = summary.get("success") or {}
+            progress_values.append(self._pct_value(progress.get("count", 0), progress.get("base", 0)))
+            success_values.append(self._pct_value(success.get("count", 0), success.get("base", 0)))
+        if not labels:
+            return "No dashboard graph data is available."
+        return "\n".join(
+            [
+                "```mermaid",
+                "xychart-beta",
+                '    title "SmartMigrate Progress / Success"',
+                f"    x-axis [{', '.join(json.dumps(label) for label in labels)}]",
+                '    y-axis "Rate (%)" 0 --> 100',
+                f"    bar [{', '.join(f'{value:.1f}' for value in progress_values)}]",
+                f"    bar [{', '.join(f'{value:.1f}' for value in success_values)}]",
+                "```",
+            ]
+        )
+
     def _recommendation(self, agents: dict[str, dict[str, Any]]) -> dict[str, Any]:
-        # Choose the highest-priority stage with remaining targets.
         for key, label in AGENT_ORDER:
             summary = agents.get(key) or {}
             count = int(summary.get("target_count") or 0)
@@ -305,7 +267,6 @@ class NewType04Dashboard(Component):
         return {}
 
     def _count(self, table: str, where_clause: str = "1=1") -> int:
-        # Run a count query with the supplied table and condition.
         with self._connect() as conn:
             cur = conn.cursor()
             cur.execute(f"SELECT COUNT(*) FROM {table} WHERE {where_clause}")
@@ -313,7 +274,6 @@ class NewType04Dashboard(Component):
         return int(row[0] if row else 0)
 
     def _status_counts(self, table: str, status_column: str, where_clause: str = "1=1") -> dict[str, int]:
-        # Query grouped status counts for a dashboard stage.
         with self._connect() as conn:
             cur = conn.cursor()
             cur.execute(
@@ -329,35 +289,18 @@ class NewType04Dashboard(Component):
         return {str(row[0]): int(row[1]) for row in rows}
 
     def _available_columns(self, table_name: str) -> set[str]:
-        # Load available Oracle column names for a table.
         table = self._clean_identifier(table_name)
-        schema = str(getattr(self, "system_schema", "") or "").strip().upper()
+        schema = str(self._db_config.get("system_schema") or "").strip().upper()
         with self._connect() as conn:
             cur = conn.cursor()
             if schema:
-                cur.execute(
-                    """
-                    SELECT COLUMN_NAME
-                      FROM ALL_TAB_COLUMNS
-                     WHERE OWNER = :1
-                       AND TABLE_NAME = :2
-                    """,
-                    [schema, table],
-                )
+                cur.execute("SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS WHERE OWNER = :1 AND TABLE_NAME = :2", [schema, table])
             else:
-                cur.execute(
-                    """
-                    SELECT COLUMN_NAME
-                      FROM USER_TAB_COLUMNS
-                     WHERE TABLE_NAME = :1
-                    """,
-                    [table],
-                )
+                cur.execute("SELECT COLUMN_NAME FROM USER_TAB_COLUMNS WHERE TABLE_NAME = :1", [table])
             rows = cur.fetchall()
         return {str(row[0]).upper() for row in rows}
 
     def _unavailable(self, agent: str, table: str, reason: str) -> dict[str, Any]:
-        # Return a standard unavailable-stage dashboard summary.
         return {
             "agent": agent,
             "available": False,
@@ -375,17 +318,16 @@ class NewType04Dashboard(Component):
 
     @contextmanager
     def _connect(self):
-        # Open and safely close an Oracle database connection.
         import oracledb
 
         dsn = oracledb.makedsn(
-            str(getattr(self, "db_host", "") or "").strip(),
-            int(getattr(self, "db_port", None) or 1521),
-            service_name=str(getattr(self, "db_service_name", "") or "").strip(),
+            str(self._db_config.get("db_host") or "").strip(),
+            int(self._db_config.get("db_port") or 1521),
+            service_name=str(self._db_config.get("db_service_name") or "").strip(),
         )
         conn = oracledb.connect(
-            user=str(getattr(self, "db_username", "") or "").strip(),
-            password=self._secret_to_str(getattr(self, "db_password", None)),
+            user=str(self._db_config.get("db_username") or "").strip(),
+            password=str(self._db_config.get("db_password") or ""),
             dsn=dsn,
         )
         try:
@@ -394,83 +336,45 @@ class NewType04Dashboard(Component):
             conn.close()
 
     def _has_db_config(self) -> bool:
-        # Check whether the minimum DB connection settings are present.
-        return all(str(getattr(self, name, "") or "").strip() for name in ("db_host", "db_service_name", "db_username"))
+        return all(str(self._db_config.get(name) or "").strip() for name in ("db_host", "db_service_name", "db_username"))
 
     def _qualify(self, table_name: str) -> str:
-        # Qualify a table name with the optional system schema.
         table = self._clean_identifier(table_name)
-        schema = str(getattr(self, "system_schema", "") or "").strip().upper()
-        return f"{schema}.{table}" if schema else table
+        schema = str(self._db_config.get("system_schema") or "").strip().upper()
+        return f"{self._clean_identifier(schema)}.{table}" if schema else table
 
     def _clean_identifier(self, value: str) -> str:
-        # Validate and normalize an Oracle identifier.
         clean = str(value or "").strip().upper()
         if not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", clean):
             raise ValueError(f"Invalid identifier: {clean}")
         return clean
 
     def _pct(self, numerator: int, denominator: int) -> str:
-        # Format a numerator and denominator as a percentage string.
         denominator = int(denominator or 0)
         if denominator <= 0:
             return "-"
         return f"{(int(numerator or 0) / denominator) * 100:.1f}%"
 
+    def _pct_value(self, numerator: Any, denominator: Any) -> float:
+        base = self._num(denominator)
+        if base <= 0:
+            return 0.0
+        return max(0.0, min(self._num(numerator) / base * 100, 100.0))
+
     def _num(self, value: Any) -> int:
-        # Convert a display count value to an integer.
         try:
             return int(value or 0)
         except (TypeError, ValueError):
             return 0
 
     def _rate(self, value: dict[str, Any]) -> str:
-        # Format a rate with count/base detail for Markdown table display.
         return f"{value.get('rate', '-')} ({value.get('count', 0)}/{value.get('base', 0)})"
 
-    def _mermaid_rates_chart(self, agents: dict[str, Any]) -> str:
-        # Render a bar chart when the Chat Output supports Mermaid Markdown.
-        labels: list[str] = []
-        progress_values: list[float] = []
-        success_values: list[float] = []
-        for key, label in AGENT_ORDER:
-            summary = agents.get(key) or {}
-            if not summary.get("available", True):
-                continue
-            labels.append(label)
-            progress = summary.get("progress") or {}
-            success = summary.get("success") or {}
-            progress_values.append(self._pct_value(progress.get("count", 0), progress.get("base", 0)))
-            success_values.append(self._pct_value(success.get("count", 0), success.get("base", 0)))
-        if not labels:
-            return "No dashboard graph data is available."
-        axis_labels = ", ".join(json.dumps(label) for label in labels)
-        progress_bar = ", ".join(f"{value:.1f}" for value in progress_values)
-        success_bar = ", ".join(f"{value:.1f}" for value in success_values)
-        return "\n".join(
-            [
-                "```mermaid",
-                "xychart-beta",
-                '    title "SmartMigrate Progress / Success"',
-                f"    x-axis [{axis_labels}]",
-                '    y-axis "Rate (%)" 0 --> 100',
-                f"    bar [{progress_bar}]",
-                f"    bar [{success_bar}]",
-                "```",
-            ]
-        )
-
-    def _pct_value(self, numerator: Any, denominator: Any) -> float:
-        # Return a numeric percentage for chart series values.
-        base = self._num(denominator)
-        if base <= 0:
-            return 0.0
-        return max(0.0, min(self._num(numerator) / base * 100, 100.0))
-
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
-        # Parse a Langflow Data, dict, or JSON string payload.
         if isinstance(raw, Data):
             return dict(raw.data or {})
+        if isinstance(raw, Message):
+            raw = raw.text
         if isinstance(raw, dict):
             return dict(raw)
         text = str(raw or "").strip()
@@ -479,13 +383,5 @@ class NewType04Dashboard(Component):
             text = re.sub(r"\s*```$", "", text)
         parsed = json.loads(text) if text else {}
         if not isinstance(parsed, dict):
-            raise ValueError("payload_json must be a JSON object")
+            raise ValueError("loop_done must be a JSON object")
         return parsed
-
-    def _secret_to_str(self, value: Any) -> str:
-        # Convert a Langflow secret value into a plain string.
-        if value is None:
-            return ""
-        if hasattr(value, "get_secret_value"):
-            return str(value.get_secret_value())
-        return str(value)

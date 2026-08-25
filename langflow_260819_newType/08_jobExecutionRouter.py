@@ -490,9 +490,15 @@ class NewType08JobExecutionRouter(Component):
         return None
 
     def _next_node(self, route: str) -> str:
-        # Resolve the next component name for a route.
-        if route in {"MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"}:
-            return "09_executionPlanSummary"
+        # Resolve the execution-path component. 09 is connected in parallel for notice output only.
+        if route == "MIG":
+            return "10A_migJobsToLoopTable"
+        if route == "SQL_CONVERSION":
+            return "12_sqlConversionPipeline"
+        if route == "SQL_TUNING":
+            return "15_sqlTuningPipeline"
+        if route == "SQL_FORMATTING":
+            return "17_sqlFormattingPipeline"
         return "13_finalSummary"
 
     def _to_int(self, value: Any) -> int | None:

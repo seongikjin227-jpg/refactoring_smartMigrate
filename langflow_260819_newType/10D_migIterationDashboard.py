@@ -55,10 +55,6 @@ class NewType10DMigIterationDashboard(Component):
             "total_jobs": result.get("total_jobs", 1),
             "completed_count": result.get("completed_count", result.get("job_index", 1)),
             "remaining_count": result.get("remaining_count", 0),
-            "requested_success_count": result.get("requested_success_count", 0),
-            "requested_failed_count": result.get("requested_failed_count", 0),
-            "requested_waiting_count": result.get("requested_waiting_count", 0),
-            "requested_processed_count": result.get("requested_processed_count", result.get("completed_count", result.get("job_index", 1))),
             "message": result.get("message") or "",
             "attempts": result.get("attempts") or [],
         }
@@ -78,63 +74,48 @@ class NewType10DMigIterationDashboard(Component):
         completed = int(result.get("completed_count") or index)
         remaining = max(int(result.get("remaining_count") or (total - completed)), 0)
         attempts = list(result.get("attempts") or [])
-        success_so_far = int(result.get("requested_success_count") or 0)
-        if success_so_far <= 0 and (result.get("ok") is True or str(result.get("status") or "").upper() == "PASS"):
-            success_so_far = 1
         progress_rate = (completed / total * 100) if total else 0.0
-        advancement_rate = (success_so_far / total * 100) if total else 0.0
-        success_count = 1 if result.get("ok") else 0
-        fail_count = 0 if result.get("ok") else 1
+        current_success = 1 if result.get("ok") else 0
+        current_failure = 0 if result.get("ok") else 1
+
         lines = [
-            "## MIG 진행 현황",
+            "## MIG Progress",
             "",
-            f"- 실행 작업: map_id={result.get('map_id')}",
-            f"- 진행률: {completed}/{total}건, {progress_rate:.1f}%",
+            f"- Current job: map_id={result.get('map_id')}",
+            f"- Progress: {completed}/{total} jobs, {progress_rate:.1f}%",
             self._bar(completed, total),
-            f"- 진척률: {success_so_far}/{total}건 PASS, {advancement_rate:.1f}%",
-            self._bar(success_so_far, total),
-            f"- 현재 결과: {result.get('status')}",
+            f"- Current status: {result.get('status')}",
             f"- retry: {result.get('retry_count', 0)}",
-            f"- 소요시간: {result.get('elapsed_seconds', 0)}초",
+            f"- elapsed: {result.get('elapsed_seconds', 0)} seconds",
             "",
-            "| 구분 | 건수 |",
+            "| Metric | Count |",
             "|---|---:|",
-            f"| 완료 | {completed} |",
-            f"| 현재 성공 | {success_count} |",
-            f"| 현재 실패 | {fail_count} |",
-            f"| 잔여 | {remaining} |",
+            f"| Completed | {completed} |",
+            f"| Current success | {current_success} |",
+            f"| Current failure | {current_failure} |",
+            f"| Remaining | {remaining} |",
         ]
         if attempts:
-            lines.extend(["", "최근 로그:"])
+            lines.extend(["", "Recent logs:"])
             for attempt in attempts[-5:]:
                 stage = attempt.get("failed_stage") or "VERIFY"
-                lines.append(
-                    f"- attempt {attempt.get('attempt')}: {attempt.get('status')} "
-                    f"({stage})"
-                )
+                lines.append(f"- attempt {attempt.get('attempt')}: {attempt.get('status')} ({stage})")
                 for step in list(attempt.get("steps") or [])[-4:]:
                     lines.append(f"  - {step.get('stage')}: {step.get('status')}")
         message = str(result.get("message") or "").strip()
         if message:
-            lines.extend(["", f"메시지: {message}"])
+            lines.extend(["", f"Message: {message}"])
         if completed >= total:
-            failed_so_far = int(result.get("requested_failed_count") or 0)
-            waiting_so_far = int(result.get("requested_waiting_count") or 0)
             lines.extend(
                 [
                     "",
-                    "## MIG 요청 작업 최종 요약",
+                    "## MIG Request Summary",
                     "",
-                    f"- 작업 대상: {total}건",
-                    f"- 진행률: {completed}/{total}건, {progress_rate:.1f}%",
-                    self._bar(completed, total),
-                    f"- 진척률: {success_so_far}/{total}건 PASS, {advancement_rate:.1f}%",
-                    self._bar(success_so_far, total),
-                    f"- 성공: {success_so_far}건",
-                    f"- 실패: {failed_so_far}건",
-                    f"- 대기: {waiting_so_far}건",
+                    f"- Target jobs: {total}",
+                    f"- Completed: {completed}/{total}",
+                    f"- Last job status: {result.get('status')}",
                     "",
-                    "요청하신 작업이 완료됐습니다.",
+                    "Requested MIG loop is complete.",
                 ]
             )
         return "\n".join(lines)
@@ -143,7 +124,7 @@ class NewType10DMigIterationDashboard(Component):
         clamped = max(0, min(value, total))
         filled = round(clamped / total * width) if total > 0 else 0
         percent = (clamped / total * 100) if total > 0 else 0.0
-        return f"{'🟩' * filled}{'⬜' * (width - filled)} `{percent:.1f}%`"
+        return f"{'#' * filled}{'-' * (width - filled)} `{percent:.1f}%`"
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):

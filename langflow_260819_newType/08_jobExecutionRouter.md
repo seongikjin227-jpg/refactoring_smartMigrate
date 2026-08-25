@@ -1,29 +1,30 @@
-# 08 Job Execution Router 분기 설계
+﻿# 08 Job Execution Router 遺꾧린 ?ㅺ퀎
 
-## 역할
+## ??븷
 
-`08_jobExecutionRouter.py`는 `06_getRemainingJobs.py`가 조회한 잔여 작업 요약과 사용자 요청을 함께 보고, 실행 파이프라인으로 보낼지 아니면 바로 Chat Output 메시지로 종료할지 결정한다.
+`08_jobExecutionRouter.py`??`06_getRemainingJobs.py`媛 議고쉶???붿뿬 ?묒뾽 ?붿빟怨??ъ슜???붿껌???④퍡 蹂닿퀬, ?ㅽ뻾 ?뚯씠?꾨씪?몄쑝濡?蹂대궪吏 ?꾨땲硫?諛붾줈 Chat Output 硫붿떆吏濡?醫낅즺?좎? 寃곗젙?쒕떎.
+- Execution outputs are connected in parallel: one copy goes to `09_executionPlanSummary` for a notice message, and the same 08 payload goes directly to the selected execution component.
 
-이 컴포넌트는 LLM 판단을 사용한다. 단, Langflow output branch는 단순하게 유지한다.
+??而댄룷?뚰듃??LLM ?먮떒???ъ슜?쒕떎. ?? Langflow output branch???⑥닚?섍쾶 ?좎??쒕떎.
 
-| Output | 의미 |
+| Output | ?섎? |
 |---|---|
-| `mig_job` | DB Migration 실행 대상이 확정된 경우 |
-| `sql_conversion_job` | SQL Conversion 실행 대상이 확정된 경우 |
-| `sql_tuning_job` | SQL Tuning 실행 대상이 확정된 경우 |
-| `sql_formatting_job` | SQL Formatting 실행 대상이 확정된 경우 |
-| `prerequisite_required` | 잔여 작업은 있지만 선행 작업이 남아 있어 지금 실행하면 안 되는 경우 |
-| `no_runnable_job` | 요청한 잔여 작업이 없거나 실행 업무 유형을 확정할 수 없는 경우 |
+| `mig_job` | DB Migration ?ㅽ뻾 ??곸씠 ?뺤젙??寃쎌슦 |
+| `sql_conversion_job` | SQL Conversion ?ㅽ뻾 ??곸씠 ?뺤젙??寃쎌슦 |
+| `sql_tuning_job` | SQL Tuning ?ㅽ뻾 ??곸씠 ?뺤젙??寃쎌슦 |
+| `sql_formatting_job` | SQL Formatting ?ㅽ뻾 ??곸씠 ?뺤젙??寃쎌슦 |
+| `prerequisite_required` | ?붿뿬 ?묒뾽? ?덉?留??좏뻾 ?묒뾽???⑥븘 ?덉뼱 吏湲??ㅽ뻾?섎㈃ ???섎뒗 寃쎌슦 |
+| `no_runnable_job` | ?붿껌???붿뿬 ?묒뾽???녾굅???ㅽ뻾 ?낅Т ?좏삎???뺤젙?????녿뒗 寃쎌슦 |
 
-`prerequisite_required`와 `no_runnable_job`은 반드시 분리한다. 선행 작업이 남아 있는 것은 "대상이 없음"이 아니라 "지금 실행 순서가 아님"에 가깝기 때문이다.
+`prerequisite_required`? `no_runnable_job`? 諛섎뱶??遺꾨━?쒕떎. ?좏뻾 ?묒뾽???⑥븘 ?덈뒗 寃껋? "??곸씠 ?놁쓬"???꾨땲??"吏湲??ㅽ뻾 ?쒖꽌媛 ?꾨떂"??媛源앷린 ?뚮Ц?대떎.
 
-## 입력 Payload
+## ?낅젰 Payload
 
-08번은 최소한 아래 정보를 받는다고 가정한다.
+08踰덉? 理쒖냼???꾨옒 ?뺣낫瑜?諛쏅뒗?ㅺ퀬 媛?뺥븳??
 
 ```json
 {
-  "user_request": "사용자 원문 요청",
+  "user_request": "?ъ슜???먮Ц ?붿껌",
   "remaining_summary": {
     "migration_total": 0,
     "sql_conversion_total": 0,
@@ -40,11 +41,11 @@
 }
 ```
 
-`06_getRemainingJobs.py`는 CLOB SQL 본문을 넘기지 않는다. 08번은 실행 대상 판단에 필요한 count, 식별자, `priority`, `prior_map_id` 같은 경량 라우팅 메타데이터만 사용한다.
+`06_getRemainingJobs.py`??CLOB SQL 蹂몃Ц???섍린吏 ?딅뒗?? 08踰덉? ?ㅽ뻾 ????먮떒???꾩슂??count, ?앸퀎?? `priority`, `prior_map_id` 媛숈? 寃쎈웾 ?쇱슦??硫뷀??곗씠?곕쭔 ?ъ슜?쒕떎.
 
-## LLM 반환 Payload
+## LLM 諛섑솚 Payload
 
-LLM은 아래 JSON만 반환한다.
+LLM? ?꾨옒 JSON留?諛섑솚?쒕떎.
 
 ```json
 {
@@ -55,125 +56,125 @@ LLM은 아래 JSON만 반환한다.
     "sql_ids": [],
     "space_nms": []
   },
-  "reason": "짧은 한국어 사유"
+  "reason": "吏㏃? ?쒓뎅???ъ쑀"
 }
 ```
 
-## 업무 우선순위
+## ?낅Т ?곗꽑?쒖쐞
 
-실행 업무는 아래 순서를 가진다.
+?ㅽ뻾 ?낅Т???꾨옒 ?쒖꽌瑜?媛吏꾨떎.
 
 1. DB Migration
 2. SQL Conversion
 3. SQL Tuning
 4. SQL Formatting
 
-뒤 단계 실행 요청이 들어왔는데 앞 단계 작업 대상이 남아 있으면 실행하지 않는다. 이 경우 output은 `prerequisite_required`이고, 메시지는 선행 업무를 먼저 진행하라고 안내한다.
+???④퀎 ?ㅽ뻾 ?붿껌???ㅼ뼱?붾뒗?????④퀎 ?묒뾽 ??곸씠 ?⑥븘 ?덉쑝硫??ㅽ뻾?섏? ?딅뒗?? ??寃쎌슦 output? `prerequisite_required`?닿퀬, 硫붿떆吏???좏뻾 ?낅Т瑜?癒쇱? 吏꾪뻾?섎씪怨??덈궡?쒕떎.
 
-예:
+??
 
 ```text
-SQL Conversion 작업을 실행할 수 없습니다.
-DB Migration 작업 대상이 남아 있습니다. 해당 작업을 먼저 진행해주세요.
+SQL Conversion ?묒뾽???ㅽ뻾?????놁뒿?덈떎.
+DB Migration ?묒뾽 ??곸씠 ?⑥븘 ?덉뒿?덈떎. ?대떦 ?묒뾽??癒쇱? 吏꾪뻾?댁＜?몄슂.
 ```
 
-## 분기 유형
+## 遺꾧린 ?좏삎
 
-### 1. 전체 실행 요청
+### 1. ?꾩껜 ?ㅽ뻾 ?붿껌
 
-사용자가 특정 식별자 없이 전체 실행을 요청한 경우다.
+?ъ슜?먭? ?뱀젙 ?앸퀎???놁씠 ?꾩껜 ?ㅽ뻾???붿껌??寃쎌슦??
 
-| 사용자 요청 예시 | 판단 조건 | Output | 메시지 또는 다음 노드 |
+| ?ъ슜???붿껌 ?덉떆 | ?먮떒 議곌굔 | Output | 硫붿떆吏 ?먮뒗 ?ㅼ쓬 ?몃뱶 |
 |---|---|---|---|
-| `DB Migration 전체 진행해줘` | MIG pending count > 0 | `mig_job` | `09_executionPlanSummary` |
-| `DB Migration 전체 진행해줘` | MIG pending count = 0 | `no_runnable_job` | `DB Migration 작업 대상이 없습니다.` |
-| `SQL Conversion 전체 실행해줘` | MIG pending count = 0 and SQL Conversion pending count > 0 | `sql_conversion_job` | `09_executionPlanSummary` |
-| `SQL Conversion 전체 실행해줘` | MIG pending count > 0 | `prerequisite_required` | `DB Migration 작업 대상이 남아 있습니다. 해당 작업을 먼저 진행해주세요.` |
-| `SQL Conversion 전체 실행해줘` | MIG pending count = 0 and SQL Conversion pending count = 0 | `no_runnable_job` | `SQL Conversion 작업 대상이 없습니다.` |
-| `SQL Tuning 전체 진행해줘` | MIG/Conversion pending count = 0 and Tuning pending count > 0 | `sql_tuning_job` | `09_executionPlanSummary` |
-| `SQL Tuning 전체 진행해줘` | MIG 또는 Conversion pending count > 0 | `prerequisite_required` | 남아 있는 선행 업무를 먼저 진행하라고 안내 |
-| `SQL Tuning 전체 진행해줘` | 선행 업무 없음 and Tuning pending count = 0 | `no_runnable_job` | `SQL Tuning 작업 대상이 없습니다.` |
-| `SQL Formatting 전체 진행해줘` | MIG/Conversion/Tuning pending count = 0 and Formatting pending count > 0 | `sql_formatting_job` | `09_executionPlanSummary` |
-| `SQL Formatting 전체 진행해줘` | 앞 단계 pending count > 0 | `prerequisite_required` | 남아 있는 선행 업무를 먼저 진행하라고 안내 |
-| `SQL Formatting 전체 진행해줘` | 선행 업무 없음 and Formatting pending count = 0 | `no_runnable_job` | `SQL Formatting 작업 대상이 없습니다.` |
+| `DB Migration ?꾩껜 吏꾪뻾?댁쨾` | MIG pending count > 0 | `mig_job` | `10A_migJobsToLoopTable` (+ parallel `09_executionPlanSummary` notice) |
+| `DB Migration ?꾩껜 吏꾪뻾?댁쨾` | MIG pending count = 0 | `no_runnable_job` | `DB Migration ?묒뾽 ??곸씠 ?놁뒿?덈떎.` |
+| `SQL Conversion ?꾩껜 ?ㅽ뻾?댁쨾` | MIG pending count = 0 and SQL Conversion pending count > 0 | `sql_conversion_job` | `12_sqlConversionPipeline` (+ parallel `09_executionPlanSummary` notice) |
+| `SQL Conversion ?꾩껜 ?ㅽ뻾?댁쨾` | MIG pending count > 0 | `prerequisite_required` | `DB Migration ?묒뾽 ??곸씠 ?⑥븘 ?덉뒿?덈떎. ?대떦 ?묒뾽??癒쇱? 吏꾪뻾?댁＜?몄슂.` |
+| `SQL Conversion ?꾩껜 ?ㅽ뻾?댁쨾` | MIG pending count = 0 and SQL Conversion pending count = 0 | `no_runnable_job` | `SQL Conversion ?묒뾽 ??곸씠 ?놁뒿?덈떎.` |
+| `SQL Tuning ?꾩껜 吏꾪뻾?댁쨾` | MIG/Conversion pending count = 0 and Tuning pending count > 0 | `sql_tuning_job` | `15_sqlTuningPipeline` (+ parallel `09_executionPlanSummary` notice) |
+| `SQL Tuning ?꾩껜 吏꾪뻾?댁쨾` | MIG ?먮뒗 Conversion pending count > 0 | `prerequisite_required` | ?⑥븘 ?덈뒗 ?좏뻾 ?낅Т瑜?癒쇱? 吏꾪뻾?섎씪怨??덈궡 |
+| `SQL Tuning ?꾩껜 吏꾪뻾?댁쨾` | ?좏뻾 ?낅Т ?놁쓬 and Tuning pending count = 0 | `no_runnable_job` | `SQL Tuning ?묒뾽 ??곸씠 ?놁뒿?덈떎.` |
+| `SQL Formatting ?꾩껜 吏꾪뻾?댁쨾` | MIG/Conversion/Tuning pending count = 0 and Formatting pending count > 0 | `sql_formatting_job` | `17_sqlFormattingPipeline` (+ parallel `09_executionPlanSummary` notice) |
+| `SQL Formatting ?꾩껜 吏꾪뻾?댁쨾` | ???④퀎 pending count > 0 | `prerequisite_required` | ?⑥븘 ?덈뒗 ?좏뻾 ?낅Т瑜?癒쇱? 吏꾪뻾?섎씪怨??덈궡 |
+| `SQL Formatting ?꾩껜 吏꾪뻾?댁쨾` | ?좏뻾 ?낅Т ?놁쓬 and Formatting pending count = 0 | `no_runnable_job` | `SQL Formatting ?묒뾽 ??곸씠 ?놁뒿?덈떎.` |
 
-### 2. 업무 유형 없는 전체 실행 요청
+### 2. ?낅Т ?좏삎 ?녿뒗 ?꾩껜 ?ㅽ뻾 ?붿껌
 
-사용자가 `대기 작업 전체 실행해줘`, `전체 작업 진행해줘`처럼 업무 유형을 지정하지 않은 경우다.
+?ъ슜?먭? `?湲??묒뾽 ?꾩껜 ?ㅽ뻾?댁쨾`, `?꾩껜 ?묒뾽 吏꾪뻾?댁쨾`泥섎읆 ?낅Т ?좏삎??吏?뺥븯吏 ?딆? 寃쎌슦??
 
-| 판단 조건 | Output | 처리 |
+| ?먮떒 議곌굔 | Output | 泥섎━ |
 |---|---|---|
-| MIG pending count > 0 | `mig_job` | 가장 앞 단계인 DB Migration 전체 실행 |
-| MIG = 0 and Conversion pending count > 0 | `sql_conversion_job` | SQL Conversion 전체 실행 |
-| MIG/Conversion = 0 and Tuning pending count > 0 | `sql_tuning_job` | SQL Tuning 전체 실행 |
-| MIG/Conversion/Tuning = 0 and Formatting pending count > 0 | `sql_formatting_job` | SQL Formatting 전체 실행 |
-| 모든 pending count = 0 | `no_runnable_job` | `실행할 작업 대상이 없습니다.` |
+| MIG pending count > 0 | `mig_job` | 媛?????④퀎??DB Migration ?꾩껜 ?ㅽ뻾 |
+| MIG = 0 and Conversion pending count > 0 | `sql_conversion_job` | SQL Conversion ?꾩껜 ?ㅽ뻾 |
+| MIG/Conversion = 0 and Tuning pending count > 0 | `sql_tuning_job` | SQL Tuning ?꾩껜 ?ㅽ뻾 |
+| MIG/Conversion/Tuning = 0 and Formatting pending count > 0 | `sql_formatting_job` | SQL Formatting ?꾩껜 ?ㅽ뻾 |
+| 紐⑤뱺 pending count = 0 | `no_runnable_job` | `?ㅽ뻾???묒뾽 ??곸씠 ?놁뒿?덈떎.` |
 
-### 3. DB Migration 단건/복수 실행 요청
+### 3. DB Migration ?④굔/蹂듭닔 ?ㅽ뻾 ?붿껌
 
-사용자가 `map_id`를 지정한 경우다.
+?ъ슜?먭? `map_id`瑜?吏?뺥븳 寃쎌슦??
 
-| 사용자 요청 예시 | 판단 조건 | Output | 메시지 또는 다음 노드 |
+| ?ъ슜???붿껌 ?덉떆 | ?먮떒 議곌굔 | Output | 硫붿떆吏 ?먮뒗 ?ㅼ쓬 ?몃뱶 |
 |---|---|---|---|
-| `map_id=101 실행해줘` | MIG 작업 대상에 101 존재 | `mig_job` | `09_executionPlanSummary` |
-| `map_id=101,102 실행해줘` | MIG 작업 대상에 101,102 존재 | `mig_job` | 선택된 map_id를 순차 실행 |
-| `map_id=101 실행해줘` | MIG 작업 대상에 101 없음 | `no_runnable_job` | `map_id=101이 작업 대상에서 조회되지 않았습니다.` |
-| `map_id=101 실행해줘` | map_id=101이 `USE_YN=N` 또는 이미 처리 완료라 pending 대상이 아님 | `no_runnable_job` | `map_id=101이 작업 대상에서 조회되지 않았습니다. 상태 변경이 필요하면 관리 기능으로 요청해주세요.` |
+| `map_id=101 ?ㅽ뻾?댁쨾` | MIG ?묒뾽 ??곸뿉 101 議댁옱 | `mig_job` | `10A_migJobsToLoopTable` (+ parallel `09_executionPlanSummary` notice) |
+| `map_id=101,102 ?ㅽ뻾?댁쨾` | MIG ?묒뾽 ??곸뿉 101,102 議댁옱 | `mig_job` | ?좏깮??map_id瑜??쒖감 ?ㅽ뻾 |
+| `map_id=101 ?ㅽ뻾?댁쨾` | MIG ?묒뾽 ??곸뿉 101 ?놁쓬 | `no_runnable_job` | `map_id=101???묒뾽 ??곸뿉??議고쉶?섏? ?딆븯?듬땲??` |
+| `map_id=101 ?ㅽ뻾?댁쨾` | map_id=101??`USE_YN=N` ?먮뒗 ?대? 泥섎━ ?꾨즺??pending ??곸씠 ?꾨떂 | `no_runnable_job` | `map_id=101???묒뾽 ??곸뿉??議고쉶?섏? ?딆븯?듬땲?? ?곹깭 蹂寃쎌씠 ?꾩슂?섎㈃ 愿由?湲곕뒫?쇰줈 ?붿껌?댁＜?몄슂.` |
 
-### 4. SQL Conversion 단건/복수 실행 요청
+### 4. SQL Conversion ?④굔/蹂듭닔 ?ㅽ뻾 ?붿껌
 
-사용자가 `sql_id`, `space_nm`을 지정하고 변환을 요청한 경우다.
+?ъ슜?먭? `sql_id`, `space_nm`??吏?뺥븯怨?蹂?섏쓣 ?붿껌??寃쎌슦??
 
-| 사용자 요청 예시 | 판단 조건 | Output | 메시지 또는 다음 노드 |
+| ?ъ슜???붿껌 ?덉떆 | ?먮떒 議곌굔 | Output | 硫붿떆吏 ?먮뒗 ?ㅼ쓬 ?몃뱶 |
 |---|---|---|---|
-| `sql_id=Q001 변환해줘` | MIG pending count = 0 and Conversion 대상에 Q001 존재 | `sql_conversion_job` | `09_executionPlanSummary` |
-| `space_nm=SALES sql_id=Q001 변환해줘` | MIG pending count = 0 and 해당 조합 존재 | `sql_conversion_job` | `09_executionPlanSummary` |
-| `sql_id=Q001 변환해줘` | MIG pending count > 0 | `prerequisite_required` | `DB Migration 작업 대상이 남아 있습니다. 해당 작업을 먼저 진행해주세요.` |
-| `sql_id=Q001 변환해줘` | MIG pending count = 0 and Conversion 대상에 Q001 없음 | `no_runnable_job` | `sql_id=Q001이 SQL Conversion 작업 대상에서 조회되지 않았습니다.` |
+| `sql_id=Q001 蹂?섑빐以? | MIG pending count = 0 and Conversion ??곸뿉 Q001 議댁옱 | `sql_conversion_job` | `12_sqlConversionPipeline` (+ parallel `09_executionPlanSummary` notice) |
+| `space_nm=SALES sql_id=Q001 蹂?섑빐以? | MIG pending count = 0 and ?대떦 議고빀 議댁옱 | `sql_conversion_job` | `12_sqlConversionPipeline` (+ parallel `09_executionPlanSummary` notice) |
+| `sql_id=Q001 蹂?섑빐以? | MIG pending count > 0 | `prerequisite_required` | `DB Migration ?묒뾽 ??곸씠 ?⑥븘 ?덉뒿?덈떎. ?대떦 ?묒뾽??癒쇱? 吏꾪뻾?댁＜?몄슂.` |
+| `sql_id=Q001 蹂?섑빐以? | MIG pending count = 0 and Conversion ??곸뿉 Q001 ?놁쓬 | `no_runnable_job` | `sql_id=Q001??SQL Conversion ?묒뾽 ??곸뿉??議고쉶?섏? ?딆븯?듬땲??` |
 
-### 5. SQL Tuning 단건/복수 실행 요청
+### 5. SQL Tuning ?④굔/蹂듭닔 ?ㅽ뻾 ?붿껌
 
-SQL Tuning 작업 대상은 `STATUS_TUNING IS NULL`이고 `STATUS_CONVERSION = PASS-CONVERSION`인 건이다.
+SQL Tuning ?묒뾽 ??곸? `STATUS_TUNING IS NULL`?닿퀬 `STATUS_CONVERSION = PASS-CONVERSION`??嫄댁씠??
 
-| 사용자 요청 예시 | 판단 조건 | Output | 메시지 또는 다음 노드 |
+| ?ъ슜???붿껌 ?덉떆 | ?먮떒 議곌굔 | Output | 硫붿떆吏 ?먮뒗 ?ㅼ쓬 ?몃뱶 |
 |---|---|---|---|
-| `sql_id=Q002 튜닝해줘` | 선행 pending 없음 and Tuning 대상에 Q002 존재 | `sql_tuning_job` | `09_executionPlanSummary` |
-| `space_nm=SALES,HR 튜닝 진행해줘` | 선행 pending 없음 and 해당 space 대상 존재 | `sql_tuning_job` | 대상 조합을 순차 실행 |
-| `sql_id=Q002 튜닝해줘` | MIG 또는 Conversion pending count > 0 | `prerequisite_required` | 남아 있는 선행 업무를 먼저 진행하라고 안내 |
-| `sql_id=Q002 튜닝해줘` | 선행 pending 없음 and Tuning 대상에 Q002 없음 | `no_runnable_job` | `sql_id=Q002가 SQL Tuning 작업 대상에서 조회되지 않았습니다.` |
+| `sql_id=Q002 ?쒕떇?댁쨾` | ?좏뻾 pending ?놁쓬 and Tuning ??곸뿉 Q002 議댁옱 | `sql_tuning_job` | `15_sqlTuningPipeline` (+ parallel `09_executionPlanSummary` notice) |
+| `space_nm=SALES,HR ?쒕떇 吏꾪뻾?댁쨾` | ?좏뻾 pending ?놁쓬 and ?대떦 space ???議댁옱 | `sql_tuning_job` | ???議고빀???쒖감 ?ㅽ뻾 |
+| `sql_id=Q002 ?쒕떇?댁쨾` | MIG ?먮뒗 Conversion pending count > 0 | `prerequisite_required` | ?⑥븘 ?덈뒗 ?좏뻾 ?낅Т瑜?癒쇱? 吏꾪뻾?섎씪怨??덈궡 |
+| `sql_id=Q002 ?쒕떇?댁쨾` | ?좏뻾 pending ?놁쓬 and Tuning ??곸뿉 Q002 ?놁쓬 | `no_runnable_job` | `sql_id=Q002媛 SQL Tuning ?묒뾽 ??곸뿉??議고쉶?섏? ?딆븯?듬땲??` |
 
-### 6. SQL Formatting 단건/복수 실행 요청
+### 6. SQL Formatting ?④굔/蹂듭닔 ?ㅽ뻾 ?붿껌
 
-| 사용자 요청 예시 | 판단 조건 | Output | 메시지 또는 다음 노드 |
+| ?ъ슜???붿껌 ?덉떆 | ?먮떒 議곌굔 | Output | 硫붿떆吏 ?먮뒗 ?ㅼ쓬 ?몃뱶 |
 |---|---|---|---|
-| `sql_id=Q003 포맷팅해줘` | 선행 pending 없음 and Formatting 대상에 Q003 존재 | `sql_formatting_job` | `09_executionPlanSummary` |
-| `space_nm=SALES,HR 포맷팅 진행해줘` | 선행 pending 없음 and 해당 space 대상 존재 | `sql_formatting_job` | 대상 조합을 순차 실행 |
-| `sql_id=Q003 포맷팅해줘` | MIG/Conversion/Tuning pending count > 0 | `prerequisite_required` | 남아 있는 선행 업무를 먼저 진행하라고 안내 |
-| `sql_id=Q003 포맷팅해줘` | 선행 pending 없음 and Formatting 대상에 Q003 없음 | `no_runnable_job` | `sql_id=Q003이 SQL Formatting 작업 대상에서 조회되지 않았습니다.` |
+| `sql_id=Q003 ?щ㎎?낇빐以? | ?좏뻾 pending ?놁쓬 and Formatting ??곸뿉 Q003 議댁옱 | `sql_formatting_job` | `17_sqlFormattingPipeline` (+ parallel `09_executionPlanSummary` notice) |
+| `space_nm=SALES,HR ?щ㎎??吏꾪뻾?댁쨾` | ?좏뻾 pending ?놁쓬 and ?대떦 space ???議댁옱 | `sql_formatting_job` | ???議고빀???쒖감 ?ㅽ뻾 |
+| `sql_id=Q003 ?щ㎎?낇빐以? | MIG/Conversion/Tuning pending count > 0 | `prerequisite_required` | ?⑥븘 ?덈뒗 ?좏뻾 ?낅Т瑜?癒쇱? 吏꾪뻾?섎씪怨??덈궡 |
+| `sql_id=Q003 ?щ㎎?낇빐以? | ?좏뻾 pending ?놁쓬 and Formatting ??곸뿉 Q003 ?놁쓬 | `no_runnable_job` | `sql_id=Q003??SQL Formatting ?묒뾽 ??곸뿉??議고쉶?섏? ?딆븯?듬땲??` |
 
-### 7. 실행 요청이지만 업무 유형이 불명확한 경우
+### 7. ?ㅽ뻾 ?붿껌?댁?留??낅Т ?좏삎??遺덈챸?뺥븳 寃쎌슦
 
-| 사용자 요청 예시 | 판단 조건 | Output | 메시지 |
+| ?ъ슜???붿껌 ?덉떆 | ?먮떒 議곌굔 | Output | 硫붿떆吏 |
 |---|---|---|---|
-| `작업 실행해줘` | 업무 유형도 없고 pending 우선순위로도 결정하기 어려움 | `no_runnable_job` | `실행할 업무 유형을 확인할 수 없습니다. DB Migration, SQL Conversion, SQL Tuning, SQL Formatting 중 하나로 다시 요청해주세요.` |
-| `이거 처리해줘` | 식별자도 업무 키워드도 없음 | `no_runnable_job` | 다시 요청 안내 |
+| `?묒뾽 ?ㅽ뻾?댁쨾` | ?낅Т ?좏삎???녾퀬 pending ?곗꽑?쒖쐞濡쒕룄 寃곗젙?섍린 ?대젮? | `no_runnable_job` | `?ㅽ뻾???낅Т ?좏삎???뺤씤?????놁뒿?덈떎. DB Migration, SQL Conversion, SQL Tuning, SQL Formatting 以??섎굹濡??ㅼ떆 ?붿껌?댁＜?몄슂.` |
+| `?닿굅 泥섎━?댁쨾` | ?앸퀎?먮룄 ?낅Т ?ㅼ썙?쒕룄 ?놁쓬 | `no_runnable_job` | ?ㅼ떆 ?붿껌 ?덈궡 |
 
-## Message Output 사유
+## Message Output ?ъ쑀
 
-`prerequisite_required`와 `no_runnable_job`은 아래 기준으로 나눈다.
+`prerequisite_required`? `no_runnable_job`? ?꾨옒 湲곗??쇰줈 ?섎늿??
 
-| Output | 사유 | 예시 메시지 |
+| Output | ?ъ쑀 | ?덉떆 硫붿떆吏 |
 |---|---|---|
-| `prerequisite_required` | 선행 업무 잔여 | `DB Migration 작업 대상이 남아 있습니다. 해당 작업을 먼저 진행해주세요.` |
-| `prerequisite_required` | targeted MIG 요청에서 06 payload로 확인 가능한 prior_map_id 위반 | `map_id=101은 선행 map_id가 남아 있어 지금 실행할 수 없습니다.` |
-| `no_runnable_job` | 해당 업무 pending 없음 | `SQL Conversion 작업 대상이 없습니다.` |
-| `no_runnable_job` | 요청한 식별자가 작업 대상에 없음 | `map_id=101이 작업 대상에서 조회되지 않았습니다.` |
-| `no_runnable_job` | 업무 유형 불명확 | `실행할 업무 유형을 확인할 수 없습니다.` |
+| `prerequisite_required` | ?좏뻾 ?낅Т ?붿뿬 | `DB Migration ?묒뾽 ??곸씠 ?⑥븘 ?덉뒿?덈떎. ?대떦 ?묒뾽??癒쇱? 吏꾪뻾?댁＜?몄슂.` |
+| `prerequisite_required` | targeted MIG ?붿껌?먯꽌 06 payload濡??뺤씤 媛?ν븳 prior_map_id ?꾨컲 | `map_id=101? ?좏뻾 map_id媛 ?⑥븘 ?덉뼱 吏湲??ㅽ뻾?????놁뒿?덈떎.` |
+| `no_runnable_job` | ?대떦 ?낅Т pending ?놁쓬 | `SQL Conversion ?묒뾽 ??곸씠 ?놁뒿?덈떎.` |
+| `no_runnable_job` | ?붿껌???앸퀎?먭? ?묒뾽 ??곸뿉 ?놁쓬 | `map_id=101???묒뾽 ??곸뿉??議고쉶?섏? ?딆븯?듬땲??` |
+| `no_runnable_job` | ?낅Т ?좏삎 遺덈챸??| `?ㅽ뻾???낅Т ?좏삎???뺤씤?????놁뒿?덈떎.` |
 
-## 핵심 규칙
+## ?듭떖 洹쒖튃
 
-- `PREREQUISITE_REQUIRED`는 폐기 분기가 아니다. 작업 대상은 있지만 선행 조건 때문에 지금 실행하면 안 되는 경우를 담당한다.
-- `NO_RUNNABLE_JOB`은 작업 대상 자체가 없거나 실행 요청을 확정할 수 없는 경우만 담당한다.
-- 사용자가 요청한 식별자는 `target_filter`에 반드시 유지되어야 한다.
-- 실행 파이프라인으로 넘어가는 경우에는 `selected_jobs`에 실제 실행 대상 식별자만 담는다.
-- 사용자가 요청한 대상이 pending 조회 결과에 없으면 synthetic job을 만들지 않는다.
+- `PREREQUISITE_REQUIRED`???먭린 遺꾧린媛 ?꾨땲?? ?묒뾽 ??곸? ?덉?留??좏뻾 議곌굔 ?뚮Ц??吏湲??ㅽ뻾?섎㈃ ???섎뒗 寃쎌슦瑜??대떦?쒕떎.
+- `NO_RUNNABLE_JOB`? ?묒뾽 ????먯껜媛 ?녾굅???ㅽ뻾 ?붿껌???뺤젙?????녿뒗 寃쎌슦留??대떦?쒕떎.
+- ?ъ슜?먭? ?붿껌???앸퀎?먮뒗 `target_filter`??諛섎뱶???좎??섏뼱???쒕떎.
+- ?ㅽ뻾 ?뚯씠?꾨씪?몄쑝濡??섏뼱媛??寃쎌슦?먮뒗 `selected_jobs`???ㅼ젣 ?ㅽ뻾 ????앸퀎?먮쭔 ?대뒗??
+- ?ъ슜?먭? ?붿껌????곸씠 pending 議고쉶 寃곌낵???놁쑝硫?synthetic job??留뚮뱾吏 ?딅뒗??

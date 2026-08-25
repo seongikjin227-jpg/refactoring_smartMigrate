@@ -1,22 +1,22 @@
-# Langflow newType POC Architecture
+﻿# Langflow newType POC Architecture
 
-## 핵심 원칙
+## ?듭떖 ?먯튃
 
-- `01 Request Classifier LLM`은 `01_requestClassifierPrompt.md`를 사용해 사용자 요청을 `GENERAL_CHAT`, `MANAGEMENT`, `JOB_EXECUTION`으로 1차 분류한다.
-- `SQL Conversion 잔여 작업 조회`, `SQL Tuning 잔여 보여줘`, `Formatting 대기 작업 몇 건이야`, `DB Migration 잔여 목록`처럼 읽기성 잔여 작업 조회 요청은 `MANAGEMENT`로 보낸다.
-- `04 Management LLM Router`는 관리 요청을 `DASHBOARD`, `STATUS_CHANGE`, `CORRECT_SQL_INPUT`, `EXCEPTION`으로 분기한다.
-- 잔여 작업 조회/현황/건수/실패/대기 작업 조회는 `DASHBOARD`로 분기하고, 대시보드 조회 결과를 활용해 답변한다.
-- `JOB_EXECUTION`은 실제 작업 실행 요청이다. 전체 잔여 작업 실행과 `map_id`/`sql_id`/`space_nm` 기반 단건 또는 복수건 실행을 모두 포함한다.
-- `01 Request Classifier LLM`, `04 Management LLM Router`, `08 Job Target Router`는 LLM 기반 분기다. rule fallback, classifier mode, router mode는 사용하지 않는다.
-- LLM 프롬프트는 컴포넌트 코드 내부 상수로 관리하고 Langflow 입력값으로 받지 않는다.
-- `06 Get Remaining Jobs`는 실행 라우팅에 필요한 count, 대상 식별자, 경량 메타데이터만 조회한다. CLOB/SQL 본문은 반환하지 않고, DB Migration은 `map_id`, `priority`, `prior_map_id`, NEXT_SQL_INFO 계열은 `space_nm + sql_id`, `priority`를 반환한다.
-- `08 Job Target Router`는 `06 Get Remaining Jobs` 결과와 사용자 요청을 함께 보고 실행 도메인, 실행 모드, 대상 필터를 LLM으로 결정한다.
-- 선행 작업이 남아 있는 경우는 `Prerequisite Required Message`, 요청 대상이 잔여 작업에 없는 경우는 `No Runnable Target Message`로 분리한다.
-- 실행 전 `09 Execution Plan Summary`가 어떤 파이프라인에서 몇 개의 job을 실행할지 `Message`로 먼저 안내한다.
-- 각 pipeline은 현재 POC이므로 실제 DB Migration/SQL 변환/튜닝/포맷팅 로직을 실행하지 않고 테스트용 랜덤 결과와 로그를 반환한다.
-- Chat Output에 직접 연결되는 출력은 모두 `Message` 타입이다.
+- `01 Request Classifier LLM`? `01_requestClassifierPrompt.md`瑜??ъ슜???ъ슜???붿껌??`GENERAL_CHAT`, `MANAGEMENT`, `JOB_EXECUTION`?쇰줈 1李?遺꾨쪟?쒕떎.
+- `SQL Conversion ?붿뿬 ?묒뾽 議고쉶`, `SQL Tuning ?붿뿬 蹂댁뿬以?, `Formatting ?湲??묒뾽 紐?嫄댁씠??, `DB Migration ?붿뿬 紐⑸줉`泥섎읆 ?쎄린???붿뿬 ?묒뾽 議고쉶 ?붿껌? `MANAGEMENT`濡?蹂대궦??
+- `04 Management LLM Router`??愿由??붿껌??`DASHBOARD`, `STATUS_CHANGE`, `CORRECT_SQL_INPUT`, `EXCEPTION`?쇰줈 遺꾧린?쒕떎.
+- ?붿뿬 ?묒뾽 議고쉶/?꾪솴/嫄댁닔/?ㅽ뙣/?湲??묒뾽 議고쉶??`DASHBOARD`濡?遺꾧린?섍퀬, ??쒕낫??議고쉶 寃곌낵瑜??쒖슜???듬??쒕떎.
+- `JOB_EXECUTION`? ?ㅼ젣 ?묒뾽 ?ㅽ뻾 ?붿껌?대떎. ?꾩껜 ?붿뿬 ?묒뾽 ?ㅽ뻾怨?`map_id`/`sql_id`/`space_nm` 湲곕컲 ?④굔 ?먮뒗 蹂듭닔嫄??ㅽ뻾??紐⑤몢 ?ы븿?쒕떎.
+- `01 Request Classifier LLM`, `04 Management LLM Router`, `08 Job Target Router`??LLM 湲곕컲 遺꾧린?? rule fallback, classifier mode, router mode???ъ슜?섏? ?딅뒗??
+- LLM ?꾨＼?꾪듃??而댄룷?뚰듃 肄붾뱶 ?대? ?곸닔濡?愿由ы븯怨?Langflow ?낅젰媛믪쑝濡?諛쏆? ?딅뒗??
+- `06 Get Remaining Jobs`???ㅽ뻾 ?쇱슦?낆뿉 ?꾩슂??count, ????앸퀎?? 寃쎈웾 硫뷀??곗씠?곕쭔 議고쉶?쒕떎. CLOB/SQL 蹂몃Ц? 諛섑솚?섏? ?딄퀬, DB Migration? `map_id`, `priority`, `prior_map_id`, NEXT_SQL_INFO 怨꾩뿴? `space_nm + sql_id`, `priority`瑜?諛섑솚?쒕떎.
+- `08 Job Target Router`??`06 Get Remaining Jobs` 寃곌낵? ?ъ슜???붿껌???④퍡 蹂닿퀬 ?ㅽ뻾 ?꾨찓?? ?ㅽ뻾 紐⑤뱶, ????꾪꽣瑜?LLM?쇰줈 寃곗젙?쒕떎.
+- ?좏뻾 ?묒뾽???⑥븘 ?덈뒗 寃쎌슦??`Prerequisite Required Message`, ?붿껌 ??곸씠 ?붿뿬 ?묒뾽???녿뒗 寃쎌슦??`No Runnable Target Message`濡?遺꾨━?쒕떎.
+- ?ㅽ뻾 ??`09 Execution Plan Summary`媛 ?대뼡 ?뚯씠?꾨씪?몄뿉??紐?媛쒖쓽 job???ㅽ뻾?좎? `Message`濡?癒쇱? ?덈궡?쒕떎.
+- 媛?pipeline? ?꾩옱 POC?대?濡??ㅼ젣 DB Migration/SQL 蹂???쒕떇/?щ㎎??濡쒖쭅???ㅽ뻾?섏? ?딄퀬 ?뚯뒪?몄슜 ?쒕뜡 寃곌낵? 濡쒓렇瑜?諛섑솚?쒕떎.
+- Chat Output??吏곸젒 ?곌껐?섎뒗 異쒕젰? 紐⑤몢 `Message` ??낆씠??
 
-## 전체 흐름
+## ?꾩껜 ?먮쫫
 
 ```mermaid
 flowchart TD
@@ -34,24 +34,26 @@ flowchart TD
 
     G --> H{"08 Job Target Router"}
 
-    H -->|MIG targets| P["09 Execution Plan Summary"]
-    H -->|SQL Conversion targets| P
-    H -->|SQL Tuning targets| P
-    H -->|SQL Formatting targets| P
+    H -->|MIG targets / notice copy| P["09 Execution Plan Summary"]
+    H -->|SQL Conversion targets / notice copy| P
+    H -->|SQL Tuning targets / notice copy| P
+    H -->|SQL Formatting targets / notice copy| P
     H -->|prerequisite_required message| OUT
     H -->|no_runnable_target message| OUT
 
     P -->|notice message| OUT
-    P -->|payload / MIG| M0["10A MIG Jobs To Loop Table"]
-    P -->|payload / SQL_CONVERSION| C2["12 SQL Conversion Pipeline"]
-    P -->|payload / SQL_TUNING| T2["15 SQL Tuning Pipeline"]
-    P -->|payload / SQL_FORMATTING| F2["17 SQL Formatting Pipeline"]
+    H -->|MIG targets / execution payload| M0["10A MIG Jobs To Loop Table"]
+    H -->|SQL_CONVERSION targets / execution payload| C2["12 SQL Conversion Pipeline"]
+    H -->|SQL_TUNING targets / execution payload| T2["15 SQL Tuning Pipeline"]
+    H -->|SQL_FORMATTING targets / execution payload| F2["17 SQL Formatting Pipeline"]
 
     M0 --> ML{"10B MIG Loop"}
     ML --> M1["10C MIG One Job POC Executor"]
     M1 --> M2["10D MIG Iteration Dashboard"]
     M2 --> MOUT["Chat Output<br/>MIG Iteration"]
     MOUT -->|json output| ML
+    ML -->|done| FD["11 Final Dashboard"]
+    FD --> OUT
     C2 --> S3["13 Final Summary"]
     T2 --> S3
     F2 --> S3
@@ -63,9 +65,9 @@ flowchart TD
     S3 --> OUT
 ```
 
-## 포트 연결
+## ?ы듃 ?곌껐
 
-| 순서 | From | Output | To | Input |
+| ?쒖꽌 | From | Output | To | Input |
 |---:|---|---|---|---|
 | 1 | Chat Input | Message/Text | `01 Request Classifier LLM` | `user message` + `01_requestClassifierPrompt.md` |
 | 2 | `01 Request Classifier LLM` | `Message(JSON text)` | `02 Intent Conditional Router` | `payload_json` |
@@ -77,43 +79,46 @@ flowchart TD
 | 8 | `04 Management LLM Router` | `Exception Message` | Chat Output | Message |
 | 9 | `02 Intent Conditional Router` | `Job Execution` | `06 Get Remaining Jobs` | `payload_json` |
 | 10 | `06 Get Remaining Jobs` | `payload` | `08 Job Target Router` | `payload_json` |
-| 11 | `08 Job Target Router` | executable target output | `09 Execution Plan Summary` | `payload_json` |
+| 11 | `08 Job Target Router` | executable target output copy | `09 Execution Plan Summary` | `payload_json` |
 | 12 | `09 Execution Plan Summary` | `Notice Message` | Chat Output | Message |
-| 13 | `09 Execution Plan Summary` | `Payload` | selected Pipeline 또는 `10A MIG Jobs To Loop Table` | `payload_json` |
-| 14 | `10A MIG Jobs To Loop Table` | `Jobs Table` | `10B MIG Loop` | `MIG Jobs` |
-| 15 | `10B MIG Loop` | `Item` | `10C MIG One Job POC Executor` | `job_item` |
-| 16 | `10C MIG One Job POC Executor` | `Job Result` | `10D MIG Iteration Dashboard` | `job_result` |
-| 17 | `10D MIG Iteration Dashboard` | `Message` | Chat Output | Message |
-| 18 | Chat Output | `JSON Output` | `10B MIG Loop` | loop feedback |
-| 19 | `12 SQL Conversion Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
-| 20 | `15 SQL Tuning Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
-| 21 | `17 SQL Formatting Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
-| 22 | `08 Job Target Router` | `Prerequisite Required Message` | Chat Output | Message |
-| 23 | `08 Job Target Router` | `No Runnable Target Message` | Chat Output | Message |
+| 13 | `08 Job Target Router` | `MIG Targets` | `10A MIG Jobs To Loop Table` | `payload_json` |
+| 14 | `08 Job Target Router` | `SQL Conversion Targets` | `12 SQL Conversion Pipeline` | `payload_json` |
+| 15 | `08 Job Target Router` | `SQL Tuning Targets` | `15 SQL Tuning Pipeline` | `payload_json` |
+| 16 | `08 Job Target Router` | `SQL Formatting Targets` | `17 SQL Formatting Pipeline` | `payload_json` |
+| 17 | `10A MIG Jobs To Loop Table` | `Jobs Table` | `10B MIG Loop` | `MIG Jobs` |
+| 18 | `10B MIG Loop` | `Item` | `10C MIG One Job POC Executor` | `job_item` |
+| 19 | `10C MIG One Job POC Executor` | `Job Result` | `10D MIG Iteration Dashboard` | `job_result` |
+| 20 | `10D MIG Iteration Dashboard` | `Message` | Chat Output | Message |
+| 21 | Chat Output | `JSON Output` | `10B MIG Loop` | loop feedback |
+| 22 | `12 SQL Conversion Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
+| 23 | `15 SQL Tuning Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
+| 24 | `17 SQL Formatting Pipeline` | `payload` | `13 Final Summary` | `payload_json` |
+| 25 | `08 Job Target Router` | `Prerequisite Required Message` | Chat Output | Message |
+| 26 | `08 Job Target Router` | `No Runnable Target Message` | Chat Output | Message |
 | 24 | `13 Final Summary` | `Result Message` | Chat Output | Message |
 
-## 요청별 분기 기준
+## ?붿껌蹂?遺꾧린 湲곗?
 
-| 사용자 요청 예시 | 1차 route | 2차 route / 실행 모드 | 연결 |
+| ?ъ슜???붿껌 ?덉떆 | 1李?route | 2李?route / ?ㅽ뻾 紐⑤뱶 | ?곌껐 |
 |---|---|---|---|
-| `안녕`, `이 구조 설명해줘` | `GENERAL_CHAT` | - | `03 LLM Response` |
-| `SQL Conversion 잔여 작업 조회해줘` | `MANAGEMENT` | `DASHBOARD` | `04 Dashboard` |
-| `DB Migration 대상 목록 보여줘` | `MANAGEMENT` | `DASHBOARD` | `04 Dashboard` |
-| `map_id=101 priority 올려줘` | `MANAGEMENT` | `STATUS_CHANGE` | `04 Status Change` |
-| `sql_id=Q001 correct sql 저장해줘` | `MANAGEMENT` | `CORRECT_SQL_INPUT` | `04 Correct SQL Input` |
-| `DB Migration 전체 진행해줘` | `JOB_EXECUTION` | `all_pending / MIG` | `06 -> 08 -> 09 -> 10A -> 10B -> 10C -> 10D` |
-| `map_id=101 실행해줘` | `JOB_EXECUTION` | `targeted / MIG` | `06 -> 08 -> 09 -> 10A -> 10B -> 10C -> 10D` |
-| `sql_id=Q001 변환해줘` | `JOB_EXECUTION` | `targeted / SQL_CONVERSION` | `06 -> 08 -> 09 -> 12 -> 13` |
-| `space_nm=SALES 튜닝 진행해줘` | `JOB_EXECUTION` | `targeted / SQL_TUNING` | `06 -> 08 -> 09 -> 15 -> 13` |
-| `sql_id=Q001 포맷팅해줘` | `JOB_EXECUTION` | `targeted / SQL_FORMATTING` | `06 -> 08 -> 09 -> 17 -> 13` |
-| `SQL Conversion 전체 실행해줘` + DB Migration 잔여 존재 | `JOB_EXECUTION` | `PREREQUISITE_REQUIRED` | `06 -> 08 -> Chat Output` |
-| `map_id=999 실행해줘` + 잔여 작업 없음 | `JOB_EXECUTION` | `NO_RUNNABLE_JOB` | `06 -> 08 -> Chat Output` |
+| `?덈뀞`, `??援ъ“ ?ㅻ챸?댁쨾` | `GENERAL_CHAT` | - | `03 LLM Response` |
+| `SQL Conversion ?붿뿬 ?묒뾽 議고쉶?댁쨾` | `MANAGEMENT` | `DASHBOARD` | `04 Dashboard` |
+| `DB Migration ???紐⑸줉 蹂댁뿬以? | `MANAGEMENT` | `DASHBOARD` | `04 Dashboard` |
+| `map_id=101 priority ?щ젮以? | `MANAGEMENT` | `STATUS_CHANGE` | `04 Status Change` |
+| `sql_id=Q001 correct sql ??ν빐以? | `MANAGEMENT` | `CORRECT_SQL_INPUT` | `04 Correct SQL Input` |
+| `DB Migration ?꾩껜 吏꾪뻾?댁쨾` | `JOB_EXECUTION` | `all_pending / MIG` | `06 -> 08 -> 10A -> 10B -> 10C -> 10D (+ parallel 09 -> Chat Output)` |
+| `map_id=101 ?ㅽ뻾?댁쨾` | `JOB_EXECUTION` | `targeted / MIG` | `06 -> 08 -> 10A -> 10B -> 10C -> 10D (+ parallel 09 -> Chat Output)` |
+| `sql_id=Q001 蹂?섑빐以? | `JOB_EXECUTION` | `targeted / SQL_CONVERSION` | `06 -> 08 -> 12 -> 13 (+ parallel 09 -> Chat Output)` |
+| `space_nm=SALES ?쒕떇 吏꾪뻾?댁쨾` | `JOB_EXECUTION` | `targeted / SQL_TUNING` | `06 -> 08 -> 15 -> 13 (+ parallel 09 -> Chat Output)` |
+| `sql_id=Q001 ?щ㎎?낇빐以? | `JOB_EXECUTION` | `targeted / SQL_FORMATTING` | `06 -> 08 -> 17 -> 13 (+ parallel 09 -> Chat Output)` |
+| `SQL Conversion ?꾩껜 ?ㅽ뻾?댁쨾` + DB Migration ?붿뿬 議댁옱 | `JOB_EXECUTION` | `PREREQUISITE_REQUIRED` | `06 -> 08 -> Chat Output` |
+| `map_id=999 ?ㅽ뻾?댁쨾` + ?붿뿬 ?묒뾽 ?놁쓬 | `JOB_EXECUTION` | `NO_RUNNABLE_JOB` | `06 -> 08 -> Chat Output` |
 
-## Dashboard 응답 계약
+## Dashboard ?묐떟 怨꾩빟
 
-`04 Dashboard`는 관리성 조회 branch다. 실제 Dashboard 조회 컴포넌트나 DB 조회 결과가 payload에 포함되면 그 내용을 `Message`로 정리한다.
+`04 Dashboard`??愿由ъ꽦 議고쉶 branch?? ?ㅼ젣 Dashboard 議고쉶 而댄룷?뚰듃??DB 議고쉶 寃곌낵媛 payload???ы븿?섎㈃ 洹??댁슜??`Message`濡??뺣━?쒕떎.
 
-지원 payload key:
+吏??payload key:
 
 ```text
 dashboard_data
@@ -123,30 +128,27 @@ rows
 summary
 ```
 
-POC에서 위 데이터가 없으면 실제 조회 결과가 아직 연결되지 않았다고 명시한다. 실제 플로우에서는 Dashboard 조회 결과를 위 key 중 하나로 전달한 뒤 Chat Output 또는 응답용 LLM에 연결한다.
+POC?먯꽌 ???곗씠?곌? ?놁쑝硫??ㅼ젣 議고쉶 寃곌낵媛 ?꾩쭅 ?곌껐?섏? ?딆븯?ㅺ퀬 紐낆떆?쒕떎. ?ㅼ젣 ?뚮줈?곗뿉?쒕뒗 Dashboard 議고쉶 寃곌낵瑜???key 以??섎굹濡??꾨떖????Chat Output ?먮뒗 ?묐떟??LLM???곌껐?쒕떎.
 
-## 실행 전 안내
+## ?ㅽ뻾 ???덈궡
 
-`09 Execution Plan Summary`는 실제 pipeline 실행 전에 사용자에게 아래 정보를 `Message`로 안내한다.
+`09 Execution Plan Summary`???ㅼ젣 pipeline ?ㅽ뻾 ?꾩뿉 ?ъ슜?먯뿉寃??꾨옒 ?뺣낫瑜?`Message`濡??덈궡?쒕떎.
 
 ```text
-실행 파이프라인
-실행 모드: all_pending(전체 잔여) 또는 targeted(지정)
-실행 예정 job 수
-실행 예정 job list
+?ㅽ뻾 ?뚯씠?꾨씪???ㅽ뻾 紐⑤뱶: all_pending(?꾩껜 ?붿뿬) ?먮뒗 targeted(吏??
+?ㅽ뻾 ?덉젙 job ???ㅽ뻾 ?덉젙 job list
 ```
 
-`Notice Message`는 Chat Output으로 바로 연결하고, `Payload`는 선택된 pipeline으로 연결한다.
+`09 Execution Plan Summary` sends only `Notice Message` to Chat Output. The execution payload from `08 Job Target Router` is connected directly to the selected pipeline.
 
-## MIG PIPELINE 흐름도
-
-첫 POC는 DB Migration만 Loop 기반으로 구현한다. `08 Job Target Router` 이후 MIG branch는 `selected_jobs`를 한 번에 처리하지 않고, Loop가 job 1건씩 `10C MIG One Job POC Executor`에 전달한다. `PRIOR_MAP_ID` dependency와 DDL 조회는 실제 DB 기준으로 수행하고, SQL 생성/실행/검증은 나중에 실제 LLM/SQL 실행 로직을 넣을 수 있도록 node 껍데기를 유지한 채 POC 랜덤 결과만 반환한다. DB 상태 업데이트와 로그 저장은 실제로 수행한다.
+## MIG PIPELINE ?먮쫫??
+泥?POC??DB Migration留?Loop 湲곕컲?쇰줈 援ы쁽?쒕떎. `08 Job Target Router` ?댄썑 MIG branch??`selected_jobs`瑜???踰덉뿉 泥섎━?섏? ?딄퀬, Loop媛 job 1嫄댁뵫 `10C MIG One Job POC Executor`???꾨떖?쒕떎. `PRIOR_MAP_ID` dependency? DDL 議고쉶???ㅼ젣 DB 湲곗??쇰줈 ?섑뻾?섍퀬, SQL ?앹꽦/?ㅽ뻾/寃利앹? ?섏쨷???ㅼ젣 LLM/SQL ?ㅽ뻾 濡쒖쭅???ｌ쓣 ???덈룄濡?node 猿띾뜲湲곕? ?좎???梨?POC ?쒕뜡 寃곌낵留?諛섑솚?쒕떎. DB ?곹깭 ?낅뜲?댄듃? 濡쒓렇 ??μ? ?ㅼ젣濡??섑뻾?쒕떎.
 
 ```mermaid
 flowchart TD
-    H{"08 Job Target Router"} -->|MIG targets| P["09 Execution Plan Summary"]
+    H{"08 Job Target Router"} -->|MIG targets / notice copy| P["09 Execution Plan Summary"]
     P -->|notice message| OUT_NOTICE["Chat Output<br/>Execution Plan Notice"]
-    P -->|payload / MIG| MT["10A MIG Jobs To Loop Table"]
+    H -->|MIG targets / execution payload| MT["10A MIG Jobs To Loop Table"]
 
     MT --> L{"10B MIG Loop"}
 
@@ -181,78 +183,78 @@ flowchart TD
 
 ```
 
-### MIG Loop 컴포넌트 책임
+### MIG Loop 而댄룷?뚰듃 梨낆엫
 
-| 컴포넌트 | 역할 | 입력 | 출력 |
+| 而댄룷?뚰듃 | ??븷 | ?낅젰 | 異쒕젰 |
 |---|---|---|---|
-| `09 Execution Plan Summary` | 실행 전 안내 메시지 생성 | `08` payload | `Notice Message`, `Payload` |
-| `10A MIG Jobs To Loop Table` | `selected_jobs`를 Loop 입력 row 목록으로 변환 | `Payload` | `DataFrame` 또는 `list[Data]` |
-| `10B MIG Loop` | MIG job을 1건씩 loop body로 전달한다. 마지막 요약은 마지막 `10D` 메시지에서 출력한다 | job row list | `Item` |
-| `10C MIG One Job POC Executor` | job 1건 실행 POC. dependency/FETCH_DDL은 실제 DB 조회, GENERATE_SQL/EXECUTE_SQL/VERIFY는 랜덤 결과, DB 업데이트, 로그 적재, 내부 retry 처리 | one job `Data` | one job result `Data` |
-| `10D MIG Iteration Dashboard` | 작업 1건 완료 후 진행률/결과 메시지와 loop feedback payload 생성. 마지막 job이면 최종 요약과 완료 메시지도 함께 출력 | one job result `Data` | Chat Output 입력 payload |
-| `Chat Output - Iteration Dashboard` | 작업별 메시지를 화면에 출력하고 JSON output으로 iteration result 전달 | dashboard payload | `json output` |
+| `09 Execution Plan Summary` | ?ㅽ뻾 ???덈궡 硫붿떆吏 ?앹꽦 | `08` payload | `Notice Message` |
+| `10A MIG Jobs To Loop Table` | `selected_jobs`瑜?Loop ?낅젰 row 紐⑸줉?쇰줈 蹂??| `Payload` | `DataFrame` ?먮뒗 `list[Data]` |
+| `10B MIG Loop` | MIG job??1嫄댁뵫 loop body濡??꾨떖?쒕떎. 留덉?留??붿빟? 留덉?留?`10D` 硫붿떆吏?먯꽌 異쒕젰?쒕떎 | job row list | `Item` |
+| `10C MIG One Job POC Executor` | job 1嫄??ㅽ뻾 POC. dependency/FETCH_DDL? ?ㅼ젣 DB 議고쉶, GENERATE_SQL/EXECUTE_SQL/VERIFY???쒕뜡 寃곌낵, DB ?낅뜲?댄듃, 濡쒓렇 ?곸옱, ?대? retry 泥섎━ | one job `Data` | one job result `Data` |
+| `10D MIG Iteration Dashboard` | ?묒뾽 1嫄??꾨즺 ??吏꾪뻾瑜?寃곌낵 硫붿떆吏? loop feedback payload ?앹꽦. 留덉?留?job?대㈃ 理쒖쥌 ?붿빟怨??꾨즺 硫붿떆吏???④퍡 異쒕젰 | one job result `Data` | Chat Output ?낅젰 payload |
+| `Chat Output - Iteration Dashboard` | ?묒뾽蹂?硫붿떆吏瑜??붾㈃??異쒕젰?섍퀬 JSON output?쇰줈 iteration result ?꾨떖 | dashboard payload | `json output` |
 
-### MIG POC 실행 정책
+### MIG POC ?ㅽ뻾 ?뺤콉
 
-- `PRIORITY`는 실행 정렬 기준이다. 낮은 숫자의 priority job이 실패해도 그 자체로 다음 job을 막지 않는다.
-- 선행 의존성은 `PRIOR_MAP_ID`만 사용한다. `PRIOR_MAP_ID`가 있고 선행 job이 `PASS`가 아니면 해당 job은 실행하지 않고 dependency 결과로 남긴다.
-- retry는 우선 `10C MIG One Job POC Executor` 내부에서 처리한다. Langflow Loop는 job 목록 반복만 담당한다.
-- retry 여부는 `STATUS` 값이 아니라 `RETRY_COUNT < max_retry` 조건으로 판단한다. 중간 실패와 최종 실패 모두 stage별 `FAIL-*` 상태를 저장한다.
-- `FETCH_DDL`은 `NEXT_MIG_INFO`, `NEXT_MIG_INFO_DTL`, Oracle catalog(`USER_TAB_COLUMNS`/`ALL_TAB_COLUMNS`)를 실제 조회한다.
-- POC 랜덤 결과는 `GENERATE_SQL`, `EXECUTE_SQL`, `VERIFY` node에서만 만든다. seed 입력 파라미터는 두지 않고 내부에서 `map_id + job_index + attempt + node_name` 기준으로 같은 job/attempt/node는 같은 결과가 나오게 한다.
-- 실제 LLM SQL 생성은 `GENERATE_SQL` node 내부에, 실제 SQL 실행은 `EXECUTE_SQL` node 내부에, 실제 검증 SQL 실행은 `VERIFY` node 내부에 나중에 삽입한다.
+- `PRIORITY`???ㅽ뻾 ?뺣젹 湲곗??대떎. ??? ?レ옄??priority job???ㅽ뙣?대룄 洹??먯껜濡??ㅼ쓬 job??留됱? ?딅뒗??
+- ?좏뻾 ?섏〈?깆? `PRIOR_MAP_ID`留??ъ슜?쒕떎. `PRIOR_MAP_ID`媛 ?덇퀬 ?좏뻾 job??`PASS`媛 ?꾨땲硫??대떦 job? ?ㅽ뻾?섏? ?딄퀬 dependency 寃곌낵濡??④릿??
+- retry???곗꽑 `10C MIG One Job POC Executor` ?대??먯꽌 泥섎━?쒕떎. Langflow Loop??job 紐⑸줉 諛섎났留??대떦?쒕떎.
+- retry ?щ???`STATUS` 媛믪씠 ?꾨땲??`RETRY_COUNT < max_retry` 議곌굔?쇰줈 ?먮떒?쒕떎. 以묎컙 ?ㅽ뙣? 理쒖쥌 ?ㅽ뙣 紐⑤몢 stage蹂?`FAIL-*` ?곹깭瑜???ν븳??
+- `FETCH_DDL`? `NEXT_MIG_INFO`, `NEXT_MIG_INFO_DTL`, Oracle catalog(`USER_TAB_COLUMNS`/`ALL_TAB_COLUMNS`)瑜??ㅼ젣 議고쉶?쒕떎.
+- POC ?쒕뜡 寃곌낵??`GENERATE_SQL`, `EXECUTE_SQL`, `VERIFY` node?먯꽌留?留뚮뱺?? seed ?낅젰 ?뚮씪誘명꽣???먯? ?딄퀬 ?대??먯꽌 `map_id + job_index + attempt + node_name` 湲곗??쇰줈 媛숈? job/attempt/node??媛숈? 寃곌낵媛 ?섏삤寃??쒕떎.
+- ?ㅼ젣 LLM SQL ?앹꽦? `GENERATE_SQL` node ?대??? ?ㅼ젣 SQL ?ㅽ뻾? `EXECUTE_SQL` node ?대??? ?ㅼ젣 寃利?SQL ?ㅽ뻾? `VERIFY` node ?대????섏쨷???쎌엯?쒕떎.
 
-### MIG POC DB 업데이트 계약
+### MIG POC DB ?낅뜲?댄듃 怨꾩빟
 
-| 시점 | 대상 | 업데이트 |
+| ?쒖젏 | ???| ?낅뜲?댄듃 |
 |---|---|---|
-| job 시작 | `NEXT_MIG_INFO` | `STATUS='RUNNING'`, `BATCH_CNT=BATCH_CNT+1`, `UPD_TS=CURRENT_TIMESTAMP` |
-| attempt 실패, retry 남음 | `NEXT_MIG_INFO` | `STATUS='FAIL-*'`, `RETRY_COUNT=RETRY_COUNT+1`, `UPD_TS=CURRENT_TIMESTAMP` |
-| attempt 실패, retry 남음 | `NEXT_MIG_LOG` | `LOG_TYPE='POC_RETRY'`, `STEP_NAME`, `STATUS='FAIL-*'`, `RETRY_COUNT`, `MESSAGE` |
-| 최종 실패 | `NEXT_MIG_INFO` | `STATUS='FAIL-*'`, `RETRY_COUNT`, `ELAPSED_SECONDS`, `UPD_TS=CURRENT_TIMESTAMP` |
-| 최종 실패 | `NEXT_MIG_LOG` | `LOG_TYPE='POC_FINAL'`, `STATUS='FAIL-*'`, 실패 stage/message |
-| 성공 | `NEXT_MIG_INFO` | `STATUS='PASS'`, `RETRY_COUNT`, `ELAPSED_SECONDS`, `UPD_TS=CURRENT_TIMESTAMP` |
-| 성공 | `NEXT_MIG_LOG` | `LOG_TYPE='POC_FINAL'`, `STATUS='PASS'`, 성공 message |
+| job ?쒖옉 | `NEXT_MIG_INFO` | `STATUS='RUNNING'`, `BATCH_CNT=BATCH_CNT+1`, `UPD_TS=CURRENT_TIMESTAMP` |
+| attempt ?ㅽ뙣, retry ?⑥쓬 | `NEXT_MIG_INFO` | `STATUS='FAIL-*'`, `RETRY_COUNT=RETRY_COUNT+1`, `UPD_TS=CURRENT_TIMESTAMP` |
+| attempt ?ㅽ뙣, retry ?⑥쓬 | `NEXT_MIG_LOG` | `LOG_TYPE='POC_RETRY'`, `STEP_NAME`, `STATUS='FAIL-*'`, `RETRY_COUNT`, `MESSAGE` |
+| 理쒖쥌 ?ㅽ뙣 | `NEXT_MIG_INFO` | `STATUS='FAIL-*'`, `RETRY_COUNT`, `ELAPSED_SECONDS`, `UPD_TS=CURRENT_TIMESTAMP` |
+| 理쒖쥌 ?ㅽ뙣 | `NEXT_MIG_LOG` | `LOG_TYPE='POC_FINAL'`, `STATUS='FAIL-*'`, ?ㅽ뙣 stage/message |
+| ?깃났 | `NEXT_MIG_INFO` | `STATUS='PASS'`, `RETRY_COUNT`, `ELAPSED_SECONDS`, `UPD_TS=CURRENT_TIMESTAMP` |
+| ?깃났 | `NEXT_MIG_LOG` | `LOG_TYPE='POC_FINAL'`, `STATUS='PASS'`, ?깃났 message |
 
-### 작업별 Dashboard Message 예시
+### ?묒뾽蹂?Dashboard Message ?덉떆
 
 ```md
-## MIG 진행 현황
+## MIG 吏꾪뻾 ?꾪솴
 
-- 실행 작업: map_id=101
-- 전체 진행: 3/10건, 30.0%
-- 현재 결과: PASS
+- ?ㅽ뻾 ?묒뾽: map_id=101
+- ?꾩껜 吏꾪뻾: 3/10嫄? 30.0%
+- ?꾩옱 寃곌낵: PASS
 - retry: 1/3
-- 소요시간: 12초
-
-| 구분 | 건수 |
+- ?뚯슂?쒓컙: 12珥?
+| 援щ텇 | 嫄댁닔 |
 |---|---:|
-| 완료 | 3 |
-| 성공 | 2 |
-| 실패 | 1 |
-| 잔여 | 7 |
+| ?꾨즺 | 3 |
+| ?깃났 | 2 |
+| ?ㅽ뙣 | 1 |
+| ?붿뿬 | 7 |
 
-최근 로그:
+理쒓렐 濡쒓렇:
 - attempt 1: FAIL-TEST
 - attempt 2: PASS
 ```
 
-### MIG POC 예상 연결
+### MIG POC ?덉긽 ?곌껐
 
-| 순서 | From | Output | To | Input |
+| ?쒖꽌 | From | Output | To | Input |
 |---:|---|---|---|---|
-| 1 | `08 Job Target Router` | `MIG Targets` | `09 Execution Plan Summary` | `payload_json` |
+| 1 | `08 Job Target Router` | `MIG Targets` copy | `09 Execution Plan Summary` | `payload_json` |
 | 2 | `09 Execution Plan Summary` | `Notice Message` | `Chat Output - Execution Plan Notice` | Message |
-| 3 | `09 Execution Plan Summary` | `Payload` | `10A MIG Jobs To Loop Table` | `payload_json` |
+| 3 | `08 Job Target Router` | `MIG Targets` | `10A MIG Jobs To Loop Table` | `payload_json` |
 | 4 | `10A MIG Jobs To Loop Table` | `Jobs Table` | `10B MIG Loop` | `MIG Jobs` |
 | 5 | `10B MIG Loop` | `Item` | `10C MIG One Job POC Executor` | `job_item` |
 | 6 | `10C MIG One Job POC Executor` | `Job Result` | `10D MIG Iteration Dashboard` | `job_result` |
 | 7 | `10D MIG Iteration Dashboard` | `Message/Payload` | `Chat Output - Iteration Dashboard` | Message |
+| 9 | `10B MIG Loop` | `Done` | `11 Final Dashboard` | `loop_done` |
 | 8 | `Chat Output - Iteration Dashboard` | `JSON Output` | `10B MIG Loop` | loop feedback |
 
-## Chat Output 연결 규칙
+## Chat Output ?곌껐 洹쒖튃
 
-Chat Output으로 직접 연결되는 출력은 모두 `Message` 타입이다.
+Chat Output?쇰줈 吏곸젒 ?곌껐?섎뒗 異쒕젰? 紐⑤몢 `Message` ??낆씠??
 
 | Component | Output |
 |---|---|
@@ -267,7 +269,7 @@ Chat Output으로 직접 연결되는 출력은 모두 `Message` 타입이다.
 | `Chat Output - Iteration Dashboard` | user-visible message + JSON output |
 | `13 Final Summary` | `Result Message` |
 
-## 제거된 컴포넌트
+## ?쒓굅??而댄룷?뚰듃
 
 - `05_jobExecutionNotice.py`
 - `03_generalChatResponder.py`
@@ -277,3 +279,4 @@ Chat Output으로 직접 연결되는 출력은 모두 `Message` 타입이다.
 - `12_nextIncompleteLoop.py`
 - `14_sqlTuningAgent.py`
 - `16_sqlFormattingAgent.py`
+
