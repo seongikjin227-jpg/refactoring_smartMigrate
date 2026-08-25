@@ -40,6 +40,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         started = time.perf_counter()
         payload = self._parse_payload(getattr(self, "job_item", ""))
         db_config = self._db_config(payload)
+        self._require_db_config(db_config)
         job: dict[str, Any] = {}
         try:
             job = self._load_sql_job(db_config, payload)
@@ -325,6 +326,12 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             "db_password": str(item_config.get("db_password") or ""),
             "system_schema": str(item_config.get("system_schema") or "").strip(),
         }
+
+    def _require_db_config(self, db_config: dict[str, Any]) -> None:
+        """Fail early when the Loop item does not include database settings."""
+        missing = [key for key in ("db_host", "db_service_name", "db_username") if not str(db_config.get(key) or "").strip()]
+        if missing:
+            raise ValueError(f"17C SQL Formatting is not connected to database settings: missing {', '.join(missing)}")
 
     def _qualify(self, table_name: str, schema: Any) -> str:
         """Return a validated schema-qualified table name."""
