@@ -38,6 +38,8 @@ class NewType12ASqlConversionJobsToLoopTable(Component):
         payload = self._parse_payload(getattr(self, "payload_json", ""))
         jobs = self._sql_jobs(payload)
         total = len(jobs)
+        db_config = self._db_config(payload)
+        self._require_db_config(db_config)
         rows: list[dict[str, Any]] = []
         for index, job in enumerate(jobs, start=1):
             self._validate_sql_key(job, index)
@@ -51,7 +53,7 @@ class NewType12ASqlConversionJobsToLoopTable(Component):
                     "job_index": index,
                     "total_jobs": total,
                     "completed_before": index - 1,
-                    "db_config": self._db_config(),
+                    "db_config": db_config,
                     "history": list(payload.get("history") or []),
                 }
             )
@@ -78,16 +80,23 @@ class NewType12ASqlConversionJobsToLoopTable(Component):
             return
         raise ValueError(f"12A SQL Conversion job row {index} requires row_id or space_nm+sql_id")
 
-    def _db_config(self) -> dict[str, Any]:
+    def _db_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Collect DB connection settings for downstream Loop items."""
+        payload_config = dict(payload.get("db_config") or {})
         return {
-            "db_host": str(getattr(self, "db_host", "") or "").strip(),
-            "db_port": int(getattr(self, "db_port", None) or 1521),
-            "db_service_name": str(getattr(self, "db_service_name", "") or "").strip(),
-            "db_username": str(getattr(self, "db_username", "") or "").strip(),
-            "db_password": self._secret_to_str(getattr(self, "db_password", None)),
-            "system_schema": str(getattr(self, "system_schema", "") or "").strip(),
+            "db_host": str(getattr(self, "db_host", "") or payload_config.get("db_host") or "").strip(),
+            "db_port": int(getattr(self, "db_port", None) or payload_config.get("db_port") or 1521),
+            "db_service_name": str(getattr(self, "db_service_name", "") or payload_config.get("db_service_name") or "").strip(),
+            "db_username": str(getattr(self, "db_username", "") or payload_config.get("db_username") or "").strip(),
+            "db_password": self._secret_to_str(getattr(self, "db_password", None)) or str(payload_config.get("db_password") or ""),
+            "system_schema": str(getattr(self, "system_schema", "") or payload_config.get("system_schema") or "").strip(),
         }
+
+    def _require_db_config(self, db_config: dict[str, Any]) -> None:
+        """Fail early when SQL Conversion is not wired to database settings."""
+        missing = [key for key in ("db_host", "db_service_name", "db_username") if not str(db_config.get(key) or "").strip()]
+        if missing:
+            raise ValueError(f"12A SQL Conversion is not connected to database settings: missing {', '.join(missing)}")
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         """Parse a Langflow Data, dict, or JSON string payload."""
