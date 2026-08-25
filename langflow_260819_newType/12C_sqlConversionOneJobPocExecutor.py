@@ -50,6 +50,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         job: dict[str, Any] = {}
         try:
             job = self._load_sql_job(db_config, payload)
+            self._increment_batch_count(db_config, str(job["row_id"]))
             result = self._run_conversion(payload, job, db_config, started)
         except Exception as exc:
             result = self._finish_failure(payload, job, db_config, started, FAIL_TOBE, str(exc))
@@ -67,6 +68,16 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         source_sql = self._source_sql(job)
         if not source_sql.strip():
             return self._finish_failure(payload, job, db_config, started, FAIL_TOBE, "FR_SQL/EDIT_FR_SQL is empty")
+        target_table = str(job.get("target_table") or "").strip()
+        if not target_table:
+            return self._finish_failure(
+                payload,
+                job,
+                db_config,
+                started,
+                FAIL_TOBE,
+                "TARGET_TABLE is empty. Cannot retrieve mapping rules for SQL conversion.",
+            )
 
         tag_kind = str(job.get("tag_kind") or "").strip().upper()
         attempts: list[dict[str, Any]] = []
@@ -86,11 +97,17 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                     last_status = FAIL_TOBE
                     last_message = "[POC] TO_SQL generation failed"
                     attempts.append({"attempt": attempt_no, "stage": "GENERATE_TOBE_SQL", "status": last_status, "reason": last_message})
+                    self._insert_sql_log(db_config, job, "TOBE_SQL", None, "FAIL", attempt_no, "GENERATE_TOBE_SQL", last_message)
                     resume_stage = "GENERATE_TOBE_SQL"
                     continue
 
                 to_sql = self._build_poc_to_sql(job, source_for_conversion)
                 attempts.append({"attempt": attempt_no, "stage": "GENERATE_TOBE_SQL", "status": CONVERSION_PASS, "sql_length": len(to_sql)})
+                self._insert_sql_log(db_config, job, "TOBE_SQL", to_sql, "SUCCESS", attempt_no, "GENERATE_TOBE_SQL")
+                generated_values = {"TO_SQL": to_sql}
+                if tuned_fr_sql is not None:
+                    generated_values["TUNED_FR_SQL"] = tuned_fr_sql
+                self._update_row(db_config, job["row_id"], generated_values)
                 resume_stage = "GENERATE_BIND_SQL" if tag_kind == "SELECT" else "SKIP_TEST_FOR_NON_SELECT"
             elif to_sql:
                 attempts.append({"attempt": attempt_no, "stage": "REUSE_TOBE_SQL", "status": CONVERSION_PASS, "reason": f"resume_from={resume_stage}"})
@@ -101,6 +118,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                         last_status = FAIL_BIND
                         last_message = "[POC] bind SQL generation failed"
                         attempts.append({"attempt": attempt_no, "stage": "GENERATE_BIND_SQL", "status": last_status, "reason": last_message})
+                        self._insert_sql_log(db_config, job, "BIND_SQL", None, "FAIL", attempt_no, "GENERATE_BIND_SQL", last_message)
                         resume_stage = "GENERATE_BIND_SQL"
                         continue
 
@@ -110,20 +128,28 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                         last_status = FAIL_BIND
                         last_message = "Bind SQL generation failed"
                         resume_stage = "GENERATE_BIND_SQL"
+                        self._insert_sql_log(db_config, job, "BIND_SQL", bind_sql, "FAIL", attempt_no, "GENERATE_BIND_SQL", last_message)
                         continue
+                    self._insert_sql_log(db_config, job, "BIND_SQL", bind_sql, "SUCCESS", attempt_no, "GENERATE_BIND_SQL")
+                    self._update_row(db_config, job["row_id"], {"BIND_SQL": bind_sql, "BIND_SET": bind_set})
                     resume_stage = "GENERATE_TEST_SQL"
                 elif resume_stage == "GENERATE_TEST_SQL":
                     attempts.append({"attempt": attempt_no, "stage": "REUSE_BIND_SQL", "status": CONVERSION_PASS, "reason": "resume_from=GENERATE_TEST_SQL"})
 
-                if resume_stage == "GENERATE_TEST_SQL" and self._poc_stage_failed(job, attempt_no, "GENERATE_TEST_SQL"):
-                    last_status = FAIL_TEST
-                    last_message = "[POC] test SQL validation failed"
-                    attempts.append({"attempt": attempt_no, "stage": "GENERATE_TEST_SQL", "status": last_status, "reason": last_message})
-                    resume_stage = "GENERATE_TEST_SQL"
-                    continue
-
                 test_sql = self._build_poc_test_sql(job)
                 attempts.append({"attempt": attempt_no, "stage": "GENERATE_TEST_SQL", "status": CONVERSION_PASS})
+                self._insert_sql_log(db_config, job, "TEST_SQL", test_sql, "SUCCESS", attempt_no, "GENERATE_TEST_SQL")
+                self._update_row(db_config, job["row_id"], {"TEST_SQL": test_sql})
+
+                if resume_stage == "GENERATE_TEST_SQL" and self._poc_stage_failed(job, attempt_no, "VALIDATE_TEST_SQL"):
+                    last_status = FAIL_TEST
+                    last_message = "[POC] test SQL validation failed"
+                    attempts.append({"attempt": attempt_no, "stage": "VALIDATE_TEST_SQL", "status": last_status, "reason": last_message})
+                    self._insert_sql_log(db_config, job, "TEST_SQL", test_sql, "FAIL", attempt_no, "VALIDATE_TEST_SQL", last_message)
+                    resume_stage = "GENERATE_TEST_SQL"
+                    continue
+                attempts.append({"attempt": attempt_no, "stage": "VALIDATE_TEST_SQL", "status": CONVERSION_PASS})
+                self._insert_sql_log(db_config, job, "TEST_SQL", test_sql, "PASS", attempt_no, "VALIDATE_TEST_SQL")
             else:
                 bind_sql = ""
                 bind_set = None
@@ -134,19 +160,21 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 f"FINAL SUCCESS stage=SQL_CONVERSION status={CONVERSION_PASS} "
                 f"job={job.get('space_nm')}.{job.get('sql_id')} reason=TAG_KIND:{tag_kind or 'UNKNOWN'}"
             )
+            success_values = {
+                "TO_SQL": to_sql,
+                "BIND_SQL": bind_sql,
+                "BIND_SET": bind_set,
+                "TEST_SQL": test_sql,
+                "STATUS_CONVERSION": CONVERSION_PASS,
+                "LOG": final_log,
+                "RETRY_COUNT": attempt_no - 1,
+            }
+            if tuned_fr_sql is not None:
+                success_values["TUNED_FR_SQL"] = tuned_fr_sql
             self._update_row(
                 db_config,
                 job["row_id"],
-                {
-                    "TO_SQL": to_sql,
-                    "BIND_SQL": bind_sql,
-                    "BIND_SET": bind_set,
-                    "TEST_SQL": test_sql,
-                    "STATUS_CONVERSION": CONVERSION_PASS,
-                    "TUNED_FR_SQL": tuned_fr_sql,
-                    "LOG": final_log,
-                    "RETRY_COUNT": attempt_no - 1,
-                },
+                success_values,
             )
             return self._result(
                 payload=payload,
@@ -282,6 +310,17 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 str(job["row_id"]),
                 update_values,
             )
+            self._insert_sql_log(
+                db_config,
+                job,
+                "SQL_CONVERSION",
+                (partial_values or {}).get("TO_SQL"),
+                status,
+                self._retry_count(failure_attempts) + 1,
+                self._failure_stage(status),
+                message,
+                elapsed_seconds=time.perf_counter() - started,
+            )
         return self._result(
             payload=payload,
             job=job,
@@ -348,7 +387,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         if status == FAIL_BIND:
             return "GENERATE_BIND_SQL"
         if status == FAIL_TEST:
-            return "GENERATE_TEST_SQL"
+            return "VALIDATE_TEST_SQL"
         return "GENERATE_TOBE_SQL"
 
     def _retry_count(self, attempts: list[dict[str, Any]]) -> int:
@@ -441,6 +480,88 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             cur.execute(query, params)
             conn.commit()
 
+    def _increment_batch_count(self, db_config: dict[str, Any], row_id: str) -> None:
+        """Increment NEXT_SQL_INFO.BATCH_CNT when a SQL conversion job starts."""
+        table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
+        columns = self._table_columns(db_config, table)
+        if "BATCH_CNT" not in columns:
+            return
+        set_clause = "BATCH_CNT = NVL(BATCH_CNT, 0) + 1"
+        if "UPD_TS" in columns:
+            set_clause += ", UPD_TS = CURRENT_TIMESTAMP"
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                UPDATE {table}
+                   SET {set_clause}
+                 WHERE ROWID = CHARTOROWID(:1)
+                """,
+                [row_id],
+            )
+            conn.commit()
+
+    def _insert_sql_log(
+        self,
+        db_config: dict[str, Any],
+        job: dict[str, Any],
+        sql_kind: str,
+        sql_content: Any,
+        status: str,
+        attempt_no: int | None,
+        stage_name: str,
+        error_message: str | None = None,
+        elapsed_seconds: float | None = None,
+    ) -> None:
+        """Insert a best-effort NEXT_SQL_LOG row without truncating SQL_CONTENT."""
+        try:
+            table = self._qualify("NEXT_SQL_LOG", db_config.get("system_schema"))
+            columns = self._table_columns(db_config, table)
+            values: dict[str, Any] = {
+                "CREATED_AT": "CURRENT_TIMESTAMP",
+                "SPACE_NM": self._fit_text(job.get("space_nm"), 200),
+                "SQL_ID": self._fit_text(job.get("sql_id"), 200),
+                "SQL_INFO_ROWID": self._fit_text(job.get("row_id"), 30),
+                "SQL_KIND": self._fit_text(sql_kind, 30),
+                "SQL_CONTENT": None if sql_content is None else str(sql_content),
+                "STATUS": self._fit_text(status, 20),
+                "PROMPT_NAME": None,
+                "MODEL_NAME": None,
+                "BATCH_NO": None,
+                "CYCLE_NO": None,
+                "ELAPSED_SECONDS": round(float(elapsed_seconds), 3) if elapsed_seconds is not None else None,
+                "ATTEMPT_NO": attempt_no,
+                "STAGE_NAME": self._fit_text(stage_name, 100),
+                "ERROR_MESSAGE": self._fit_text(error_message, 4000),
+            }
+            insert_columns: list[str] = []
+            value_exprs: list[str] = []
+            params: dict[str, Any] = {}
+            for column, value in values.items():
+                if column not in columns:
+                    continue
+                insert_columns.append(column)
+                if column == "CREATED_AT":
+                    value_exprs.append("CURRENT_TIMESTAMP")
+                    continue
+                bind_name = column.lower()
+                value_exprs.append(f":{bind_name}")
+                params[bind_name] = value
+            if not insert_columns:
+                return
+            with self._connect(db_config) as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    f"""
+                    INSERT INTO {table} ({", ".join(insert_columns)})
+                    VALUES ({", ".join(value_exprs)})
+                    """,
+                    params,
+                )
+                conn.commit()
+        except Exception:
+            return
+
     def _source_sql(self, job: dict[str, Any]) -> str:
         """Return EDIT_FR_SQL first, otherwise FR_SQL."""
         edited = str(job.get("edit_fr_sql") or "").strip()
@@ -473,7 +594,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
     def _fail_probability(self, attempt: int, stage: str) -> float:
         """Return the fixed POC failure probability for each retry attempt."""
         base = max(0, min(100, POC_FAIL_PERCENT)) / 100
-        return base if stage in {"GENERATE_TOBE_SQL", "GENERATE_BIND_SQL", "GENERATE_TEST_SQL"} else 0.0
+        return base if stage in {"GENERATE_TOBE_SQL", "GENERATE_BIND_SQL", "VALIDATE_TEST_SQL"} else 0.0
 
     def _max_retry(self) -> int:
         """Return a bounded retry count for the POC conversion loop."""
@@ -561,6 +682,16 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         if value is not None and hasattr(value, "read"):
             return str(value.read())
         return "" if value is None else str(value)
+
+    def _fit_text(self, value: Any, max_len: int) -> str | None:
+        """Trim log metadata by UTF-8 bytes; SQL payloads are not passed here."""
+        if value is None:
+            return None
+        text = str(value)
+        encoded = text.encode("utf-8", errors="ignore")
+        if len(encoded) <= max_len:
+            return text
+        return encoded[:max_len].decode("utf-8", errors="ignore")
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         """Parse a Langflow Data, Message, dict, or JSON string payload."""

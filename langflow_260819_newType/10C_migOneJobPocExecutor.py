@@ -275,6 +275,13 @@ class NewType10CMigOneJobPocExecutor(Component):
                     "current_v_sql": outputs.get("verification_sql") or state.get("current_v_sql") or "",
                 }
             )
+            if step.get("stage") == "GENERATE_SQL":
+                self._save_generated_sql(
+                    self._db_config(state.get("job") or {}),
+                    int(state["map_id"]),
+                    next_state.get("current_migration_sql", ""),
+                    next_state.get("current_v_sql", ""),
+                )
             if step.get("stage") == "VERIFY":
                 next_state["status"] = "PASS"
             elif step.get("stage") == "GENERATE_SQL" and state.get("failure_status") == "FAIL-TEST":
@@ -586,6 +593,34 @@ class NewType10CMigOneJobPocExecutor(Component):
                  WHERE MAP_ID = :4
                 """,
                 [status, elapsed, retry_count, map_id],
+            )
+            conn.commit()
+
+    def _save_generated_sql(self, db_config: dict[str, Any], map_id: int, migration_sql: str, verification_sql: str) -> None:
+        """Persist generated MIG_SQL and VERIFY_SQL immediately after generation."""
+        table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
+        columns = self._table_columns(db_config, table)
+        set_clauses: list[str] = []
+        params: dict[str, Any] = {"map_id": map_id}
+        if "MIG_SQL" in columns and str(migration_sql or "").strip():
+            params["mig_sql"] = migration_sql
+            set_clauses.append("MIG_SQL = :mig_sql")
+        if "VERIFY_SQL" in columns and str(verification_sql or "").strip():
+            params["verify_sql"] = verification_sql
+            set_clauses.append("VERIFY_SQL = :verify_sql")
+        if "UPD_TS" in columns and set_clauses:
+            set_clauses.append("UPD_TS = CURRENT_TIMESTAMP")
+        if not set_clauses:
+            return
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                UPDATE {table}
+                   SET {", ".join(set_clauses)}
+                 WHERE MAP_ID = :map_id
+                """,
+                params,
             )
             conn.commit()
 

@@ -58,6 +58,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                 self.status = result
                 return Data(data=result)
 
+            self._increment_batch_count(db_config, str(job["row_id"]))
             result = self._run_formatting(merged, job, db_config, started)
         except Exception as exc:
             result = self._finish_failure(payload, job, started, str(exc))
@@ -81,6 +82,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         # - Store only FORMATTED_SQL; do not update STATUS_CONVERSION or STATUS_TUNING.
         formatted_sql = self._format_sql(source_sql)
         self._update_row(db_config, job["row_id"], {"FORMATTED_SQL": formatted_sql})
+        self._insert_sql_log(db_config, job, "FORMATTED_SQL", formatted_sql, "SUCCESS", 1, "GENERATE_FORMATTED_SQL", elapsed_seconds=time.perf_counter() - started)
         return self._result(
             payload=payload,
             job=job,
@@ -261,6 +263,88 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             cur.execute(query, params)
             conn.commit()
 
+    def _increment_batch_count(self, db_config: dict[str, Any], row_id: str) -> None:
+        """Increment NEXT_SQL_INFO.BATCH_CNT when a SQL formatting job starts."""
+        table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
+        columns = self._table_columns(db_config, table)
+        if "BATCH_CNT" not in columns:
+            return
+        set_clause = "BATCH_CNT = NVL(BATCH_CNT, 0) + 1"
+        if "UPD_TS" in columns:
+            set_clause += ", UPD_TS = CURRENT_TIMESTAMP"
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                UPDATE {table}
+                   SET {set_clause}
+                 WHERE ROWID = CHARTOROWID(:1)
+                """,
+                [row_id],
+            )
+            conn.commit()
+
+    def _insert_sql_log(
+        self,
+        db_config: dict[str, Any],
+        job: dict[str, Any],
+        sql_kind: str,
+        sql_content: Any,
+        status: str,
+        attempt_no: int | None,
+        stage_name: str,
+        error_message: str | None = None,
+        elapsed_seconds: float | None = None,
+    ) -> None:
+        """Insert a best-effort NEXT_SQL_LOG row without truncating SQL_CONTENT."""
+        try:
+            table = self._qualify("NEXT_SQL_LOG", db_config.get("system_schema"))
+            columns = self._table_columns(db_config, table)
+            values: dict[str, Any] = {
+                "CREATED_AT": "CURRENT_TIMESTAMP",
+                "SPACE_NM": self._fit_text(job.get("space_nm"), 200),
+                "SQL_ID": self._fit_text(job.get("sql_id"), 200),
+                "SQL_INFO_ROWID": self._fit_text(job.get("row_id"), 30),
+                "SQL_KIND": self._fit_text(sql_kind, 30),
+                "SQL_CONTENT": None if sql_content is None else str(sql_content),
+                "STATUS": self._fit_text(status, 20),
+                "PROMPT_NAME": None,
+                "MODEL_NAME": None,
+                "BATCH_NO": None,
+                "CYCLE_NO": None,
+                "ELAPSED_SECONDS": round(float(elapsed_seconds), 3) if elapsed_seconds is not None else None,
+                "ATTEMPT_NO": attempt_no,
+                "STAGE_NAME": self._fit_text(stage_name, 100),
+                "ERROR_MESSAGE": self._fit_text(error_message, 4000),
+            }
+            insert_columns: list[str] = []
+            value_exprs: list[str] = []
+            params: dict[str, Any] = {}
+            for column, value in values.items():
+                if column not in columns:
+                    continue
+                insert_columns.append(column)
+                if column == "CREATED_AT":
+                    value_exprs.append("CURRENT_TIMESTAMP")
+                    continue
+                bind_name = column.lower()
+                value_exprs.append(f":{bind_name}")
+                params[bind_name] = value
+            if not insert_columns:
+                return
+            with self._connect(db_config) as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    f"""
+                    INSERT INTO {table} ({", ".join(insert_columns)})
+                    VALUES ({", ".join(value_exprs)})
+                    """,
+                    params,
+                )
+                conn.commit()
+        except Exception:
+            return
+
     def _status(self, value: Any) -> str:
         """Normalize a status string for comparisons."""
         return str(value or "").strip().upper()
@@ -360,6 +444,16 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         if value is not None and hasattr(value, "read"):
             return str(value.read())
         return "" if value is None else str(value)
+
+    def _fit_text(self, value: Any, max_len: int) -> str | None:
+        """Trim log metadata by UTF-8 bytes; SQL payloads are not passed here."""
+        if value is None:
+            return None
+        text = str(value)
+        encoded = text.encode("utf-8", errors="ignore")
+        if len(encoded) <= max_len:
+            return text
+        return encoded[:max_len].decode("utf-8", errors="ignore")
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         """Parse a Langflow Data, Message, dict, or JSON string payload."""
