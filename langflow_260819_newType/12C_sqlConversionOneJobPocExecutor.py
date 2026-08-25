@@ -23,6 +23,7 @@ FAIL_TOBE = "FAIL-TOBE"
 FAIL_BIND = "FAIL-BIND"
 FAIL_TEST = "FAIL-TEST"
 SQL_LENGTH_SHORT_MAX = 5000
+POC_FAIL_PERCENT = 50
 
 
 class NewType12CSqlConversionOneJobPocExecutor(Component):
@@ -34,7 +35,6 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
     inputs = [
         DataInput(name="job_item", display_name="Job Item", required=True),
         IntInput(name="max_retry", display_name="Max Retry", value=3, required=False),
-        IntInput(name="poc_fail_percent", display_name="POC Fail Percent", value=45, required=False),
     ]
 
     outputs = [
@@ -74,35 +74,52 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         max_retry = self._max_retry()
         last_status = FAIL_TOBE
         last_message = "SQL conversion failed."
+        resume_stage = "GENERATE_TOBE_SQL"
+        to_sql = str(job.get("to_sql") or "").strip()
+        bind_sql = str(job.get("bind_sql") or "").strip()
+        bind_set = str(job.get("bind_set") or "") or None
+        test_sql = str(job.get("test_sql") or "").strip()
 
         for attempt_no in range(1, max_retry + 1):
-            if self._poc_stage_failed(job, attempt_no, "GENERATE_TOBE_SQL"):
-                last_status = FAIL_TOBE
-                last_message = "[POC] TO_SQL generation failed"
-                attempts.append({"attempt": attempt_no, "stage": "GENERATE_TOBE_SQL", "status": last_status, "reason": last_message})
-                continue
+            if resume_stage == "GENERATE_TOBE_SQL":
+                if self._poc_stage_failed(job, attempt_no, "GENERATE_TOBE_SQL"):
+                    last_status = FAIL_TOBE
+                    last_message = "[POC] TO_SQL generation failed"
+                    attempts.append({"attempt": attempt_no, "stage": "GENERATE_TOBE_SQL", "status": last_status, "reason": last_message})
+                    resume_stage = "GENERATE_TOBE_SQL"
+                    continue
 
-            to_sql = self._build_poc_to_sql(job, source_for_conversion)
-            attempts.append({"attempt": attempt_no, "stage": "GENERATE_TOBE_SQL", "status": CONVERSION_PASS, "sql_length": len(to_sql)})
+                to_sql = self._build_poc_to_sql(job, source_for_conversion)
+                attempts.append({"attempt": attempt_no, "stage": "GENERATE_TOBE_SQL", "status": CONVERSION_PASS, "sql_length": len(to_sql)})
+                resume_stage = "GENERATE_BIND_SQL" if tag_kind == "SELECT" else "SKIP_TEST_FOR_NON_SELECT"
+            elif to_sql:
+                attempts.append({"attempt": attempt_no, "stage": "REUSE_TOBE_SQL", "status": CONVERSION_PASS, "reason": f"resume_from={resume_stage}"})
 
             if tag_kind == "SELECT":
-                if self._poc_stage_failed(job, attempt_no, "GENERATE_BIND_SQL"):
-                    last_status = FAIL_BIND
-                    last_message = "[POC] bind SQL generation failed"
-                    attempts.append({"attempt": attempt_no, "stage": "GENERATE_BIND_SQL", "status": last_status, "reason": last_message})
-                    continue
+                if resume_stage == "GENERATE_BIND_SQL":
+                    if self._poc_stage_failed(job, attempt_no, "GENERATE_BIND_SQL"):
+                        last_status = FAIL_BIND
+                        last_message = "[POC] bind SQL generation failed"
+                        attempts.append({"attempt": attempt_no, "stage": "GENERATE_BIND_SQL", "status": last_status, "reason": last_message})
+                        resume_stage = "GENERATE_BIND_SQL"
+                        continue
 
-                bind_status, bind_sql, bind_set = self._build_poc_bind_payload(job, source_for_conversion, to_sql)
-                attempts.append({"attempt": attempt_no, "stage": "GENERATE_BIND_SQL", "status": bind_status})
-                if bind_status != CONVERSION_PASS:
-                    last_status = FAIL_BIND
-                    last_message = "Bind SQL generation failed"
-                    continue
+                    bind_status, bind_sql, bind_set = self._build_poc_bind_payload(job, source_for_conversion, to_sql)
+                    attempts.append({"attempt": attempt_no, "stage": "GENERATE_BIND_SQL", "status": bind_status})
+                    if bind_status != CONVERSION_PASS:
+                        last_status = FAIL_BIND
+                        last_message = "Bind SQL generation failed"
+                        resume_stage = "GENERATE_BIND_SQL"
+                        continue
+                    resume_stage = "GENERATE_TEST_SQL"
+                elif resume_stage == "GENERATE_TEST_SQL":
+                    attempts.append({"attempt": attempt_no, "stage": "REUSE_BIND_SQL", "status": CONVERSION_PASS, "reason": "resume_from=GENERATE_TEST_SQL"})
 
-                if self._poc_stage_failed(job, attempt_no, "GENERATE_TEST_SQL"):
+                if resume_stage == "GENERATE_TEST_SQL" and self._poc_stage_failed(job, attempt_no, "GENERATE_TEST_SQL"):
                     last_status = FAIL_TEST
                     last_message = "[POC] test SQL validation failed"
                     attempts.append({"attempt": attempt_no, "stage": "GENERATE_TEST_SQL", "status": last_status, "reason": last_message})
+                    resume_stage = "GENERATE_TEST_SQL"
                     continue
 
                 test_sql = self._build_poc_test_sql(job)
@@ -153,7 +170,22 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 },
             )
 
-        return self._finish_failure(payload, job, db_config, started, last_status, last_message, attempts)
+        return self._finish_failure(
+            payload,
+            job,
+            db_config,
+            started,
+            last_status,
+            last_message,
+            attempts,
+            partial_values={
+                "TO_SQL": to_sql,
+                "BIND_SQL": bind_sql,
+                "BIND_SET": bind_set,
+                "TEST_SQL": test_sql,
+                "TUNED_FR_SQL": tuned_fr_sql,
+            },
+        )
 
     def _prepare_conversion_source(
         self,
@@ -228,18 +260,27 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         status: str,
         message: str,
         attempts: list[dict[str, Any]] | None = None,
+        partial_values: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Persist a SQL conversion failure using the source status values."""
         failure_attempts = attempts or [{"attempt": 1, "stage": self._failure_stage(status), "status": status, "reason": message}]
         if job.get("row_id"):
-            self._update_row(
-                db_config,
-                str(job["row_id"]),
+            update_values = {
+                key: value
+                for key, value in (partial_values or {}).items()
+                if value not in (None, "")
+            }
+            update_values.update(
                 {
                     "STATUS_CONVERSION": status,
                     "LOG": f"FINAL FAIL stage=SQL_CONVERSION status={status} error={message}",
                     "RETRY_COUNT": int(getattr(self, "max_retry", None) or 3),
-                },
+                }
+            )
+            self._update_row(
+                db_config,
+                str(job["row_id"]),
+                update_values,
             )
         return self._result(
             payload=payload,
@@ -252,6 +293,10 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             extra={
                 "status_conversion": status,
                 "conversion_status": status,
+                "to_sql": (partial_values or {}).get("TO_SQL"),
+                "bind_sql": (partial_values or {}).get("BIND_SQL"),
+                "bind_set": (partial_values or {}).get("BIND_SET"),
+                "test_sql": (partial_values or {}).get("TEST_SQL"),
                 "next_node": "12D_sqlConversionIterationDashboard",
             },
         )
@@ -426,16 +471,9 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         return random.Random(seed).random() < probability
 
     def _fail_probability(self, attempt: int, stage: str) -> float:
-        """Return the POC failure probability for a stage and attempt number."""
-        base = max(0, min(100, int(getattr(self, "poc_fail_percent", None) or 45))) / 100
-        if base <= 0:
-            return 0.0
-        stage_weight = {
-            "GENERATE_TOBE_SQL": 0.70,
-            "GENERATE_BIND_SQL": 0.80,
-            "GENERATE_TEST_SQL": 1.00,
-        }.get(stage, 0.0)
-        return max(0.05, (base * stage_weight) - ((int(attempt or 1) - 1) * 0.20))
+        """Return the fixed POC failure probability for each retry attempt."""
+        base = max(0, min(100, POC_FAIL_PERCENT)) / 100
+        return base if stage in {"GENERATE_TOBE_SQL", "GENERATE_BIND_SQL", "GENERATE_TEST_SQL"} else 0.0
 
     def _max_retry(self) -> int:
         """Return a bounded retry count for the POC conversion loop."""

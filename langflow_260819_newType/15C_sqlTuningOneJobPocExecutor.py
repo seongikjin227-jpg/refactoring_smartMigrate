@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 import re
 import time
 from contextlib import contextmanager
@@ -21,6 +22,7 @@ CONVERSION_SUCCESS_STATUSES = {"PASS", "PASS-CONVERSION"}
 TUNING_PASS = "PASS-TUNING"
 FAIL_TUNED = "FAIL-TUNED"
 FAIL_TEST = "FAIL-TEST"
+POC_TUNING_FAIL_PERCENT = 50
 
 
 class NewType15CSqlTuningOneJobPocExecutor(Component):
@@ -80,66 +82,99 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         tag_kind = str(payload.get("tag_kind") or job.get("tag_kind") or "").strip().upper()
         attempts: list[dict[str, Any]] = []
 
-        # Future LLM/RAG section:
-        # - Retrieve SQL_TUNING SEARCH rules and store BLOCK_RAG_CONTENT.
-        # - Call tune_tobe_sql().
-        # - If no rule is found in the real path, persist FAIL-TUNED.
-        #
-        # Current POC keeps TO_SQL unchanged so conversion-passed rows can continue
-        # through the same Langflow request into formatting.
-        tuned_sql = to_sql
-        tuned_result = "NO TUNING"
-        tuning_guides = self._poc_tuning_guides(tag_kind, tuned_result)
-        attempts.append(
-            {
-                "attempt": 1,
-                "stage": "APPLY_TUNING_RULES",
-                "status": TUNING_PASS,
-                "result": tuned_result,
-                "guide_ids": [guide["guide_id"] for guide in tuning_guides],
-            }
-        )
+        tuned_sql = str(payload.get("tuned_to_sql") or job.get("tuned_to_sql") or "").strip()
+        tuned_result = str(payload.get("tuned_result") or job.get("tuned_result") or "").strip()
+        tuning_guides: list[dict[str, Any]] = list(payload.get("tuning_guides") or [])
+        resume_stage = "APPLY_TUNING_RULES"
+        last_status = FAIL_TUNED
+        last_message = "SQL tuning failed."
 
-        if tag_kind == "SELECT" and tuned_sql.strip() != to_sql.strip():
-            # Future validation section:
-            # - Generate tuned comparison TEST_SQL.
-            # - Execute against the same BIND_SET.
-            # - Retry tuning until max_retry is exhausted, then persist FAIL-TEST.
-            attempts.append({"attempt": 1, "stage": "VALIDATE_TUNED_SQL", "status": TUNING_PASS})
-        else:
-            reason = "NO_TUNING" if tuned_sql.strip() == to_sql.strip() else f"TAG_KIND:{tag_kind or 'UNKNOWN'}"
-            attempts.append({"attempt": 1, "stage": "SKIP_TUNED_VALIDATION", "status": TUNING_PASS, "reason": reason})
+        for attempt_no in range(1, self._max_retry() + 1):
+            if resume_stage == "APPLY_TUNING_RULES":
+                # Future LLM/RAG section:
+                # - Retrieve SQL_TUNING SEARCH rules and store BLOCK_RAG_CONTENT.
+                # - Call tune_tobe_sql().
+                # - If no rule is found in the real path, persist FAIL-TUNED.
+                if self._poc_stage_failed(job, attempt_no, "APPLY_TUNING_RULES"):
+                    last_status = FAIL_TUNED
+                    last_message = "[POC] tuning rule application failed"
+                    attempts.append({"attempt": attempt_no, "stage": "APPLY_TUNING_RULES", "status": last_status, "reason": last_message})
+                    resume_stage = "APPLY_TUNING_RULES"
+                    continue
 
-        final_log = f"FINAL SUCCESS stage=SQL_TUNING status={TUNING_PASS} job={job.get('space_nm')}.{job.get('sql_id')} result={tuned_result}"
-        self._update_row(
+                tuned_sql, tuned_result = self._build_poc_tuned_sql(to_sql)
+                tuning_guides = self._poc_tuning_guides(tag_kind, tuned_result)
+                attempts.append(
+                    {
+                        "attempt": attempt_no,
+                        "stage": "APPLY_TUNING_RULES",
+                        "status": TUNING_PASS,
+                        "result": tuned_result,
+                        "guide_ids": [guide["guide_id"] for guide in tuning_guides],
+                    }
+                )
+                resume_stage = "VALIDATE_TUNED_SQL" if tag_kind == "SELECT" and tuned_sql.strip() != to_sql.strip() else "SKIP_TUNED_VALIDATION"
+            elif tuned_sql:
+                attempts.append({"attempt": attempt_no, "stage": "REUSE_TUNED_SQL", "status": TUNING_PASS, "reason": f"resume_from={resume_stage}"})
+
+            if resume_stage == "VALIDATE_TUNED_SQL":
+                # Future validation section:
+                # - Generate tuned comparison TEST_SQL.
+                # - Execute against the same BIND_SET.
+                # - On FAIL-TEST retry, keep TUNED_TO_SQL and resume here.
+                if self._poc_stage_failed(job, attempt_no, "VALIDATE_TUNED_SQL"):
+                    last_status = FAIL_TEST
+                    last_message = "[POC] tuned SQL validation failed"
+                    attempts.append({"attempt": attempt_no, "stage": "VALIDATE_TUNED_SQL", "status": last_status, "reason": last_message})
+                    resume_stage = "VALIDATE_TUNED_SQL"
+                    continue
+                attempts.append({"attempt": attempt_no, "stage": "VALIDATE_TUNED_SQL", "status": TUNING_PASS})
+            else:
+                reason = "NO_TUNING" if tuned_sql.strip() == to_sql.strip() else f"TAG_KIND:{tag_kind or 'UNKNOWN'}"
+                attempts.append({"attempt": attempt_no, "stage": "SKIP_TUNED_VALIDATION", "status": TUNING_PASS, "reason": reason})
+
+            final_log = f"FINAL SUCCESS stage=SQL_TUNING status={TUNING_PASS} job={job.get('space_nm')}.{job.get('sql_id')} result={tuned_result}"
+            self._update_row(
+                db_config,
+                job["row_id"],
+                {
+                    "TO_SQL": to_sql,
+                    "TUNED_TO_SQL": tuned_sql,
+                    "TUNED_RESULT": tuned_result,
+                    "STATUS_TUNING": TUNING_PASS,
+                    "LOG": final_log,
+                    "RETRY_COUNT": attempt_no - 1,
+                },
+            )
+            return self._result(
+                payload=payload,
+                job=job,
+                ok=True,
+                status=TUNING_PASS,
+                elapsed=time.perf_counter() - started,
+                attempts=attempts,
+                message="SQL tuning completed.",
+                extra={
+                    "status_tuning": TUNING_PASS,
+                    "tuning_status": TUNING_PASS,
+                    "tuned_to_sql": tuned_sql,
+                    "tuned_result": tuned_result,
+                    "tuning_guides": tuning_guides,
+                    "tag_kind": tag_kind,
+                    "next_node": "17C_sqlFormattingOneJobPocExecutor",
+                },
+            )
+
+        return self._finish_failure(
+            payload,
+            job,
             db_config,
-            job["row_id"],
-            {
-                "TO_SQL": to_sql,
-                "TUNED_TO_SQL": tuned_sql,
-                "TUNED_RESULT": tuned_result,
-                "STATUS_TUNING": TUNING_PASS,
-                "LOG": final_log,
-                "RETRY_COUNT": 0,
-            },
-        )
-        return self._result(
-            payload=payload,
-            job=job,
-            ok=True,
-            status=TUNING_PASS,
-            elapsed=time.perf_counter() - started,
+            started,
+            last_status,
+            last_message,
             attempts=attempts,
-            message="SQL tuning completed.",
-            extra={
-                "status_tuning": TUNING_PASS,
-                "tuning_status": TUNING_PASS,
-                "tuned_to_sql": tuned_sql,
-                "tuned_result": tuned_result,
-                "tuning_guides": tuning_guides,
-                "tag_kind": tag_kind,
-                "next_node": "17C_sqlFormattingOneJobPocExecutor",
-            },
+            partial_values={"TUNED_TO_SQL": tuned_sql, "TUNED_RESULT": tuned_result},
+            tuning_guides=tuning_guides,
         )
 
     def _finish_failure(
@@ -150,19 +185,31 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         started: float,
         status: str,
         message: str,
+        attempts: list[dict[str, Any]] | None = None,
+        partial_values: dict[str, Any] | None = None,
+        tuning_guides: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Persist a SQL tuning failure using the source status values."""
-        failure_attempts = [{"attempt": 1, "stage": "APPLY_TUNING_RULES", "status": status, "reason": message}]
+        failure_attempts = attempts or [{"attempt": 1, "stage": self._failure_stage(status), "status": status, "reason": message}]
         if job.get("row_id"):
+            tuned_result = str((partial_values or {}).get("TUNED_RESULT") or message)[:4000]
+            update_values = {
+                key: value
+                for key, value in (partial_values or {}).items()
+                if value not in (None, "")
+            }
+            update_values.update(
+                {
+                    "STATUS_TUNING": status,
+                    "TUNED_RESULT": tuned_result,
+                    "LOG": f"FINAL FAIL stage=SQL_TUNING status={status} error={message}",
+                    "RETRY_COUNT": int(getattr(self, "max_retry", None) or 2),
+                }
+            )
             self._update_row(
                 db_config,
                 str(job["row_id"]),
-                {
-                    "STATUS_TUNING": status,
-                    "TUNED_RESULT": message[:4000],
-                    "LOG": f"FINAL FAIL stage=SQL_TUNING status={status} error={message}",
-                    "RETRY_COUNT": int(getattr(self, "max_retry", None) or 2),
-                },
+                update_values,
             )
         return self._result(
             payload=payload,
@@ -172,7 +219,14 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             elapsed=time.perf_counter() - started,
             attempts=failure_attempts,
             message=message,
-            extra={"status_tuning": status, "tuning_status": status, "next_node": self._dashboard_node(payload)},
+            extra={
+                "status_tuning": status,
+                "tuning_status": status,
+                "tuned_to_sql": (partial_values or {}).get("TUNED_TO_SQL"),
+                "tuned_result": (partial_values or {}).get("TUNED_RESULT") or message,
+                "tuning_guides": list(tuning_guides or []),
+                "next_node": self._dashboard_node(payload),
+            },
         )
 
     def _pass_through(
@@ -256,11 +310,35 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                 "result": tuned_result,
                 "guidance": (
                     "RAG/LLM tuning rule retrieval is not connected yet. "
-                    "The POC keeps TO_SQL unchanged, records TUNED_RESULT='NO TUNING', "
-                    "and continues to formatting when conversion passed."
+                    "The POC records a deterministic tuned SQL comment so the "
+                    "tuning validation and FAIL-TEST resume branches are visible."
                 ),
             }
         ]
+
+    def _build_poc_tuned_sql(self, to_sql: str) -> tuple[str, str]:
+        """Create a deterministic tuned SQL placeholder until RAG/LLM tuning is connected."""
+        return f"/* POC SQL_TUNING: guide applied before formatting */\n{to_sql.strip()}", "POC TUNING GUIDE APPLIED"
+
+    def _poc_stage_failed(self, job: dict[str, Any], attempt: int, stage: str) -> bool:
+        """Return a deterministic POC failure decision for one tuning stage."""
+        probability = self._fail_probability(stage)
+        if probability <= 0:
+            return False
+        seed = f"SQL_TUNING:{job.get('space_nm')}:{job.get('sql_id')}:{attempt}:{stage}"
+        return random.Random(seed).random() < probability
+
+    def _fail_probability(self, stage: str) -> float:
+        """Return the fixed POC tuning failure probability for each retry attempt."""
+        return (max(0, min(100, POC_TUNING_FAIL_PERCENT)) / 100) if stage in {"APPLY_TUNING_RULES", "VALIDATE_TUNED_SQL"} else 0.0
+
+    def _max_retry(self) -> int:
+        """Return a bounded retry count for the POC tuning loop."""
+        return max(1, min(10, int(getattr(self, "max_retry", None) or 2)))
+
+    def _failure_stage(self, status: str) -> str:
+        """Return the tuning stage represented by a failure status."""
+        return "VALIDATE_TUNED_SQL" if status == FAIL_TEST else "APPLY_TUNING_RULES"
 
     def _load_sql_job(self, db_config: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         """Load one NEXT_SQL_INFO row by ROWID or by SPACE_NM + SQL_ID."""
