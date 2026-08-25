@@ -38,7 +38,7 @@ class NewType06GetRemainingJobs(Component):
         try:
             payload = self._parse_payload(getattr(self, "payload_json", ""))
             if not payload.get("should_execute", True):
-                payload.update({"component": "06_getRemainingJobs", "next_node": "13_finalSummary"})
+                payload.update({"component": "06_getRemainingJobs", "next_node": "chat_output", "final": True})
                 return Data(data=payload)
 
             if not self._has_db_config():

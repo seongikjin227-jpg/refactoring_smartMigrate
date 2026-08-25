@@ -310,7 +310,7 @@ class NewType08JobExecutionRouter(Component):
             "run_mode": run_mode,
             "target_filter": targets,
             "reason": str(hint.get("reason") or ""),
-            "source": "LLM",
+            "source": str(hint.get("source") or "LLM"),
         }
 
     def _normalize_list(self, value: Any, caster: Any) -> list[Any]:

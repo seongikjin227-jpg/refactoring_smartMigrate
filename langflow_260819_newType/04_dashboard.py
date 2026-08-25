@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import html
 import json
 import re
 from contextlib import contextmanager
@@ -47,14 +49,16 @@ class NewType04Dashboard(Component):
             payload = self._parse_payload(getattr(self, "payload_json", ""))
             dashboard = self._query_dashboard()
             answer = self._build_answer(payload, dashboard)
+            chart_url = self._chart_data_url((dashboard.get("agents") or {}))
             self.status = {
                 **payload,
                 "component": "04_dashboard",
                 "dashboard_data": dashboard,
+                "dashboard_chart_url": chart_url,
                 "answer_text": answer,
                 "final": True,
             }
-            return Message(text=answer)
+            return self._message(answer, chart_url)
         except Exception as exc:
             answer = f"[Dashboard 조회 결과]\nDashboard 조회 중 오류가 발생했습니다.\n오류: {exc}"
             self.status = {"ok": False, "component": "04_dashboard", "error": str(exc), "answer_text": answer}
@@ -225,37 +229,20 @@ class NewType04Dashboard(Component):
         # Format dashboard data into a Markdown user-facing message.
         user_request = str(payload.get("user_request") or payload.get("original_request") or "").strip()
         agents = dashboard.get("agents") or {}
-        recommendation = dashboard.get("recommendation") or {}
-
         lines = ["# SmartMigrate Dashboard"]
         if user_request:
-            lines.append("")
             lines.append(f"> 요청: {user_request}")
-        lines.append("")
-        if recommendation:
-            lines.append("## 우선 진행")
-            lines.append("")
-            lines.append(
-                f"- **{recommendation.get('label')}** 잔여 작업이 **{recommendation.get('target_count')}건** 남아 있습니다."
-            )
-        else:
-            lines.append("## 우선 진행")
-            lines.append("")
-            lines.append("- 현재 잔여 작업이 없습니다.")
 
         lines.append("")
         lines.append("## 작업 현황")
-        lines.append("")
-        lines.append("| 실행순서 | 단계 | 작업 대상 | 잔여 | 성공 | 실패 | 기타 | 진척률 | 성공률 |")
-        lines.append("|---:|---|---:|---:|---:|---:|---:|---:|---:|")
+        lines.append("| 순서 | 단계 | 작업 대상 | 잔여 | 성공 | 실패 | 기타 |")
+        lines.append("|---:|---|---:|---:|---:|---:|---:|")
         for key, label in AGENT_ORDER:
             summary = agents.get(key) or {}
             priority = AGENT_ORDER.index((key, label)) + 1
             if not summary.get("available", True):
-                lines.append(f"| {priority} | {label} | - | - | - | - | - | - | - |")
+                lines.append(f"| {priority} | {label} | - | - | - | - | - |")
                 continue
-            progress = summary.get("progress") or {}
-            success = summary.get("success") or {}
             lines.append(
                 "| "
                 f"{priority} | "
@@ -264,15 +251,12 @@ class NewType04Dashboard(Component):
                 f"{self._num(summary.get('remaining_count', summary.get('target_count')))} | "
                 f"{self._num(summary.get('pass_count'))} | "
                 f"{self._num(summary.get('fail_count'))} | "
-                f"{self._num(summary.get('other_count'))} | "
-                f"{self._rate(progress)} | "
-                f"{self._rate(success)} |"
+                f"{self._num(summary.get('other_count'))} |"
             )
 
         lines.append("")
         lines.append("## Progress Graph")
-        lines.append("")
-        lines.append(self._mermaid_rates_chart(agents))
+        lines.append("![SmartMigrate Progress / Success](dashboard_chart)")
 
         unavailable = [
             (label, (agents.get(key) or {}).get("reason"))
@@ -286,13 +270,6 @@ class NewType04Dashboard(Component):
             for label, reason in unavailable:
                 lines.append(f"- **{label}**: {reason}")
 
-        lines.append("")
-        lines.append("## 기준")
-        lines.append("")
-        lines.append("- 작업 대상은 각 단계에서 관리하는 전체 작업 수이며, 이미 성공/실패 처리된 작업도 포함합니다.")
-        lines.append("- 잔여는 아직 성공/실패로 끝나지 않아 앞으로 실행해야 하는 작업 수입니다.")
-        lines.append("- 실행순서는 `DB Migration > SQL Conversion > SQL Tuning > SQL Formatting` 순서입니다.")
-        lines.append("- 각 job의 `PRIORITY`는 실행 정렬 기준이며, 선행 작업 의존성은 `PRIOR_MAP_ID`로만 판단합니다.")
         return "\n".join(lines)
 
     def _recommendation(self, agents: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -424,12 +401,20 @@ class NewType04Dashboard(Component):
         except (TypeError, ValueError):
             return 0
 
-    def _rate(self, value: dict[str, Any]) -> str:
-        # Format a rate with count/base detail for Markdown table display.
-        return f"{value.get('rate', '-')} ({value.get('count', 0)}/{value.get('base', 0)})"
+    def _message(self, text: str, chart_url: str) -> Message:
+        # Include both Markdown image fallback and Langflow media content.
+        markdown_text = text.replace("(dashboard_chart)", f"({chart_url})")
+        media_block = {
+            "title": "Dashboard Graph",
+            "contents": [{"type": "media", "urls": [chart_url]}],
+        }
+        try:
+            return Message(text=markdown_text, content_blocks=[media_block])
+        except TypeError:
+            return Message(text=markdown_text)
 
-    def _mermaid_rates_chart(self, agents: dict[str, Any]) -> str:
-        # Render a bar chart when the Chat Output supports Mermaid Markdown.
+    def _chart_data_url(self, agents: dict[str, Any]) -> str:
+        # Build an inline SVG grouped bar chart as a data URL.
         labels: list[str] = []
         progress_values: list[float] = []
         success_values: list[float] = []
@@ -442,23 +427,52 @@ class NewType04Dashboard(Component):
             success = summary.get("success") or {}
             progress_values.append(self._pct_value(progress.get("count", 0), progress.get("base", 0)))
             success_values.append(self._pct_value(success.get("count", 0), success.get("base", 0)))
-        if not labels:
-            return "No dashboard graph data is available."
-        axis_labels = ", ".join(json.dumps(label) for label in labels)
-        progress_bar = ", ".join(f"{value:.1f}" for value in progress_values)
-        success_bar = ", ".join(f"{value:.1f}" for value in success_values)
-        return "\n".join(
+        svg = self._bar_chart_svg(labels, progress_values, success_values)
+        encoded = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+        return f"data:image/svg+xml;base64,{encoded}"
+
+    def _bar_chart_svg(self, labels: list[str], progress_values: list[float], success_values: list[float]) -> str:
+        width = 760
+        height = 420
+        left = 70
+        top = 52
+        chart_w = 640
+        chart_h = 260
+        groups = max(len(labels), 1)
+        group_w = chart_w / groups
+        bar_w = min(44, group_w * 0.28)
+        parts = [
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
+            '<rect width="100%" height="100%" fill="#ffffff"/>',
+            '<text x="70" y="30" font-family="Arial" font-size="20" font-weight="700" fill="#1f2937">SmartMigrate Progress / Success</text>',
+            f'<line x1="{left}" y1="{top + chart_h}" x2="{left + chart_w}" y2="{top + chart_h}" stroke="#374151" stroke-width="1"/>',
+            f'<line x1="{left}" y1="{top}" x2="{left}" y2="{top + chart_h}" stroke="#374151" stroke-width="1"/>',
+        ]
+        for tick in range(0, 101, 25):
+            y = top + chart_h - (tick / 100 * chart_h)
+            parts.append(f'<line x1="{left}" y1="{y:.1f}" x2="{left + chart_w}" y2="{y:.1f}" stroke="#e5e7eb" stroke-width="1"/>')
+            parts.append(f'<text x="{left - 12}" y="{y + 4:.1f}" text-anchor="end" font-family="Arial" font-size="11" fill="#6b7280">{tick}%</text>')
+        for index, label in enumerate(labels):
+            base_x = left + index * group_w + group_w / 2
+            progress = progress_values[index]
+            success = success_values[index]
+            for offset, value, color in ((-bar_w * 0.6, progress, "#2563eb"), (bar_w * 0.6, success, "#16a34a")):
+                bar_h = value / 100 * chart_h
+                x = base_x + offset - bar_w / 2
+                y = top + chart_h - bar_h
+                parts.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{bar_h:.1f}" rx="3" fill="{color}"/>')
+                parts.append(f'<text x="{x + bar_w / 2:.1f}" y="{y - 5:.1f}" text-anchor="middle" font-family="Arial" font-size="10" fill="#374151">{value:.0f}%</text>')
+            parts.append(f'<text x="{base_x:.1f}" y="{top + chart_h + 28}" text-anchor="middle" font-family="Arial" font-size="12" fill="#374151">{html.escape(label)}</text>')
+        parts.extend(
             [
-                "```mermaid",
-                "xychart-beta",
-                '    title "SmartMigrate Progress / Success"',
-                f"    x-axis [{axis_labels}]",
-                '    y-axis "Rate (%)" 0 --> 100',
-                f"    bar [{progress_bar}]",
-                f"    bar [{success_bar}]",
-                "```",
+                '<rect x="520" y="22" width="12" height="12" fill="#2563eb"/>',
+                '<text x="538" y="32" font-family="Arial" font-size="12" fill="#374151">Progress</text>',
+                '<rect x="610" y="22" width="12" height="12" fill="#16a34a"/>',
+                '<text x="628" y="32" font-family="Arial" font-size="12" fill="#374151">Success</text>',
+                "</svg>",
             ]
         )
+        return "".join(parts)
 
     def _pct_value(self, numerator: Any, denominator: Any) -> float:
         # Return a numeric percentage for chart series values.
