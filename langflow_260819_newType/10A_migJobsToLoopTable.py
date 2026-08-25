@@ -38,7 +38,7 @@ class NewType10AMigJobsToLoopTable(Component):
         payload = self._parse_payload(getattr(self, "payload_json", ""))
         jobs = self._sort_by_dependency(self._mig_jobs(payload))
         total = len(jobs)
-        db_config = self._db_config()
+        db_config = self._db_config(payload)
         rows: list[dict[str, Any]] = []
         for index, job in enumerate(jobs, start=1):
             if job.get("map_id") is None or str(job.get("map_id")).strip() == "":
@@ -75,14 +75,15 @@ class NewType10AMigJobsToLoopTable(Component):
                 out.append(dict(job))
         return out
 
-    def _db_config(self) -> dict[str, Any]:
+    def _db_config(self, payload: dict[str, Any]) -> dict[str, Any]:
+        payload_config = dict(payload.get("db_config") or {})
         return {
-            "db_host": str(getattr(self, "db_host", "") or "").strip(),
-            "db_port": int(getattr(self, "db_port", None) or 1521),
-            "db_service_name": str(getattr(self, "db_service_name", "") or "").strip(),
-            "db_username": str(getattr(self, "db_username", "") or "").strip(),
-            "db_password": self._secret_to_str(getattr(self, "db_password", None)),
-            "system_schema": str(getattr(self, "system_schema", "") or "").strip(),
+            "db_host": str(payload_config.get("db_host") or getattr(self, "db_host", "") or "").strip(),
+            "db_port": int(payload_config.get("db_port") or getattr(self, "db_port", None) or 1521),
+            "db_service_name": str(payload_config.get("db_service_name") or getattr(self, "db_service_name", "") or "").strip(),
+            "db_username": str(payload_config.get("db_username") or getattr(self, "db_username", "") or "").strip(),
+            "db_password": str(payload_config.get("db_password") or "") or self._secret_to_str(getattr(self, "db_password", None)),
+            "system_schema": str(payload_config.get("system_schema") or getattr(self, "system_schema", "") or "").strip(),
         }
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:

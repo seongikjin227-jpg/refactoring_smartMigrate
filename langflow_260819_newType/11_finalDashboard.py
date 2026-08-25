@@ -345,7 +345,18 @@ class NewType11FinalDashboard(Component):
             return 0
 
     def _rate(self, value: dict[str, Any]) -> str:
-        return f"{value.get('rate', '-')} ({value.get('count', 0)}/{value.get('base', 0)})"
+        count = self._num(value.get("count"))
+        base = self._num(value.get("base"))
+        if base <= 0:
+            return f"{self._progress_bar(0, 0)} - ({count}/{base})"
+        return f"{self._progress_bar(count, base)} {value.get('rate', '-')} ({count}/{base})"
+
+    def _progress_bar(self, count: int, base: int, width: int = 10) -> str:
+        if base <= 0:
+            filled = 0
+        else:
+            filled = max(0, min(width, round((int(count or 0) / int(base)) * width)))
+        return "■" * filled + "□" * (width - filled)
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):

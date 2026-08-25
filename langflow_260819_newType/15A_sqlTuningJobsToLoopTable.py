@@ -84,12 +84,12 @@ class NewType15ASqlTuningJobsToLoopTable(Component):
         """Collect DB connection settings for downstream Loop items."""
         payload_config = dict(payload.get("db_config") or {})
         return {
-            "db_host": str(getattr(self, "db_host", "") or payload_config.get("db_host") or "").strip(),
-            "db_port": int(getattr(self, "db_port", None) or payload_config.get("db_port") or 1521),
-            "db_service_name": str(getattr(self, "db_service_name", "") or payload_config.get("db_service_name") or "").strip(),
-            "db_username": str(getattr(self, "db_username", "") or payload_config.get("db_username") or "").strip(),
-            "db_password": self._secret_to_str(getattr(self, "db_password", None)) or str(payload_config.get("db_password") or ""),
-            "system_schema": str(getattr(self, "system_schema", "") or payload_config.get("system_schema") or "").strip(),
+            "db_host": str(payload_config.get("db_host") or getattr(self, "db_host", "") or "").strip(),
+            "db_port": int(payload_config.get("db_port") or getattr(self, "db_port", None) or 1521),
+            "db_service_name": str(payload_config.get("db_service_name") or getattr(self, "db_service_name", "") or "").strip(),
+            "db_username": str(payload_config.get("db_username") or getattr(self, "db_username", "") or "").strip(),
+            "db_password": str(payload_config.get("db_password") or "") or self._secret_to_str(getattr(self, "db_password", None)),
+            "system_schema": str(payload_config.get("system_schema") or getattr(self, "system_schema", "") or "").strip(),
         }
 
     def _require_db_config(self, db_config: dict[str, Any]) -> None:
