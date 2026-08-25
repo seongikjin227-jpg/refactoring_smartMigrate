@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 import re
 from contextlib import contextmanager
@@ -48,16 +47,14 @@ class NewType04Dashboard(Component):
             payload = self._parse_payload(getattr(self, "payload_json", ""))
             dashboard = self._query_dashboard()
             answer = self._build_answer(payload, dashboard)
-            chart_url = self._chart_data_url((dashboard.get("agents") or {}))
             self.status = {
                 **payload,
                 "component": "04_dashboard",
                 "dashboard_data": dashboard,
-                "dashboard_chart_url": chart_url,
                 "answer_text": answer,
                 "final": True,
             }
-            return self._message(answer, chart_url)
+            return Message(text=answer)
         except Exception as exc:
             answer = f"[Dashboard 조회 결과]\nDashboard 조회 중 오류가 발생했습니다.\n오류: {exc}"
             self.status = {"ok": False, "component": "04_dashboard", "error": str(exc), "answer_text": answer}
@@ -254,8 +251,21 @@ class NewType04Dashboard(Component):
             )
 
         lines.append("")
-        lines.append("## Progress Graph")
-        lines.append("![SmartMigrate Progress / Success](dashboard_chart)")
+        lines.append("## 진척률 / 성공률")
+        lines.append("| 순서 | 단계 | 진척률 | 성공률 |")
+        lines.append("|---:|---|---:|---:|")
+        for key, label in AGENT_ORDER:
+            summary = agents.get(key) or {}
+            priority = AGENT_ORDER.index((key, label)) + 1
+            if not summary.get("available", True):
+                lines.append(f"| {priority} | {label} | - | - |")
+                continue
+            lines.append(
+                "| "
+                f"{priority} | {label} | "
+                f"{self._rate(summary.get('progress') or {})} | "
+                f"{self._rate(summary.get('success') or {})} |"
+            )
 
         unavailable = [
             (label, (agents.get(key) or {}).get("reason"))
@@ -400,116 +410,9 @@ class NewType04Dashboard(Component):
         except (TypeError, ValueError):
             return 0
 
-    def _message(self, text: str, chart_url: str) -> Message:
-        # Include Markdown, files, and a Langflow image content block.
-        markdown_text = text.replace("(dashboard_chart)", f"({chart_url})")
-        image_block = self._image_content_block(chart_url)
-        try:
-            return Message(text=markdown_text, files=[chart_url], content_blocks=[image_block])
-        except TypeError:
-            try:
-                return Message(text=markdown_text, content_blocks=[image_block])
-            except TypeError:
-                return Message(text=markdown_text)
-
-    def _chart_data_url(self, agents: dict[str, Any]) -> str:
-        # Build a PNG chart with the standard library.
-        labels: list[str] = []
-        progress_values: list[float] = []
-        success_values: list[float] = []
-        for key, label in AGENT_ORDER:
-            summary = agents.get(key) or {}
-            if not summary.get("available", True):
-                continue
-            labels.append(label)
-            progress = summary.get("progress") or {}
-            success = summary.get("success") or {}
-            progress_values.append(self._pct_value(progress.get("count", 0), progress.get("base", 0)))
-            success_values.append(self._pct_value(success.get("count", 0), success.get("base", 0)))
-        return self._bar_chart_png_data_url(labels, progress_values, success_values)
-
-    def _image_content_block(self, chart_url: str) -> dict[str, Any]:
-        # Prefer the native image block shape used by recent Langflow versions.
-        if chart_url.startswith("data:image/png;base64,"):
-            return {
-                "type": "image",
-                "base64": chart_url.split(",", 1)[1],
-                "mime_type": "image/png",
-                "caption": "SmartMigrate Progress / Success",
-            }
-        return {"type": "image", "urls": [chart_url], "caption": "SmartMigrate Progress / Success"}
-
-    def _bar_chart_png_data_url(self, labels: list[str], progress_values: list[float], success_values: list[float]) -> str:
-        # Render a compact PNG bar chart with only the Python standard library.
-        import binascii
-        import struct
-        import zlib
-
-        if not labels:
-            labels = ["No Data"]
-            progress_values = [0.0]
-            success_values = [0.0]
-
-        width, height = 760, 420
-        pixels = bytearray([255, 255, 255] * width * height)
-
-        def rect(x1: int, y1: int, x2: int, y2: int, color: tuple[int, int, int]) -> None:
-            x1 = max(0, min(width, x1))
-            x2 = max(0, min(width, x2))
-            y1 = max(0, min(height, y1))
-            y2 = max(0, min(height, y2))
-            for y in range(y1, y2):
-                row = y * width * 3
-                for x in range(x1, x2):
-                    offset = row + x * 3
-                    pixels[offset : offset + 3] = bytes(color)
-
-        left, top, chart_w, chart_h = 70, 52, 640, 260
-        axis = (55, 65, 81)
-        grid = (229, 231, 235)
-        for tick in range(0, 101, 25):
-            y = int(top + chart_h - (tick / 100 * chart_h))
-            rect(left, y, left + chart_w, y + 1, grid)
-        rect(left, top, left + 1, top + chart_h + 1, axis)
-        rect(left, top + chart_h, left + chart_w + 1, top + chart_h + 1, axis)
-
-        group_w = chart_w / max(len(labels), 1)
-        bar_w = int(min(44, group_w * 0.28))
-        for index in range(len(labels)):
-            base_x = int(left + index * group_w + group_w / 2)
-            for offset, value, color in (
-                (-int(bar_w * 0.6), progress_values[index], (37, 99, 235)),
-                (int(bar_w * 0.6), success_values[index], (22, 163, 74)),
-            ):
-                bar_h = int(max(0.0, min(float(value), 100.0)) / 100 * chart_h)
-                x = base_x + offset - bar_w // 2
-                y = top + chart_h - bar_h
-                rect(x, y, x + bar_w, top + chart_h, color)
-
-        raw = bytearray()
-        for y in range(height):
-            raw.append(0)
-            start = y * width * 3
-            raw.extend(pixels[start : start + width * 3])
-
-        def chunk(name: bytes, data: bytes) -> bytes:
-            crc = binascii.crc32(name + data) & 0xFFFFFFFF
-            return struct.pack(">I", len(data)) + name + data + struct.pack(">I", crc)
-
-        png = (
-            b"\x89PNG\r\n\x1a\n"
-            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
-            + chunk(b"IDAT", zlib.compress(bytes(raw), 9))
-            + chunk(b"IEND", b"")
-        )
-        return f"data:image/png;base64,{base64.b64encode(png).decode('ascii')}"
-
-    def _pct_value(self, numerator: Any, denominator: Any) -> float:
-        # Return a numeric percentage for chart series values.
-        base = self._num(denominator)
-        if base <= 0:
-            return 0.0
-        return max(0.0, min(self._num(numerator) / base * 100, 100.0))
+    def _rate(self, value: dict[str, Any]) -> str:
+        # Format a rate with count/base detail for Markdown table display.
+        return f"{value.get('rate', '-')} ({value.get('count', 0)}/{value.get('base', 0)})"
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         # Parse a Langflow Data, dict, or JSON string payload.
