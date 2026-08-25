@@ -269,10 +269,10 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             cur = conn.cursor()
             cur.execute(query, params)
             row = cur.fetchone()
-        if not row:
-            raise ValueError(f"NEXT_SQL_INFO row not found: space_nm={payload.get('space_nm')}, sql_id={payload.get('sql_id')}")
-        keys = ["row_id", *[alias for _, alias, _ in aliases]]
-        loaded = {key: self._lob_to_str(row[index]) for index, key in enumerate(keys)}
+            if not row:
+                raise ValueError(f"NEXT_SQL_INFO row not found: space_nm={payload.get('space_nm')}, sql_id={payload.get('sql_id')}")
+            keys = ["row_id", *[alias for _, alias, _ in aliases]]
+            loaded = {key: self._lob_to_str(row[index]) for index, key in enumerate(keys)}
         return {**payload, **loaded}
 
     def _update_row(self, db_config: dict[str, Any], row_id: str, values: dict[str, Any]) -> None:

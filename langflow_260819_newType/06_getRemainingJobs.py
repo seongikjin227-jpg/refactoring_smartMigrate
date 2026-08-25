@@ -44,7 +44,6 @@ class NewType06GetRemainingJobs(Component):
             if not self._has_db_config():
                 raise ValueError("DB connection settings are required for 06 Get Remaining Jobs")
             jobs = self._load_from_db()
-            db_config = self._db_config()
             summary = {
                 "total": len(jobs.get("all_jobs", [])),
                 "migration_total": len(jobs.get("migration_jobs", [])),
@@ -59,7 +58,6 @@ class NewType06GetRemainingJobs(Component):
                     "remaining_summary": summary,
                     "pending_jobs": jobs,
                     "pending_summary": summary,
-                    "db_config": db_config,
                     "next_node": "08_jobExecutionRouter",
                 }
             )
@@ -196,17 +194,6 @@ class NewType06GetRemainingJobs(Component):
     def _has_db_config(self) -> bool:
         # Check whether the minimum DB connection settings are present.
         return all(str(getattr(self, name, "") or "").strip() for name in ("db_host", "db_service_name", "db_username"))
-
-    def _db_config(self) -> dict[str, Any]:
-        # Carry the same DB settings used by 06 into downstream route/loop payloads.
-        return {
-            "db_host": str(getattr(self, "db_host", "") or "").strip(),
-            "db_port": int(getattr(self, "db_port", None) or 1521),
-            "db_service_name": str(getattr(self, "db_service_name", "") or "").strip(),
-            "db_username": str(getattr(self, "db_username", "") or "").strip(),
-            "db_password": self._secret_to_str(getattr(self, "db_password", None)),
-            "system_schema": str(getattr(self, "system_schema", "") or "").strip(),
-        }
 
     def _qualify(self, table_name: str) -> str:
         # Qualify a table name with the optional system schema.
