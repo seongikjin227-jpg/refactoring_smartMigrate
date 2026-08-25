@@ -30,21 +30,13 @@ class NewType17BSqlFormattingLoop(Component):
         HandleInput(
             name="data",
             display_name="SQL Formatting Jobs",
-            info="SQL formatting job rows to iterate. Accepts DataFrame, Table, Data, or Message.",
+            info="SQL formatting job rows to iterate.",
             input_types=["DataFrame", "Table", "Data", "Message"],
         ),
     ]
 
     outputs = [
-        Output(
-            display_name="Item",
-            name="item",
-            method="item_output",
-            types=["Data"],
-            allows_loop=True,
-            loop_types=["Data"],
-            group_outputs=True,
-        ),
+        Output(display_name="Item", name="item", method="item_output", types=["Data"], allows_loop=True, loop_types=["Data"], group_outputs=True),
         Output(display_name="Done", name="done", method="done_output", types=["Data"]),
     ]
 
@@ -53,19 +45,9 @@ class NewType17BSqlFormattingLoop(Component):
         if self.ctx.get(f"{self._id}_initialized", False):
             return
         data_list = self._validate_data(self.data)
-        job_keys: list[str] = []
         for index, item in enumerate(data_list, start=1):
-            payload = self._data_dict(item)
-            self._validate_sql_key(payload, index)
-            job_keys.append(self._job_key(payload))
-        self.log(f"Normalized SQL Formatting loop jobs={job_keys}", name="Input")
-        self.update_ctx(
-            {
-                f"{self._id}_data": data_list,
-                f"{self._id}_index": 0,
-                f"{self._id}_initialized": True,
-            }
-        )
+            self._validate_sql_key(self._data_dict(item), index)
+        self.update_ctx({f"{self._id}_data": data_list, f"{self._id}_index": 0, f"{self._id}_initialized": True})
 
     def _convert_message_to_data(self, message: Message) -> Data:
         return convert_to_data(message, auto_parse=False)
@@ -126,10 +108,8 @@ class NewType17BSqlFormattingLoop(Component):
         try:
             self.initialize_data()
             data_list = self.ctx.get(f"{self._id}_data", [])
-            self.log(f"Starting SQL Formatting loop over {len(data_list)} job(s)", name="Start")
             if not data_list:
                 self.update_ctx({f"{self._id}_aggregated": [], f"{self._id}_iterated": True})
-                self.log("No SQL Formatting jobs to iterate", name="Skipped")
                 return []
             aggregated_results = await self.execute_loop_body(data_list, event_manager=self._event_manager)
         except Exception as exc:
@@ -140,28 +120,22 @@ class NewType17BSqlFormattingLoop(Component):
             await logger.aexception(f"SQL Formatting loop {self._id} failed while executing loop body")
             self.update_ctx({f"{self._id}_iteration_error": exc, f"{self._id}_iterated": True})
             raise
-        elapsed = time.perf_counter() - started_at
-        self.log(f"Completed {len(aggregated_results)} SQL Formatting iteration(s) in {elapsed:.3f}s", name="Complete")
         self.update_ctx({f"{self._id}_aggregated": aggregated_results, f"{self._id}_iterated": True})
         return aggregated_results
 
     async def item_output(self) -> Data:
-        # The Item output is only the loop-body entry point. Its normal return
-        # value must never continue through the outer graph into 17C.
+        """Execute the loop body and keep the outer Item output stopped."""
         self.stop("item")
         try:
             if self._vertex is not None:
                 await self._iterate()
         finally:
-            # Running the loop body builds a nested graph. Re-assert the stop
-            # after it finishes so the inspection payload below cannot be
-            # dispatched to 17C as one additional job.
             self.stop("item")
         data_list = self.ctx.get(f"{self._id}_data", [])
         return Data(data={"count": len(data_list), "items": [self._data_dict(item) for item in data_list]})
 
     async def done_output(self) -> Data:
-        # The Done output is the post-loop path. Connect it to 11.
+        """Emit a Done payload after all SQL formatting iterations complete."""
         if self._vertex is not None:
             await self._iterate()
         data_list = self.ctx.get(f"{self._id}_data", [])
@@ -182,12 +156,6 @@ class NewType17BSqlFormattingLoop(Component):
         if str(payload.get("space_nm") or "").strip() and str(payload.get("sql_id") or "").strip():
             return
         raise ValueError(f"17B SQL Formatting item {index} requires row_id or space_nm+sql_id")
-
-    def _job_key(self, payload: dict[str, Any]) -> str:
-        row_id = str(payload.get("row_id") or "").strip()
-        if row_id:
-            return f"row_id={row_id}"
-        return f"space_nm={payload.get('space_nm')}, sql_id={payload.get('sql_id')}"
 
     def _data_dict(self, item: Any) -> dict[str, Any]:
         if isinstance(item, Data):

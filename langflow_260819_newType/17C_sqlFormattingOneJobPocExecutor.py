@@ -30,8 +30,9 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
 
     inputs = [
         DataInput(name="job_item", display_name="Job Item", required=True),
-        IntInput(name="max_retry", display_name="Max Retry", value=0, required=False),
+        IntInput(name="max_retry", display_name="Max Retry", value=2, required=False),
     ]
+
     outputs = [Output(display_name="Job Result", name="job_result", method="run_job", types=["Data"])]
 
     def run_job(self) -> Data:

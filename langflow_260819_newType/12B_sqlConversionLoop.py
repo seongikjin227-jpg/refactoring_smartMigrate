@@ -2,6 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from lfx.custom.custom_component.component import Component
+from lfx.inputs.inputs import HandleInput
+from lfx.io import Output
+from lfx.schema.data import Data
+from lfx.schema.dataframe import DataFrame
+from lfx.schema.message import Message
+
 from lfx.base.flow_controls.loop_utils import (
     execute_loop_body,
     extract_loop_output,
@@ -11,12 +18,6 @@ from lfx.base.flow_controls.loop_utils import (
     validate_data_input,
 )
 from lfx.components.processing.converter import convert_to_data
-from lfx.custom.custom_component.component import Component
-from lfx.inputs.inputs import HandleInput
-from lfx.io import Output
-from lfx.schema.data import Data
-from lfx.schema.dataframe import DataFrame
-from lfx.schema.message import Message
 
 
 class NewType12BSqlConversionLoop(Component):
