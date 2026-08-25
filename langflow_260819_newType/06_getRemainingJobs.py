@@ -86,13 +86,21 @@ class NewType06GetRemainingJobs(Component):
             migration_jobs = self._query_jobs(
                 cur,
                 f"""
-                SELECT MAP_ID,
-                       PRIORITY,
-                       PRIOR_MAP_ID
-                  FROM {mig_table}
-                 WHERE UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
-                   AND STATUS IS NULL
-                 ORDER BY PRIORITY ASC NULLS LAST, MAP_ID ASC
+                SELECT M.MAP_ID,
+                       M.PRIORITY,
+                       M.PRIOR_MAP_ID
+                  FROM {mig_table} M
+                  LEFT JOIN {mig_table} P ON P.MAP_ID = M.PRIOR_MAP_ID
+                 WHERE UPPER(TRIM(NVL(M.USE_YN, 'N'))) = 'Y'
+                   AND M.STATUS IS NULL
+                 ORDER BY
+                       CASE
+                           WHEN M.PRIOR_MAP_ID IS NULL OR M.PRIOR_MAP_ID <= 0 THEN 0
+                           WHEN P.STATUS IS NOT NULL THEN 1
+                           ELSE 2
+                       END ASC,
+                       M.PRIORITY ASC NULLS LAST,
+                       M.MAP_ID ASC
                 """,
                 "MIG",
                 ["map_id", "priority", "prior_map_id"],
@@ -117,8 +125,8 @@ class NewType06GetRemainingJobs(Component):
                        TO_CHAR(SQL_ID) AS SQL_ID,
                        PRIORITY
                   FROM {sql_table}
-                 WHERE STATUS_TUNING IS NULL
-                   AND UPPER(TRIM(STATUS_CONVERSION)) = 'PASS-CONVERSION'
+                 WHERE UPPER(TRIM(STATUS_TUNING)) IN ('URGENT', 'READY', 'FAIL', 'FAIL-TUNED', 'FAIL-BIND', 'FAIL-TEST')
+                   AND UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')
                  ORDER BY PRIORITY ASC NULLS LAST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                 """,
                 "SQL_TUNING",

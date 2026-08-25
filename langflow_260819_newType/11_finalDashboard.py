@@ -114,7 +114,7 @@ class NewType11FinalDashboard(Component):
         missing = [col for col in ("STATUS_TUNING", "STATUS_CONVERSION") if col not in columns]
         if missing:
             return self._unavailable("SQL_TUNING", table, f"missing columns: {', '.join(missing)}")
-        base_where = "UPPER(TRIM(STATUS_CONVERSION)) = 'PASS-CONVERSION'"
+        base_where = "UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')"
         total = self._count(table, base_where)
         target = self._count(table, f"{base_where} AND STATUS_TUNING IS NULL")
         pass_count = self._count(table, f"{base_where} AND UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING')")
@@ -125,7 +125,7 @@ class NewType11FinalDashboard(Component):
         return self._stage_summary(
             agent="SQL_TUNING",
             table=table,
-            target_condition="STATUS_TUNING IS NULL AND STATUS_CONVERSION='PASS-CONVERSION'",
+            target_condition="STATUS_TUNING IS NULL and STATUS_CONVERSION pass",
             total=total,
             target_count=target,
             progress_count=pass_count,
@@ -198,10 +198,9 @@ class NewType11FinalDashboard(Component):
 
     def _build_answer(self, dashboard: dict[str, Any]) -> str:
         agents = dashboard.get("agents") or {}
-        lines = ["# SmartMigrate Dashboard", "DB Migration 작업이 완료됐습니다. 현재 전체 작업 현황은 아래와 같습니다."]
+        lines = ["# SmartMigrate Dashboard"]
         lines.extend(
             [
-                "",
                 "## 작업 현황",
                 "| 순서 | 단계 | 작업 대상 | 잔여 | 성공 | 실패 | 기타 |",
                 "|---:|---|---:|---:|---:|---:|---:|",

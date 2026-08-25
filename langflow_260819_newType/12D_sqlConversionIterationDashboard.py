@@ -15,10 +15,10 @@ except Exception:
     DataInput = MessageTextInput
 
 
-class NewType10DMigIterationDashboard(Component):
-    display_name = "10D MIG Iteration Dashboard"
-    description = "Formats one completed MIG POC iteration for Chat Output and loop feedback."
-    name = "NewType10DMigIterationDashboard"
+class NewType12DSqlConversionIterationDashboard(Component):
+    display_name = "12D SQL Conversion Iteration Dashboard"
+    description = "Formats one SQL Conversion loop result for Chat Output and loop feedback."
+    name = "NewType12DSqlConversionIterationDashboard"
     icon = "Gauge"
 
     inputs = [DataInput(name="job_result", display_name="Job Result", required=True)]
@@ -28,11 +28,13 @@ class NewType10DMigIterationDashboard(Component):
     ]
 
     def build_message(self) -> Message:
+        """Return a chat-friendly iteration message."""
         payload = self._build()
         self.status = payload
         return Message(text=str(payload.get("answer_text") or ""))
 
     def build_loop_result(self) -> Data:
+        """Return the loop aggregation payload."""
         payload = self._build()
         self.status = payload
         return Data(data=payload.get("loop_result") or payload)
@@ -44,91 +46,63 @@ class NewType10DMigIterationDashboard(Component):
         result = self._parse_payload(getattr(self, "job_result", ""))
         answer = self._answer(result)
         loop_result = {
-            "job_type": "MIG",
-            "map_id": result.get("map_id"),
+            "job_type": "SQL_CONVERSION",
+            "space_nm": result.get("space_nm"),
+            "sql_id": result.get("sql_id"),
             "ok": bool(result.get("ok")),
             "status": result.get("status"),
-            "retry_count": result.get("retry_count", 0),
-            "attempt_count": result.get("attempt_count", 0),
-            "elapsed_seconds": result.get("elapsed_seconds", 0),
             "job_index": result.get("job_index", 1),
             "total_jobs": result.get("total_jobs", 1),
             "completed_count": result.get("completed_count", result.get("job_index", 1)),
             "remaining_count": result.get("remaining_count", 0),
+            "elapsed_seconds": result.get("elapsed_seconds", 0),
+            "stages": result.get("stages") or {},
             "message": result.get("message") or "",
-            "attempts": result.get("attempts") or [],
         }
-        payload = {
-            **result,
-            "component": "10D_migIterationDashboard",
-            "answer_text": answer,
-            "loop_result": loop_result,
-            "final": False,
-        }
+        payload = {**result, "component": "12D_sqlConversionIterationDashboard", "answer_text": answer, "loop_result": loop_result, "final": False}
         self._cached_payload = payload
         return payload
 
     def _answer(self, result: dict[str, Any]) -> str:
+        """Build Markdown for one SQL conversion/tuning/formatting iteration."""
         index = int(result.get("job_index") or 1)
         total = int(result.get("total_jobs") or 1)
         completed = int(result.get("completed_count") or index)
-        remaining = max(int(result.get("remaining_count") or (total - completed)), 0)
-        attempts = list(result.get("attempts") or [])
         progress_rate = (completed / total * 100) if total else 0.0
-        not_runnable = bool(result.get("not_runnable"))
-        skipped = bool(result.get("skipped"))
-        current_success = 1 if result.get("ok") and not not_runnable and not skipped else 0
-        current_failure = 0 if result.get("ok") or not_runnable or skipped else 1
-
         lines = [
-            "## MIG Progress",
+            "## SQL Conversion Progress",
             "",
-            f"- Current job: map_id={result.get('map_id')}",
+            f"- Current job: space_nm={result.get('space_nm')}, sql_id={result.get('sql_id')}",
             f"- Progress: {completed}/{total} jobs, {progress_rate:.1f}%",
             self._bar(completed, total),
             f"- Current status: {result.get('status')}",
-            f"- retry: {result.get('retry_count', 0)}",
-            f"- elapsed: {result.get('elapsed_seconds', 0)} seconds",
             "",
-            "| Metric | Count |",
-            "|---|---:|",
-            f"| Completed | {completed} |",
-            f"| Current success | {current_success} |",
-            f"| Current failure | {current_failure} |",
-            f"| Remaining | {remaining} |",
+            "| Stage | Status | Message |",
+            "|---|---|---|",
         ]
-        if attempts:
-            lines.extend(["", "Recent logs:"])
-            for attempt in attempts[-5:]:
-                stage = attempt.get("failed_stage") or "VERIFY"
-                lines.append(f"- attempt {attempt.get('attempt')}: {attempt.get('status')} ({stage})")
-                for step in list(attempt.get("steps") or [])[-4:]:
-                    lines.append(f"  - {step.get('stage')}: {step.get('status')}")
-        message = str(result.get("message") or "").strip()
-        if message:
-            lines.extend(["", f"Message: {message}"])
+        stages = result.get("stages") or {}
+        for stage in ("conversion", "tuning", "formatting"):
+            item = stages.get(stage) or {}
+            lines.append(f"| {stage} | {item.get('status', '-')} | {self._cell(item.get('message', '-'))} |")
+        if result.get("message"):
+            lines.extend(["", f"Message: {result.get('message')}"])
         if completed >= total:
-            lines.extend(
-                [
-                    "",
-                    "## MIG Request Summary",
-                    "",
-                    f"- Target jobs: {total}",
-                    f"- Completed: {completed}/{total}",
-                    f"- Last job status: {result.get('status')}",
-                    "",
-                    "Requested MIG loop is complete.",
-                ]
-            )
+            lines.extend(["", "Requested SQL Conversion loop is complete."])
         return "\n".join(lines)
 
     def _bar(self, value: int, total: int, width: int = 20) -> str:
+        """Return a simple Markdown progress bar."""
         clamped = max(0, min(value, total))
         filled = round(clamped / total * width) if total > 0 else 0
         percent = (clamped / total * 100) if total > 0 else 0.0
         return f"{'#' * filled}{'-' * (width - filled)} `{percent:.1f}%`"
 
+    def _cell(self, value: Any) -> str:
+        """Escape pipe characters for Markdown table cells."""
+        return str(value or "-").replace("|", "/")
+
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
+        """Parse a Langflow Data, Message, dict, or JSON string payload."""
         if isinstance(raw, Data):
             return dict(raw.data or {})
         if isinstance(raw, Message):

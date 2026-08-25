@@ -44,7 +44,7 @@ MigrationOrchestrator.process_job(job)
      - finalize
 
   3. 최종 status 반환
-     - PASS / SKIP / WAITING / FAIL
+     - PASS / SKIP-PRIOR-FAIL / NOT_RUNNABLE / FAIL
 ```
 
 ## Graph 노드 순서
@@ -58,12 +58,12 @@ check_dependency
               -> finalize
 ```
 
-의존성 확인을 먼저 수행해 `WAITING` 또는 `SKIP` 대상은 DDL 조회를 하지 않습니다. 재시도나 의존성 상태에 따라 중간에 `finalize`로 빠지거나 `biz_retry_prepare`를 거쳐 다시 실행됩니다.
+의존성 확인을 먼저 수행해 선행 작업이 실패 계열이면 현재 job은 `SKIP-PRIOR-FAIL`로 저장하고, 선행 작업이 아직 미완료이면 DDL 조회와 상태 업데이트를 하지 않습니다. 재시도 상태에 따라 중간에 `finalize`로 빠지거나 `biz_retry_prepare`를 거쳐 다시 실행됩니다.
 
 ```text
 check_dependency
   -> READY: fetch_ddl
-  -> WAITING/SKIP: finalize
+  -> SKIP-PRIOR-FAIL/NOT_RUNNABLE: finalize
 
 fetch_ddl
   -> generate
@@ -93,8 +93,9 @@ biz_retry_prepare
 담당 함수: `check_dependency_node()`
 
 1. `PRIOR_MAP_ID` 의존성을 확인합니다.
-2. 선행 job이 실패하면 `SKIP`, 아직 준비되지 않았으면 `WAITING`으로 종료합니다.
-3. 실행 가능하면 `BATCH_CNT`를 증가시키고 `fetch_ddl`로 진행합니다.
+2. 선행 job이 실패 계열이면 현재 job을 `SKIP-PRIOR-FAIL`로 저장합니다.
+3. 선행 job이 아직 미완료이면 현재 job은 실행 대상이 아니므로 `NOT_RUNNABLE` 런타임 결과로 종료하고 DB status는 업데이트하지 않습니다.
+4. 실행 가능하면 `BATCH_CNT`를 증가시키고 `fetch_ddl`로 진행합니다.
 
 `PRIORITY`는 실행 정렬 기준이며 dependency가 아닙니다. 같은 `TO_TABLE`의 낮은 priority job이 실패했더라도 그 자체로 현재 job을 막지 않습니다.
 
@@ -149,8 +150,8 @@ DDL은 LLM prompt에 들어가며, migration SQL의 타입 변환과 target colu
 최종 status에 따라 `NEXT_MIG_INFO` 상태와 migration history를 저장합니다.
 
 - `PASS`: migration 성공
-- `SKIP`: 의존성 실패로 후속 job skip
-- `WAITING`: 선행 job 대기
+- `SKIP-PRIOR-FAIL`: 선행 job이 실패 계열이라 현재 job도 실행하지 않고 skip 상태로 저장
+- `NOT_RUNNABLE`: 선행 job이 아직 미완료라 실행하지 않음. DB status는 업데이트하지 않음
 - `FAIL`: 최대 retry 초과 또는 복구 불가 실패
 
 ## Retry 정책

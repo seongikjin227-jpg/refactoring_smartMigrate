@@ -65,6 +65,10 @@ def _is_user_edited(job) -> bool:
 def _user_edited_value(job) -> str:
     return str(getattr(job, "user_edited", "") or "N").strip().upper() or "N"
 
+def _is_dependency_failure_status(status: str) -> bool:
+    value = str(status or "").strip().upper()
+    return value == "FAIL" or value.startswith("FAIL-") or value.startswith("SKIP-")
+
 def _extract_query_table_names(sql_text: str) -> list[str]:
     """Extract physical table names from a COMPLEX FR_TABLE SQL expression."""
     text = re.sub(r"/\*.*?\*/", " ", sql_text or "", flags=re.DOTALL)
@@ -126,11 +130,25 @@ def check_dependency_node(state: MigrationState) -> dict:
     dep_status = check_dependencies(job.map_id, job.prior_map_id)
 
     if dep_status != "READY":
-        if str(dep_status or "").strip().upper() == "FAIL":
-            logger.warning(f"[Graph:DEP] map_id={job.map_id} | PRIOR_MAP_ID={job.prior_map_id} FAIL. 후속 작업을 SKIP 합니다.")
-            return {"status": "SKIP", "error_type": "DEPENDENCY_FAIL", "last_error": f"선행 MAP_ID={job.prior_map_id} 상태: {dep_status}"}
-        logger.warning(f"[Graph:DEP] map_id={job.map_id} | PRIOR_MAP_ID={job.prior_map_id} 미통과 ({dep_status}). 다음 cycle까지 대기합니다.")
-        return {"status": "WAITING", "error_type": "DEPENDENCY_WAIT", "last_error": f"선행 MAP_ID={job.prior_map_id} 상태: {dep_status}"}
+        if _is_dependency_failure_status(dep_status):
+            logger.warning(
+                f"[Graph:DEP] map_id={job.map_id} | PRIOR_MAP_ID={job.prior_map_id} "
+                f"failed ({dep_status}). Current job will be skipped."
+            )
+            return {
+                "status": "SKIP-PRIOR-FAIL",
+                "error_type": "DEPENDENCY_SKIP",
+                "last_error": f"선행 MAP_ID={job.prior_map_id} 상태: {dep_status}",
+            }
+        logger.warning(
+            f"[Graph:DEP] map_id={job.map_id} | PRIOR_MAP_ID={job.prior_map_id} "
+            f"not runnable ({dep_status}). No job status update will be written."
+        )
+        return {
+            "status": "NOT_RUNNABLE",
+            "error_type": "DEPENDENCY_NOT_READY",
+            "last_error": f"선행 MAP_ID={job.prior_map_id} 상태: {dep_status}",
+        }
 
     increment_batch_count(job.map_id)
     return {"error_type": _clear_error()}
@@ -314,16 +332,15 @@ def finalize_node(state: MigrationState) -> dict:
         log_business_history(job.map_id, "INFO", "INFO", "VERIFY", "PASS", "Migration Success", retry_count, mig_kind, generate_sql=state.get("current_v_sql") or "")
         logger.info(f"[Graph:FINISH] map_id={job.map_id} | >>> 성공 <<<")
         return {"elapsed_time": elapsed, "status": "PASS"}
-    elif state["status"] == "SKIP":
+    elif state["status"] == "SKIP-PRIOR-FAIL":
         retry_count = _retry_count(state)
-        update_job_status(job.map_id, "SKIP", elapsed, retry_count)
-        log_business_history(job.map_id, "JOB_SKIP", "WARN", "DEP_CHECK", "SKIP", state["last_error"], retry_count, mig_kind, generate_sql=_current_generate_sql(state))
-        logger.warning(f"[Graph:FINISH] map_id={job.map_id} | >>> SKIP (의존성 실패) <<<")
-        return {"elapsed_time": elapsed, "status": "SKIP"}
-    elif state["status"] == "WAITING":
-        log_business_history(job.map_id, "JOB_WAIT", "INFO", "DEP_CHECK", "WAITING", state["last_error"], _retry_count(state), mig_kind, generate_sql=_current_generate_sql(state))
-        logger.info(f"[Graph:FINISH] map_id={job.map_id} | >>> WAITING (의존성 대기) <<<")
-        return {"elapsed_time": elapsed, "status": "WAITING"}
+        update_job_status(job.map_id, "SKIP-PRIOR-FAIL", elapsed, retry_count)
+        log_business_history(job.map_id, "JOB_SKIP", "WARN", "DEP_CHECK", "SKIP-PRIOR-FAIL", state["last_error"], retry_count, mig_kind, generate_sql=_current_generate_sql(state))
+        logger.warning(f"[Graph:FINISH] map_id={job.map_id} | >>> SKIP-PRIOR-FAIL <<<")
+        return {"elapsed_time": elapsed, "status": "SKIP-PRIOR-FAIL"}
+    elif state["status"] == "NOT_RUNNABLE":
+        logger.info(f"[Graph:FINISH] map_id={job.map_id} | not runnable: {state.get('last_error')}")
+        return {"elapsed_time": elapsed, "status": "NOT_RUNNABLE"}
     else:
         retry_count = _retry_count(state)
         failure_status = _failure_status(state)
@@ -337,13 +354,13 @@ def finalize_node(state: MigrationState) -> dict:
 def should_continue(state: MigrationState) -> Literal["generate", "finalize", "verify", "execute"]:
     error_type = state.get("error_type")
 
-    if state.get("status") in ("PASS", "SKIP", "WAITING"):
+    if state.get("status") in ("PASS", "SKIP-PRIOR-FAIL", "NOT_RUNNABLE"):
         return "finalize"
 
-    if error_type == "DEPENDENCY_WAIT":
+    if error_type == "DEPENDENCY_SKIP":
         return "finalize"
 
-    if error_type == "DEPENDENCY_FAIL":
+    if error_type == "DEPENDENCY_NOT_READY":
         return "finalize"
 
     if error_type == "LLM_RETRY":

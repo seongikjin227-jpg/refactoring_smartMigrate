@@ -36,7 +36,7 @@ class NewType10AMigJobsToLoopTable(Component):
     def build_jobs_table(self) -> DataFrame:
         # Build a Loop-compatible DataFrame where each row is one MIG job.
         payload = self._parse_payload(getattr(self, "payload_json", ""))
-        jobs = self._mig_jobs(payload)
+        jobs = self._sort_by_dependency(self._mig_jobs(payload))
         total = len(jobs)
         db_config = self._db_config()
         rows: list[dict[str, Any]] = []
@@ -98,6 +98,50 @@ class NewType10AMigJobsToLoopTable(Component):
         if not isinstance(parsed, dict):
             raise ValueError("payload_json must be a JSON object")
         return parsed
+
+    def _sort_by_dependency(self, jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        # Order jobs so an included PRIOR_MAP_ID runs before its dependent job.
+        indexed = [(index, job) for index, job in enumerate(jobs)]
+        by_map_id = {self._to_int(job.get("map_id")): (index, job) for index, job in indexed if self._to_int(job.get("map_id")) is not None}
+        visited: set[int] = set()
+        visiting: set[int] = set()
+        ordered: list[dict[str, Any]] = []
+
+        def base_key(item: tuple[int, dict[str, Any]]) -> tuple[int, int, int]:
+            index, job = item
+            priority = self._to_int(job.get("priority"))
+            map_id = self._to_int(job.get("map_id"))
+            return (priority if priority is not None else 999999999, map_id if map_id is not None else 999999999, index)
+
+        def visit(map_id: int) -> None:
+            if map_id in visited:
+                return
+            if map_id in visiting:
+                raise ValueError(f"10A MIG dependency cycle detected at map_id={map_id}")
+            item = by_map_id.get(map_id)
+            if item is None:
+                return
+            visiting.add(map_id)
+            prior = self._to_int(item[1].get("prior_map_id"))
+            if prior is not None and prior > 0 and prior in by_map_id:
+                visit(prior)
+            visiting.remove(map_id)
+            visited.add(map_id)
+            ordered.append(dict(item[1]))
+
+        for _, job in sorted(indexed, key=base_key):
+            map_id = self._to_int(job.get("map_id"))
+            if map_id is None:
+                ordered.append(dict(job))
+                continue
+            visit(map_id)
+        return ordered
+
+    def _to_int(self, value: Any) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     def _secret_to_str(self, value: Any) -> str:
         if value is None:

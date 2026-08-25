@@ -494,11 +494,11 @@ class NewType08JobExecutionRouter(Component):
         if route == "MIG":
             return "10A_migJobsToLoopTable"
         if route == "SQL_CONVERSION":
-            return "12_sqlConversionPipeline"
+            return "12A_sqlConversionJobsToLoopTable"
         if route == "SQL_TUNING":
-            return "15_sqlTuningPipeline"
+            return "15A_sqlTuningJobsToLoopTable"
         if route == "SQL_FORMATTING":
-            return "17_sqlFormattingPipeline"
+            return "17A_sqlFormattingJobsToLoopTable"
         return "13_finalSummary"
 
     def _to_int(self, value: Any) -> int | None:

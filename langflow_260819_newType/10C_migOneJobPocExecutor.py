@@ -46,10 +46,28 @@ class NewType10CMigOneJobPocExecutor(Component):
             dep_status = self._dependency_status(db_config, map_id, job.get("prior_map_id"))
             if dep_status != "READY":
                 elapsed = int(time.perf_counter() - started)
-                result = self._result(job, ok=False, status="WAITING", elapsed=elapsed, attempts=attempts)
+                if self._is_dependency_failure_status(dep_status):
+                    status = "SKIP-PRIOR-FAIL"
+                    self._update_job(db_config, map_id, status, elapsed, 0)
+                    self._insert_log(
+                        db_config,
+                        map_id,
+                        "JOB_SKIP",
+                        "WARN",
+                        "DEP_CHECK",
+                        status,
+                        f"prior_map_id={job.get('prior_map_id')} status={dep_status}",
+                        0,
+                        "",
+                    )
+                    result = self._result(job, ok=False, status=status, elapsed=elapsed, attempts=attempts)
+                    result.update({"skipped": True, "db_status_updated": True})
+                else:
+                    result = self._result(job, ok=False, status="NOT_RUNNABLE", elapsed=elapsed, attempts=attempts)
+                    result.update({"not_runnable": True, "db_status_updated": False})
                 result.update(
                     {
-                        "error_type": "DEPENDENCY_WAIT",
+                        "error_type": "DEPENDENCY_NOT_READY",
                         "message": f"prior_map_id={job.get('prior_map_id')} status={dep_status}",
                     }
                 )
@@ -530,6 +548,11 @@ class NewType10CMigOneJobPocExecutor(Component):
             return "PENDING"
         status = str(row[0] or "").strip().upper()
         return "READY" if status == "PASS" else (status or "PENDING")
+
+    def _is_dependency_failure_status(self, status: str) -> bool:
+        """Return True when a prior job has reached a terminal failure/skip status."""
+        value = str(status or "").strip().upper()
+        return value == "FAIL" or value.startswith("FAIL-") or value.startswith("SKIP-")
 
     def _mark_running(self, db_config: dict[str, Any], map_id: int) -> None:
         """Mark a migration job as running in NEXT_MIG_INFO."""

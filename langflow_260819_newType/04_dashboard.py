@@ -126,7 +126,7 @@ class NewType04Dashboard(Component):
         missing = [col for col in ("STATUS_TUNING", "STATUS_CONVERSION") if col not in columns]
         if missing:
             return self._unavailable("SQL_TUNING", table, f"missing columns: {', '.join(missing)}")
-        base_where = "UPPER(TRIM(STATUS_CONVERSION)) = 'PASS-CONVERSION'"
+        base_where = "UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')"
         total = self._count(table, base_where)
         target = self._count(table, f"{base_where} AND STATUS_TUNING IS NULL")
         pass_count = self._count(table, f"{base_where} AND UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING')")
@@ -137,7 +137,7 @@ class NewType04Dashboard(Component):
         return self._stage_summary(
             agent="SQL_TUNING",
             table=table,
-            target_condition="STATUS_TUNING IS NULL AND STATUS_CONVERSION='PASS-CONVERSION'",
+            target_condition="STATUS_TUNING IS NULL and STATUS_CONVERSION pass",
             total=total,
             target_count=target,
             progress_count=pass_count,
@@ -223,13 +223,8 @@ class NewType04Dashboard(Component):
 
     def _build_answer(self, payload: dict[str, Any], dashboard: dict[str, Any]) -> str:
         # Format dashboard data into a Markdown user-facing message.
-        user_request = str(payload.get("user_request") or payload.get("original_request") or "").strip()
         agents = dashboard.get("agents") or {}
         lines = ["# SmartMigrate Dashboard"]
-        if user_request:
-            lines.append(f"> 요청: {user_request}")
-
-        lines.append("")
         lines.append("## 작업 현황")
         lines.append("| 순서 | 단계 | 작업 대상 | 잔여 | 성공 | 실패 | 기타 |")
         lines.append("|---:|---|---:|---:|---:|---:|---:|")

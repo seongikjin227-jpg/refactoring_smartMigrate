@@ -79,8 +79,12 @@ def get_pending_jobs() -> list[MappingRule]:
             LEFT JOIN {map_table} P ON P.MAP_ID = M.PRIOR_MAP_ID
             WHERE UPPER(TRIM(NVL(M.USE_YN, 'N'))) = 'Y'
               AND M.STATUS IS NULL
-              AND (M.PRIOR_MAP_ID IS NULL OR M.PRIOR_MAP_ID <= 0 OR UPPER(TRIM(NVL(P.STATUS, ''))) = 'PASS')
             ORDER BY
+                CASE
+                    WHEN M.PRIOR_MAP_ID IS NULL OR M.PRIOR_MAP_ID <= 0 THEN 0
+                    WHEN P.STATUS IS NOT NULL THEN 1
+                    ELSE 2
+                END ASC,
                 M.PRIORITY ASC,
                 M.MAP_ID ASC
             FETCH FIRST 1 ROW ONLY
