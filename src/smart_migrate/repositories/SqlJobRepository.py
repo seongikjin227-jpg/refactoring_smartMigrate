@@ -8,8 +8,6 @@ from smart_migrate.integrations.oracle.OracleConnection import get_connection, g
 from smart_migrate.shared.SqlStatuses import (
     CONVERSION_SUCCESS_STATUSES,
     FAIL_TEST,
-    LEGACY_FAIL,
-    TUNING_FAIL_STATUSES,
     TUNING_SUCCESS_STATUSES,
     sql_in,
 )
@@ -300,7 +298,7 @@ def get_sql_job_by_row_id(row_id: str) -> SqlInfoJob | None:
 
 
 def get_tuning_jobs() -> list:
-    """Return unfinished tuning jobs under the retry limit."""
+    """Return conversion-passed rows that have not started SQL tuning."""
     table = get_result_table()
     available_columns = _get_available_columns(table)
     fr_sql_column = "FR_SQL"
@@ -325,16 +323,10 @@ def get_tuning_jobs() -> list:
     query = f"""
         SELECT ROWIDTOCHAR(ROWID) AS RID
         FROM {table}
-        WHERE UPPER(TRIM({tuning_status_column})) IN ({sql_in(('URGENT', 'READY', LEGACY_FAIL, *TUNING_FAIL_STATUSES))})
+        WHERE {tuning_status_column} IS NULL
           AND UPPER(TRIM({conversion_status_column})) IN ({sql_in(CONVERSION_SUCCESS_STATUSES)})
           {batch_limit_clause}
         ORDER BY
-          CASE
-            WHEN UPPER(TRIM({tuning_status_column})) = 'URGENT' THEN 1
-            WHEN UPPER(TRIM({tuning_status_column})) = 'READY' THEN 2
-            WHEN UPPER(TRIM({tuning_status_column})) IN ({sql_in((LEGACY_FAIL, *TUNING_FAIL_STATUSES))}) THEN 3
-            ELSE 9
-          END,
           UPD_TS NULLS FIRST,
           TO_CHAR(SPACE_NM),
           TO_CHAR(SQL_ID)

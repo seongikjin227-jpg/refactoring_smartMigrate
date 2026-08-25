@@ -174,7 +174,7 @@ SQL Conversion 요청은 loop item 1건이 아래 순서로 흐른다.
 | LONG SQL | `TUNED_FR_SQL` 생성 branch 실행. 현재는 POC placeholder 저장, 실제 RAG/LLM은 TODO 주석으로 분리 |
 | `TAG_KIND='SELECT'` | bind/test validation branch를 탄다 |
 | non-SELECT | bind/test validation 없이 conversion 성공 처리 |
-| success update | `TO_SQL`, `BIND_SQL`, `BIND_SET`, `TEST_SQL`, `STATUS_CONVERSION`, `STATUS_TUNING='READY'`, `TUNED_FR_SQL`, `LOG`, `RETRY_COUNT` |
+| success update | `TO_SQL`, `BIND_SQL`, `BIND_SET`, `TEST_SQL`, `STATUS_CONVERSION`, `TUNED_FR_SQL`, `LOG`, `RETRY_COUNT`. `STATUS_TUNING` is not changed by conversion. |
 | failure update | 실패 지점별 `STATUS_CONVERSION` 저장 |
 
 ### SQL Conversion 상태값
@@ -256,7 +256,7 @@ Formatting의 `FORMATTED`, `FAIL-FORMATTING`, `SKIP-UPSTREAM-TUNING`은 Langflow
 |---|---|
 | `MIG` | `NEXT_MIG_INFO.USE_YN='Y'` and `STATUS IS NULL`. `PRIOR_MAP_ID` 부모/결정 완료 job 우선 정렬 |
 | `SQL_CONVERSION` | `NEXT_SQL_INFO.STATUS_CONVERSION IS NULL` |
-| `SQL_TUNING` | `STATUS_CONVERSION IN ('PASS', 'PASS-CONVERSION')` and `STATUS_TUNING IN ('URGENT', 'READY', 'FAIL', 'FAIL-TUNED', 'FAIL-BIND', 'FAIL-TEST')` |
+| `SQL_TUNING` | `STATUS_CONVERSION IN ('PASS', 'PASS-CONVERSION')` and `STATUS_TUNING IS NULL` |
 | `SQL_FORMATTING` | `STATUS_TUNING IN ('PASS', 'PASS-TUNING')` and `FORMATTED_SQL` empty |
 
 ## Loop Done 규칙
@@ -296,4 +296,3 @@ Formatting의 `FORMATTED`, `FAIL-FORMATTING`, `SKIP-UPSTREAM-TUNING`은 Langflow
 | `12C` | LONG SQL일 때 SQL_TUNING RAG 기반 `TUNED_FR_SQL` 생성 |
 | `15C` | SQL_TUNING SEARCH rule 조회, `BLOCK_RAG_CONTENT` 저장, tuning LLM 호출, SELECT tuned validation |
 | `17C` | formatting prompt 기반 LLM formatting 호출 |
-

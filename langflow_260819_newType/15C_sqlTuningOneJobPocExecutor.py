@@ -53,8 +53,8 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                     payload=merged,
                     job=job,
                     started=started,
-                    status="SKIP-UPSTREAM-CONVERSION",
-                    message=f"SQL tuning skipped because conversion status is {conversion_status or 'NULL'}.",
+                    status=conversion_status or self._status(merged.get("status")) or "NOT-RUN",
+                    message=f"SQL tuning passed through without DB update because conversion status is {conversion_status or 'NULL'}.",
                 )
                 self.status = result
                 return Data(data=result)

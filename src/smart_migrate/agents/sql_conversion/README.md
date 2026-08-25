@@ -169,7 +169,7 @@ conversion agent 안에서는 SQL_TUNING RAG가 두 군데에서 쓰일 수 있�
 - `BIND_SET`: bind case JSON
 - `TEST_SQL`: 원본/TO-BE row count 비교 SQL
 - `STATUS_CONVERSION`: `PASS`
-- `STATUS_TUNING`: conversion 성공 직후 기본적으로 `READY`
+- `STATUS_TUNING`: conversion does not update this column. SQL tuning writes `PASS-TUNING`, `FAIL-TUNED`, or `FAIL-TEST`.
 - `LOG`, `RETRY_COUNT`, `UPD_TS`
 
 전처리 결과는 별도 저장합니다.

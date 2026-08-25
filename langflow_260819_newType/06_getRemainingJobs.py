@@ -125,7 +125,7 @@ class NewType06GetRemainingJobs(Component):
                        TO_CHAR(SQL_ID) AS SQL_ID,
                        PRIORITY
                   FROM {sql_table}
-                 WHERE UPPER(TRIM(STATUS_TUNING)) IN ('URGENT', 'READY', 'FAIL', 'FAIL-TUNED', 'FAIL-BIND', 'FAIL-TEST')
+                 WHERE STATUS_TUNING IS NULL
                    AND UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')
                  ORDER BY PRIORITY ASC NULLS LAST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                 """,

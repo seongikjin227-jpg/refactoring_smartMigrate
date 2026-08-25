@@ -18,7 +18,6 @@ except Exception:
 
 
 CONVERSION_PASS = "PASS-CONVERSION"
-TUNING_READY = "READY"
 FAIL_TOBE = "FAIL-TOBE"
 FAIL_BIND = "FAIL-BIND"
 FAIL_TEST = "FAIL-TEST"
@@ -99,7 +98,6 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 "BIND_SET": bind_set,
                 "TEST_SQL": test_sql,
                 "STATUS_CONVERSION": CONVERSION_PASS,
-                "STATUS_TUNING": TUNING_READY,
                 "TUNED_FR_SQL": tuned_fr_sql,
                 "LOG": final_log,
                 "RETRY_COUNT": 0,
@@ -112,12 +110,10 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             status=CONVERSION_PASS,
             elapsed=time.perf_counter() - started,
             attempts=attempts,
-            message="SQL conversion completed. Tuning is READY.",
+            message="SQL conversion completed. Continuing to tuning.",
             extra={
                 "status_conversion": CONVERSION_PASS,
                 "conversion_status": CONVERSION_PASS,
-                "status_tuning": TUNING_READY,
-                "tuning_status": TUNING_READY,
                 "to_sql": to_sql,
                 "bind_sql": bind_sql,
                 "bind_set": bind_set,

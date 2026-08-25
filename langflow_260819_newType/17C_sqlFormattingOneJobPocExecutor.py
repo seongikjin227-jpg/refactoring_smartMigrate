@@ -52,8 +52,8 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                     payload=merged,
                     job=job,
                     started=started,
-                    status="SKIP-UPSTREAM-TUNING",
-                    message=f"SQL formatting skipped because tuning status is {tuning_status or 'NULL'}.",
+                    status=self._status(merged.get("status")) or tuning_status or "NOT-RUN",
+                    message=f"SQL formatting passed through without DB update because tuning status is {tuning_status or 'NULL'}.",
                 )
                 self.status = result
                 return Data(data=result)
