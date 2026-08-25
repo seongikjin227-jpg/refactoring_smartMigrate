@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import html
 import json
 import re
 from contextlib import contextmanager
@@ -402,19 +401,19 @@ class NewType04Dashboard(Component):
             return 0
 
     def _message(self, text: str, chart_url: str) -> Message:
-        # Include both Markdown image fallback and Langflow media content.
+        # Include Markdown, files, and a Langflow image content block.
         markdown_text = text.replace("(dashboard_chart)", f"({chart_url})")
-        media_block = {
-            "title": "Dashboard Graph",
-            "contents": [{"type": "media", "urls": [chart_url]}],
-        }
+        image_block = self._image_content_block(chart_url)
         try:
-            return Message(text=markdown_text, content_blocks=[media_block])
+            return Message(text=markdown_text, files=[chart_url], content_blocks=[image_block])
         except TypeError:
-            return Message(text=markdown_text)
+            try:
+                return Message(text=markdown_text, content_blocks=[image_block])
+            except TypeError:
+                return Message(text=markdown_text)
 
     def _chart_data_url(self, agents: dict[str, Any]) -> str:
-        # Build an inline SVG grouped bar chart as a data URL.
+        # Build a PNG chart with matplotlib.
         labels: list[str] = []
         progress_values: list[float] = []
         success_values: list[float] = []
@@ -427,52 +426,55 @@ class NewType04Dashboard(Component):
             success = summary.get("success") or {}
             progress_values.append(self._pct_value(progress.get("count", 0), progress.get("base", 0)))
             success_values.append(self._pct_value(success.get("count", 0), success.get("base", 0)))
-        svg = self._bar_chart_svg(labels, progress_values, success_values)
-        encoded = base64.b64encode(svg.encode("utf-8")).decode("ascii")
-        return f"data:image/svg+xml;base64,{encoded}"
+        return self._bar_chart_png_data_url(labels, progress_values, success_values)
 
-    def _bar_chart_svg(self, labels: list[str], progress_values: list[float], success_values: list[float]) -> str:
-        width = 760
-        height = 420
-        left = 70
-        top = 52
-        chart_w = 640
-        chart_h = 260
-        groups = max(len(labels), 1)
-        group_w = chart_w / groups
-        bar_w = min(44, group_w * 0.28)
-        parts = [
-            f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
-            '<rect width="100%" height="100%" fill="#ffffff"/>',
-            '<text x="70" y="30" font-family="Arial" font-size="20" font-weight="700" fill="#1f2937">SmartMigrate Progress / Success</text>',
-            f'<line x1="{left}" y1="{top + chart_h}" x2="{left + chart_w}" y2="{top + chart_h}" stroke="#374151" stroke-width="1"/>',
-            f'<line x1="{left}" y1="{top}" x2="{left}" y2="{top + chart_h}" stroke="#374151" stroke-width="1"/>',
-        ]
-        for tick in range(0, 101, 25):
-            y = top + chart_h - (tick / 100 * chart_h)
-            parts.append(f'<line x1="{left}" y1="{y:.1f}" x2="{left + chart_w}" y2="{y:.1f}" stroke="#e5e7eb" stroke-width="1"/>')
-            parts.append(f'<text x="{left - 12}" y="{y + 4:.1f}" text-anchor="end" font-family="Arial" font-size="11" fill="#6b7280">{tick}%</text>')
-        for index, label in enumerate(labels):
-            base_x = left + index * group_w + group_w / 2
-            progress = progress_values[index]
-            success = success_values[index]
-            for offset, value, color in ((-bar_w * 0.6, progress, "#2563eb"), (bar_w * 0.6, success, "#16a34a")):
-                bar_h = value / 100 * chart_h
-                x = base_x + offset - bar_w / 2
-                y = top + chart_h - bar_h
-                parts.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{bar_h:.1f}" rx="3" fill="{color}"/>')
-                parts.append(f'<text x="{x + bar_w / 2:.1f}" y="{y - 5:.1f}" text-anchor="middle" font-family="Arial" font-size="10" fill="#374151">{value:.0f}%</text>')
-            parts.append(f'<text x="{base_x:.1f}" y="{top + chart_h + 28}" text-anchor="middle" font-family="Arial" font-size="12" fill="#374151">{html.escape(label)}</text>')
-        parts.extend(
-            [
-                '<rect x="520" y="22" width="12" height="12" fill="#2563eb"/>',
-                '<text x="538" y="32" font-family="Arial" font-size="12" fill="#374151">Progress</text>',
-                '<rect x="610" y="22" width="12" height="12" fill="#16a34a"/>',
-                '<text x="628" y="32" font-family="Arial" font-size="12" fill="#374151">Success</text>',
-                "</svg>",
-            ]
-        )
-        return "".join(parts)
+    def _image_content_block(self, chart_url: str) -> dict[str, Any]:
+        # Prefer the native image block shape used by recent Langflow versions.
+        if chart_url.startswith("data:image/png;base64,"):
+            return {
+                "type": "image",
+                "base64": chart_url.split(",", 1)[1],
+                "mime_type": "image/png",
+                "caption": "SmartMigrate Progress / Success",
+            }
+        return {"type": "image", "urls": [chart_url], "caption": "SmartMigrate Progress / Success"}
+
+    def _bar_chart_png_data_url(self, labels: list[str], progress_values: list[float], success_values: list[float]) -> str:
+        # Render the dashboard graph with matplotlib as a base64 PNG.
+        import io
+
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        if not labels:
+            labels = ["No Data"]
+            progress_values = [0.0]
+            success_values = [0.0]
+
+        positions = list(range(len(labels)))
+        width = 0.36
+        fig, ax = plt.subplots(figsize=(7.6, 4.2), dpi=150)
+        ax.bar([pos - width / 2 for pos in positions], progress_values, width, label="Progress", color="#2563eb")
+        ax.bar([pos + width / 2 for pos in positions], success_values, width, label="Success", color="#16a34a")
+        ax.set_title("SmartMigrate Progress / Success", loc="left", fontsize=13, fontweight="bold")
+        ax.set_ylabel("Rate (%)")
+        ax.set_ylim(0, 100)
+        ax.set_xticks(positions)
+        ax.set_xticklabels(labels, rotation=0, ha="center")
+        ax.grid(axis="y", color="#e5e7eb", linewidth=0.8)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.legend(loc="upper right", frameon=False)
+        for container in ax.containers:
+            ax.bar_label(container, labels=[f"{value:.0f}%" for value in container.datavalues], padding=3, fontsize=8)
+        fig.tight_layout()
+        buffer = io.BytesIO()
+        fig.savefig(buffer, format="png", bbox_inches="tight")
+        plt.close(fig)
+        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+        return f"data:image/png;base64,{encoded}"
 
     def _pct_value(self, numerator: Any, denominator: Any) -> float:
         # Return a numeric percentage for chart series values.
