@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
-from lfx.io import MessageTextInput, Output
+from lfx.io import IntInput, MessageTextInput, Output
 from lfx.schema.data import Data
 from lfx.schema.message import Message
 
@@ -28,7 +28,10 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
     name = "NewType17CSqlFormattingOneJobPocExecutor"
     icon = "TextCursorInput"
 
-    inputs = [DataInput(name="job_item", display_name="Job Item", required=True)]
+    inputs = [
+        DataInput(name="job_item", display_name="Job Item", required=True),
+        IntInput(name="max_retry", display_name="Max Retry", value=0, required=False),
+    ]
     outputs = [Output(display_name="Job Result", name="job_result", method="run_job", types=["Data"])]
 
     def run_job(self) -> Data:
