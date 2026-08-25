@@ -29,7 +29,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
     icon = "TextCursorInput"
 
     inputs = [DataInput(name="job_item", display_name="Job Item", required=True)]
-    outputs = [Output(display_name="Stage Result", name="stage_result", method="run_job", types=["Data"])]
+    outputs = [Output(display_name="Job Result", name="job_result", method="run_job", types=["Data"])]
 
     def run_job(self) -> Data:
         """Run one formatting job or pass through when tuning did not pass."""

@@ -36,7 +36,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         IntInput(name="max_retry", display_name="Max Retry", value=3, required=False),
     ]
 
-    outputs = [Output(display_name="Stage Result", name="stage_result", method="run_job", types=["Data"])]
+    outputs = [Output(display_name="Job Result", name="job_result", method="run_job", types=["Data"])]
 
     def run_job(self) -> Data:
         """Run one SQL conversion job and return a payload for 15C."""
