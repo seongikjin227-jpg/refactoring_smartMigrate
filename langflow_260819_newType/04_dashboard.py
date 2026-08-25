@@ -413,7 +413,7 @@ class NewType04Dashboard(Component):
                 return Message(text=markdown_text)
 
     def _chart_data_url(self, agents: dict[str, Any]) -> str:
-        # Build a PNG chart with matplotlib.
+        # Build a PNG chart with the standard library.
         labels: list[str] = []
         progress_values: list[float] = []
         success_values: list[float] = []
@@ -440,41 +440,69 @@ class NewType04Dashboard(Component):
         return {"type": "image", "urls": [chart_url], "caption": "SmartMigrate Progress / Success"}
 
     def _bar_chart_png_data_url(self, labels: list[str], progress_values: list[float], success_values: list[float]) -> str:
-        # Render the dashboard graph with matplotlib as a base64 PNG.
-        import io
-
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
+        # Render a compact PNG bar chart with only the Python standard library.
+        import binascii
+        import struct
+        import zlib
 
         if not labels:
             labels = ["No Data"]
             progress_values = [0.0]
             success_values = [0.0]
 
-        positions = list(range(len(labels)))
-        width = 0.36
-        fig, ax = plt.subplots(figsize=(7.6, 4.2), dpi=150)
-        ax.bar([pos - width / 2 for pos in positions], progress_values, width, label="Progress", color="#2563eb")
-        ax.bar([pos + width / 2 for pos in positions], success_values, width, label="Success", color="#16a34a")
-        ax.set_title("SmartMigrate Progress / Success", loc="left", fontsize=13, fontweight="bold")
-        ax.set_ylabel("Rate (%)")
-        ax.set_ylim(0, 100)
-        ax.set_xticks(positions)
-        ax.set_xticklabels(labels, rotation=0, ha="center")
-        ax.grid(axis="y", color="#e5e7eb", linewidth=0.8)
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-        ax.legend(loc="upper right", frameon=False)
-        for container in ax.containers:
-            ax.bar_label(container, labels=[f"{value:.0f}%" for value in container.datavalues], padding=3, fontsize=8)
-        fig.tight_layout()
-        buffer = io.BytesIO()
-        fig.savefig(buffer, format="png", bbox_inches="tight")
-        plt.close(fig)
-        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
-        return f"data:image/png;base64,{encoded}"
+        width, height = 760, 420
+        pixels = bytearray([255, 255, 255] * width * height)
+
+        def rect(x1: int, y1: int, x2: int, y2: int, color: tuple[int, int, int]) -> None:
+            x1 = max(0, min(width, x1))
+            x2 = max(0, min(width, x2))
+            y1 = max(0, min(height, y1))
+            y2 = max(0, min(height, y2))
+            for y in range(y1, y2):
+                row = y * width * 3
+                for x in range(x1, x2):
+                    offset = row + x * 3
+                    pixels[offset : offset + 3] = bytes(color)
+
+        left, top, chart_w, chart_h = 70, 52, 640, 260
+        axis = (55, 65, 81)
+        grid = (229, 231, 235)
+        for tick in range(0, 101, 25):
+            y = int(top + chart_h - (tick / 100 * chart_h))
+            rect(left, y, left + chart_w, y + 1, grid)
+        rect(left, top, left + 1, top + chart_h + 1, axis)
+        rect(left, top + chart_h, left + chart_w + 1, top + chart_h + 1, axis)
+
+        group_w = chart_w / max(len(labels), 1)
+        bar_w = int(min(44, group_w * 0.28))
+        for index in range(len(labels)):
+            base_x = int(left + index * group_w + group_w / 2)
+            for offset, value, color in (
+                (-int(bar_w * 0.6), progress_values[index], (37, 99, 235)),
+                (int(bar_w * 0.6), success_values[index], (22, 163, 74)),
+            ):
+                bar_h = int(max(0.0, min(float(value), 100.0)) / 100 * chart_h)
+                x = base_x + offset - bar_w // 2
+                y = top + chart_h - bar_h
+                rect(x, y, x + bar_w, top + chart_h, color)
+
+        raw = bytearray()
+        for y in range(height):
+            raw.append(0)
+            start = y * width * 3
+            raw.extend(pixels[start : start + width * 3])
+
+        def chunk(name: bytes, data: bytes) -> bytes:
+            crc = binascii.crc32(name + data) & 0xFFFFFFFF
+            return struct.pack(">I", len(data)) + name + data + struct.pack(">I", crc)
+
+        png = (
+            b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(bytes(raw), 9))
+            + chunk(b"IEND", b"")
+        )
+        return f"data:image/png;base64,{base64.b64encode(png).decode('ascii')}"
 
     def _pct_value(self, numerator: Any, denominator: Any) -> float:
         # Return a numeric percentage for chart series values.
