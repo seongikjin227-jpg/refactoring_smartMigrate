@@ -76,6 +76,7 @@ class NewType15DSqlTuningIterationDashboard(Component):
             f"- Progress: {completed}/{total} jobs, {progress_rate:.1f}%",
             self._bar(completed, total),
             f"- Current status: {result.get('status')}",
+            f"- retry: {self._retry_count(result)}",
             "",
             "| Stage | Status | Message |",
             "|---|---|---|",
@@ -83,7 +84,19 @@ class NewType15DSqlTuningIterationDashboard(Component):
         stages = result.get("stages") or {}
         for stage in ("conversion", "tuning", "formatting"):
             item = stages.get(stage) or {}
-            lines.append(f"| {stage} | {item.get('status', '-')} | {self._cell(item.get('message', '-'))} |")
+            lines.append(f"| {stage} | {self._cell(item.get('status', ''))} | {self._cell(item.get('message', ''))} |")
+        tuning_stage = stages.get("tuning") or {}
+        tuned_result = tuning_stage.get("tuned_result") or result.get("tuned_result")
+        if tuned_result:
+            lines.extend(["", f"Tuned result: {self._cell(tuned_result)}"])
+        guide_lines = self._guide_lines(tuning_stage.get("tuning_guides") or result.get("tuning_guides") or [])
+        if guide_lines:
+            lines.extend(["", "Applied tuning guide:", "| Guide | Type | Result | Guidance |", "|---|---|---|---|"])
+            lines.extend(guide_lines)
+        attempt_lines = self._attempt_lines(stages)
+        if attempt_lines:
+            lines.extend(["", "Attempt history:", "| Stage | Attempt | Step | Status | Detail |", "|---|---:|---|---|---|"])
+            lines.extend(attempt_lines)
         if result.get("message"):
             lines.extend(["", f"Message: {result.get('message')}"])
         if completed >= total:
@@ -99,7 +112,60 @@ class NewType15DSqlTuningIterationDashboard(Component):
 
     def _cell(self, value: Any) -> str:
         """Escape pipe characters for Markdown table cells."""
-        return str(value or "-").replace("|", "/")
+        return str(value or "").replace("|", "/")
+
+    def _retry_count(self, result: dict[str, Any]) -> int:
+        """Return the number of retry attempts represented in stage history."""
+        max_attempt = 1
+        for stage in (result.get("stages") or {}).values():
+            for attempt in stage.get("attempts") or []:
+                try:
+                    max_attempt = max(max_attempt, int(attempt.get("attempt") or 1))
+                except (TypeError, ValueError):
+                    continue
+        return max(max_attempt - 1, 0)
+
+    def _attempt_lines(self, stages: dict[str, Any]) -> list[str]:
+        """Format stage attempt history for Markdown output."""
+        lines: list[str] = []
+        for stage_name in ("conversion", "tuning", "formatting"):
+            stage = stages.get(stage_name) or {}
+            for attempt in stage.get("attempts") or []:
+                lines.append(
+                    "| "
+                    f"{stage_name} | "
+                    f"{attempt.get('attempt', '')} | "
+                    f"{self._cell(attempt.get('stage'))} | "
+                    f"{self._cell(attempt.get('status'))} | "
+                    f"{self._cell(self._attempt_detail(attempt))} |"
+                )
+        return lines
+
+    def _attempt_detail(self, attempt: dict[str, Any]) -> str:
+        """Build a compact detail string for one attempt row."""
+        details = []
+        for key in ("reason", "result", "guide_ids", "tag_kind"):
+            value = attempt.get(key)
+            if value not in (None, "", []):
+                if isinstance(value, list):
+                    value = ", ".join(str(item) for item in value)
+                details.append(f"{key}={value}")
+        return ", ".join(details)
+
+    def _guide_lines(self, guides: list[dict[str, Any]]) -> list[str]:
+        """Format applied tuning guide metadata."""
+        lines = []
+        for guide in guides:
+            if not isinstance(guide, dict):
+                continue
+            lines.append(
+                "| "
+                f"{self._cell(guide.get('guide_id'))} | "
+                f"{self._cell(guide.get('rule_type'))} | "
+                f"{self._cell(guide.get('result'))} | "
+                f"{self._cell(guide.get('guidance'))} |"
+            )
+        return lines
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         """Parse a Langflow Data, Message, dict, or JSON string payload."""

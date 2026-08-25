@@ -76,6 +76,7 @@ class NewType12DSqlConversionIterationDashboard(Component):
             f"- Progress: {completed}/{total} jobs, {progress_rate:.1f}%",
             self._bar(completed, total),
             f"- Current status: {result.get('status')}",
+            f"- retry: {self._retry_count(result)}",
             "",
             "| Stage | Status | Message |",
             "|---|---|---|",
@@ -83,9 +84,13 @@ class NewType12DSqlConversionIterationDashboard(Component):
         stages = result.get("stages") or {}
         for stage in ("conversion", "tuning", "formatting"):
             item = stages.get(stage) or {}
-            lines.append(f"| {stage} | {item.get('status', '-')} | {self._cell(item.get('message', '-'))} |")
+            lines.append(f"| {stage} | {self._cell(item.get('status', ''))} | {self._cell(item.get('message', ''))} |")
         if result.get("message"):
             lines.extend(["", f"Message: {result.get('message')}"])
+        attempt_lines = self._attempt_lines(stages)
+        if attempt_lines:
+            lines.extend(["", "Attempt history:", "| Stage | Attempt | Step | Status | Detail |", "|---|---:|---|---|---|"])
+            lines.extend(attempt_lines)
         if completed >= total:
             lines.extend(["", "Requested SQL Conversion loop is complete."])
         return "\n".join(lines)
@@ -99,7 +104,44 @@ class NewType12DSqlConversionIterationDashboard(Component):
 
     def _cell(self, value: Any) -> str:
         """Escape pipe characters for Markdown table cells."""
-        return str(value or "-").replace("|", "/")
+        return str(value or "").replace("|", "/")
+
+    def _retry_count(self, result: dict[str, Any]) -> int:
+        """Return the number of retry attempts represented in stage history."""
+        max_attempt = 1
+        for stage in (result.get("stages") or {}).values():
+            for attempt in stage.get("attempts") or []:
+                try:
+                    max_attempt = max(max_attempt, int(attempt.get("attempt") or 1))
+                except (TypeError, ValueError):
+                    continue
+        return max(max_attempt - 1, 0)
+
+    def _attempt_lines(self, stages: dict[str, Any]) -> list[str]:
+        """Format stage attempt history for Markdown output."""
+        lines: list[str] = []
+        for stage_name in ("conversion", "tuning", "formatting"):
+            stage = stages.get(stage_name) or {}
+            for attempt in stage.get("attempts") or []:
+                detail = self._attempt_detail(attempt)
+                lines.append(
+                    "| "
+                    f"{stage_name} | "
+                    f"{attempt.get('attempt', '')} | "
+                    f"{self._cell(attempt.get('stage'))} | "
+                    f"{self._cell(attempt.get('status'))} | "
+                    f"{self._cell(detail)} |"
+                )
+        return lines
+
+    def _attempt_detail(self, attempt: dict[str, Any]) -> str:
+        """Build a compact detail string for one attempt row."""
+        details = []
+        for key in ("reason", "result", "tag_kind", "sql_length"):
+            value = attempt.get(key)
+            if value not in (None, ""):
+                details.append(f"{key}={value}")
+        return ", ".join(details)
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         """Parse a Langflow Data, Message, dict, or JSON string payload."""

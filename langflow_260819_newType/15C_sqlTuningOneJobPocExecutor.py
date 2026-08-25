@@ -89,7 +89,16 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         # through the same Langflow request into formatting.
         tuned_sql = to_sql
         tuned_result = "NO TUNING"
-        attempts.append({"attempt": 1, "stage": "APPLY_TUNING_RULES", "status": TUNING_PASS, "result": tuned_result})
+        tuning_guides = self._poc_tuning_guides(tag_kind, tuned_result)
+        attempts.append(
+            {
+                "attempt": 1,
+                "stage": "APPLY_TUNING_RULES",
+                "status": TUNING_PASS,
+                "result": tuned_result,
+                "guide_ids": [guide["guide_id"] for guide in tuning_guides],
+            }
+        )
 
         if tag_kind == "SELECT" and tuned_sql.strip() != to_sql.strip():
             # Future validation section:
@@ -127,6 +136,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                 "tuning_status": TUNING_PASS,
                 "tuned_to_sql": tuned_sql,
                 "tuned_result": tuned_result,
+                "tuning_guides": tuning_guides,
                 "tag_kind": tag_kind,
                 "next_node": "17C_sqlFormattingOneJobPocExecutor",
             },
@@ -142,6 +152,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         message: str,
     ) -> dict[str, Any]:
         """Persist a SQL tuning failure using the source status values."""
+        failure_attempts = [{"attempt": 1, "stage": "APPLY_TUNING_RULES", "status": status, "reason": message}]
         if job.get("row_id"):
             self._update_row(
                 db_config,
@@ -159,7 +170,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             ok=False,
             status=status,
             elapsed=time.perf_counter() - started,
-            attempts=[],
+            attempts=failure_attempts,
             message=message,
             extra={"status_tuning": status, "tuning_status": status, "next_node": self._dashboard_node(payload)},
         )
@@ -202,7 +213,15 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         index = int(payload.get("job_index") or 1)
         completed = min(index, total)
         stages = dict(payload.get("stages") or {})
-        stages["tuning"] = {"ok": ok, "status": status, "message": message}
+        if not extra.get("tuning_skipped"):
+            stages["tuning"] = {
+                "ok": ok,
+                "status": status,
+                "message": message,
+                "attempts": attempts,
+                "tuned_result": extra.get("tuned_result"),
+                "tuning_guides": list(extra.get("tuning_guides") or []),
+            }
         return {
             **payload,
             **extra,
@@ -225,6 +244,23 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             "stages": stages,
             "db_status_updated": bool(job.get("row_id")) and not extra.get("tuning_skipped"),
         }
+
+    def _poc_tuning_guides(self, tag_kind: str, tuned_result: str) -> list[dict[str, Any]]:
+        """Return visible POC tuning guide metadata until RAG retrieval is connected."""
+        return [
+            {
+                "guide_id": "POC-SQL-TUNING-001",
+                "category": "SQL_TUNING",
+                "rule_type": "POC",
+                "tag_kind": tag_kind or "UNKNOWN",
+                "result": tuned_result,
+                "guidance": (
+                    "RAG/LLM tuning rule retrieval is not connected yet. "
+                    "The POC keeps TO_SQL unchanged, records TUNED_RESULT='NO TUNING', "
+                    "and continues to formatting when conversion passed."
+                ),
+            }
+        ]
 
     def _load_sql_job(self, db_config: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         """Load one NEXT_SQL_INFO row by ROWID or by SPACE_NM + SQL_ID."""

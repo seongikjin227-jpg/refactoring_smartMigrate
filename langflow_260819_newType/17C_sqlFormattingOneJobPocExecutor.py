@@ -143,7 +143,8 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         index = int(payload.get("job_index") or 1)
         completed = min(index, total)
         stages = dict(payload.get("stages") or {})
-        stages["formatting"] = {"ok": ok, "status": status, "message": message}
+        if not extra.get("formatting_skipped"):
+            stages["formatting"] = {"ok": ok, "status": status, "message": message, "attempts": attempts}
         return {
             **payload,
             **extra,
