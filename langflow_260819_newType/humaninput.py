@@ -32,21 +32,10 @@ except Exception:  # pragma: no cover - older Langflow packages
 from lfx.io import IntInput, StrInput
 from lfx.schema.message import Message
 
-try:
-    from lfx.inputs.inputs import ActionPickerInput, BoolInput, DurationInput
-except Exception:  # pragma: no cover - older Langflow packages
-    ActionPickerInput = None
-    DurationInput = None
-    try:
-        from lfx.io import BoolInput
-    except Exception:  # pragma: no cover
-        BoolInput = StrInput
-
 
 HUMAN_INPUT_REQUIRED = "human_input_required"
 _KIND_NODE_INPUT = "node_input"
 _FALLBACK_ACTION = "fallback"
-_UNIT_SECONDS = {"Minutes": 60, "Hours": 3600, "Days": 86400}
 
 
 def _action_id(label: str) -> str:
@@ -54,15 +43,6 @@ def _action_id(label: str) -> str:
 
 
 def _decisions_input():
-    if ActionPickerInput is not None:
-        return ActionPickerInput(
-            name="decisions",
-            display_name="User Choices",
-            info="Choices the human can pick; each becomes a branch output.",
-            value=["Approve", "Reject"],
-            real_time_refresh=True,
-            required=True,
-        )
     return StrInput(
         name="decisions",
         display_name="User Choices",
@@ -73,16 +53,6 @@ def _decisions_input():
 
 
 def _timeout_input():
-    if DurationInput is not None:
-        return DurationInput(
-            name="timeout",
-            display_name="Timeout",
-            info="A response received after this window is routed to the fallback branch when enabled.",
-            options=["Minutes", "Hours", "Days"],
-            value={"value": 10, "unit": "Minutes"},
-            advanced=True,
-            show=True,
-        )
     return IntInput(
         name="timeout",
         display_name="Timeout Seconds",
@@ -113,19 +83,10 @@ def _fallback_enabled_input():
         "name": "enable_fallback",
         "display_name": "Enable Fallback",
         "info": "Add a fallback output used when the answer arrives after the timeout window.",
-        "value": True,
+        "value": "true",
         "advanced": True,
-        "real_time_refresh": True,
     }
-    try:
-        return BoolInput(**kwargs)
-    except TypeError:
-        kwargs.pop("real_time_refresh", None)
-        try:
-            return BoolInput(**kwargs)
-        except TypeError:
-            kwargs["value"] = "true"
-            return StrInput(**kwargs)
+    return StrInput(**kwargs)
 
 
 class SmartMigrateHumanInput(Component):
@@ -250,12 +211,8 @@ class SmartMigrateHumanInput(Component):
         return str(getattr(self, "prompt", "") or "")
 
     def _timeout_seconds(self) -> int:
-        timeout = getattr(self, "timeout", None) or {}
-        if isinstance(timeout, dict):
-            unit = timeout.get("unit", "Minutes") or "Minutes"
-            return int(timeout.get("value", 0) or 0) * _UNIT_SECONDS.get(unit, 60)
         try:
-            return max(0, int(timeout or 0))
+            return max(0, int(getattr(self, "timeout", None) or 0))
         except Exception:
             return 0
 
