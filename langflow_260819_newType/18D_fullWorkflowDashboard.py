@@ -160,8 +160,8 @@ class NewType18DFullWorkflowDashboard(Component):
             "",
             f"- 전체 작업 처리: {index}/{total}건, {self._pct(index, total)}",
             self._bar(index, total),
-            f"- 처리 단계: {label}",
-            f"- 완료된 작업: {self._job_label(result)}",
+            f"- 작업 종류: {label}",
+            f"- 완료된 작업: {self._job_identifier(result, route)}",
             f"- 진행 결과: {self._result_summary(result, route)}",
         ]
         error_log = self._final_error_log(result)
@@ -374,16 +374,19 @@ class NewType18DFullWorkflowDashboard(Component):
     def _job_label(self, result: dict[str, Any]) -> str:
         route = str(result.get("planned_job_route") or result.get("job_route") or "").upper()
         label = self._job_type_label(result, route)
+        return f"{label} {self._job_identifier(result, route)}"
+
+    def _job_identifier(self, result: dict[str, Any], route: str) -> str:
         map_id = self._first_value(result, "map_id", "MAP_ID")
         space_nm = self._first_value(result, "space_nm", "SPACE_NM", "spaceName")
         sql_id = self._first_value(result, "sql_id", "SQL_ID", "sqlId")
         if route == "MIG" or str(result.get("job_name") or "").strip().lower() == "migration":
-            return f"{label} map_id={map_id or '-'}"
+            return f"map_id={map_id or '-'}"
         parts = [
             f"space_nm={space_nm or '-'}",
             f"sql_id={sql_id or '-'}",
         ]
-        return f"{label} " + ", ".join(parts)
+        return ", ".join(parts)
 
     def _first_value(self, data: dict[str, Any], *keys: str) -> Any:
         candidates = [data]
