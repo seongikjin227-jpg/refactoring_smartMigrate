@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 import re
@@ -14,16 +13,12 @@ from lfx.schema.data import Data
 from lfx.schema.message import Message
 
 
-PAYLOAD_BEGIN = "SMARTMIGRATE_PAYLOAD_B64_BEGIN"
-PAYLOAD_END = "SMARTMIGRATE_PAYLOAD_B64_END"
-
-
 def _load_component_base():
     for module_name in (
+        "lfx.custom",
+        "lfx.custom.custom_component.component",
         "langflow.custom.custom_component.base_component",
         "langflow.custom.custom_component.component",
-        "lfx.custom.custom_component.component",
-        "lfx.custom",
     ):
         try:
             module = import_module(module_name)
@@ -39,8 +34,8 @@ Component = _load_component_base()
 
 
 class NewType08HConfirmationPayloadStager(Component):
-    display_name = "08H Confirmation Message Builder"
-    description = "Builds one Message for Human Input. The execution payload is embedded in the message."
+    display_name = "08H Confirmation Prompt Builder"
+    description = "Builds the visible Korean approval prompt for Human Input. It does not embed payload data."
     name = "NewType08HConfirmationPayloadStager"
     icon = "ShieldQuestion"
 
@@ -53,40 +48,22 @@ class NewType08HConfirmationPayloadStager(Component):
     ]
 
     outputs = [
-        Output(display_name="Human Input Message", name="message", method="build_message", types=["Message"]),
+        Output(display_name="Human Input Prompt", name="message", method="build_message", types=["Message"]),
     ]
 
     def build_message(self) -> Message:
         payload = self._parse_payload(getattr(self, "payload_json", ""))
         confirmation_id = self._confirmation_id(payload)
-        staged_payload = {
-            **payload,
-            "confirmation_id": confirmation_id,
-            "confirmation_required": True,
-            "confirmation_status": "PENDING",
-            "confirmation_created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        staged_payload.setdefault("history", []).append(
-            {
-                "step": "human_input_confirmation_message_built",
-                "message": f"confirmation_id={confirmation_id}",
-            }
-        )
-
-        message = self._message_text(confirmation_id, self._plan_text(payload), staged_payload)
+        message = self._message_text(confirmation_id, self._plan_text(payload))
         self.status = {
             "component": "08H_confirmationPayloadStager",
             "confirmation_id": confirmation_id,
             "status": "PENDING",
-            "message_only_payload": True,
+            "payload_embedded": False,
         }
         return Message(text=message)
 
-    def _message_text(self, confirmation_id: str, plan_text: str, payload: dict[str, Any]) -> str:
-        payload_text = base64.b64encode(
-            json.dumps(payload, ensure_ascii=False, default=str, separators=(",", ":")).encode("utf-8")
-        ).decode("ascii")
-        hidden_payload = f"<!--\n{PAYLOAD_BEGIN}\n{payload_text}\n{PAYLOAD_END}\n-->"
+    def _message_text(self, confirmation_id: str, plan_text: str) -> str:
         return "\n".join(
             [
                 "요청하신 작업 계획입니다.",
@@ -96,8 +73,6 @@ class NewType08HConfirmationPayloadStager(Component):
                 f"confirmation_id={confirmation_id}",
                 "",
                 "진행 여부를 선택해주세요.",
-                "",
-                hidden_payload,
             ]
         )
 
@@ -140,6 +115,8 @@ class NewType08HConfirmationPayloadStager(Component):
             return [dict(job) for job in selected_jobs if isinstance(job, dict)]
 
         jobs = payload.get("remaining_jobs") or payload.get("pending_jobs") or {}
+        if not isinstance(jobs, dict):
+            return []
         if route == "MIG":
             return list(jobs.get("migration_jobs") or [])
         if route == "SQL_CONVERSION":
@@ -161,7 +138,7 @@ class NewType08HConfirmationPayloadStager(Component):
         if route != "FULL_WORKFLOW":
             return {route: len(jobs)} if route else {}
         pending = payload.get("remaining_jobs") or payload.get("pending_jobs") or {}
-        if pending:
+        if isinstance(pending, dict) and pending:
             return {
                 "MIG": len(pending.get("migration_jobs") or []),
                 "SQL_CONVERSION": len(pending.get("sql_conversion_jobs") or pending.get("sql_jobs") or []),
@@ -212,6 +189,8 @@ class NewType08HConfirmationPayloadStager(Component):
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):
             return dict(raw.data or {})
+        if isinstance(raw, Message):
+            raw = raw.text
         if isinstance(raw, dict):
             return dict(raw)
         text = str(raw or "").strip()

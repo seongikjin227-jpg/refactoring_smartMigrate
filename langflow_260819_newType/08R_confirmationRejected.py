@@ -1,17 +1,21 @@
+from __future__ import annotations
+
 import re
 from importlib import import_module
 from typing import Any
 
-from lfx.io import MessageTextInput, Output
+from lfx.inputs.inputs import HandleInput
+from lfx.io import Output
+from lfx.schema.data import Data
 from lfx.schema.message import Message
 
 
 def _load_component_base():
     for module_name in (
+        "lfx.custom",
+        "lfx.custom.custom_component.component",
         "langflow.custom.custom_component.base_component",
         "langflow.custom.custom_component.component",
-        "lfx.custom.custom_component.component",
-        "lfx.custom",
     ):
         try:
             module = import_module(module_name)
@@ -33,7 +37,12 @@ class NewType08RConfirmationRejected(Component):
     icon = "ShieldX"
 
     inputs = [
-        MessageTextInput(name="reject_message", display_name="Reject Message", required=True),
+        HandleInput(
+            name="reject_payload",
+            display_name="Reject Payload",
+            input_types=["Data", "Message"],
+            required=False,
+        ),
     ]
 
     outputs = [
@@ -41,14 +50,14 @@ class NewType08RConfirmationRejected(Component):
     ]
 
     def build_message(self) -> Message:
-        message_text = self._message_text(getattr(self, "reject_message", ""))
-        confirmation_id = self._extract_confirmation_id(message_text)
+        payload = self._payload(getattr(self, "reject_payload", None))
+        confirmation_id = str(payload.get("confirmation_id") or "").strip()
 
         text = "\n".join(
             [
                 "작업 실행이 취소되었습니다.",
                 f"confirmation_id={confirmation_id}" if confirmation_id else "",
-                "승인되지 않았으므로 DB Migration, SQL Conversion, SQL Tuning, SQL Formatting 작업은 시작하지 않았습니다.",
+                "승인되지 않았으므로 DB Migration, SQL Conversion, SQL Tuning, SQL Formatting 작업을 시작하지 않았습니다.",
             ]
         ).strip()
         self.status = {
@@ -59,11 +68,16 @@ class NewType08RConfirmationRejected(Component):
         }
         return Message(text=text)
 
+    def _payload(self, raw: Any) -> dict[str, Any]:
+        if isinstance(raw, Data):
+            return dict(raw.data or {})
+        if isinstance(raw, Message):
+            return {"message": str(raw.text or ""), "confirmation_id": self._extract_confirmation_id(raw.text or "")}
+        if isinstance(raw, dict):
+            return dict(raw)
+        text = str(raw or "")
+        return {"message": text, "confirmation_id": self._extract_confirmation_id(text)}
+
     def _extract_confirmation_id(self, text: str) -> str:
         match = re.search(r"\bconfirmation_id\s*=\s*([A-Za-z0-9_.:-]+)", text or "")
         return match.group(1).strip() if match else ""
-
-    def _message_text(self, raw: Any) -> str:
-        if isinstance(raw, Message):
-            return str(raw.text or "")
-        return str(raw or "")
