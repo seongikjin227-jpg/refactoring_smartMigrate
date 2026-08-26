@@ -172,7 +172,7 @@ class NewType08HConfirmationPayloadStager(Component):
         return []
 
     def _plan_counts(self, payload: dict[str, Any], route: str, jobs: list[dict[str, Any]]) -> dict[str, int]:
-        existing = payload.get("planned_job_counts")
+        existing = payload.get("planned_job_counts") or payload.get("workflow_plan_counts")
         if isinstance(existing, dict) and existing:
             return {str(key).upper(): self._to_int(value) for key, value in existing.items()}
         if route != "FULL_WORKFLOW":
@@ -229,6 +229,13 @@ class NewType08HConfirmationPayloadStager(Component):
         return f"CONF-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{digest}"
 
     def _to_int(self, value: Any) -> int:
+        if isinstance(value, dict):
+            for key in ("count", "total", "planned", "planned_count", "value", "job_count"):
+                if key in value:
+                    return self._to_int(value.get(key))
+            return sum(self._to_int(item) for item in value.values())
+        if isinstance(value, list):
+            return sum(self._to_int(item) for item in value)
         try:
             return int(value or 0)
         except Exception:
@@ -247,4 +254,3 @@ class NewType08HConfirmationPayloadStager(Component):
         if not isinstance(parsed, dict):
             raise ValueError("payload_json must be a JSON object")
         return parsed
-
