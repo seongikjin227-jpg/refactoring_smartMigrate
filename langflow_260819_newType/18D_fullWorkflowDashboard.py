@@ -287,11 +287,13 @@ class NewType18DFullWorkflowDashboard(Component):
         route = str(result.get("planned_job_route") or result.get("job_route") or "").upper()
         label = self._job_type_label(result, route)
         map_id = self._first_value(result, "map_id", "MAP_ID")
-        if route == "MIG" or map_id is not None:
-            return f"{label} map_id={map_id}"
+        space_nm = self._first_value(result, "space_nm", "SPACE_NM", "spaceName")
+        sql_id = self._first_value(result, "sql_id", "SQL_ID", "sqlId")
+        if route == "MIG" or str(result.get("job_name") or "").strip().lower() == "migration":
+            return f"{label} map_id={map_id or '-'}"
         parts = [
-            f"space_nm={self._first_value(result, 'space_nm', 'SPACE_NM', 'spaceName') or '-'}",
-            f"sql_id={self._first_value(result, 'sql_id', 'SQL_ID', 'sqlId') or '-'}",
+            f"space_nm={space_nm or '-'}",
+            f"sql_id={sql_id or '-'}",
         ]
         row_id = str(self._first_value(result, "row_id", "ROW_ID", "rowid", "ROWID") or "").strip()
         if row_id:
@@ -307,9 +309,15 @@ class NewType18DFullWorkflowDashboard(Component):
         for key in keys:
             for candidate in candidates:
                 value = candidate.get(key)
-                if value is not None and str(value).strip() != "":
+                if not self._is_blank_value(value):
                     return value
         return None
+
+    def _is_blank_value(self, value: Any) -> bool:
+        if value is None:
+            return True
+        text = str(value).strip()
+        return text == "" or text.lower() in {"nan", "none", "null", "nat"}
 
     def _job_type_label(self, result: dict[str, Any], route: str) -> str:
         job_name = str(result.get("job_name") or "").strip().lower()
