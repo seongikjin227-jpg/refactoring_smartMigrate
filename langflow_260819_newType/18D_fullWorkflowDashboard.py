@@ -71,7 +71,7 @@ class NewType18DFullWorkflowDashboard(Component):
         payload = {
             **result,
             "component": "18D_fullWorkflowDashboard",
-            "answer_text": self._iteration_message_v2(result, route),
+            "answer_text": self._iteration_message_v3(result, route),
             "loop_result": loop_result,
             "final": False,
         }
@@ -151,6 +151,24 @@ class NewType18DFullWorkflowDashboard(Component):
             lines.extend(["", f"메시지: {message}"])
         return "\n".join(lines)
 
+    def _iteration_message_v3(self, result: dict[str, Any], route: str) -> str:
+        label = ROUTE_LABELS.get(route, route or "Unknown")
+        index = int(result.get("job_index") or 1)
+        total = int(result.get("total_jobs") or 1)
+        lines = [
+            "## 작업 처리 결과",
+            "",
+            f"- 전체 작업 처리: {index}/{total}건, {self._pct(index, total)}",
+            self._bar(index, total),
+            f"- 처리 단계: {label}",
+            f"- 완료된 작업: {self._job_label(result)}",
+            f"- 진행 결과: {self._result_summary(result, route)}",
+        ]
+        error_log = self._final_error_log(result)
+        if error_log:
+            lines.extend(["", f"- 최종 오류 로그: {self._cell(error_log)}"])
+        return "\n".join(lines)
+
     def _final_message(self, summary: dict[str, Any], results: list[dict[str, Any]], payload: dict[str, Any]) -> str:
         total = sum(int((summary.get(route) or {}).get("planned") or 0) for route in ROUTE_ORDER)
         completed = sum(int((summary.get(route) or {}).get("completed") or 0) for route in ROUTE_ORDER)
@@ -158,7 +176,7 @@ class NewType18DFullWorkflowDashboard(Component):
         handled = min(total, completed + skipped)
         stage_activity = self._stage_activity(results)
         lines = [
-            "# Overall Progress",
+            "# 전체 작업 처리 결과",
             "",
             f"- 전체 진행률: {handled}/{total}건 처리, {self._pct(handled, total)}",
             self._bar(handled, total),
@@ -283,6 +301,76 @@ class NewType18DFullWorkflowDashboard(Component):
     def _is_skipped(self, result: dict[str, Any]) -> bool:
         return bool(result.get("workflow_blocked") or result.get("not_runnable") or result.get("skipped") or result.get("tuning_skipped") or result.get("formatting_skipped"))
 
+    def _result_summary(self, result: dict[str, Any], route: str) -> str:
+        if route == "MIG" or str(result.get("job_name") or "").strip().lower() == "migration":
+            return self._status_phrase("DB Migration", result.get("status"), result.get("ok"), self._is_skipped(result))
+
+        stages = result.get("stages") or {}
+        parts: list[str] = []
+        for stage_name in ("conversion", "tuning", "formatting"):
+            stage = stages.get(stage_name)
+            if not isinstance(stage, dict) or not stage:
+                continue
+            parts.append(
+                self._status_phrase(
+                    self._stage_label(stage_name),
+                    stage.get("status"),
+                    stage.get("ok"),
+                    self._is_stage_skipped(stage, result, stage_name),
+                )
+            )
+        if parts:
+            return " -> ".join(parts)
+        return self._status_phrase(ROUTE_LABELS.get(route, route or "Unknown"), result.get("status"), result.get("ok"), self._is_skipped(result))
+
+    def _status_phrase(self, label: str, status: Any, ok: Any, skipped: bool = False) -> str:
+        if skipped:
+            return f"{label} 건너뜀"
+        value = str(status or "").strip().upper()
+        if value == "FORMATTED":
+            return f"{label} 완료"
+        if bool(ok) or value in {"PASS", "PASS-CONVERSION", "PASS-TUNING", "SUCCESS"}:
+            return f"{label} 성공"
+        if self._is_failure_status(value):
+            return f"{label} 실패"
+        if value:
+            return f"{label} {value}"
+        return f"{label} 결과 없음"
+
+    def _final_error_log(self, result: dict[str, Any]) -> str:
+        if not self._has_failure(result):
+            return ""
+        attempts = self._all_attempts(result)
+        for attempt in reversed(attempts):
+            if not self._attempt_failed(attempt):
+                continue
+            for key in ("message", "reason", "error", "result"):
+                value = attempt.get(key)
+                if value not in (None, "", []):
+                    stage = attempt.get("stage") or attempt.get("failed_stage") or "UNKNOWN"
+                    status = attempt.get("status") or attempt.get("failed_stage_status") or result.get("status") or "FAIL"
+                    return f"{stage} {status}: {value}"
+        return str(result.get("message") or result.get("error") or result.get("status") or "").strip()
+
+    def _has_failure(self, result: dict[str, Any]) -> bool:
+        if self._is_failure_status(result.get("status")) or result.get("error"):
+            return True
+        for stage in (result.get("stages") or {}).values():
+            if isinstance(stage, dict) and self._is_failure_status(stage.get("status")):
+                return True
+        return False
+
+    def _all_attempts(self, result: dict[str, Any]) -> list[dict[str, Any]]:
+        attempts = [item for item in list(result.get("attempts") or []) if isinstance(item, dict)]
+        for stage in (result.get("stages") or {}).values():
+            if isinstance(stage, dict):
+                attempts.extend(item for item in list(stage.get("attempts") or []) if isinstance(item, dict))
+        return attempts
+
+    def _attempt_failed(self, attempt: dict[str, Any]) -> bool:
+        status = str(attempt.get("status") or attempt.get("failed_stage_status") or "").strip().upper()
+        return self._is_failure_status(status) or bool(attempt.get("error"))
+
     def _job_label(self, result: dict[str, Any]) -> str:
         route = str(result.get("planned_job_route") or result.get("job_route") or "").upper()
         label = self._job_type_label(result, route)
@@ -295,9 +383,6 @@ class NewType18DFullWorkflowDashboard(Component):
             f"space_nm={space_nm or '-'}",
             f"sql_id={sql_id or '-'}",
         ]
-        row_id = str(self._first_value(result, "row_id", "ROW_ID", "rowid", "ROWID") or "").strip()
-        if row_id:
-            parts.append(f"row_id={row_id}")
         return f"{label} " + ", ".join(parts)
 
     def _first_value(self, data: dict[str, Any], *keys: str) -> Any:
