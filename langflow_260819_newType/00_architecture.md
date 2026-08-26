@@ -6,8 +6,8 @@
 
 - `08H Confirmation Prompt Builder`가 실행 계획을 만들고 Human Input에 보여준다.
 - 실행 payload는 승인 전에 실행 시작 노드로 직접 연결하지 않는다.
-- `08H Confirmation Payload Stager`가 Human Input prompt와 `08I`로 넘길 execution payload를 분리한다.
-- 실제 실행은 Human Input의 `Approve` 또는 `Fallback` 이후 `08I Confirmed Payload Loader`가 payload를 복원한 뒤 시작된다.
+- `08H Confirmation Message Builder`가 Human Input에 들어갈 Message를 만들고, 그 Message 안에 execution payload를 포함한다.
+- 실제 실행은 Human Input의 `Approve` 또는 `Fallback` 이후 `08I`가 Message에서 payload를 복원한 뒤 시작된다.
 - Full Workflow는 `18A -> 18B -> 10C -> 12C -> 15C -> 17C -> 18D` 단일 chain을 사용한다.
 - 각 실행 flow는 `A -> B(loop) -> C(main executor) -> D(iteration dashboard)` 구조를 따른다.
 - 각 loop의 `Done` output은 `11 Final Dashboard`로 연결된다.
@@ -39,15 +39,14 @@ flowchart TD
     JR -->|prerequisite_required| OUT
     JR -->|no_runnable_target| OUT
 
-    JR -->|execution payload| STAGE["08H Confirmation Payload Stager"]
-    STAGE -->|prompt| HITL{"Human Input"}
-    STAGE -->|execution payload| LOAD["08I Confirmed Payload Loader"]
+    JR -->|execution payload| STAGE["08H Confirmation Message Builder"]
+    STAGE -->|Message with embedded payload| HITL{"Human Input"}
 
     HITL -->|Reject| REJ["08R Confirmation Rejected"]
     REJ --> OUT
 
-    HITL -->|Approve -> approve_message| LOAD
-    HITL -->|Fallback -> fallback_message| LOAD
+    HITL -->|Approve Message| LOAD["08I Message To Payload"]
+    HITL -->|Fallback Message| LOAD
 
     LOAD --> ROUTE{"Execution Start"}
 
@@ -101,7 +100,7 @@ flowchart TD
     FD --> OUT
 ```
 
-The important safety rule is that `08` execution payload must not be wired directly to `10A`, `12A`, `15A`, `17A`, or `18A`. Before approval, payload may flow only through `08H` and into `08I`; `08I` emits execution payload only after Approve/Fallback.
+The important safety rule is that `08` execution payload must not be wired directly to `10A`, `12A`, `15A`, `17A`, or `18A`. Before approval, payload is embedded only in the Human Input Message. `08I` emits execution payload only after Approve/Fallback.
 
 ## Overall Flow
 

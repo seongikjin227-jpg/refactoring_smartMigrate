@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import re
 from datetime import datetime, timezone
@@ -10,10 +11,9 @@ from lfx.io import MessageTextInput, Output
 from lfx.schema.data import Data
 from lfx.schema.message import Message
 
-try:
-    from lfx.io import DataInput
-except Exception:
-    DataInput = MessageTextInput
+
+PAYLOAD_BEGIN = "SMARTMIGRATE_PAYLOAD_B64_BEGIN"
+PAYLOAD_END = "SMARTMIGRATE_PAYLOAD_B64_END"
 
 
 def _load_component_base():
@@ -37,13 +37,12 @@ Component = _load_component_base()
 
 
 class NewType08IConfirmedPayloadLoader(Component):
-    display_name = "08I Confirmed Payload Loader"
-    description = "Loads the staged execution payload only after Human Input Approve or Fallback."
+    display_name = "08I Human Input Message To Payload"
+    description = "Converts an approved Human Input Message back to execution payload Data."
     name = "NewType08IConfirmedPayloadLoader"
     icon = "ShieldCheck"
 
     inputs = [
-        DataInput(name="payload_json", display_name="Execution Payload", required=True),
         MessageTextInput(name="approve_message", display_name="Approve Message", required=False),
         MessageTextInput(name="fallback_message", display_name="Fallback Message", required=False),
     ]
@@ -62,15 +61,12 @@ class NewType08IConfirmedPayloadLoader(Component):
             }
             return Data(data={})
 
-        payload = self._parse_payload(getattr(self, "payload_json", ""))
-        confirmation_id = self._extract_confirmation_id(message_text)
+        payload = self._extract_payload(message_text)
+        confirmation_id = str(payload.get("confirmation_id") or self._extract_confirmation_id(message_text)).strip()
         if not confirmation_id:
-            confirmation_id = str(payload.get("confirmation_id") or "").strip()
-        if not confirmation_id:
-            raise ValueError("confirmation_id was not found in approve/fallback message or payload_json")
+            raise ValueError("confirmation_id was not found in Human Input message payload")
 
         now = datetime.now(timezone.utc).isoformat()
-
         payload.update(
             {
                 "confirmation_id": confirmation_id,
@@ -98,15 +94,28 @@ class NewType08IConfirmedPayloadLoader(Component):
     def _selected_confirmation_message(self) -> tuple[str, str]:
         approve_text = self._message_text(getattr(self, "approve_message", ""))
         fallback_text = self._message_text(getattr(self, "fallback_message", ""))
-        if self._extract_confirmation_id(approve_text):
+        if self._has_payload(approve_text):
             return approve_text, "APPROVED"
-        if self._extract_confirmation_id(fallback_text):
-            return fallback_text, "APPROVED_BY_TIMEOUT"
-        if approve_text.strip():
-            return approve_text, "APPROVED"
-        if fallback_text.strip():
+        if self._has_payload(fallback_text):
             return fallback_text, "APPROVED_BY_TIMEOUT"
         return "", "WAITING_FOR_HUMAN_INPUT"
+
+    def _has_payload(self, text: str) -> bool:
+        return bool(self._payload_match(text))
+
+    def _extract_payload(self, text: str) -> dict[str, Any]:
+        match = self._payload_match(text)
+        if not match:
+            raise ValueError("Human Input message does not contain SmartMigrate payload marker")
+        encoded = re.sub(r"\s+", "", match.group(1))
+        decoded = base64.b64decode(encoded.encode("ascii")).decode("utf-8")
+        payload = json.loads(decoded)
+        if not isinstance(payload, dict):
+            raise ValueError("SmartMigrate payload marker must contain a JSON object")
+        return payload
+
+    def _payload_match(self, text: str):
+        return re.search(rf"{PAYLOAD_BEGIN}\s*(.*?)\s*{PAYLOAD_END}", text or "", flags=re.S)
 
     def _extract_confirmation_id(self, text: str) -> str:
         match = re.search(r"\bconfirmation_id\s*=\s*([A-Za-z0-9_.:-]+)", text or "")
@@ -116,20 +125,6 @@ class NewType08IConfirmedPayloadLoader(Component):
         if isinstance(raw, Message):
             return str(raw.text or "")
         return str(raw or "")
-
-    def _parse_payload(self, raw: Any) -> dict[str, Any]:
-        if isinstance(raw, Data):
-            return dict(raw.data or {})
-        if isinstance(raw, dict):
-            return dict(raw)
-        text = str(raw or "").strip()
-        if text.startswith("```"):
-            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
-            text = re.sub(r"\s*```$", "", text)
-        parsed = json.loads(text) if text else {}
-        if not isinstance(parsed, dict):
-            raise ValueError("payload_json must be a JSON object")
-        return parsed
 
     def _stop_output(self, output_name: str) -> None:
         stop = getattr(self, "stop", None)
@@ -144,3 +139,4 @@ class NewType08IConfirmedPayloadLoader(Component):
                 pass
         except Exception:
             pass
+

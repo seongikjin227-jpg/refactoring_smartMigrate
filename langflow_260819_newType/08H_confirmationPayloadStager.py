@@ -1,21 +1,21 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import re
-from collections.abc import Mapping
 from datetime import datetime, timezone
 from importlib import import_module
 from typing import Any
 
-from lfx.io import MessageTextInput, Output
+from lfx.inputs.inputs import HandleInput
+from lfx.io import Output
 from lfx.schema.data import Data
 from lfx.schema.message import Message
 
-try:
-    from lfx.io import DataInput
-except Exception:
-    DataInput = MessageTextInput
+
+PAYLOAD_BEGIN = "SMARTMIGRATE_PAYLOAD_B64_BEGIN"
+PAYLOAD_END = "SMARTMIGRATE_PAYLOAD_B64_END"
 
 
 def _load_component_base():
@@ -39,43 +39,24 @@ Component = _load_component_base()
 
 
 class NewType08HConfirmationPayloadStager(Component):
-    display_name = "08H Confirmation Prompt Builder"
-    description = "Builds the Human Input prompt and forwards execution payload directly to the approval gate."
+    display_name = "08H Confirmation Message Builder"
+    description = "Builds one Message for Human Input. The execution payload is embedded in the message."
     name = "NewType08HConfirmationPayloadStager"
     icon = "ShieldQuestion"
 
     inputs = [
-        DataInput(name="payload_json", display_name="Execution Payload", required=True),
+        HandleInput(
+            name="payload_json",
+            display_name="Execution Payload",
+            input_types=["Data", "Message"],
+        ),
     ]
 
     outputs = [
-        Output(display_name="Prompt", name="prompt", method="build_prompt", types=["Message"]),
-        Output(display_name="Execution Payload", name="execution_payload", method="build_execution_payload", types=["Data"]),
+        Output(display_name="Human Input Message", name="message", method="build_message", types=["Message"]),
     ]
 
-    def build_prompt(self) -> Message:
-        result = self._build()
-        self.status = {
-            "component": "08H_confirmationPayloadStager",
-            "confirmation_id": result["confirmation_id"],
-            "status": "PENDING",
-        }
-        return Message(text=result["prompt"])
-
-    def build_execution_payload(self) -> Data:
-        result = self._build()
-        self.status = {
-            "component": "08H_confirmationPayloadStager",
-            "confirmation_id": result["confirmation_id"],
-            "status": "PENDING",
-        }
-        return Data(data=result["payload"])
-
-    def _build(self) -> dict[str, Any]:
-        cached = getattr(self, "_cached_result", None)
-        if cached is not None:
-            return cached
-
+    def build_message(self) -> Message:
         payload = self._parse_payload(getattr(self, "payload_json", ""))
         confirmation_id = self._confirmation_id(payload)
         staged_payload = {
@@ -87,20 +68,24 @@ class NewType08HConfirmationPayloadStager(Component):
         }
         staged_payload.setdefault("history", []).append(
             {
-                "step": "human_input_confirmation_staged",
+                "step": "human_input_confirmation_message_built",
                 "message": f"confirmation_id={confirmation_id}",
             }
         )
 
-        result = {
+        message = self._message_text(confirmation_id, self._plan_text(payload), staged_payload)
+        self.status = {
+            "component": "08H_confirmationPayloadStager",
             "confirmation_id": confirmation_id,
-            "prompt": self._prompt_text(confirmation_id, self._plan_text(payload)),
-            "payload": staged_payload,
+            "status": "PENDING",
+            "message_only_payload": True,
         }
-        self._cached_result = result
-        return result
+        return Message(text=message)
 
-    def _prompt_text(self, confirmation_id: str, plan_text: str) -> str:
+    def _message_text(self, confirmation_id: str, plan_text: str, payload: dict[str, Any]) -> str:
+        payload_text = base64.b64encode(
+            json.dumps(payload, ensure_ascii=False, default=str, separators=(",", ":")).encode("utf-8")
+        ).decode("ascii")
         return "\n".join(
             [
                 "요청하신 작업 계획입니다.",
@@ -113,6 +98,10 @@ class NewType08HConfirmationPayloadStager(Component):
                 "- Approve: 작업을 시작합니다.",
                 "- Reject: 작업을 취소합니다.",
                 "- Timeout/Fallback: 자동 승인으로 처리합니다.",
+                "",
+                PAYLOAD_BEGIN,
+                payload_text,
+                PAYLOAD_END,
             ]
         )
 
@@ -121,7 +110,7 @@ class NewType08HConfirmationPayloadStager(Component):
         run_mode = str(payload.get("run_mode") or "all_pending")
         jobs = self._jobs_for_route(payload, route)
         counts = self._plan_counts(payload, route, jobs)
-        total_count = sum(self._to_int(value) for value in counts.values()) if counts else len(jobs)
+        total_count = sum(counts.values()) if counts else len(jobs)
         mode_label = "전체 잔여 작업" if run_mode == "all_pending" else "지정 작업"
 
         lines = [
@@ -173,12 +162,8 @@ class NewType08HConfirmationPayloadStager(Component):
         return []
 
     def _plan_counts(self, payload: dict[str, Any], route: str, jobs: list[dict[str, Any]]) -> dict[str, int]:
-        existing = payload.get("planned_job_counts") or payload.get("workflow_plan_counts")
-        if isinstance(existing, dict) and existing:
-            return {str(key).upper(): self._to_int(value) for key, value in existing.items()}
         if route != "FULL_WORKFLOW":
             return {route: len(jobs)} if route else {}
-
         pending = payload.get("remaining_jobs") or payload.get("pending_jobs") or {}
         if pending:
             return {
@@ -187,7 +172,6 @@ class NewType08HConfirmationPayloadStager(Component):
                 "SQL_TUNING": len(pending.get("sql_tuning_jobs") or []),
                 "SQL_FORMATTING": len(pending.get("sql_formatting_jobs") or []),
             }
-
         counts = {"MIG": 0, "SQL_CONVERSION": 0, "SQL_TUNING": 0, "SQL_FORMATTING": 0}
         for job in jobs:
             job_route = str(job.get("job_route") or job.get("planned_job_route") or "").upper()
@@ -228,19 +212,6 @@ class NewType08HConfirmationPayloadStager(Component):
         )
         digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
         return f"CONF-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{digest}"
-
-    def _to_int(self, value: Any) -> int:
-        if isinstance(value, Mapping):
-            for key in ("count", "total", "planned", "planned_count", "value", "job_count"):
-                if key in value:
-                    return self._to_int(value.get(key))
-            return sum(self._to_int(item) for item in value.values())
-        if isinstance(value, list):
-            return sum(self._to_int(item) for item in value)
-        try:
-            return int(value or 0)
-        except Exception:
-            return 0
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):
