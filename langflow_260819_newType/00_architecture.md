@@ -194,4 +194,8 @@ Each row carries `job_name`, `planned_job_route`, `phase_index`, route-level pro
 - `tuning`: pass through 10C/12C, run 15C/17C
 - `formatting`: pass through 10C/12C/15C, run 17C
 
-Retry policy for this route is "first attempt + up to 2 retries". Business failures are recorded by the C component and the full workflow loop continues to the next queued job, so the final 18D summary can report completed/pass/fail/skipped counts by phase.
+Retry policy for this route is "first attempt + up to 2 retries".
+
+18B is phase-aware. It executes all DB Migration rows first. If any DB Migration row ends without `PASS`/`SUCCESS`, 18B does not send the remaining SQL rows through `10C -> 12C -> 15C -> 17C` one by one. Instead, it stops before the first SQL row, counts the remaining rows by phase as skipped, and sends one final Done payload to 18D. 18D then shows the abort reason and skipped SQL counts in the final dashboard.
+
+The SQL C components do not query `NEXT_MIG_INFO` as a workflow gate. Migration gating belongs to 18B so a large remaining SQL backlog can finish with one aggregate skip summary instead of hundreds of per-row blocked messages.

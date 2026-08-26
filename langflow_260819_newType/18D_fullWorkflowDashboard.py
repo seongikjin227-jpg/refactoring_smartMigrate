@@ -80,7 +80,7 @@ class NewType18DFullWorkflowDashboard(Component):
     def _final_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         results = [self._data_dict(item) for item in payload.get("aggregated_results") or []]
         summary = payload.get("workflow_summary") or self._summary(results, payload.get("workflow_plan_counts") or {})
-        answer = self._final_message(summary, results)
+        answer = self._final_message(summary, results, payload)
         return {
             **payload,
             "component": "18D_fullWorkflowDashboard",
@@ -99,39 +99,50 @@ class NewType18DFullWorkflowDashboard(Component):
         route_index = int(result.get("route_job_index") or index)
         route_total = int(result.get("route_total_jobs") or total)
         lines = [
-            "## Full Workflow Progress",
+            "## Overall Progress",
             "",
-            f"- Current phase: {phase_index}/{phase_count} {label}",
-            f"- Current job: {self._job_label(result)}",
-            f"- Overall progress: {index}/{total} jobs, {self._pct(index, total)}",
+            f"- 전체 진행률: {index}/{total}건, {self._pct(index, total)}",
             self._bar(index, total),
-            f"- Phase progress: {route_index}/{route_total} jobs, {self._pct(route_index, route_total)}",
-            f"- Current status: {result.get('status')}",
-            f"- retry: {self._retry_count(result)}",
+            f"- 현재 단계: {phase_index}/{phase_count} {label}",
+            f"- 단계 진행률: {route_index}/{route_total}건, {self._pct(route_index, route_total)}",
+            f"- 현재 작업: {self._job_label(result)}",
+            f"- 현재 상태: {result.get('status')}",
+            f"- 재시도: {self._retry_count(result)}",
         ]
         stages = result.get("stages") or {}
         if stages:
-            lines.extend(["", "| Stage | Status | Message |", "|---|---|---|"])
+            lines.extend(["", "| 단계 | 상태 | 메시지 |", "|---|---|---|"])
             for stage in ("conversion", "tuning", "formatting"):
                 item = stages.get(stage) or {}
-                lines.append(f"| {stage} | {self._cell(item.get('status', '-'))} | {self._cell(item.get('message', '-'))} |")
+                lines.append(f"| {self._stage_label(stage)} | {self._cell(item.get('status', '-'))} | {self._cell(item.get('message', '-'))} |")
         message = str(result.get("message") or "").strip()
         if message:
-            lines.extend(["", f"Message: {message}"])
+            lines.extend(["", f"메시지: {message}"])
         return "\n".join(lines)
 
-    def _final_message(self, summary: dict[str, Any], results: list[dict[str, Any]]) -> str:
+    def _final_message(self, summary: dict[str, Any], results: list[dict[str, Any]], payload: dict[str, Any]) -> str:
         total = sum(int((summary.get(route) or {}).get("planned") or 0) for route in ROUTE_ORDER)
         completed = sum(int((summary.get(route) or {}).get("completed") or 0) for route in ROUTE_ORDER)
+        skipped = sum(int((summary.get(route) or {}).get("skipped") or 0) for route in ROUTE_ORDER)
+        handled = min(total, completed + skipped)
         stage_activity = self._stage_activity(results)
         lines = [
-            "# Full Workflow Summary",
+            "# Overall Progress",
             "",
-            f"- Overall: {completed}/{total} planned jobs completed",
-            "",
-            "| Phase | Planned | Completed | Pass | Fail | Skipped |",
-            "|---|---:|---:|---:|---:|---:|",
+            f"- 전체 진행률: {handled}/{total}건 처리, {self._pct(handled, total)}",
+            self._bar(handled, total),
         ]
+        if payload.get("workflow_aborted"):
+            lines.extend(["", f"- 중단 사유: {payload.get('abort_reason') or '선행 단계 실패로 후속 작업을 생략했습니다.'}"])
+            skipped_counts = dict(payload.get("skipped_plan_counts") or {})
+            skipped_total = sum(self._num(value) for value in skipped_counts.values())
+            if skipped_total:
+                lines.extend(["", f"- 생략된 후속 작업: {skipped_total}건", "", "| 생략 기능 | 건수 |", "|---|---:|"])
+                for route in ROUTE_ORDER:
+                    count = self._num(skipped_counts.get(route))
+                    if count:
+                        lines.append(f"| {ROUTE_LABELS[route]} | {count} |")
+        lines.extend(["", "## 전체 작업 요약", "", "| 기능 | 예정 | 완료 | PASS | FAIL | SKIP |", "|---|---:|---:|---:|---:|---:|"])
         for route in ROUTE_ORDER:
             item = summary.get(route) or {}
             lines.append(
@@ -143,23 +154,22 @@ class NewType18DFullWorkflowDashboard(Component):
                 f"{self._num(item.get('fail'))} | "
                 f"{self._num(item.get('skipped'))} |"
             )
-        lines.extend(["", "## Executed Stage Activity", "", "| Stage | Executed | Pass | Fail | Skipped |", "|---|---:|---:|---:|---:|"])
+        lines.extend(["", "## 실행 단계 현황", "", "| 단계 | 실행 | PASS | FAIL | SKIP |", "|---|---:|---:|---:|---:|"])
         for stage in ("db_migration", "conversion", "tuning", "formatting"):
             item = stage_activity.get(stage) or {}
             lines.append(
                 "| "
-                f"{stage} | "
+                f"{self._stage_label(stage)} | "
                 f"{self._num(item.get('executed'))} | "
                 f"{self._num(item.get('pass'))} | "
                 f"{self._num(item.get('fail'))} | "
                 f"{self._num(item.get('skipped'))} |"
             )
         if results:
-            lines.extend(["", "Recent results:"])
+            lines.extend(["", "## 최근 작업 결과"])
             for result in results[-10:]:
-                route = str(result.get("planned_job_route") or result.get("job_route") or "").upper()
-                lines.append(f"- {ROUTE_LABELS.get(route, route)} {self._job_label(result)}: {result.get('status')}")
-        lines.extend(["", "Full Workflow loop is complete."])
+                lines.append(f"- {self._job_label(result)}: {result.get('status')}")
+        lines.extend(["", "전체 작업 루프가 완료되었습니다."])
         return "\n".join(lines)
 
     def _stage_activity(self, results: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
@@ -240,12 +250,41 @@ class NewType18DFullWorkflowDashboard(Component):
         return value == "FAIL" or value.startswith("FAIL-")
 
     def _is_skipped(self, result: dict[str, Any]) -> bool:
-        return bool(result.get("not_runnable") or result.get("skipped") or result.get("tuning_skipped") or result.get("formatting_skipped"))
+        return bool(result.get("workflow_blocked") or result.get("not_runnable") or result.get("skipped") or result.get("tuning_skipped") or result.get("formatting_skipped"))
 
     def _job_label(self, result: dict[str, Any]) -> str:
-        if str(result.get("planned_job_route") or result.get("job_route") or "").upper() == "MIG" or result.get("map_id") is not None:
-            return f"map_id={result.get('map_id')}"
-        return f"space_nm={result.get('space_nm') or '-'}, sql_id={result.get('sql_id') or '-'}"
+        route = str(result.get("planned_job_route") or result.get("job_route") or "").upper()
+        label = self._job_type_label(result, route)
+        if route == "MIG" or result.get("map_id") is not None:
+            return f"{label} map_id={result.get('map_id')}"
+        parts = [
+            f"space_nm={result.get('space_nm') or '-'}",
+            f"sql_id={result.get('sql_id') or '-'}",
+        ]
+        row_id = str(result.get("row_id") or "").strip()
+        if row_id:
+            parts.append(f"row_id={row_id}")
+        return f"{label} " + ", ".join(parts)
+
+    def _job_type_label(self, result: dict[str, Any], route: str) -> str:
+        job_name = str(result.get("job_name") or "").strip().lower()
+        if job_name == "migration":
+            return "DB Migration"
+        if job_name == "conversion":
+            return "SQL Conversion"
+        if job_name == "tuning":
+            return "SQL Tuning"
+        if job_name == "formatting":
+            return "SQL Formatting"
+        return ROUTE_LABELS.get(route, route or "Unknown")
+
+    def _stage_label(self, stage: str) -> str:
+        return {
+            "db_migration": "DB Migration",
+            "conversion": "SQL Conversion",
+            "tuning": "SQL Tuning",
+            "formatting": "SQL Formatting",
+        }.get(str(stage or ""), str(stage or "-"))
 
     def _retry_count(self, result: dict[str, Any]) -> int:
         max_attempt = 1
@@ -263,7 +302,7 @@ class NewType18DFullWorkflowDashboard(Component):
         clamped = max(0, min(value, total))
         filled = round(clamped / total * width) if total > 0 else 0
         percent = (clamped / total * 100) if total > 0 else 0.0
-        return f"{'#' * filled}{'-' * (width - filled)} `{percent:.1f}%`"
+        return f"{'■' * filled}{'□' * (width - filled)} `{percent:.1f}%`"
 
     def _pct(self, value: int, total: int) -> str:
         return f"{(value / total * 100):.1f}%" if total else "-"

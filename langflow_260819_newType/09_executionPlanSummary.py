@@ -45,6 +45,7 @@ class NewType09ExecutionPlanSummary(Component):
         route = str(payload.get("job_route") or "").upper()
         run_mode = str(payload.get("run_mode") or ("all_pending" if payload.get("run_all_pending") else "targeted"))
         jobs = self._jobs_for_route(payload, route)
+        plan_counts = self._plan_counts(payload, route, jobs)
         command = {
             "action": self._action_for_route(route),
             "run_mode": run_mode,
@@ -58,9 +59,10 @@ class NewType09ExecutionPlanSummary(Component):
             "command_json": command,
             "planned_job_route": route,
             "planned_job_count": len(jobs),
+            "planned_job_counts": plan_counts,
             "planned_jobs": jobs,
-            "execution_plan_message": self._message(route, run_mode, jobs),
-            "execution_plan_prompt": self._llm_prompt(route, run_mode, jobs),
+            "execution_plan_message": self._message(route, run_mode, jobs, plan_counts),
+            "execution_plan_prompt": self._llm_prompt(route, run_mode, jobs, plan_counts),
             "notice_only": True,
             "next_node": "chat_output",
         }
@@ -93,6 +95,23 @@ class NewType09ExecutionPlanSummary(Component):
             ]
         return []
 
+    def _plan_counts(self, payload: dict[str, Any], route: str, jobs: list[dict[str, Any]]) -> dict[str, int]:
+        if route != "FULL_WORKFLOW":
+            return {route: len(jobs)} if route else {}
+        counts = {"MIG": 0, "SQL_CONVERSION": 0, "SQL_TUNING": 0, "SQL_FORMATTING": 0}
+        pending = payload.get("remaining_jobs") or payload.get("pending_jobs") or {}
+        if pending:
+            counts["MIG"] = len(pending.get("migration_jobs") or [])
+            counts["SQL_CONVERSION"] = len(pending.get("sql_conversion_jobs") or pending.get("sql_jobs") or [])
+            counts["SQL_TUNING"] = len(pending.get("sql_tuning_jobs") or [])
+            counts["SQL_FORMATTING"] = len(pending.get("sql_formatting_jobs") or [])
+            return counts
+        for job in jobs:
+            job_route = str(job.get("planned_job_route") or job.get("job_route") or "").upper()
+            if job_route in counts:
+                counts[job_route] += 1
+        return counts
+
     def _action_for_route(self, route: str) -> str:
         # Map an execution route to its action name.
         return {
@@ -103,7 +122,7 @@ class NewType09ExecutionPlanSummary(Component):
             "FULL_WORKFLOW": "run_full_workflow",
         }.get(route, "run_remaining_jobs")
 
-    def _message(self, route: str, run_mode: str, jobs: list[dict[str, Any]]) -> str:
+    def _message(self, route: str, run_mode: str, jobs: list[dict[str, Any]], plan_counts: dict[str, int]) -> str:
         # Format the execution-plan notice text.
         label = {
             "MIG": "DB Migration",
@@ -118,7 +137,21 @@ class NewType09ExecutionPlanSummary(Component):
             f"{label} {mode_label}을 시작합니다.",
             f"- 실행 예정 작업 수: {len(jobs)}",
         ]
+        if route == "FULL_WORKFLOW":
+            lines.extend(
+                [
+                    "",
+                    "| 기능 | 실행 예정 |",
+                    "|---|---:|",
+                    f"| DB Migration | {plan_counts.get('MIG', 0)} |",
+                    f"| SQL Conversion | {plan_counts.get('SQL_CONVERSION', 0)} |",
+                    f"| SQL Tuning | {plan_counts.get('SQL_TUNING', 0)} |",
+                    f"| SQL Formatting | {plan_counts.get('SQL_FORMATTING', 0)} |",
+                ]
+            )
         if jobs:
+            if route == "FULL_WORKFLOW":
+                lines.append("")
             lines.append("- 실행 예정 목록:")
             for job in jobs[:20]:
                 lines.append(f"  - {self._job_label(job)}")
@@ -126,7 +159,7 @@ class NewType09ExecutionPlanSummary(Component):
                 lines.append(f"  - ... and {len(jobs) - 20} more")
         return "\n".join(lines)
 
-    def _llm_prompt(self, route: str, run_mode: str, jobs: list[dict[str, Any]]) -> str:
+    def _llm_prompt(self, route: str, run_mode: str, jobs: list[dict[str, Any]], plan_counts: dict[str, int]) -> str:
         # Build an optional LLM prompt for execution-plan messaging.
         return "\n".join(
             [
@@ -141,6 +174,7 @@ class NewType09ExecutionPlanSummary(Component):
                         "job_route": route,
                         "run_mode": run_mode,
                         "planned_job_count": len(jobs),
+                        "planned_job_counts": plan_counts,
                         "planned_jobs": [self._compact_job(job) for job in jobs[:50]],
                     },
                     ensure_ascii=False,

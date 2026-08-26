@@ -115,7 +115,32 @@ class NewType18BFullWorkflowLoop(Component):
             if not data_list:
                 self.update_ctx({f"{self._id}_aggregated": [], f"{self._id}_iterated": True})
                 return []
-            aggregated_results = await self.execute_loop_body(data_list, event_manager=self._event_manager)
+            aggregated_results = []
+            migration_failed = False
+            abort_reason = ""
+            skipped_plan_counts = {route: 0 for route in ROUTE_ORDER}
+            for index, item in enumerate(data_list):
+                item_payload = self._data_dict(item)
+                if migration_failed and self._route(item_payload) != "MIG":
+                    skipped_plan_counts = self._plan_counts(data_list[index:])
+                    abort_reason = "DB Migration 결과에 실패/미완료 작업이 있어 SQL Conversion 이후 작업을 시작하지 않았습니다."
+                    self.log(abort_reason, name="Phase Gate")
+                    break
+
+                item_results = await self.execute_loop_body([item], event_manager=self._event_manager)
+                aggregated_results.extend(item_results)
+                for result in item_results:
+                    result_payload = self._data_dict(result)
+                    if self._route(result_payload) == "MIG" and self._migration_blocks_sql(result_payload):
+                        migration_failed = True
+
+            self.update_ctx(
+                {
+                    f"{self._id}_workflow_aborted": bool(abort_reason),
+                    f"{self._id}_abort_reason": abort_reason,
+                    f"{self._id}_skipped_plan_counts": skipped_plan_counts,
+                }
+            )
         except Exception as exc:
             from lfx.log.logger import logger
 
@@ -154,7 +179,10 @@ class NewType18BFullWorkflowLoop(Component):
             "db_config": dict(first_payload.get("db_config") or {}),
             "workflow_plan_counts": dict(first_payload.get("workflow_plan_counts") or self._plan_counts(data_list)),
             "aggregated_results": results,
-            "workflow_summary": self._summary(results, data_list),
+            "workflow_summary": self._summary(results, data_list, self.ctx.get(f"{self._id}_skipped_plan_counts", {})),
+            "workflow_aborted": bool(self.ctx.get(f"{self._id}_workflow_aborted", False)),
+            "abort_reason": str(self.ctx.get(f"{self._id}_abort_reason", "") or ""),
+            "skipped_plan_counts": dict(self.ctx.get(f"{self._id}_skipped_plan_counts", {}) or {}),
             "next_node": "18D_fullWorkflowDashboard",
         }
         self.status = payload
@@ -174,7 +202,7 @@ class NewType18BFullWorkflowLoop(Component):
             raise ValueError(f"18B {route} item {index} requires row_id or space_nm+sql_id")
         raise ValueError(f"18B item {index} has invalid job_route={route}")
 
-    def _summary(self, results: list[dict[str, Any]], data_list: list[Any]) -> dict[str, Any]:
+    def _summary(self, results: list[dict[str, Any]], data_list: list[Any], skipped_plan_counts: dict[str, Any] | None = None) -> dict[str, Any]:
         plan_counts = self._plan_counts(data_list)
         summary: dict[str, dict[str, int]] = {
             route: {"planned": int(plan_counts.get(route) or 0), "completed": 0, "pass": 0, "fail": 0, "skipped": 0}
@@ -189,10 +217,13 @@ class NewType18BFullWorkflowLoop(Component):
                 summary[route]["fail"] += 1
             elif self._is_success(route, result):
                 summary[route]["pass"] += 1
-            elif result.get("not_runnable") or result.get("tuning_skipped") or result.get("formatting_skipped") or result.get("skipped"):
+            elif result.get("workflow_blocked") or result.get("not_runnable") or result.get("tuning_skipped") or result.get("formatting_skipped") or result.get("skipped"):
                 summary[route]["skipped"] += 1
             else:
                 summary[route]["fail"] += 1
+        for route, count in dict(skipped_plan_counts or {}).items():
+            if route in summary:
+                summary[route]["skipped"] += int(count or 0)
         return summary
 
     def _is_success(self, route: str, result: dict[str, Any]) -> bool:
@@ -215,14 +246,23 @@ class NewType18BFullWorkflowLoop(Component):
         value = str(status or "").strip().upper()
         return value == "FAIL" or value.startswith("FAIL-")
 
+    def _migration_blocks_sql(self, result: dict[str, Any]) -> bool:
+        status = str(result.get("status") or "").strip().upper()
+        if status in {"PASS", "SUCCESS"} and bool(result.get("ok", True)):
+            return False
+        return True
+
     def _plan_counts(self, data_list: list[Any]) -> dict[str, int]:
         counts = {route: 0 for route in ROUTE_ORDER}
         for item in data_list:
             payload = self._data_dict(item)
-            route = str(payload.get("planned_job_route") or payload.get("job_route") or "").upper()
+            route = self._route(payload)
             if route in counts:
                 counts[route] += 1
         return counts
+
+    def _route(self, payload: dict[str, Any]) -> str:
+        return str(payload.get("planned_job_route") or payload.get("job_route") or "").upper()
 
     def _data_dict(self, item: Any) -> dict[str, Any]:
         if isinstance(item, Data):
