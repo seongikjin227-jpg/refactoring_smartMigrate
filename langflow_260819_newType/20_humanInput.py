@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import json
 import re
 from datetime import datetime, timezone
 from importlib import import_module
 from typing import Any
 
 from lfx.inputs.inputs import ActionPickerInput, BoolInput, DurationInput, HandleInput
-from lfx.io import MultilineInput, Output
+from lfx.io import DataInput, Output
 from lfx.schema.data import Data
 from lfx.schema.message import Message
 
@@ -52,22 +51,15 @@ class NewType20HumanInput(Component):
     inputs = [
         HandleInput(
             name="prompt_message",
-            display_name="Input Message",
-            input_types=["Message", "Data"],
-            info="Optional dynamic prompt message. When connected, this is shown instead of the static Input text.",
-            required=False,
-        ),
-        MultilineInput(
-            name="prompt",
             display_name="Input",
-            info="Content shown to the human for review.",
-            value="",
+            input_types=["Message", "Data"],
+            info="Content shown to the human for review before they choose Approve, Reject, or Fallback.",
+            required=True,
         ),
-        HandleInput(
-            name="payload_json",
-            display_name="Execution Payload",
-            input_types=["Data", "Message"],
-            info="Payload to release only after Approve or Fallback.",
+        DataInput(
+            name="execution_data",
+            display_name="Execution Data",
+            info="Data to release only after Approve or Fallback.",
             required=False,
             advanced=True,
         ),
@@ -235,29 +227,17 @@ class NewType20HumanInput(Component):
         if isinstance(prompt_message, str) and prompt_message.strip():
             return prompt_message
 
-        prompt = getattr(self, "prompt", "") or ""
-        if isinstance(prompt, Message):
-            return str(prompt.text or "")
-        return str(prompt)
+        return ""
 
     def _payload(self) -> dict[str, Any]:
-        raw = getattr(self, "payload_json", None)
+        raw = getattr(self, "execution_data", None)
         if isinstance(raw, Data):
             return dict(raw.data or {})
-        if isinstance(raw, Message):
-            raw = raw.text
         if isinstance(raw, dict):
             return dict(raw)
-        text = str(raw or "").strip()
-        if not text:
+        if raw in (None, ""):
             return {}
-        if text.startswith("```"):
-            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
-            text = re.sub(r"\s*```$", "", text)
-        parsed = json.loads(text)
-        if not isinstance(parsed, dict):
-            raise ValueError("payload_json must be a JSON object")
-        return parsed
+        raise ValueError("execution_data must be a Langflow Data object")
 
     def _confirmation_status(self, chosen: str) -> str:
         if chosen == "approve":

@@ -55,7 +55,7 @@ Langflow Human Input은 다음 방식으로 동작한다.
        -> 20 Human Input.prompt_message
 
 08 Job Execution Router
-  -> 20 Human Input.payload_json
+  -> 20 Human Input.execution_data
 
 20 Human Input
   Approve  -> 18A Full Workflow Jobs To Loop Table
@@ -77,7 +77,7 @@ Langflow Human Input은 다음 방식으로 동작한다.
 
 허용:
 
-- `08 payload -> 20.payload_json` 직접 `Data` 연결
+- `08 Data -> 20.execution_data` 직접 `Data` 연결
 - `20 Approve/Fallback -> 18A` 연결
 - `20 Reject -> 08R` 연결
 
@@ -96,7 +96,7 @@ Langflow Human Input은 다음 방식으로 동작한다.
 - `BoolInput`: fallback 사용 여부
 - `DurationInput`: timeout 설정
 - `prompt_message`: 08H가 만든 동적 승인 메시지
-- `payload_json`: 승인 후 전달할 실행 payload
+- `execution_data`: 승인 후 전달할 실행 Data
 - 선택되지 않은 branch는 `self.stop(...)`으로 중단
 
 `08R`

@@ -7,7 +7,7 @@
 - `08 Job Execution Router`는 사용자의 실행 의도를 판단하고 실행 payload를 만든다.
 - 실제 실행 전에 항상 `20 Human Input`을 거친다.
 - `08H Confirmation Prompt Builder`는 사용자에게 보여줄 한국어 계획 메시지만 만든다.
-- 실행 payload는 화면에 출력하지 않고 `20 Human Input.payload_json`으로만 전달한다.
+- 실행 Data는 화면에 출력하지 않고 `20 Human Input.execution_data`로만 전달한다.
 - `20 Human Input`에서 `Approve` 또는 `Fallback`이 선택된 경우에만 payload가 실행 시작 노드로 전달된다.
 - `Reject`는 `08R Confirmation Rejected`로만 연결하고 실행 노드로 연결하지 않는다.
 - Full Workflow는 `18A -> 18B -> 10C -> 12C -> 15C -> 17C -> 18D` 단일 chain을 사용한다.
@@ -37,7 +37,7 @@ flowchart TD
     JR -->|prerequisite_required| OUT
     JR -->|no_runnable_target| OUT
 
-    JR -->|payload_json| H20["20 Human Input"]
+    JR -->|execution_data| H20["20 Human Input"]
     JR --> H08["08H Confirmation Prompt Builder"]
     H08 -->|prompt_message| H20
 
@@ -105,7 +105,7 @@ flowchart TD
        -> 20 Human Input.prompt_message
 
 08 Job Execution Router
-  -> 20 Human Input.payload_json
+  -> 20 Human Input.execution_data
 
 20 Human Input
   Approve/Fallback -> execution start
@@ -114,7 +114,7 @@ flowchart TD
 
 `08H`는 화면에 보이는 계획 메시지만 만든다. Payload를 HTML 주석, base64, marker 문자열로 숨겨 넣지 않는다.
 
-`20 Human Input`은 `prompt_message`로 받은 메시지를 Human Input 화면에 보여주고, payload를 별도 `Data` 입력으로 받은 뒤 승인된 브랜치로만 내보낸다. 따라서 `Approve` 또는 `Fallback` 전에는 실행 시작 노드가 payload를 받을 수 없다.
+`20 Human Input`은 `prompt_message`로 받은 메시지를 Human Input 화면에 보여주고, 실행 Data를 별도 `Data` 입력으로 받은 뒤 승인된 브랜치로만 내보낸다. 따라서 `Approve` 또는 `Fallback` 전에는 실행 시작 노드가 실행 Data를 받을 수 없다.
 
 ## Full Workflow Flow
 

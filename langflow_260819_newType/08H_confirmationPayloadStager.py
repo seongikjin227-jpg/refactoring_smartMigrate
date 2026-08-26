@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from datetime import datetime, timezone
 from importlib import import_module
 from typing import Any
 
-from lfx.inputs.inputs import HandleInput
-from lfx.io import Output
+from lfx.io import DataInput, Output
 from lfx.schema.data import Data
 from lfx.schema.message import Message
 
@@ -40,11 +38,7 @@ class NewType08HConfirmationPayloadStager(Component):
     icon = "ShieldQuestion"
 
     inputs = [
-        HandleInput(
-            name="payload_json",
-            display_name="Execution Payload",
-            input_types=["Data", "Message"],
-        ),
+        DataInput(name="execution_data", display_name="Execution Data", required=True),
     ]
 
     outputs = [
@@ -52,7 +46,7 @@ class NewType08HConfirmationPayloadStager(Component):
     ]
 
     def build_message(self) -> Message:
-        payload = self._parse_payload(getattr(self, "payload_json", ""))
+        payload = self._execution_data()
         confirmation_id = self._confirmation_id(payload)
         message = self._message_text(confirmation_id, self._plan_text(payload))
         self.status = {
@@ -186,18 +180,10 @@ class NewType08HConfirmationPayloadStager(Component):
         digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
         return f"CONF-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{digest}"
 
-    def _parse_payload(self, raw: Any) -> dict[str, Any]:
+    def _execution_data(self) -> dict[str, Any]:
+        raw = getattr(self, "execution_data", None)
         if isinstance(raw, Data):
             return dict(raw.data or {})
-        if isinstance(raw, Message):
-            raw = raw.text
         if isinstance(raw, dict):
             return dict(raw)
-        text = str(raw or "").strip()
-        if text.startswith("```"):
-            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
-            text = re.sub(r"\s*```$", "", text)
-        parsed = json.loads(text) if text else {}
-        if not isinstance(parsed, dict):
-            raise ValueError("payload_json must be a JSON object")
-        return parsed
+        raise ValueError("execution_data must be a Langflow Data object")
