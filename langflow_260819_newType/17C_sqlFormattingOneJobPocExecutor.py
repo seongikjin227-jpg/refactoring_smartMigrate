@@ -39,6 +39,10 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         """Run one formatting job or pass through when tuning did not pass."""
         started = time.perf_counter()
         payload = self._parse_payload(getattr(self, "job_item", ""))
+        if not self._should_run_formatting(payload):
+            result = self._component_pass_through(payload, started, "17C skipped because job_name is migration.")
+            self.status = result
+            return Data(data=result)
         db_config = self._db_config(payload)
         self._require_db_config(db_config)
         job: dict[str, Any] = {}
@@ -64,6 +68,48 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             result = self._finish_failure(payload, job, started, str(exc))
         self.status = result
         return Data(data=result)
+
+    def _should_run_formatting(self, payload: dict[str, Any]) -> bool:
+        return self._job_name(payload) in {"conversion", "tuning", "formatting"}
+
+    def _job_name(self, payload: dict[str, Any]) -> str:
+        value = str(payload.get("job_name") or "").strip().lower()
+        if value:
+            return value
+        route = str(payload.get("planned_job_route") or payload.get("job_route") or "").strip().upper()
+        return {
+            "MIG": "migration",
+            "SQL_CONVERSION": "conversion",
+            "SQL_TUNING": "tuning",
+            "SQL_FORMATTING": "formatting",
+        }.get(route, "")
+
+    def _component_pass_through(self, payload: dict[str, Any], started: float, message: str) -> dict[str, Any]:
+        elapsed = time.perf_counter() - started
+        total = int(payload.get("total_jobs") or 1)
+        index = int(payload.get("job_index") or 1)
+        result = {
+            **payload,
+            "component": "17C_sqlFormattingOneJobPocExecutor",
+            "ok": bool(payload.get("ok", True)),
+            "status": payload.get("status") or "PASS-THROUGH",
+            "elapsed_seconds": round(elapsed, 3),
+            "attempt_count": int(payload.get("attempt_count") or 0),
+            "attempts": list(payload.get("attempts") or []),
+            "job_index": index,
+            "total_jobs": total,
+            "completed_count": index,
+            "remaining_count": max(total - index, 0),
+            "stages": dict(payload.get("stages") or {}),
+            "component_pass_through": True,
+            "pass_through_component": "17C",
+            "message": payload.get("message") or message,
+            "next_node": "18D_fullWorkflowDashboard",
+        }
+        history = list(result.get("history") or [])
+        history.append({"step": "17C_pass_through", "message": message})
+        result["history"] = history
+        return result
 
     def _run_formatting(
         self,
@@ -355,6 +401,8 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
 
     def _dashboard_node(self, payload: dict[str, Any]) -> str:
         """Return the dashboard that owns the current chained flow."""
+        if payload.get("full_workflow"):
+            return "18D_fullWorkflowDashboard"
         route = str(payload.get("job_route") or "").upper()
         if route == "SQL_CONVERSION":
             return "12D_sqlConversionIterationDashboard"

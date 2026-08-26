@@ -34,7 +34,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
 
     inputs = [
         DataInput(name="job_item", display_name="Job Item", required=True),
-        IntInput(name="max_retry", display_name="Max Retry", value=3, required=False),
+        IntInput(name="max_retry", display_name="Max Retry", value=2, required=False),
     ]
 
     outputs = [
@@ -45,6 +45,11 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         """Run one SQL conversion job and return a payload for 15C."""
         started = time.perf_counter()
         payload = self._parse_payload(getattr(self, "job_item", ""))
+        self._payload_max_retry = payload.get("max_retry") if isinstance(payload, dict) else None
+        if not self._should_run_conversion(payload):
+            result = self._pass_through(payload, started, "12C skipped because job_name is not conversion.")
+            self.status = result
+            return Data(data=result)
         db_config = self._db_config(payload)
         self._require_db_config(db_config)
         job: dict[str, Any] = {}
@@ -56,6 +61,48 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             result = self._finish_failure(payload, job, db_config, started, FAIL_TOBE, str(exc))
         self.status = result
         return Data(data=result)
+
+    def _should_run_conversion(self, payload: dict[str, Any]) -> bool:
+        return self._job_name(payload) == "conversion"
+
+    def _job_name(self, payload: dict[str, Any]) -> str:
+        value = str(payload.get("job_name") or "").strip().lower()
+        if value:
+            return value
+        route = str(payload.get("planned_job_route") or payload.get("job_route") or "").strip().upper()
+        return {
+            "MIG": "migration",
+            "SQL_CONVERSION": "conversion",
+            "SQL_TUNING": "tuning",
+            "SQL_FORMATTING": "formatting",
+        }.get(route, "")
+
+    def _pass_through(self, payload: dict[str, Any], started: float, message: str) -> dict[str, Any]:
+        elapsed = time.perf_counter() - started
+        total = int(payload.get("total_jobs") or 1)
+        index = int(payload.get("job_index") or 1)
+        result = {
+            **payload,
+            "component": "12C_sqlConversionOneJobPocExecutor",
+            "ok": bool(payload.get("ok", True)),
+            "status": payload.get("status") or "PASS-THROUGH",
+            "elapsed_seconds": round(elapsed, 3),
+            "attempt_count": int(payload.get("attempt_count") or 0),
+            "attempts": list(payload.get("attempts") or []),
+            "job_index": index,
+            "total_jobs": total,
+            "completed_count": index,
+            "remaining_count": max(total - index, 0),
+            "stages": dict(payload.get("stages") or {}),
+            "component_pass_through": True,
+            "pass_through_component": "12C",
+            "message": payload.get("message") or message,
+            "next_node": "15C_sqlTuningOneJobPocExecutor",
+        }
+        history = list(result.get("history") or [])
+        history.append({"step": "12C_pass_through", "message": message})
+        result["history"] = history
+        return result
 
     def _run_conversion(
         self,
@@ -302,7 +349,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 {
                     "STATUS_CONVERSION": status,
                     "LOG": f"FINAL FAIL stage=SQL_CONVERSION status={status} error={message}",
-                    "RETRY_COUNT": int(getattr(self, "max_retry", None) or 3),
+                    "RETRY_COUNT": self._configured_retry_limit(),
                 }
             )
             self._update_row(
@@ -336,7 +383,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 "bind_sql": (partial_values or {}).get("BIND_SQL"),
                 "bind_set": (partial_values or {}).get("BIND_SET"),
                 "test_sql": (partial_values or {}).get("TEST_SQL"),
-                "next_node": "12D_sqlConversionIterationDashboard",
+                "next_node": "15C_sqlTuningOneJobPocExecutor" if payload.get("full_workflow") else "12D_sqlConversionIterationDashboard",
             },
         )
 
@@ -597,8 +644,16 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         return base if stage in {"GENERATE_TOBE_SQL", "GENERATE_BIND_SQL", "VALIDATE_TEST_SQL"} else 0.0
 
     def _max_retry(self) -> int:
-        """Return a bounded retry count for the POC conversion loop."""
-        return max(1, min(10, int(getattr(self, "max_retry", None) or 3)))
+        """Return bounded total attempts for the POC conversion loop."""
+        if getattr(self, "_payload_max_retry", None) is not None:
+            return max(1, min(11, int(getattr(self, "_payload_max_retry") or 0) + 1))
+        return max(1, min(11, int(getattr(self, "max_retry", None) or 2) + 1))
+
+    def _configured_retry_limit(self) -> int:
+        """Return the configured retry limit, not including the first attempt."""
+        if getattr(self, "_payload_max_retry", None) is not None:
+            return max(0, min(10, int(getattr(self, "_payload_max_retry") or 0)))
+        return max(0, min(10, int(getattr(self, "max_retry", None) or 2)))
 
     def _select_expr(self, columns: set[str], column: str, alias: str, data_type: str) -> str:
         """Return a safe SELECT expression for optional NEXT_SQL_INFO columns."""

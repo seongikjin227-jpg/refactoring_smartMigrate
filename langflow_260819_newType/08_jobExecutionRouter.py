@@ -29,6 +29,7 @@ JOB_EXECUTION_ROUTER_PROMPT = """당신은 SmartMigrate의 잔여 작업 실행 
 - SQL_CONVERSION: SQL Conversion 작업. 보통 sql_id 또는 space_nm으로 식별합니다.
 - SQL_TUNING: SQL Tuning 작업.
 - SQL_FORMATTING: SQL Formatting 작업.
+- FULL_WORKFLOW: DB Migration, SQL Conversion, SQL Tuning, SQL Formatting을 고정 순서로 모두 진행하는 전체 작업.
 - PREREQUISITE_REQUIRED: 잔여 작업은 있지만 선행 단계 또는 PRIOR_MAP_ID 의존성이 남아 있어 지금 실행하면 안 되는 경우.
 - NO_RUNNABLE_JOB: 실행할 대상이 없다고 판단되는 경우.
 
@@ -38,7 +39,7 @@ JOB_EXECUTION_ROUTER_PROMPT = """당신은 SmartMigrate의 잔여 작업 실행 
 
 반환 JSON schema:
 {
-  "job_route": "MIG|SQL_CONVERSION|SQL_TUNING|SQL_FORMATTING|PREREQUISITE_REQUIRED|NO_RUNNABLE_JOB",
+  "job_route": "MIG|SQL_CONVERSION|SQL_TUNING|SQL_FORMATTING|FULL_WORKFLOW|PREREQUISITE_REQUIRED|NO_RUNNABLE_JOB",
   "run_mode": "all_pending|targeted",
   "target_filter": {
     "map_ids": [],
@@ -54,6 +55,10 @@ JOB_EXECUTION_ROUTER_PROMPT = """당신은 SmartMigrate의 잔여 작업 실행 
 - sql_id 또는 space_nm이 있고 튜닝 요청이면 SQL_TUNING입니다.
 - sql_id 또는 space_nm이 있고 포맷팅 요청이면 SQL_FORMATTING입니다.
 - sql_id 또는 space_nm이 있고 튜닝/포맷팅이 아니면 SQL_CONVERSION입니다.
+- 사용자가 "전체 작업", "전체 진행", "DB Migration부터 포맷팅까지", "처음부터 끝까지"처럼 전체 흐름을 요청하면 job_route는 FULL_WORKFLOW, run_mode는 all_pending입니다.
+- 사용자가 "작업 실행해줘", "진행해줘", "잔여 작업 실행해줘"처럼 특정 도메인이나 대상을 명시하지 않고 실행만 요청하면 job_route는 FULL_WORKFLOW, run_mode는 all_pending입니다.
+- FULL_WORKFLOW는 DB Migration부터 SQL Formatting까지 전체 큐를 처리하므로 migration_total, sql_conversion_total, sql_tuning_total이 남아 있어도 PREREQUISITE_REQUIRED로 분류하지 않습니다.
+- FULL_WORKFLOW 요청에서 migration_total, sql_conversion_total, sql_tuning_total, sql_formatting_total이 모두 0이면 NO_RUNNABLE_JOB을 선택합니다.
 - 명시 대상이 없고 전체/대기 작업 실행 요청이면 run_mode는 all_pending입니다.
 - SQL Conversion 실행 요청에서 remaining_summary.migration_total이 1건 이상이면 PREREQUISITE_REQUIRED를 선택합니다.
 - SQL Tuning 실행 요청에서 remaining_summary.migration_total 또는 remaining_summary.sql_conversion_total이 1건 이상이면 PREREQUISITE_REQUIRED를 선택합니다.
@@ -86,6 +91,7 @@ class NewType08JobExecutionRouter(Component):
         Output(display_name="SQL Conversion Targets", name="sql_conversion_job", method="sql_conversion_response", group_outputs=True),
         Output(display_name="SQL Tuning Targets", name="sql_tuning_job", method="sql_tuning_response", group_outputs=True),
         Output(display_name="SQL Formatting Targets", name="sql_formatting_job", method="sql_formatting_response", group_outputs=True),
+        Output(display_name="Full Workflow Targets", name="full_workflow_job", method="full_workflow_response", group_outputs=True),
         Output(display_name="Prerequisite Required Message", name="prerequisite_required", method="prerequisite_required_response", group_outputs=True, types=["Message"]),
         Output(display_name="No Runnable Target Message", name="no_runnable_job", method="no_runnable_response", group_outputs=True, types=["Message"]),
     ]
@@ -105,6 +111,10 @@ class NewType08JobExecutionRouter(Component):
     def sql_formatting_response(self) -> Data:
         # Return the SQL Formatting execution branch when selected.
         return self._route_output("SQL_FORMATTING", "sql_formatting_job")
+
+    def full_workflow_response(self) -> Data:
+        # Return the full DB Migration -> SQL Conversion -> SQL Tuning -> SQL Formatting branch.
+        return self._route_output("FULL_WORKFLOW", "full_workflow_job")
 
     def prerequisite_required_response(self) -> Message:
         # Return a message when prerequisite work must be completed first.
@@ -203,6 +213,8 @@ class NewType08JobExecutionRouter(Component):
             decision = self._empty_decision(decision_hint.get("reason") or "No runnable job target selected by LLM.", targets)
         elif route == "PREREQUISITE_REQUIRED":
             decision = self._prerequisite_decision(decision_hint.get("reason") or "선행 작업이 남아 있어 지금 실행할 수 없습니다.", targets)
+        elif route == "FULL_WORKFLOW" and sum(counts.values()) <= 0:
+            decision = self._empty_decision("No runnable job target selected for Full Workflow.", targets)
         else:
             selected_jobs = self._selected_jobs_for_hint(payload, route, requested_run_mode, targets)
             if not selected_jobs:
@@ -255,7 +267,7 @@ class NewType08JobExecutionRouter(Component):
                     "role": "user",
                     "content": json.dumps(
                         {
-                            "user_request": payload.get("user_request") or "",
+                            "user_request": payload.get("user_request") or payload.get("original_request") or payload.get("input") or "",
                             "remaining_summary": payload.get("remaining_summary") or payload.get("pending_summary") or {},
                             "remaining_job_identifiers": self._sample_jobs(payload),
                         },
@@ -281,11 +293,11 @@ class NewType08JobExecutionRouter(Component):
 
     def _normalize_llm_hint(self, hint: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         # Validate and enrich the LLM job-routing decision.
-        extracted_targets = self._extract_targets(str(payload.get("user_request") or payload.get("input") or ""))
+        extracted_targets = self._extract_targets(str(payload.get("user_request") or payload.get("original_request") or payload.get("input") or ""))
         route = str(hint.get("job_route") or "").upper()
         if route == "NO_RUNNABLE_JOB":
             route = "NO_RUNNABLE_JOB"
-        if route not in {"MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING", "PREREQUISITE_REQUIRED", "NO_RUNNABLE_JOB"}:
+        if route not in {"MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING", "FULL_WORKFLOW", "PREREQUISITE_REQUIRED", "NO_RUNNABLE_JOB"}:
             raise ValueError(f"Invalid LLM job_route: {route}")
         run_mode = str(hint.get("run_mode") or "all_pending").lower()
         if run_mode not in {"all_pending", "targeted"}:
@@ -393,6 +405,8 @@ class NewType08JobExecutionRouter(Component):
         targets: dict[str, list[Any]],
     ) -> list[dict[str, Any]]:
         # Select jobs according to the normalized LLM hint.
+        if route == "FULL_WORKFLOW":
+            return self._jobs_for_route(payload, route)
         if run_mode == "targeted" or any(targets.values()):
             lookup_jobs = self._lookup_jobs_for_route(payload, route)
             matched_lookup = [job for job in lookup_jobs if self._matches(job, targets)]
@@ -412,12 +426,21 @@ class NewType08JobExecutionRouter(Component):
             return list(jobs.get("sql_tuning_jobs") or [])
         if route == "SQL_FORMATTING":
             return list(jobs.get("sql_formatting_jobs") or [])
+        if route == "FULL_WORKFLOW":
+            return [
+                *list(jobs.get("migration_jobs") or []),
+                *list(jobs.get("sql_conversion_jobs") or jobs.get("sql_jobs") or []),
+                *list(jobs.get("sql_tuning_jobs") or []),
+                *list(jobs.get("sql_formatting_jobs") or []),
+            ]
         return []
 
     def _lookup_jobs_for_route(self, payload: dict[str, Any], route: str) -> list[dict[str, Any]]:
         # Return all lookup jobs for a specific route.
         jobs = payload.get("remaining_jobs") or payload.get("pending_jobs") or {}
         lookup = list(jobs.get("job_lookup_jobs") or jobs.get("all_jobs") or [])
+        if route == "FULL_WORKFLOW":
+            return lookup
         return [job for job in lookup if str(job.get("job_route") or "").upper() == route]
 
     def _matches(self, job: dict[str, Any], targets: dict[str, list[Any]]) -> bool:
@@ -499,6 +522,8 @@ class NewType08JobExecutionRouter(Component):
             return "15A_sqlTuningJobsToLoopTable"
         if route == "SQL_FORMATTING":
             return "17A_sqlFormattingJobsToLoopTable"
+        if route == "FULL_WORKFLOW":
+            return "18A_fullWorkflowJobsToLoopTable"
         return "13_finalSummary"
 
     def _to_int(self, value: Any) -> int | None:

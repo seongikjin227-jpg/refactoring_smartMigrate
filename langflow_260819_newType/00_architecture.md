@@ -163,3 +163,35 @@ SQL conversion과 SQL tuning에 필요한 RAG 정보는 모두 `NEXT_MIG_RAG_INF
 | `15_sqlTuningPipeline.py` | Legacy monolithic POC, router no longer uses it |
 | `17_sqlFormattingPipeline.py` | Legacy monolithic POC, router no longer uses it |
 | `13 Final Summary` | Deprecated |
+
+## 18 Full Workflow Flow
+
+The `FULL_WORKFLOW` route is used when the user asks to run the whole remaining workload, for example "전체 작업 진행해줘".
+
+```text
+06 Get Remaining Jobs
+  -> 08 Job Target Router
+     -> Full Workflow Targets
+     -> 18A Full Workflow Jobs To Loop Table
+     -> 18B Full Workflow Loop
+          Item -> 10C -> 12C -> 15C -> 17C -> 18D
+          Done -> 18D Full Workflow Dashboard
+```
+
+18A builds one ordered queue in this fixed phase order:
+
+1. DB Migration
+2. SQL Conversion
+3. SQL Tuning
+4. SQL Formatting
+
+Each row carries `job_name`, `planned_job_route`, `phase_index`, route-level progress fields, DB config, and `max_retry=2` by default. The single chain always runs through `10C -> 12C -> 15C -> 17C`; each C component decides from `job_name` whether to execute or pass through without DB updates.
+
+`job_name` controls the chain:
+
+- `migration`: run 10C, pass through 12C/15C/17C
+- `conversion`: pass through 10C, run 12C/15C/17C
+- `tuning`: pass through 10C/12C, run 15C/17C
+- `formatting`: pass through 10C/12C/15C, run 17C
+
+Retry policy for this route is "first attempt + up to 2 retries". Business failures are recorded by the C component and the full workflow loop continues to the next queued job, so the final 18D summary can report completed/pass/fail/skipped counts by phase.

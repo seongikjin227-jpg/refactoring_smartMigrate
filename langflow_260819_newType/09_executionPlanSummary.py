@@ -84,6 +84,13 @@ class NewType09ExecutionPlanSummary(Component):
             return list(jobs.get("sql_tuning_jobs") or [])
         if route == "SQL_FORMATTING":
             return list(jobs.get("sql_formatting_jobs") or [])
+        if route == "FULL_WORKFLOW":
+            return [
+                *list(jobs.get("migration_jobs") or []),
+                *list(jobs.get("sql_conversion_jobs") or jobs.get("sql_jobs") or []),
+                *list(jobs.get("sql_tuning_jobs") or []),
+                *list(jobs.get("sql_formatting_jobs") or []),
+            ]
         return []
 
     def _action_for_route(self, route: str) -> str:
@@ -93,6 +100,7 @@ class NewType09ExecutionPlanSummary(Component):
             "SQL_CONVERSION": "run_sql_conversion_job",
             "SQL_TUNING": "run_sql_tuning_job",
             "SQL_FORMATTING": "run_sql_formatting_job",
+            "FULL_WORKFLOW": "run_full_workflow",
         }.get(route, "run_remaining_jobs")
 
     def _message(self, route: str, run_mode: str, jobs: list[dict[str, Any]]) -> str:
@@ -102,6 +110,7 @@ class NewType09ExecutionPlanSummary(Component):
             "SQL_CONVERSION": "SQL Conversion",
             "SQL_TUNING": "SQL Tuning",
             "SQL_FORMATTING": "SQL Formatting",
+            "FULL_WORKFLOW": "Full Workflow",
         }.get(route, route or "Unknown")
         mode_label = "전체 잔여 작업" if run_mode == "all_pending" else "지정 작업"
         lines = [

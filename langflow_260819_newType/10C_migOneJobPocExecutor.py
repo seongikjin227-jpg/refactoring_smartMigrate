@@ -26,7 +26,7 @@ class NewType10CMigOneJobPocExecutor(Component):
 
     inputs = [
         DataInput(name="job_item", display_name="Job Item", required=True),
-        IntInput(name="max_retry", display_name="Max Retry", value=3, required=False),
+        IntInput(name="max_retry", display_name="Max Retry", value=2, required=False),
     ]
 
     outputs = [Output(display_name="Job Result", name="job_result", method="run_job", types=["Data"])]
@@ -35,10 +35,14 @@ class NewType10CMigOneJobPocExecutor(Component):
         """Run one migration job and return the final job result payload."""
         started = time.perf_counter()
         job = self._parse_payload(getattr(self, "job_item", ""))
+        if not self._should_run_migration(job):
+            result = self._pass_through(job, started, "10C skipped because job_name is not migration.")
+            self.status = result
+            return Data(data=result)
         map_id = self._to_int(job.get("map_id"))
         if map_id is None:
             raise ValueError("MIG job item requires map_id")
-        max_retry = max(0, int(getattr(self, "max_retry", None) or 3))
+        max_retry = max(0, int(job.get("max_retry") if job.get("max_retry") is not None else (getattr(self, "max_retry", None) or 2)))
         db_config = self._db_config(job)
         attempts: list[dict[str, Any]] = []
 
@@ -132,7 +136,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                 {
                     "retry_count": retry_count,
                     "message": message,
-                    "next_node": "10D_migIterationDashboard",
+                    "next_node": "12C_sqlConversionOneJobPocExecutor" if job.get("full_workflow") else "10D_migIterationDashboard",
                 }
             )
             self.status = result
@@ -143,6 +147,47 @@ class NewType10CMigOneJobPocExecutor(Component):
             result.update({"error_type": "SYSTEM_ERROR", "error": str(exc), "message": f"POC executor error: {exc}"})
             self.status = result
             return Data(data=result)
+
+    def _should_run_migration(self, job: dict[str, Any]) -> bool:
+        return self._job_name(job) == "migration"
+
+    def _job_name(self, payload: dict[str, Any]) -> str:
+        value = str(payload.get("job_name") or "").strip().lower()
+        if value:
+            return value
+        route = str(payload.get("planned_job_route") or payload.get("job_route") or "").strip().upper()
+        return {
+            "MIG": "migration",
+            "SQL_CONVERSION": "conversion",
+            "SQL_TUNING": "tuning",
+            "SQL_FORMATTING": "formatting",
+        }.get(route, "")
+
+    def _pass_through(self, job: dict[str, Any], started: float, message: str) -> dict[str, Any]:
+        elapsed = int(time.perf_counter() - started)
+        total = int(job.get("total_jobs") or 1)
+        index = int(job.get("job_index") or 1)
+        result = {
+            **job,
+            "component": "10C_migOneJobPocExecutor",
+            "ok": bool(job.get("ok", True)),
+            "status": job.get("status") or "PASS-THROUGH",
+            "elapsed_seconds": elapsed,
+            "attempts": list(job.get("attempts") or []),
+            "attempt_count": int(job.get("attempt_count") or 0),
+            "job_index": index,
+            "total_jobs": total,
+            "completed_count": index,
+            "remaining_count": max(total - index, 0),
+            "component_pass_through": True,
+            "pass_through_component": "10C",
+            "message": job.get("message") or message,
+            "next_node": "12C_sqlConversionOneJobPocExecutor",
+        }
+        history = list(result.get("history") or [])
+        history.append({"step": "10C_pass_through", "message": message})
+        result["history"] = history
+        return result
 
     def _run_poc_graph(self, context: dict[str, Any], db_config: dict[str, Any], max_retry: int) -> dict[str, Any]:
         """Build and execute the internal retry graph for one migration job."""

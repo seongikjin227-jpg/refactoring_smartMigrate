@@ -42,6 +42,11 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         """Run one tuning job or pass through when upstream conversion failed."""
         started = time.perf_counter()
         payload = self._parse_payload(getattr(self, "job_item", ""))
+        self._payload_max_retry = payload.get("max_retry") if isinstance(payload, dict) else None
+        if not self._should_run_tuning(payload):
+            result = self._component_pass_through(payload, started, "15C skipped because job_name is not conversion or tuning.")
+            self.status = result
+            return Data(data=result)
         db_config = self._db_config(payload)
         self._require_db_config(db_config)
         job: dict[str, Any] = {}
@@ -67,6 +72,48 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             result = self._finish_failure(payload, job, db_config, started, FAIL_TUNED, str(exc))
         self.status = result
         return Data(data=result)
+
+    def _should_run_tuning(self, payload: dict[str, Any]) -> bool:
+        return self._job_name(payload) in {"conversion", "tuning"}
+
+    def _job_name(self, payload: dict[str, Any]) -> str:
+        value = str(payload.get("job_name") or "").strip().lower()
+        if value:
+            return value
+        route = str(payload.get("planned_job_route") or payload.get("job_route") or "").strip().upper()
+        return {
+            "MIG": "migration",
+            "SQL_CONVERSION": "conversion",
+            "SQL_TUNING": "tuning",
+            "SQL_FORMATTING": "formatting",
+        }.get(route, "")
+
+    def _component_pass_through(self, payload: dict[str, Any], started: float, message: str) -> dict[str, Any]:
+        elapsed = time.perf_counter() - started
+        total = int(payload.get("total_jobs") or 1)
+        index = int(payload.get("job_index") or 1)
+        result = {
+            **payload,
+            "component": "15C_sqlTuningOneJobPocExecutor",
+            "ok": bool(payload.get("ok", True)),
+            "status": payload.get("status") or "PASS-THROUGH",
+            "elapsed_seconds": round(elapsed, 3),
+            "attempt_count": int(payload.get("attempt_count") or 0),
+            "attempts": list(payload.get("attempts") or []),
+            "job_index": index,
+            "total_jobs": total,
+            "completed_count": index,
+            "remaining_count": max(total - index, 0),
+            "stages": dict(payload.get("stages") or {}),
+            "component_pass_through": True,
+            "pass_through_component": "15C",
+            "message": payload.get("message") or message,
+            "next_node": "17C_sqlFormattingOneJobPocExecutor",
+        }
+        history = list(result.get("history") or [])
+        history.append({"step": "15C_pass_through", "message": message})
+        result["history"] = history
+        return result
 
     def _run_tuning(
         self,
@@ -217,7 +264,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                     "STATUS_TUNING": status,
                     "TUNED_RESULT": tuned_result,
                     "LOG": f"FINAL FAIL stage=SQL_TUNING status={status} error={message}",
-                    "RETRY_COUNT": int(getattr(self, "max_retry", None) or 2),
+                    "RETRY_COUNT": self._configured_retry_limit(),
                 }
             )
             self._update_row(
@@ -358,8 +405,16 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         return (max(0, min(100, POC_TUNING_FAIL_PERCENT)) / 100) if stage in {"APPLY_TUNING_RULES", "VALIDATE_TUNED_SQL"} else 0.0
 
     def _max_retry(self) -> int:
-        """Return a bounded retry count for the POC tuning loop."""
-        return max(1, min(10, int(getattr(self, "max_retry", None) or 2)))
+        """Return bounded total attempts for the POC tuning loop."""
+        if getattr(self, "_payload_max_retry", None) is not None:
+            return max(1, min(11, int(getattr(self, "_payload_max_retry") or 0) + 1))
+        return max(1, min(11, int(getattr(self, "max_retry", None) or 2) + 1))
+
+    def _configured_retry_limit(self) -> int:
+        """Return the configured retry limit, not including the first attempt."""
+        if getattr(self, "_payload_max_retry", None) is not None:
+            return max(0, min(10, int(getattr(self, "_payload_max_retry") or 0)))
+        return max(0, min(10, int(getattr(self, "max_retry", None) or 2)))
 
     def _failure_stage(self, status: str) -> str:
         """Return the tuning stage represented by a failure status."""
@@ -532,6 +587,8 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
 
     def _dashboard_node(self, payload: dict[str, Any]) -> str:
         """Return the dashboard that owns the current chained flow."""
+        if payload.get("full_workflow"):
+            return "17C_sqlFormattingOneJobPocExecutor"
         route = str(payload.get("job_route") or "").upper()
         if route == "SQL_CONVERSION":
             return "12D_sqlConversionIterationDashboard"
