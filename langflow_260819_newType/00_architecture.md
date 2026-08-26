@@ -196,6 +196,6 @@ Each row carries `job_name`, `planned_job_route`, `phase_index`, route-level pro
 
 Retry policy for this route is "first attempt + up to 2 retries".
 
-18B is phase-aware. It executes all DB Migration rows first. If any DB Migration row ends without `PASS`/`SUCCESS`, 18B does not send the remaining SQL rows through `10C -> 12C -> 15C -> 17C` one by one. Instead, it stops before the first SQL row, counts the remaining rows by phase as skipped, and sends one final Done payload to 18D. 18D then shows the abort reason and skipped SQL counts in the final dashboard.
+18B is phase-aware. It executes all DB Migration rows first. Before the first SQL row, 18B queries `NEXT_MIG_INFO` directly. If there are no remaining `USE_YN='Y' AND STATUS IS NULL` migration rows and at least one `FAIL`/`FAIL-*` migration row exists, 18B does not send the remaining SQL rows through `10C -> 12C -> 15C -> 17C` one by one. Instead, it stops before the first SQL row, counts the remaining rows by phase as skipped, and sends one final Done payload to 18D. 18D then shows the abort reason and skipped SQL counts in the final dashboard.
 
-The SQL C components do not query `NEXT_MIG_INFO` as a workflow gate. Migration gating belongs to 18B so a large remaining SQL backlog can finish with one aggregate skip summary instead of hundreds of per-row blocked messages.
+The SQL C components do not query `NEXT_MIG_INFO` as a workflow gate. Migration gating belongs to 18B so a large remaining SQL backlog can finish with one aggregate skip summary instead of hundreds of per-row blocked messages. 18B's DB gate is intentionally independent from the 10C/18D loop payload so a Chat Output edge cannot hide migration failure state from the phase decision.

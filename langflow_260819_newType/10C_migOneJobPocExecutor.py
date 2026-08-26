@@ -564,6 +564,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         """Build the Langflow output payload for the current job."""
         total = int(job.get("total_jobs") or 1)
         index = int(job.get("job_index") or 1)
+        should_abort_full_workflow = bool(job.get("full_workflow")) and self._job_name(job) == "migration" and not ok
         return {
             **job,
             "component": "10C_migOneJobPocExecutor",
@@ -578,6 +579,9 @@ class NewType10CMigOneJobPocExecutor(Component):
             "total_jobs": total,
             "completed_count": index,
             "remaining_count": max(total - index, 0),
+            "full_workflow_abort": should_abort_full_workflow,
+            "full_workflow_abort_phase": "DB_MIGRATION" if should_abort_full_workflow else "",
+            "full_workflow_abort_reason": "DB Migration failed; SQL phases must not start." if should_abort_full_workflow else "",
         }
 
     def _dependency_status(self, db_config: dict[str, Any], map_id: int, prior_map_id: Any) -> str:

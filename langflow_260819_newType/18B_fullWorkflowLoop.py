@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+from contextlib import contextmanager
 from typing import Any
 
 from lfx.base.flow_controls.loop_utils import (
@@ -121,6 +123,14 @@ class NewType18BFullWorkflowLoop(Component):
             skipped_plan_counts = {route: 0 for route in ROUTE_ORDER}
             for index, item in enumerate(data_list):
                 item_payload = self._data_dict(item)
+                if self._route(item_payload) != "MIG":
+                    db_gate = self._db_migration_phase_gate(item_payload)
+                    if db_gate.get("block_sql"):
+                        skipped_plan_counts = self._plan_counts(data_list[index:])
+                        abort_reason = str(db_gate.get("reason") or "DB Migration failed; SQL phases were not started.")
+                        self.log(f"{abort_reason} stats={db_gate}", name="DB Phase Gate")
+                        break
+
                 if migration_failed and self._route(item_payload) != "MIG":
                     skipped_plan_counts = self._plan_counts(data_list[index:])
                     abort_reason = "DB Migration 결과에 실패/미완료 작업이 있어 SQL Conversion 이후 작업을 시작하지 않았습니다."
@@ -131,7 +141,7 @@ class NewType18BFullWorkflowLoop(Component):
                 aggregated_results.extend(item_results)
                 for result in item_results:
                     result_payload = self._data_dict(result)
-                    if self._route(result_payload) == "MIG" and self._migration_blocks_sql(result_payload):
+                    if self._migration_abort_signal(result_payload):
                         migration_failed = True
 
             self.update_ctx(
@@ -252,6 +262,52 @@ class NewType18BFullWorkflowLoop(Component):
             return False
         return True
 
+    def _migration_abort_signal(self, result: dict[str, Any]) -> bool:
+        if bool(result.get("full_workflow_abort")):
+            return True
+        return self._route(result) == "MIG" and self._migration_blocks_sql(result)
+
+    def _db_migration_phase_gate(self, payload: dict[str, Any]) -> dict[str, Any]:
+        db_config = dict(payload.get("db_config") or {})
+        if not self._has_db_config(db_config):
+            return {"block_sql": False, "reason": "DB config is missing; skipped DB phase gate."}
+        try:
+            table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
+            with self._connect(db_config) as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    f"""
+                    SELECT
+                        SUM(CASE WHEN NVL(UPPER(USE_YN), 'N') = 'Y' AND STATUS IS NULL THEN 1 ELSE 0 END) AS PENDING_NULL_COUNT,
+                        SUM(
+                            CASE
+                                WHEN NVL(UPPER(USE_YN), 'N') = 'Y'
+                                 AND (UPPER(STATUS) = 'FAIL' OR UPPER(STATUS) LIKE 'FAIL-%')
+                                THEN 1 ELSE 0
+                            END
+                        ) AS FAIL_COUNT
+                      FROM {table}
+                    """
+                )
+                row = cur.fetchone() or (0, 0)
+        except Exception as exc:
+            self.log(f"DB migration phase gate query failed: {exc}", name="DB Phase Gate")
+            return {"block_sql": False, "reason": f"DB phase gate query failed: {exc}"}
+
+        pending_null_count = self._num(row[0])
+        fail_count = self._num(row[1])
+        block_sql = pending_null_count == 0 and fail_count > 0
+        return {
+            "block_sql": block_sql,
+            "pending_null_count": pending_null_count,
+            "fail_count": fail_count,
+            "reason": (
+                f"DB Migration 종료 후 실패 상태가 {fail_count}건 있어 SQL Conversion 이후 작업을 시작하지 않았습니다."
+                if block_sql
+                else ""
+            ),
+        }
+
     def _plan_counts(self, data_list: list[Any]) -> dict[str, int]:
         counts = {route: 0 for route in ROUTE_ORDER}
         for item in data_list:
@@ -263,6 +319,51 @@ class NewType18BFullWorkflowLoop(Component):
 
     def _route(self, payload: dict[str, Any]) -> str:
         return str(payload.get("planned_job_route") or payload.get("job_route") or "").upper()
+
+    def _num(self, value: Any) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _has_db_config(self, db_config: dict[str, Any]) -> bool:
+        return all(str(db_config.get(key) or "").strip() for key in ("db_host", "db_service_name", "db_username"))
+
+    @contextmanager
+    def _connect(self, db_config: dict[str, Any]):
+        import oracledb
+
+        dsn = oracledb.makedsn(
+            str(db_config.get("db_host") or "").strip(),
+            int(db_config.get("db_port") or 1521),
+            service_name=str(db_config.get("db_service_name") or "").strip(),
+        )
+        conn = oracledb.connect(
+            user=str(db_config.get("db_username") or "").strip(),
+            password=str(db_config.get("db_password") or ""),
+            dsn=dsn,
+        )
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    def _qualify(self, table_name: str, schema: Any) -> str:
+        value = str(table_name or "").strip().upper()
+        if "." in value:
+            return value
+        clean_table = self._clean_identifier(value)
+        clean_schema = str(schema or "").strip().upper()
+        if clean_schema:
+            clean_schema = self._clean_identifier(clean_schema)
+            return f"{clean_schema}.{clean_table}"
+        return clean_table
+
+    def _clean_identifier(self, value: str) -> str:
+        clean = str(value or "").strip().upper()
+        if not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", clean):
+            raise ValueError(f"Invalid identifier: {clean}")
+        return clean
 
     def _data_dict(self, item: Any) -> dict[str, Any]:
         if isinstance(item, Data):
