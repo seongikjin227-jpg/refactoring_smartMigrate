@@ -4,6 +4,7 @@ import json
 import re
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
@@ -277,7 +278,7 @@ class NewType08JobExecutionRouter(Component):
                 },
             ],
             "temperature": 0,
-            "max_tokens": int(getattr(self, "llm_max_tokens", None) or 1500),
+            "max_tokens": self._positive_int(getattr(self, "llm_max_tokens", None), 1500),
         }
         url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
         request = urllib.request.Request(
@@ -286,7 +287,7 @@ class NewType08JobExecutionRouter(Component):
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=int(getattr(self, "llm_timeout_seconds", None) or 90)) as response:
+        with urllib.request.urlopen(request, timeout=self._positive_int(getattr(self, "llm_timeout_seconds", None), 90)) as response:
             raw = json.loads(response.read().decode("utf-8", errors="ignore"))
         content = (((raw.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
         return self._parse_json_object(content)
@@ -333,8 +334,10 @@ class NewType08JobExecutionRouter(Component):
         out: list[Any] = []
         for item in raw_values:
             try:
-                casted = caster(item)
+                casted = self._to_int(item) if caster is int else caster(item)
             except (TypeError, ValueError):
+                continue
+            if casted is None:
                 continue
             if casted not in out:
                 out.append(casted)
@@ -445,7 +448,7 @@ class NewType08JobExecutionRouter(Component):
 
     def _matches(self, job: dict[str, Any], targets: dict[str, list[Any]]) -> bool:
         # Check whether a job matches requested target filters.
-        map_ids = {int(v) for v in targets.get("map_ids", []) if str(v).isdigit()}
+        map_ids = {item for item in (self._to_int(v) for v in targets.get("map_ids", [])) if item is not None}
         sql_ids = {str(v).lower() for v in targets.get("sql_ids", [])}
         space_nms = {str(v).lower() for v in targets.get("space_nms", [])}
         if map_ids and self._to_int(job.get("map_id")) in map_ids:
@@ -528,10 +531,27 @@ class NewType08JobExecutionRouter(Component):
 
     def _to_int(self, value: Any) -> int | None:
         # Convert a value to int when possible.
+        if isinstance(value, Mapping):
+            for key in ("value", "count", "total", "number", "amount"):
+                if key in value:
+                    return self._to_int(value.get(key))
+            return None
+        if isinstance(value, list):
+            for item in value:
+                converted = self._to_int(item)
+                if converted is not None:
+                    return converted
+            return None
         try:
             return int(value)
         except (TypeError, ValueError):
             return None
+
+    def _positive_int(self, value: Any, default: int) -> int:
+        converted = self._to_int(value)
+        if converted is None or converted <= 0:
+            return default
+        return converted
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         # Parse a Langflow Data, dict, or JSON string payload.

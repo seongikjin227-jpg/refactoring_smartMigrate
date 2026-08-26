@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from importlib import import_module
 from typing import Any
@@ -120,7 +121,7 @@ class NewType08HConfirmationPayloadStager(Component):
         run_mode = str(payload.get("run_mode") or "all_pending")
         jobs = self._jobs_for_route(payload, route)
         counts = self._plan_counts(payload, route, jobs)
-        total_count = sum(counts.values()) if counts else len(jobs)
+        total_count = sum(self._to_int(value) for value in counts.values()) if counts else len(jobs)
         mode_label = "전체 잔여 작업" if run_mode == "all_pending" else "지정 작업"
 
         lines = [
@@ -229,7 +230,7 @@ class NewType08HConfirmationPayloadStager(Component):
         return f"CONF-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{digest}"
 
     def _to_int(self, value: Any) -> int:
-        if isinstance(value, dict):
+        if isinstance(value, Mapping):
             for key in ("count", "total", "planned", "planned_count", "value", "job_count"):
                 if key in value:
                     return self._to_int(value.get(key))
