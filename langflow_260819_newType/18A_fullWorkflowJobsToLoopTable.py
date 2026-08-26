@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import re
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
@@ -29,7 +31,7 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
     icon = "ListOrdered"
 
     inputs = [
-        DataInput(name="execution_data", display_name="Execution Data", required=True),
+        DataInput(name="payload_json", display_name="Payload JSON", required=True),
         IntInput(name="max_retry", display_name="Max Retry", value=2, required=False),
         StrInput(name="db_host", display_name="DB Host", required=False),
         IntInput(name="db_port", display_name="DB Port", value=1521, required=False),
@@ -42,7 +44,7 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
     outputs = [Output(display_name="Jobs Table", name="jobs_table", method="build_jobs_table")]
 
     def build_jobs_table(self) -> DataFrame:
-        payload = self._execution_data()
+        payload = self._parse_payload(getattr(self, "payload_json", ""))
         db_config = self._db_config(payload)
         max_retry = max(0, int(getattr(self, "max_retry", None) or 2))
         grouped = self._group_jobs(payload)
@@ -198,13 +200,19 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
             "system_schema": str(payload_config.get("system_schema") or getattr(self, "system_schema", "") or "").strip(),
         }
 
-    def _execution_data(self) -> dict[str, Any]:
-        raw = getattr(self, "execution_data", None)
+    def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):
             return dict(raw.data or {})
         if isinstance(raw, dict):
             return dict(raw)
-        raise ValueError("execution_data must be a Langflow Data object")
+        text = str(raw or "").strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
+            text = re.sub(r"\s*```$", "", text)
+        parsed = json.loads(text) if text else {}
+        if not isinstance(parsed, dict):
+            raise ValueError("payload_json must be a JSON object")
+        return parsed
 
     def _to_int(self, value: Any) -> int | None:
         try:

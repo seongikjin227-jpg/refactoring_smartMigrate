@@ -3,32 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timezone
-from importlib import import_module
 from typing import Any
 
+from lfx.custom import Component
 from lfx.io import DataInput, Output
 from lfx.schema.data import Data
 from lfx.schema.message import Message
-
-
-def _load_component_base():
-    for module_name in (
-        "lfx.custom",
-        "lfx.custom.custom_component.component",
-        "langflow.custom.custom_component.base_component",
-        "langflow.custom.custom_component.component",
-    ):
-        try:
-            module = import_module(module_name)
-            component = getattr(module, "Component", None)
-            if component is not None:
-                return component
-        except Exception:
-            continue
-    raise ImportError("Could not import Langflow Component base class")
-
-
-Component = _load_component_base()
 
 
 class NewType08HConfirmationPayloadStager(Component):
@@ -186,4 +166,4 @@ class NewType08HConfirmationPayloadStager(Component):
             return dict(raw.data or {})
         if isinstance(raw, dict):
             return dict(raw)
-        raise ValueError("execution_data must be a Langflow Data object")
+        return {}

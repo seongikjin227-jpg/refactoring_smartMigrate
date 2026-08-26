@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from importlib import import_module
 from typing import Any
 
+from lfx.custom import Component
 from lfx.inputs.inputs import ActionPickerInput, BoolInput, DurationInput, HandleInput
 from lfx.io import DataInput, Output
 from lfx.schema.data import Data
@@ -15,26 +15,6 @@ HUMAN_INPUT_REQUIRED = "human_input_required"
 _KIND_NODE_INPUT = "node_input"
 _FALLBACK_ACTION = "fallback"
 _UNIT_SECONDS = {"Seconds": 1, "Minutes": 60, "Hours": 3600, "Days": 86400}
-
-
-def _load_component_base():
-    for module_name in (
-        "lfx.custom",
-        "lfx.custom.custom_component.component",
-        "langflow.custom.custom_component.base_component",
-        "langflow.custom.custom_component.component",
-    ):
-        try:
-            module = import_module(module_name)
-            component = getattr(module, "Component", None)
-            if component is not None:
-                return component
-        except Exception:
-            continue
-    raise ImportError("Could not import Langflow Component base class")
-
-
-Component = _load_component_base()
 
 
 def _action_id(label: str) -> str:
@@ -238,7 +218,7 @@ class NewType20HumanInput(Component):
             return dict(raw)
         if raw in (None, ""):
             return {}
-        raise ValueError("execution_data must be a Langflow Data object")
+        return {}
 
     def _confirmation_status(self, chosen: str) -> str:
         if chosen == "approve":
