@@ -4,15 +4,16 @@ import json
 import re
 from datetime import datetime, timezone
 from importlib import import_module
-from pathlib import Path
 from typing import Any
 
-from lfx.io import MessageTextInput, Output, StrInput
+from lfx.io import MessageTextInput, Output
 from lfx.schema.data import Data
 from lfx.schema.message import Message
 
-
-DEFAULT_STATE_DIR = ".smartmigrate_confirmation_state"
+try:
+    from lfx.io import DataInput
+except Exception:
+    DataInput = MessageTextInput
 
 
 def _load_component_base():
@@ -42,9 +43,9 @@ class NewType08IConfirmedPayloadLoader(Component):
     icon = "ShieldCheck"
 
     inputs = [
+        DataInput(name="payload_json", display_name="Execution Payload", required=True),
         MessageTextInput(name="approve_message", display_name="Approve Message", required=False),
         MessageTextInput(name="fallback_message", display_name="Fallback Message", required=False),
-        StrInput(name="state_dir", display_name="State Directory", value=DEFAULT_STATE_DIR, required=False, advanced=True),
     ]
 
     outputs = [
@@ -53,16 +54,21 @@ class NewType08IConfirmedPayloadLoader(Component):
 
     def load_payload(self) -> Data:
         message_text, decision = self._selected_confirmation_message()
+        if not message_text:
+            self._stop_output("execution_payload")
+            self.status = {
+                "component": "08I_confirmedPayloadLoader",
+                "confirmation_status": "WAITING_FOR_HUMAN_INPUT",
+            }
+            return Data(data={})
+
+        payload = self._parse_payload(getattr(self, "payload_json", ""))
         confirmation_id = self._extract_confirmation_id(message_text)
         if not confirmation_id:
-            raise ValueError("confirmation_id was not found in the Human Input approve/fallback message")
+            confirmation_id = str(payload.get("confirmation_id") or "").strip()
+        if not confirmation_id:
+            raise ValueError("confirmation_id was not found in approve/fallback message or payload_json")
 
-        path = self._record_path(confirmation_id)
-        if not path.exists():
-            raise FileNotFoundError(f"confirmation payload not found: {path}")
-
-        record = json.loads(path.read_text(encoding="utf-8"))
-        payload = dict(record.get("payload") or {})
         now = datetime.now(timezone.utc).isoformat()
 
         payload.update(
@@ -80,10 +86,6 @@ class NewType08IConfirmedPayloadLoader(Component):
                 "message": f"confirmation_id={confirmation_id}, status={decision}",
             }
         )
-
-        record["status"] = decision
-        record["confirmed_at"] = now
-        path.write_text(json.dumps(record, ensure_ascii=False, default=str, indent=2), encoding="utf-8")
 
         self.status = {
             "component": "08I_confirmedPayloadLoader",
@@ -104,18 +106,41 @@ class NewType08IConfirmedPayloadLoader(Component):
             return approve_text, "APPROVED"
         if fallback_text.strip():
             return fallback_text, "APPROVED_BY_TIMEOUT"
-        raise ValueError("08I requires either approve_message or fallback_message")
+        return "", "WAITING_FOR_HUMAN_INPUT"
 
     def _extract_confirmation_id(self, text: str) -> str:
         match = re.search(r"\bconfirmation_id\s*=\s*([A-Za-z0-9_.:-]+)", text or "")
         return match.group(1).strip() if match else ""
 
-    def _record_path(self, confirmation_id: str) -> Path:
-        state_dir = Path(str(getattr(self, "state_dir", None) or DEFAULT_STATE_DIR))
-        safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", confirmation_id)
-        return state_dir / f"{safe_id}.json"
-
     def _message_text(self, raw: Any) -> str:
         if isinstance(raw, Message):
             return str(raw.text or "")
         return str(raw or "")
+
+    def _parse_payload(self, raw: Any) -> dict[str, Any]:
+        if isinstance(raw, Data):
+            return dict(raw.data or {})
+        if isinstance(raw, dict):
+            return dict(raw)
+        text = str(raw or "").strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
+            text = re.sub(r"\s*```$", "", text)
+        parsed = json.loads(text) if text else {}
+        if not isinstance(parsed, dict):
+            raise ValueError("payload_json must be a JSON object")
+        return parsed
+
+    def _stop_output(self, output_name: str) -> None:
+        stop = getattr(self, "stop", None)
+        if not callable(stop):
+            return
+        try:
+            stop(output_name)
+        except TypeError:
+            try:
+                stop(output_name=output_name)
+            except Exception:
+                pass
+        except Exception:
+            pass

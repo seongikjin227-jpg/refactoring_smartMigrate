@@ -10,8 +10,9 @@ Execution payload must not reach the execution start nodes before the user selec
 
 ```text
 08 Job Execution Router
-  -> 09 Execution Plan Summary -> Chat Output
   -> 08H Confirmation Payload Stager
+       -> 08H.prompt -> Human Input
+       -> 08H.execution_payload -> 08I.payload_json
        -> Human Input
             Approve  -> 08I.approve_message -> 18A / execution start
             Fallback -> 08I.fallback_message -> 18A / execution start
@@ -23,10 +24,11 @@ Execution payload must not reach the execution start nodes before the user selec
 `08H_confirmationPayloadStager.py`
 
 - Receives the execution payload from 08.
-- Optionally receives the 09 execution plan message.
-- Stores the payload in `.smartmigrate_confirmation_state/{confirmation_id}.json`.
-- Sends only a prompt `Message` to Human Input.
+- Builds the execution plan message internally from route/count/job payload fields.
+- Sends a prompt `Message` to Human Input.
+- Sends the same execution payload as `Data` to `08I.payload_json`.
 - The prompt includes `confirmation_id=...`.
+- Does not write files or external state.
 
 `humaninput.py`
 
@@ -37,21 +39,23 @@ Execution payload must not reach the execution start nodes before the user selec
 `08I_confirmedPayloadLoader.py`
 
 - Runs only after Human Input `Approve` or `Fallback`.
-- Has two message inputs so both branches can merge before the single `18A.payload_json` input.
+- Has `payload_json`, `approve_message`, and `fallback_message` inputs so both branches can merge before the single `18A.payload_json` input.
+- Wire `08H.execution_payload` to `08I.payload_json`.
 - Wire Human Input `Approve` to `08I.approve_message`.
 - Wire Human Input `Fallback` to `08I.fallback_message`.
-- Reads `confirmation_id` from the Human Input message.
-- Loads the staged payload and returns it as `Data` for 18A.
+- Reads `confirmation_id` from the Human Input message or payload.
+- Returns the direct `payload_json` as `Data` for 18A only after Approve/Fallback.
+- Does not read or write files.
 
 `08R_confirmationRejected.py`
 
 - Runs only after Human Input `Reject`.
-- Marks the staged record as `REJECTED`.
 - Returns a cancellation message.
+- Does not read or write files.
 
 ## Hard Rule
 
-Do not wire the 08 or 09 execution payload directly to 18A, 10A, 12A, 15A, or 17A.
+Do not wire the 08 execution payload directly to 18A, 10A, 12A, 15A, or 17A.
 
-Before approval, execution payload may flow only to `08H_confirmationPayloadStager.py`.
-Actual execution starts only from `08I_confirmedPayloadLoader.py`.
+Before approval, execution payload may flow only to `08H_confirmationPayloadStager.py` and `08I_confirmedPayloadLoader.py`.
+`08I` is the approval gate; it emits the actual execution payload only after `approve_message` or `fallback_message` arrives.

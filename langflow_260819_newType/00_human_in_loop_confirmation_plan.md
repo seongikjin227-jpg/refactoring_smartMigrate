@@ -259,3 +259,20 @@ DB state가 필요한 이유:
 3. 08에는 Message History Retrieve 결과를 연결해서 사용자의 짧은 답변과 이전 assistant 확인 요청을 LLM이 함께 볼 수 있게 한다.
 
 이렇게 하면 Langflow의 HITL checkpoint UX와 SmartMigrate의 DB 기반 실행 안정성을 동시에 가져갈 수 있다.
+## Current Decision: Direct Data Wiring Only
+
+The current implementation does not write confirmation payloads to files.
+
+Use this wiring:
+
+```text
+08H.prompt -> Human Input
+08H.execution_payload -> 08I.payload_json
+Human Input Approve -> 08I.approve_message
+Human Input Fallback -> 08I.fallback_message
+08I.execution_payload -> 18A.payload_json
+```
+
+`08I` is the gate. It receives the direct Data payload but emits execution payload only after Approve or Fallback arrives.
+
+The older pending-state idea is only an alternative for a future stateless API/chat confirmation flow. It is not part of the current Langflow Human Input implementation.

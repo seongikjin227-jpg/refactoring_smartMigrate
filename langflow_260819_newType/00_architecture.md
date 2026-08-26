@@ -4,9 +4,9 @@
 
 ## Core Principles
 
-- `09 Execution Plan Summary`는 실행 계획을 사용자에게 보여주는 노드다.
+- `08H Confirmation Prompt Builder`가 실행 계획을 만들고 Human Input에 보여준다.
 - 실행 payload는 승인 전에 실행 시작 노드로 직접 연결하지 않는다.
-- `08H Confirmation Payload Stager`가 실행 payload를 저장하고 Human Input에는 prompt Message만 넘긴다.
+- `08H Confirmation Payload Stager`가 Human Input prompt와 `08I`로 넘길 execution payload를 분리한다.
 - 실제 실행은 Human Input의 `Approve` 또는 `Fallback` 이후 `08I Confirmed Payload Loader`가 payload를 복원한 뒤 시작된다.
 - Full Workflow는 `18A -> 18B -> 10C -> 12C -> 15C -> 17C -> 18D` 단일 chain을 사용한다.
 - 각 실행 flow는 `A -> B(loop) -> C(main executor) -> D(iteration dashboard)` 구조를 따른다.
@@ -39,17 +39,14 @@ flowchart TD
     JR -->|prerequisite_required| OUT
     JR -->|no_runnable_target| OUT
 
-    JR -->|execution payload| PLAN["09 Execution Plan Summary"]
-    PLAN -->|notice message| OUT
-
     JR -->|execution payload| STAGE["08H Confirmation Payload Stager"]
-    PLAN -. optional plan message .-> STAGE
-    STAGE -->|prompt only| HITL{"Human Input"}
+    STAGE -->|prompt| HITL{"Human Input"}
+    STAGE -->|execution payload| LOAD["08I Confirmed Payload Loader"]
 
     HITL -->|Reject| REJ["08R Confirmation Rejected"]
     REJ --> OUT
 
-    HITL -->|Approve -> approve_message| LOAD["08I Confirmed Payload Loader"]
+    HITL -->|Approve -> approve_message| LOAD
     HITL -->|Fallback -> fallback_message| LOAD
 
     LOAD --> ROUTE{"Execution Start"}
@@ -104,7 +101,7 @@ flowchart TD
     FD --> OUT
 ```
 
-The important safety rule is that `08`/`09` execution payload must not be wired directly to `10A`, `12A`, `15A`, `17A`, or `18A`. Before approval, payload may flow only into `08H`.
+The important safety rule is that `08` execution payload must not be wired directly to `10A`, `12A`, `15A`, `17A`, or `18A`. Before approval, payload may flow only through `08H` and into `08I`; `08I` emits execution payload only after Approve/Fallback.
 
 ## Overall Flow
 
@@ -124,7 +121,6 @@ management
 job_execution
   -> 06 Get Remaining Jobs
   -> 08 Job Target Router
-     -> 09 Execution Plan Summary -> Chat Output
      -> 08H Confirmation Payload Stager
      -> Human Input
           Approve/Fallback -> 08I Confirmed Payload Loader -> execution start
@@ -251,7 +247,7 @@ SQL conversion과 SQL tuning에 필요한 RAG 정보는 모두 `NEXT_MIG_RAG_INF
 | `15A~15D` | Active SQL Tuning loop |
 | `17A~17D` | Active SQL Formatting loop |
 | `11 Final Dashboard` | Active Done dashboard |
-| `09 Execution Plan Summary` | Active parallel notice output |
+| `09 Execution Plan Summary` | Removed from approval-based execution flow; 08H now builds the Human Input plan message |
 | `10_migPipeline.py` | Deleted |
 | `12_sqlConversionPipeline.py` | Legacy monolithic POC, router no longer uses it |
 | `15_sqlTuningPipeline.py` | Legacy monolithic POC, router no longer uses it |

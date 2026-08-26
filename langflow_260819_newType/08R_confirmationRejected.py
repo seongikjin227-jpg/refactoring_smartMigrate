@@ -1,17 +1,9 @@
-from __future__ import annotations
-
-import json
 import re
-from datetime import datetime, timezone
 from importlib import import_module
-from pathlib import Path
 from typing import Any
 
-from lfx.io import MessageTextInput, Output, StrInput
+from lfx.io import MessageTextInput, Output
 from lfx.schema.message import Message
-
-
-DEFAULT_STATE_DIR = ".smartmigrate_confirmation_state"
 
 
 def _load_component_base():
@@ -42,7 +34,6 @@ class NewType08RConfirmationRejected(Component):
 
     inputs = [
         MessageTextInput(name="reject_message", display_name="Reject Message", required=True),
-        StrInput(name="state_dir", display_name="State Directory", value=DEFAULT_STATE_DIR, required=False, advanced=True),
     ]
 
     outputs = [
@@ -52,8 +43,6 @@ class NewType08RConfirmationRejected(Component):
     def build_message(self) -> Message:
         message_text = self._message_text(getattr(self, "reject_message", ""))
         confirmation_id = self._extract_confirmation_id(message_text)
-        if confirmation_id:
-            self._mark_rejected(confirmation_id)
 
         text = "\n".join(
             [
@@ -70,26 +59,9 @@ class NewType08RConfirmationRejected(Component):
         }
         return Message(text=text)
 
-    def _mark_rejected(self, confirmation_id: str) -> None:
-        path = self._record_path(confirmation_id)
-        if not path.exists():
-            return
-        try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            return
-        record["status"] = "REJECTED"
-        record["rejected_at"] = datetime.now(timezone.utc).isoformat()
-        path.write_text(json.dumps(record, ensure_ascii=False, default=str, indent=2), encoding="utf-8")
-
     def _extract_confirmation_id(self, text: str) -> str:
         match = re.search(r"\bconfirmation_id\s*=\s*([A-Za-z0-9_.:-]+)", text or "")
         return match.group(1).strip() if match else ""
-
-    def _record_path(self, confirmation_id: str) -> Path:
-        state_dir = Path(str(getattr(self, "state_dir", None) or DEFAULT_STATE_DIR))
-        safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", confirmation_id)
-        return state_dir / f"{safe_id}.json"
 
     def _message_text(self, raw: Any) -> str:
         if isinstance(raw, Message):

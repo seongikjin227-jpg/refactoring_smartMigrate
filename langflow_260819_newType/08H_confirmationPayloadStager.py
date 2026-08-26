@@ -5,10 +5,9 @@ import json
 import re
 from datetime import datetime, timezone
 from importlib import import_module
-from pathlib import Path
 from typing import Any
 
-from lfx.io import MessageTextInput, Output, StrInput
+from lfx.io import MessageTextInput, Output
 from lfx.schema.data import Data
 from lfx.schema.message import Message
 
@@ -16,9 +15,6 @@ try:
     from lfx.io import DataInput
 except Exception:
     DataInput = MessageTextInput
-
-
-DEFAULT_STATE_DIR = ".smartmigrate_confirmation_state"
 
 
 def _load_component_base():
@@ -42,52 +38,66 @@ Component = _load_component_base()
 
 
 class NewType08HConfirmationPayloadStager(Component):
-    display_name = "08H Confirmation Payload Stager"
-    description = "Stores the execution payload before Human Input and returns only the approval prompt."
+    display_name = "08H Confirmation Prompt Builder"
+    description = "Builds the Human Input prompt and forwards execution payload directly to the approval gate."
     name = "NewType08HConfirmationPayloadStager"
     icon = "ShieldQuestion"
 
     inputs = [
         DataInput(name="payload_json", display_name="Execution Payload", required=True),
-        MessageTextInput(name="plan_message", display_name="Execution Plan Message", required=False),
-        StrInput(name="state_dir", display_name="State Directory", value=DEFAULT_STATE_DIR, required=False, advanced=True),
     ]
 
     outputs = [
         Output(display_name="Prompt", name="prompt", method="build_prompt", types=["Message"]),
+        Output(display_name="Execution Payload", name="execution_payload", method="build_execution_payload", types=["Data"]),
     ]
 
     def build_prompt(self) -> Message:
-        payload = self._parse_payload(getattr(self, "payload_json", ""))
-        confirmation_id = self._confirmation_id(payload)
-        plan_text = self._message_text(getattr(self, "plan_message", ""))
-        if not plan_text:
-            plan_text = self._fallback_plan_text(payload)
-
-        record = {
-            "confirmation_id": confirmation_id,
-            "status": "PENDING",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "payload": {
-                **payload,
-                "confirmation_id": confirmation_id,
-                "confirmation_required": True,
-                "confirmation_status": "PENDING",
-            },
-            "plan_message": plan_text,
-        }
-        path = self._record_path(confirmation_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(record, ensure_ascii=False, default=str, indent=2), encoding="utf-8")
-
-        prompt = self._prompt_text(confirmation_id, plan_text)
+        result = self._build()
         self.status = {
             "component": "08H_confirmationPayloadStager",
-            "confirmation_id": confirmation_id,
-            "state_path": str(path),
+            "confirmation_id": result["confirmation_id"],
             "status": "PENDING",
         }
-        return Message(text=prompt)
+        return Message(text=result["prompt"])
+
+    def build_execution_payload(self) -> Data:
+        result = self._build()
+        self.status = {
+            "component": "08H_confirmationPayloadStager",
+            "confirmation_id": result["confirmation_id"],
+            "status": "PENDING",
+        }
+        return Data(data=result["payload"])
+
+    def _build(self) -> dict[str, Any]:
+        cached = getattr(self, "_cached_result", None)
+        if cached is not None:
+            return cached
+
+        payload = self._parse_payload(getattr(self, "payload_json", ""))
+        confirmation_id = self._confirmation_id(payload)
+        staged_payload = {
+            **payload,
+            "confirmation_id": confirmation_id,
+            "confirmation_required": True,
+            "confirmation_status": "PENDING",
+            "confirmation_created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        staged_payload.setdefault("history", []).append(
+            {
+                "step": "human_input_confirmation_staged",
+                "message": f"confirmation_id={confirmation_id}",
+            }
+        )
+
+        result = {
+            "confirmation_id": confirmation_id,
+            "prompt": self._prompt_text(confirmation_id, self._plan_text(payload)),
+            "payload": staged_payload,
+        }
+        self._cached_result = result
+        return result
 
     def _prompt_text(self, confirmation_id: str, plan_text: str) -> str:
         return "\n".join(
@@ -105,18 +115,99 @@ class NewType08HConfirmationPayloadStager(Component):
             ]
         )
 
-    def _fallback_plan_text(self, payload: dict[str, Any]) -> str:
-        route = str(payload.get("job_route") or payload.get("planned_job_route") or "UNKNOWN")
+    def _plan_text(self, payload: dict[str, Any]) -> str:
+        route = str(payload.get("job_route") or payload.get("planned_job_route") or "UNKNOWN").upper()
         run_mode = str(payload.get("run_mode") or "all_pending")
-        jobs = payload.get("selected_jobs")
-        count = len(jobs) if isinstance(jobs, list) else payload.get("planned_job_count", 0)
-        return "\n".join(
-            [
-                f"작업 유형: {route}",
-                f"실행 모드: {run_mode}",
-                f"실행 예정 건수: {count}",
+        jobs = self._jobs_for_route(payload, route)
+        counts = self._plan_counts(payload, route, jobs)
+        total_count = sum(counts.values()) if counts else len(jobs)
+        mode_label = "전체 잔여 작업" if run_mode == "all_pending" else "지정 작업"
+
+        lines = [
+            f"작업 유형: {self._route_label(route)}",
+            f"실행 모드: {mode_label}",
+            f"실행 예정 건수: {total_count}",
+        ]
+        if route == "FULL_WORKFLOW":
+            lines.extend(
+                [
+                    "",
+                    "| 기능 | 실행 예정 |",
+                    "|---|---:|",
+                    f"| DB Migration | {counts.get('MIG', 0)} |",
+                    f"| SQL Conversion | {counts.get('SQL_CONVERSION', 0)} |",
+                    f"| SQL Tuning | {counts.get('SQL_TUNING', 0)} |",
+                    f"| SQL Formatting | {counts.get('SQL_FORMATTING', 0)} |",
+                ]
+            )
+        if jobs:
+            lines.extend(["", "실행 예정 목록:"])
+            for job in jobs[:20]:
+                lines.append(f"- {self._job_label(job)}")
+            if len(jobs) > 20:
+                lines.append(f"- ... 외 {len(jobs) - 20}건")
+        return "\n".join(lines)
+
+    def _jobs_for_route(self, payload: dict[str, Any], route: str) -> list[dict[str, Any]]:
+        selected_jobs = payload.get("selected_jobs")
+        if isinstance(selected_jobs, list) and selected_jobs:
+            return [dict(job) for job in selected_jobs if isinstance(job, dict)]
+
+        jobs = payload.get("remaining_jobs") or payload.get("pending_jobs") or {}
+        if route == "MIG":
+            return list(jobs.get("migration_jobs") or [])
+        if route == "SQL_CONVERSION":
+            return list(jobs.get("sql_conversion_jobs") or jobs.get("sql_jobs") or [])
+        if route == "SQL_TUNING":
+            return list(jobs.get("sql_tuning_jobs") or [])
+        if route == "SQL_FORMATTING":
+            return list(jobs.get("sql_formatting_jobs") or [])
+        if route == "FULL_WORKFLOW":
+            return [
+                *list(jobs.get("migration_jobs") or []),
+                *list(jobs.get("sql_conversion_jobs") or jobs.get("sql_jobs") or []),
+                *list(jobs.get("sql_tuning_jobs") or []),
+                *list(jobs.get("sql_formatting_jobs") or []),
             ]
-        )
+        return []
+
+    def _plan_counts(self, payload: dict[str, Any], route: str, jobs: list[dict[str, Any]]) -> dict[str, int]:
+        existing = payload.get("planned_job_counts")
+        if isinstance(existing, dict) and existing:
+            return {str(key).upper(): self._to_int(value) for key, value in existing.items()}
+        if route != "FULL_WORKFLOW":
+            return {route: len(jobs)} if route else {}
+
+        pending = payload.get("remaining_jobs") or payload.get("pending_jobs") or {}
+        if pending:
+            return {
+                "MIG": len(pending.get("migration_jobs") or []),
+                "SQL_CONVERSION": len(pending.get("sql_conversion_jobs") or pending.get("sql_jobs") or []),
+                "SQL_TUNING": len(pending.get("sql_tuning_jobs") or []),
+                "SQL_FORMATTING": len(pending.get("sql_formatting_jobs") or []),
+            }
+
+        counts = {"MIG": 0, "SQL_CONVERSION": 0, "SQL_TUNING": 0, "SQL_FORMATTING": 0}
+        for job in jobs:
+            job_route = str(job.get("job_route") or job.get("planned_job_route") or "").upper()
+            if job_route in counts:
+                counts[job_route] += 1
+        return counts
+
+    def _route_label(self, route: str) -> str:
+        return {
+            "MIG": "DB Migration",
+            "SQL_CONVERSION": "SQL Conversion",
+            "SQL_TUNING": "SQL Tuning",
+            "SQL_FORMATTING": "SQL Formatting",
+            "FULL_WORKFLOW": "Full Workflow",
+        }.get(route, route or "Unknown")
+
+    def _job_label(self, job: dict[str, Any]) -> str:
+        route = str(job.get("job_route") or job.get("planned_job_route") or job.get("job_type") or "").upper()
+        if route == "MIG" or job.get("map_id") is not None:
+            return f"DB Migration map_id={job.get('map_id')}"
+        return f"SQL space_nm={job.get('space_nm') or '-'}, sql_id={job.get('sql_id') or '-'}"
 
     def _confirmation_id(self, payload: dict[str, Any]) -> str:
         existing = str(payload.get("confirmation_id") or "").strip()
@@ -137,15 +228,11 @@ class NewType08HConfirmationPayloadStager(Component):
         digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
         return f"CONF-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{digest}"
 
-    def _record_path(self, confirmation_id: str) -> Path:
-        state_dir = Path(str(getattr(self, "state_dir", None) or DEFAULT_STATE_DIR))
-        safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", confirmation_id)
-        return state_dir / f"{safe_id}.json"
-
-    def _message_text(self, raw: Any) -> str:
-        if isinstance(raw, Message):
-            return str(raw.text or "")
-        return str(raw or "")
+    def _to_int(self, value: Any) -> int:
+        try:
+            return int(value or 0)
+        except Exception:
+            return 0
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):
@@ -160,3 +247,4 @@ class NewType08HConfirmationPayloadStager(Component):
         if not isinstance(parsed, dict):
             raise ValueError("payload_json must be a JSON object")
         return parsed
+
