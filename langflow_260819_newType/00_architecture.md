@@ -49,8 +49,8 @@ flowchart TD
     HITL -->|Reject| REJ["08R Confirmation Rejected"]
     REJ --> OUT
 
-    HITL -->|Approve| LOAD["08I Confirmed Payload Loader"]
-    HITL -->|Fallback timeout = approve| LOAD
+    HITL -->|Approve -> approve_message| LOAD["08I Confirmed Payload Loader"]
+    HITL -->|Fallback -> fallback_message| LOAD
 
     LOAD --> ROUTE{"Execution Start"}
 

@@ -42,9 +42,9 @@ class NewType08IConfirmedPayloadLoader(Component):
     icon = "ShieldCheck"
 
     inputs = [
-        MessageTextInput(name="approval_message", display_name="Approval Message", required=True),
+        MessageTextInput(name="approve_message", display_name="Approve Message", required=False),
+        MessageTextInput(name="fallback_message", display_name="Fallback Message", required=False),
         StrInput(name="state_dir", display_name="State Directory", value=DEFAULT_STATE_DIR, required=False, advanced=True),
-        StrInput(name="decision", display_name="Decision", value="APPROVED", required=False, advanced=True),
     ]
 
     outputs = [
@@ -52,10 +52,10 @@ class NewType08IConfirmedPayloadLoader(Component):
     ]
 
     def load_payload(self) -> Data:
-        message_text = self._message_text(getattr(self, "approval_message", ""))
+        message_text, decision = self._selected_confirmation_message()
         confirmation_id = self._extract_confirmation_id(message_text)
         if not confirmation_id:
-            raise ValueError("confirmation_id was not found in the Human Input approval message")
+            raise ValueError("confirmation_id was not found in the Human Input approve/fallback message")
 
         path = self._record_path(confirmation_id)
         if not path.exists():
@@ -63,7 +63,6 @@ class NewType08IConfirmedPayloadLoader(Component):
 
         record = json.loads(path.read_text(encoding="utf-8"))
         payload = dict(record.get("payload") or {})
-        decision = str(getattr(self, "decision", None) or "APPROVED").upper()
         now = datetime.now(timezone.utc).isoformat()
 
         payload.update(
@@ -93,6 +92,19 @@ class NewType08IConfirmedPayloadLoader(Component):
             "next_node": payload.get("next_node"),
         }
         return Data(data=payload)
+
+    def _selected_confirmation_message(self) -> tuple[str, str]:
+        approve_text = self._message_text(getattr(self, "approve_message", ""))
+        fallback_text = self._message_text(getattr(self, "fallback_message", ""))
+        if self._extract_confirmation_id(approve_text):
+            return approve_text, "APPROVED"
+        if self._extract_confirmation_id(fallback_text):
+            return fallback_text, "APPROVED_BY_TIMEOUT"
+        if approve_text.strip():
+            return approve_text, "APPROVED"
+        if fallback_text.strip():
+            return fallback_text, "APPROVED_BY_TIMEOUT"
+        raise ValueError("08I requires either approve_message or fallback_message")
 
     def _extract_confirmation_id(self, text: str) -> str:
         match = re.search(r"\bconfirmation_id\s*=\s*([A-Za-z0-9_.:-]+)", text or "")
