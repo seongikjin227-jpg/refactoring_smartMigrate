@@ -4,10 +4,10 @@ import hashlib
 import json
 import re
 from datetime import datetime, timezone
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
-from lfx.custom.custom_component.component import Component
 from lfx.io import MessageTextInput, Output, StrInput
 from lfx.schema.data import Data
 from lfx.schema.message import Message
@@ -19,6 +19,26 @@ except Exception:
 
 
 DEFAULT_STATE_DIR = ".smartmigrate_confirmation_state"
+
+
+def _load_component_base():
+    for module_name in (
+        "langflow.custom.custom_component.base_component",
+        "langflow.custom.custom_component.component",
+        "lfx.custom.custom_component.component",
+        "lfx.custom",
+    ):
+        try:
+            module = import_module(module_name)
+            component = getattr(module, "Component", None)
+            if component is not None:
+                return component
+        except Exception:
+            continue
+    raise ImportError("Could not import Langflow Component base class")
+
+
+Component = _load_component_base()
 
 
 class NewType08HConfirmationPayloadStager(Component):
@@ -140,4 +160,3 @@ class NewType08HConfirmationPayloadStager(Component):
         if not isinstance(parsed, dict):
             raise ValueError("payload_json must be a JSON object")
         return parsed
-

@@ -4,13 +4,107 @@
 
 ## Core Principles
 
-- `09 Execution Plan Summary`는 다음 컴포넌트로 payload를 넘기는 노드가 아니다.
-- `08 Job Target Router`의 output은 `09`와 각 실행 `A` 컴포넌트로 병렬 연결된다.
-- `09`는 사용자에게 실행 예정 payload를 먼저 보여주는 chat output 전용 노드다.
-- 실제 실행은 `08 -> 10A/12A/15A/17A`로 바로 이어진다.
+- `09 Execution Plan Summary`는 실행 계획을 사용자에게 보여주는 노드다.
+- 실행 payload는 승인 전에 실행 시작 노드로 직접 연결하지 않는다.
+- `08H Confirmation Payload Stager`가 실행 payload를 저장하고 Human Input에는 prompt Message만 넘긴다.
+- 실제 실행은 Human Input의 `Approve` 또는 `Fallback` 이후 `08I Confirmed Payload Loader`가 payload를 복원한 뒤 시작된다.
+- Full Workflow는 `18A -> 18B -> 10C -> 12C -> 15C -> 17C -> 18D` 단일 chain을 사용한다.
 - 각 실행 flow는 `A -> B(loop) -> C(main executor) -> D(iteration dashboard)` 구조를 따른다.
 - 각 loop의 `Done` output은 `11 Final Dashboard`로 연결된다.
 - `13 Final Summary`는 현재 loop 구조에서는 사용하지 않는다.
+
+## Overall Architecture Map
+
+```mermaid
+flowchart TD
+    IN["Chat Input"] --> C1["01 Request Classifier LLM"]
+    C1 --> R1{"02 Intent Conditional Router"}
+
+    R1 -->|general_chat| G["03 LLM Response"]
+    R1 -->|management| MGR{"04 Management LLM Router"}
+    R1 -->|job_execution| REM["06 Get Remaining Jobs"]
+
+    G --> OUT["Chat Output"]
+
+    MGR -->|dashboard| D4["04 Dashboard"]
+    MGR -->|status_change| S4["04 Status Change"]
+    MGR -->|correct_sql_input| C4["04 Correct SQL Input"]
+    MGR -->|exception| OUT
+    D4 --> OUT
+    S4 --> OUT
+    C4 --> OUT
+
+    REM --> JR{"08 Job Target Router"}
+
+    JR -->|prerequisite_required| OUT
+    JR -->|no_runnable_target| OUT
+
+    JR -->|execution payload| PLAN["09 Execution Plan Summary"]
+    PLAN -->|notice message| OUT
+
+    JR -->|execution payload| STAGE["08H Confirmation Payload Stager"]
+    PLAN -. optional plan message .-> STAGE
+    STAGE -->|prompt only| HITL{"Human Input"}
+
+    HITL -->|Reject| REJ["08R Confirmation Rejected"]
+    REJ --> OUT
+
+    HITL -->|Approve| LOAD["08I Confirmed Payload Loader"]
+    HITL -->|Fallback timeout = approve| LOAD
+
+    LOAD --> ROUTE{"Execution Start"}
+
+    ROUTE -->|MIG| M10A["10A MIG Jobs To Loop Table"]
+    ROUTE -->|SQL Conversion| C12A["12A SQL Conversion Jobs To Loop Table"]
+    ROUTE -->|SQL Tuning| T15A["15A SQL Tuning Jobs To Loop Table"]
+    ROUTE -->|SQL Formatting| F17A["17A SQL Formatting Jobs To Loop Table"]
+    ROUTE -->|FULL_WORKFLOW| W18A["18A Full Workflow Jobs To Loop Table"]
+
+    M10A --> M10B{"10B MIG Loop"}
+    M10B -->|Item| M10C["10C MIG One Job POC Executor"]
+    M10C --> M10D["10D MIG Iteration Dashboard"]
+    M10D -->|Message| OUT
+    M10D -->|Loop Result| M10B
+    M10B -->|Done| FD["11 Final Dashboard"]
+
+    C12A --> C12B{"12B SQL Conversion Loop"}
+    C12B -->|Item| C12C["12C SQL Conversion One Job POC Executor"]
+    C12C --> T15C_FROM12["15C SQL Tuning One Job POC Executor"]
+    T15C_FROM12 --> F17C_FROM12["17C SQL Formatting One Job POC Executor"]
+    F17C_FROM12 --> C12D["12D SQL Conversion Iteration Dashboard"]
+    C12D -->|Message| OUT
+    C12D -->|Loop Result| C12B
+    C12B -->|Done| FD
+
+    T15A --> T15B{"15B SQL Tuning Loop"}
+    T15B -->|Item| T15C["15C SQL Tuning One Job POC Executor"]
+    T15C --> F17C_FROM15["17C SQL Formatting One Job POC Executor"]
+    F17C_FROM15 --> T15D["15D SQL Tuning Iteration Dashboard"]
+    T15D -->|Message| OUT
+    T15D -->|Loop Result| T15B
+    T15B -->|Done| FD
+
+    F17A --> F17B{"17B SQL Formatting Loop"}
+    F17B -->|Item| F17C["17C SQL Formatting One Job POC Executor"]
+    F17C --> F17D["17D SQL Formatting Iteration Dashboard"]
+    F17D -->|Message| OUT
+    F17D -->|Loop Result| F17B
+    F17B -->|Done| FD
+
+    W18A --> W18B{"18B Full Workflow Loop"}
+    W18B -->|Item| FW10C["10C"]
+    FW10C --> FW12C["12C"]
+    FW12C --> FW15C["15C"]
+    FW15C --> FW17C["17C"]
+    FW17C --> W18D["18D Full Workflow Dashboard"]
+    W18D -->|Message| OUT
+    W18D -->|Loop Result| W18B
+    W18B -->|Done| W18D
+
+    FD --> OUT
+```
+
+The important safety rule is that `08`/`09` execution payload must not be wired directly to `10A`, `12A`, `15A`, `17A`, or `18A`. Before approval, payload may flow only into `08H`.
 
 ## Overall Flow
 
@@ -31,10 +125,10 @@ job_execution
   -> 06 Get Remaining Jobs
   -> 08 Job Target Router
      -> 09 Execution Plan Summary -> Chat Output
-     -> 10A MIG Jobs To Loop Table
-     -> 12A SQL Conversion Jobs To Loop Table
-     -> 15A SQL Tuning Jobs To Loop Table
-     -> 17A SQL Formatting Jobs To Loop Table
+     -> 08H Confirmation Payload Stager
+     -> Human Input
+          Approve/Fallback -> 08I Confirmed Payload Loader -> execution start
+          Reject -> 08R Confirmation Rejected -> Chat Output
 ```
 
 ## DB Migration Flow

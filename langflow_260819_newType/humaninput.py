@@ -1,12 +1,27 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from importlib import import_module
 from typing import Any
 
-try:
-    from lfx.custom import Component
-except Exception:  # pragma: no cover - compatibility with older custom components
-    from lfx.custom.custom_component.component import Component
+def _load_component_base():
+    for module_name in (
+        "langflow.custom.custom_component.base_component",
+        "langflow.custom.custom_component.component",
+        "lfx.custom.custom_component.component",
+        "lfx.custom",
+    ):
+        try:
+            module = import_module(module_name)
+            component = getattr(module, "Component", None)
+            if component is not None:
+                return component
+        except Exception:
+            continue
+    raise ImportError("Could not import Langflow Component base class")
+
+
+Component = _load_component_base()
 
 try:
     from lfx.io import MultilineInput, Output
