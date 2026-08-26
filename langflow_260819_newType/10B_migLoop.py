@@ -172,13 +172,10 @@ class NewType10BMigLoop(Component):
         # The Done output is the post-loop path. Connect it to 11.
         if self._vertex is not None:
             await self._iterate()
-        data_list = self.ctx.get(f"{self._id}_data", [])
-        first_payload = self._data_dict(data_list[0]) if data_list else {}
         payload = {
             "component": "10B_migLoop",
             "job_route": "MIG",
             "loop_done": True,
-            "db_config": dict(first_payload.get("db_config") or {}),
             "next_node": "11_finalDashboard",
         }
         self.status = payload

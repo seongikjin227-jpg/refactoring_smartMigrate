@@ -138,13 +138,10 @@ class NewType15BSqlTuningLoop(Component):
         """Emit a Done payload after all SQL tuning iterations complete."""
         if self._vertex is not None:
             await self._iterate()
-        data_list = self.ctx.get(f"{self._id}_data", [])
-        first_payload = self._data_dict(data_list[0]) if data_list else {}
         payload = {
             "component": "15B_sqlTuningLoop",
             "job_route": "SQL_TUNING",
             "loop_done": True,
-            "db_config": dict(first_payload.get("db_config") or {}),
             "next_node": "11_finalDashboard",
         }
         self.status = payload

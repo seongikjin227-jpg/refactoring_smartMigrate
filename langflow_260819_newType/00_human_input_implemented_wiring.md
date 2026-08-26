@@ -37,9 +37,16 @@ Execution payload must not reach `18A`, `10A`, `12A`, `15A`, or `17A` before the
 - Uses `ActionPickerInput`, `BoolInput`, and `DurationInput`.
 - Has one visible `Input` field backed by `prompt_message`; wire `08H.message` to it.
 - Pauses the graph by calling `graph.request_pause(...)`.
+- While waiting for a decision, stops all branch outputs so no empty Data can flow to Reject or execution nodes.
 - Stops every non-selected output branch after resume.
 - Carries `execution_data` as a `Data` input and emits it only through the selected branch.
-- `Fallback` is treated as automatic approval and emits `confirmation_status=APPROVED_BY_TIMEOUT`.
+- `Fallback` is timeout-based automatic approval. Default timeout is 30 seconds.
+
+`11_finalDashboard.py`
+
+- Receives loop Done only as a completion signal.
+- Uses its own DB input fields for dashboard queries.
+- Does not require `db_config` from loop Done payloads.
 
 `08R_confirmationRejected.py`
 

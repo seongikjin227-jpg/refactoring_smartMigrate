@@ -14,7 +14,7 @@ from lfx.schema.message import Message
 HUMAN_INPUT_REQUIRED = "human_input_required"
 _KIND_NODE_INPUT = "node_input"
 _FALLBACK_ACTION = "fallback"
-_UNIT_SECONDS = {"Minutes": 60, "Hours": 3600, "Days": 86400}
+_UNIT_SECONDS = {"Seconds": 1, "Minutes": 60, "Hours": 3600, "Days": 86400}
 
 
 def _load_component_base():
@@ -53,7 +53,7 @@ class NewType20HumanInput(Component):
             name="prompt_message",
             display_name="Input",
             input_types=["Message", "Data"],
-            info="Content shown to the human for review before they choose Approve, Reject, or Fallback.",
+            info="Content shown to the human before they choose Approve or Reject. Timeout uses Fallback.",
             required=True,
         ),
         DataInput(
@@ -75,8 +75,8 @@ class NewType20HumanInput(Component):
             name="timeout",
             display_name="Timeout",
             info="A response received after this window is routed to fallback when enabled.",
-            options=["Minutes", "Hours", "Days"],
-            value={"value": 10, "unit": "Minutes"},
+            options=["Seconds", "Minutes", "Hours", "Days"],
+            value={"value": 30, "unit": "Seconds"},
             advanced=True,
             show=True,
         ),
@@ -168,6 +168,7 @@ class NewType20HumanInput(Component):
                 self.status = "Skipped: no connected outputs"
                 return Data(data={})
             self._suspend()
+            self._stop_all_branches()
             return Data(data={})
 
         chosen = str(decision.get("action_id") or "")
@@ -256,12 +257,12 @@ class NewType20HumanInput(Component):
         timeout = getattr(self, "timeout", None) or {}
         if not isinstance(timeout, dict):
             return 0
-        unit = timeout.get("unit", "Minutes") or "Minutes"
+        unit = timeout.get("unit", "Seconds") or "Seconds"
         try:
             amount = int(timeout.get("value", 0) or 0)
         except Exception:
             amount = 0
-        return amount * _UNIT_SECONDS.get(unit, _UNIT_SECONDS["Minutes"])
+        return amount * _UNIT_SECONDS.get(unit, _UNIT_SECONDS["Seconds"])
 
     def _request_id(self) -> str:
         run_id = str(getattr(self.graph, "run_id", "") or "")
@@ -301,3 +302,7 @@ class NewType20HumanInput(Component):
     def _suspend(self) -> None:
         self.graph.request_pause(reason=HUMAN_INPUT_REQUIRED, data=self._pause_request())
         self.status = "Awaiting human input"
+
+    def _stop_all_branches(self) -> None:
+        for action_id in self._allowed_decisions():
+            self.stop(f"branch_{action_id}")

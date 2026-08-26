@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
-from lfx.io import MessageTextInput, Output
+from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
 from lfx.schema.data import Data
 from lfx.schema.message import Message
 
@@ -30,13 +30,21 @@ class NewType11FinalDashboard(Component):
     name = "NewType11FinalDashboard"
     icon = "ClipboardCheck"
 
-    inputs = [DataInput(name="loop_done", display_name="Loop Done", required=True)]
+    inputs = [
+        DataInput(name="loop_done", display_name="Loop Done", required=True),
+        StrInput(name="db_host", display_name="DB Host", required=False),
+        IntInput(name="db_port", display_name="DB Port", value=1521, required=False),
+        StrInput(name="db_service_name", display_name="DB Service Name", required=False),
+        StrInput(name="db_username", display_name="DB Username", required=False),
+        SecretStrInput(name="db_password", display_name="DB Password", required=False),
+        StrInput(name="system_schema", display_name="System Schema", required=False),
+    ]
     outputs = [Output(display_name="Result Message", name="result", method="build_result", types=["Message"])]
 
     def build_result(self) -> Message:
         try:
             payload = self._parse_payload(getattr(self, "loop_done", ""))
-            self._db_config = dict(payload.get("db_config") or {})
+            self._db_config = self._db_config_from_inputs()
             dashboard = self._query_dashboard()
             answer = self._build_answer(dashboard)
             self.status = {
@@ -54,7 +62,7 @@ class NewType11FinalDashboard(Component):
 
     def _query_dashboard(self) -> dict[str, Any]:
         if not self._has_db_config():
-            raise ValueError("db_config is required from 10B Done output")
+            raise ValueError("Final Dashboard DB inputs are required")
         agents = {
             "db_migration": self._migration_summary(),
             "sql_conversion": self._sql_conversion_summary(),
@@ -320,6 +328,23 @@ class NewType11FinalDashboard(Component):
 
     def _has_db_config(self) -> bool:
         return all(str(self._db_config.get(name) or "").strip() for name in ("db_host", "db_service_name", "db_username"))
+
+    def _db_config_from_inputs(self) -> dict[str, Any]:
+        return {
+            "db_host": str(getattr(self, "db_host", "") or "").strip(),
+            "db_port": int(getattr(self, "db_port", None) or 1521),
+            "db_service_name": str(getattr(self, "db_service_name", "") or "").strip(),
+            "db_username": str(getattr(self, "db_username", "") or "").strip(),
+            "db_password": self._secret_to_str(getattr(self, "db_password", None)),
+            "system_schema": str(getattr(self, "system_schema", "") or "").strip(),
+        }
+
+    def _secret_to_str(self, value: Any) -> str:
+        if value is None:
+            return ""
+        if hasattr(value, "get_secret_value"):
+            return str(value.get_secret_value())
+        return str(value)
 
     def _qualify(self, table_name: str) -> str:
         table = self._clean_identifier(table_name)

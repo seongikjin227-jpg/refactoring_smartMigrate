@@ -39,6 +39,7 @@ class NewType10AMigJobsToLoopTable(Component):
         jobs = self._sort_by_dependency(self._mig_jobs(payload))
         total = len(jobs)
         db_config = self._db_config(payload)
+        self._require_db_config(db_config)
         rows: list[dict[str, Any]] = []
         for index, job in enumerate(jobs, start=1):
             if job.get("map_id") is None or str(job.get("map_id")).strip() == "":
@@ -85,6 +86,11 @@ class NewType10AMigJobsToLoopTable(Component):
             "db_password": str(payload_config.get("db_password") or "") or self._secret_to_str(getattr(self, "db_password", None)),
             "system_schema": str(payload_config.get("system_schema") or getattr(self, "system_schema", "") or "").strip(),
         }
+
+    def _require_db_config(self, db_config: dict[str, Any]) -> None:
+        missing = [key for key in ("db_host", "db_service_name", "db_username") if not str(db_config.get(key) or "").strip()]
+        if missing:
+            raise ValueError(f"10A MIG is not connected to database settings: missing {', '.join(missing)}")
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):
