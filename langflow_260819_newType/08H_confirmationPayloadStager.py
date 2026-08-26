@@ -86,6 +86,7 @@ class NewType08HConfirmationPayloadStager(Component):
         payload_text = base64.b64encode(
             json.dumps(payload, ensure_ascii=False, default=str, separators=(",", ":")).encode("utf-8")
         ).decode("ascii")
+        hidden_payload = f"<!--\n{PAYLOAD_BEGIN}\n{payload_text}\n{PAYLOAD_END}\n-->"
         return "\n".join(
             [
                 "요청하신 작업 계획입니다.",
@@ -95,13 +96,8 @@ class NewType08HConfirmationPayloadStager(Component):
                 f"confirmation_id={confirmation_id}",
                 "",
                 "진행 여부를 선택해주세요.",
-                "- Approve: 작업을 시작합니다.",
-                "- Reject: 작업을 취소합니다.",
-                "- Timeout/Fallback: 자동 승인으로 처리합니다.",
                 "",
-                PAYLOAD_BEGIN,
-                payload_text,
-                PAYLOAD_END,
+                hidden_payload,
             ]
         )
 

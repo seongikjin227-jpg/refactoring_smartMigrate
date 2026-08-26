@@ -26,7 +26,8 @@ Execution payload must not reach the execution start nodes before the user selec
 - Its input is a `HandleInput` that accepts `Data` or `Message`.
 - Builds the execution plan message internally from route/count/job payload fields.
 - Sends one prompt `Message` to Human Input.
-- Embeds the execution payload in the Message between SmartMigrate payload markers.
+- Embeds the execution payload in a hidden HTML comment inside the Message.
+- Human Input should visually show only the plan and `진행 여부를 선택해주세요.`
 - The prompt includes `confirmation_id=...`.
 - Does not write files or external state.
 
