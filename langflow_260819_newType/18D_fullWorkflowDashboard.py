@@ -286,16 +286,30 @@ class NewType18DFullWorkflowDashboard(Component):
     def _job_label(self, result: dict[str, Any]) -> str:
         route = str(result.get("planned_job_route") or result.get("job_route") or "").upper()
         label = self._job_type_label(result, route)
-        if route == "MIG" or result.get("map_id") is not None:
-            return f"{label} map_id={result.get('map_id')}"
+        map_id = self._first_value(result, "map_id", "MAP_ID")
+        if route == "MIG" or map_id is not None:
+            return f"{label} map_id={map_id}"
         parts = [
-            f"space_nm={result.get('space_nm') or '-'}",
-            f"sql_id={result.get('sql_id') or '-'}",
+            f"space_nm={self._first_value(result, 'space_nm', 'SPACE_NM', 'spaceName') or '-'}",
+            f"sql_id={self._first_value(result, 'sql_id', 'SQL_ID', 'sqlId') or '-'}",
         ]
-        row_id = str(result.get("row_id") or "").strip()
+        row_id = str(self._first_value(result, "row_id", "ROW_ID", "rowid", "ROWID") or "").strip()
         if row_id:
             parts.append(f"row_id={row_id}")
         return f"{label} " + ", ".join(parts)
+
+    def _first_value(self, data: dict[str, Any], *keys: str) -> Any:
+        candidates = [data]
+        for nested_key in ("payload", "job", "job_item", "input", "source", "original", "loop_result"):
+            nested = data.get(nested_key)
+            if isinstance(nested, dict):
+                candidates.append(nested)
+        for key in keys:
+            for candidate in candidates:
+                value = candidate.get(key)
+                if value is not None and str(value).strip() != "":
+                    return value
+        return None
 
     def _job_type_label(self, result: dict[str, Any], route: str) -> str:
         job_name = str(result.get("job_name") or "").strip().lower()

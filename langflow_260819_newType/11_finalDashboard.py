@@ -122,6 +122,7 @@ class NewType11FinalDashboard(Component):
         missing = [col for col in ("STATUS_TUNING", "STATUS_CONVERSION") if col not in columns]
         if missing:
             return self._unavailable("SQL_TUNING", table, f"missing columns: {', '.join(missing)}")
+        conversion_total = self._count(table)
         base_where = "UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')"
         total = self._count(table, base_where)
         target = self._count(table, f"{base_where} AND STATUS_TUNING IS NULL")
@@ -137,7 +138,7 @@ class NewType11FinalDashboard(Component):
             total=total,
             target_count=target,
             progress_count=pass_count,
-            progress_base=total - target,
+            progress_base=conversion_total,
             success_count=pass_count,
             success_base=pass_count + fail_count,
             pass_count=pass_count,
@@ -151,6 +152,7 @@ class NewType11FinalDashboard(Component):
         missing = [col for col in ("STATUS_TUNING", "FORMATTED_SQL") if col not in columns]
         if missing:
             return self._unavailable("SQL_FORMATTING", table, f"missing columns: {', '.join(missing)}")
+        conversion_total = self._count(table)
         base_where = "UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING')"
         target_where = f"{base_where} AND (FORMATTED_SQL IS NULL OR NVL(DBMS_LOB.GETLENGTH(FORMATTED_SQL), 0) = 0)"
         applied_where = f"{base_where} AND FORMATTED_SQL IS NOT NULL AND DBMS_LOB.GETLENGTH(FORMATTED_SQL) > 0"
@@ -164,12 +166,13 @@ class NewType11FinalDashboard(Component):
             total=total,
             target_count=target,
             progress_count=applied,
-            progress_base=total,
+            progress_base=conversion_total,
             success_count=applied,
-            success_base=total,
+            success_base=0,
             pass_count=applied,
             fail_count=0,
             status_counts={"APPLIED": applied, "PENDING": target},
+            has_success_rate=False,
         )
 
     def _stage_summary(
@@ -187,6 +190,7 @@ class NewType11FinalDashboard(Component):
         pass_count: int,
         fail_count: int,
         status_counts: dict[str, int],
+        has_success_rate: bool = True,
     ) -> dict[str, Any]:
         return {
             "agent": agent,
@@ -200,13 +204,23 @@ class NewType11FinalDashboard(Component):
             "fail_count": int(fail_count or 0),
             "other_count": max(int(total or 0) - int(target_count or 0) - int(pass_count or 0) - int(fail_count or 0), 0),
             "progress": {"count": int(progress_count or 0), "base": int(progress_base or 0), "rate": self._pct(progress_count, progress_base)},
-            "success": {"count": int(success_count or 0), "base": int(success_base or 0), "rate": self._pct(success_count, success_base)},
+            "success": (
+                {"count": int(success_count or 0), "base": int(success_base or 0), "rate": self._pct(success_count, success_base)}
+                if has_success_rate
+                else {"count": 0, "base": 0, "rate": "-", "not_applicable": True}
+            ),
             "status_counts": status_counts,
         }
 
     def _build_answer(self, dashboard: dict[str, Any]) -> str:
         agents = dashboard.get("agents") or {}
-        lines = ["# SmartMigrate Dashboard"]
+        lines = [
+            "# SmartMigrate Dashboard",
+            "",
+            "요청하신 작업이 완료되었습니다.",
+            "아래는 현재 SmartMigrate 전체 작업 현황입니다.",
+            "",
+        ]
         lines.extend(
             [
                 "## 작업 현황",
@@ -370,6 +384,8 @@ class NewType11FinalDashboard(Component):
             return 0
 
     def _rate(self, value: dict[str, Any]) -> str:
+        if value.get("not_applicable"):
+            return "-"
         count = self._num(value.get("count"))
         base = self._num(value.get("base"))
         if base <= 0:
