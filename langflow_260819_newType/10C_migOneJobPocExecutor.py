@@ -540,13 +540,7 @@ class NewType10CMigOneJobPocExecutor(Component):
 
     def _fail_probability(self, attempt: int, node_name: str) -> float:
         """Return the POC failure probability for a node and attempt number."""
-        base = {
-            "TRUNCATE": 0.20,
-            "GENERATE_SQL": 0.25,
-            "EXECUTE_SQL": 0.35,
-            "VERIFY": 0.30,
-        }.get(node_name, 0.0)
-        return max(0.05, base - ((attempt - 1) * 0.15))
+        return 0.50
 
     def _build_poc_migration_sql(self, context: dict[str, Any], source_table: str, target_table: str, map_id: Any) -> str:
         """Build a simple deterministic INSERT SQL for the POC executor."""

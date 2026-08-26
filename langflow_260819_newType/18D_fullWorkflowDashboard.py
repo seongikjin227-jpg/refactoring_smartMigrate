@@ -71,7 +71,7 @@ class NewType18DFullWorkflowDashboard(Component):
         payload = {
             **result,
             "component": "18D_fullWorkflowDashboard",
-            "answer_text": self._iteration_message(result, route),
+            "answer_text": self._iteration_message_v2(result, route),
             "loop_result": loop_result,
             "final": False,
         }
@@ -89,6 +89,37 @@ class NewType18DFullWorkflowDashboard(Component):
             "workflow_summary": summary,
             "final": True,
         }
+
+    def _iteration_message_v2(self, result: dict[str, Any], route: str) -> str:
+        label = ROUTE_LABELS.get(route, route or "Unknown")
+        index = int(result.get("job_index") or 1)
+        total = int(result.get("total_jobs") or 1)
+        phase_index = int(result.get("phase_index") or 0)
+        phase_count = int(result.get("phase_count") or len(ROUTE_ORDER))
+        route_index = int(result.get("route_job_index") or index)
+        route_total = int(result.get("route_total_jobs") or total)
+        lines = [
+            "## Overall Progress",
+            "",
+            f"- 전체 진행률: {index}/{total}건, {self._pct(index, total)}",
+            self._bar(index, total),
+            f"- 단계 진행률: {route_index}/{route_total}건, {self._pct(route_index, route_total)}",
+            self._bar(route_index, route_total),
+            f"- 현재 단계: {phase_index}/{phase_count} {label}",
+            f"- 현재 작업: {self._job_label(result)}",
+            f"- 현재 상태: {result.get('status')}",
+            f"- 재시도: {self._retry_count(result)}",
+        ]
+        stages = result.get("stages") or {}
+        if stages:
+            lines.extend(["", "| 단계 | 상태 | 메시지 |", "|---|---|---|"])
+            for stage in ("conversion", "tuning", "formatting"):
+                item = stages.get(stage) or {}
+                lines.append(f"| {self._stage_label(stage)} | {self._cell(item.get('status', '-'))} | {self._cell(item.get('message', '-'))} |")
+        message = str(result.get("message") or "").strip()
+        if message:
+            lines.extend(["", f"메시지: {message}"])
+        return "\n".join(lines)
 
     def _iteration_message(self, result: dict[str, Any], route: str) -> str:
         label = ROUTE_LABELS.get(route, route or "Unknown")
