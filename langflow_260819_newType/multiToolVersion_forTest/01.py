@@ -100,6 +100,7 @@ class MultiToolPoc01FullWorkflowJobsToAgentMessage(Component):
             "route_order": list(ROUTE_ORDER),
             "workflow_plan_counts": route_totals,
             "total_tasks": total,
+            "recommended_recursion_limit": max(35, total * 2 + 10),
             "tool_call_contract": {
                 "tool_mode_argument": "command_json",
                 "command_json_type": "json_object_or_compact_json_text",
