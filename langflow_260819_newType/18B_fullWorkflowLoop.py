@@ -254,7 +254,7 @@ class NewType18BFullWorkflowLoop(Component):
 
     def _is_failure_status(self, status: Any) -> bool:
         value = str(status or "").strip().upper()
-        return value == "FAIL" or value.startswith("FAIL-")
+        return value.startswith("FAIL-")
 
     def _migration_blocks_sql(self, result: dict[str, Any]) -> bool:
         status = str(result.get("status") or "").strip().upper()
@@ -282,7 +282,7 @@ class NewType18BFullWorkflowLoop(Component):
                         SUM(
                             CASE
                                 WHEN NVL(UPPER(USE_YN), 'N') = 'Y'
-                                 AND (UPPER(STATUS) = 'FAIL' OR UPPER(STATUS) LIKE 'FAIL-%')
+                                 AND UPPER(STATUS) LIKE 'FAIL-%'
                                 THEN 1 ELSE 0
                             END
                         ) AS FAIL_COUNT

@@ -132,11 +132,11 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         max_retry = self._max_retry()
         last_status = FAIL_TOBE
         last_message = "SQL conversion failed."
-        resume_stage = "GENERATE_TOBE_SQL"
         to_sql = str(job.get("to_sql") or "").strip()
         bind_sql = str(job.get("bind_sql") or "").strip()
         bind_set = str(job.get("bind_set") or "") or None
         test_sql = str(job.get("test_sql") or "").strip()
+        resume_stage = self._initial_resume_stage(job, tag_kind, to_sql, bind_sql)
 
         for attempt_no in range(1, max_retry + 1):
             if resume_stage == "GENERATE_TOBE_SQL":
@@ -144,7 +144,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                     last_status = FAIL_TOBE
                     last_message = "[POC] TO_SQL generation failed"
                     attempts.append({"attempt": attempt_no, "stage": "GENERATE_TOBE_SQL", "status": last_status, "reason": last_message})
-                    self._insert_sql_log(db_config, job, "TOBE_SQL", None, "FAIL", attempt_no, "GENERATE_TOBE_SQL", last_message)
+                    self._insert_sql_log(db_config, job, "TOBE_SQL", None, last_status, attempt_no, "GENERATE_TOBE_SQL", last_message)
                     resume_stage = "GENERATE_TOBE_SQL"
                     continue
 
@@ -165,7 +165,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                         last_status = FAIL_BIND
                         last_message = "[POC] bind SQL generation failed"
                         attempts.append({"attempt": attempt_no, "stage": "GENERATE_BIND_SQL", "status": last_status, "reason": last_message})
-                        self._insert_sql_log(db_config, job, "BIND_SQL", None, "FAIL", attempt_no, "GENERATE_BIND_SQL", last_message)
+                        self._insert_sql_log(db_config, job, "BIND_SQL", None, last_status, attempt_no, "GENERATE_BIND_SQL", last_message)
                         resume_stage = "GENERATE_BIND_SQL"
                         continue
 
@@ -175,7 +175,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                         last_status = FAIL_BIND
                         last_message = "Bind SQL generation failed"
                         resume_stage = "GENERATE_BIND_SQL"
-                        self._insert_sql_log(db_config, job, "BIND_SQL", bind_sql, "FAIL", attempt_no, "GENERATE_BIND_SQL", last_message)
+                        self._insert_sql_log(db_config, job, "BIND_SQL", bind_sql, last_status, attempt_no, "GENERATE_BIND_SQL", last_message)
                         continue
                     self._insert_sql_log(db_config, job, "BIND_SQL", bind_sql, "SUCCESS", attempt_no, "GENERATE_BIND_SQL")
                     self._update_row(db_config, job["row_id"], {"BIND_SQL": bind_sql, "BIND_SET": bind_set})
@@ -192,7 +192,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                     last_status = FAIL_TEST
                     last_message = "[POC] test SQL validation failed"
                     attempts.append({"attempt": attempt_no, "stage": "VALIDATE_TEST_SQL", "status": last_status, "reason": last_message})
-                    self._insert_sql_log(db_config, job, "TEST_SQL", test_sql, "FAIL", attempt_no, "VALIDATE_TEST_SQL", last_message)
+                    self._insert_sql_log(db_config, job, "TEST_SQL", test_sql, last_status, attempt_no, "VALIDATE_TEST_SQL", last_message)
                     resume_stage = "GENERATE_TEST_SQL"
                     continue
                 attempts.append({"attempt": attempt_no, "stage": "VALIDATE_TEST_SQL", "status": CONVERSION_PASS})
@@ -348,7 +348,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             update_values.update(
                 {
                     "STATUS_CONVERSION": status,
-                    "LOG": f"FINAL FAIL stage=SQL_CONVERSION status={status} error={message}",
+                    "LOG": f"FINAL FAILURE stage=SQL_CONVERSION status={status} error={message}",
                     "RETRY_COUNT": self._configured_retry_limit(),
                 }
             )
@@ -435,6 +435,22 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             return "GENERATE_BIND_SQL"
         if status == FAIL_TEST:
             return "VALIDATE_TEST_SQL"
+        return "GENERATE_TOBE_SQL"
+
+    def _initial_resume_stage(self, job: dict[str, Any], tag_kind: str, to_sql: str, bind_sql: str) -> str:
+        """Resume user-corrected failed SQL rows from the next useful stage."""
+        if str(job.get("user_edited") or "").strip().upper() != "Y":
+            return "GENERATE_TOBE_SQL"
+        if not str(to_sql or "").strip():
+            return "GENERATE_TOBE_SQL"
+
+        status = str(job.get("status_conversion") or "").strip().upper()
+        if str(tag_kind or "").strip().upper() != "SELECT":
+            return "SKIP_TEST_FOR_NON_SELECT"
+        if status == FAIL_TEST and str(bind_sql or "").strip():
+            return "GENERATE_TEST_SQL"
+        if status in {FAIL_TOBE, FAIL_BIND, FAIL_TEST} or status.startswith("FAIL-"):
+            return "GENERATE_BIND_SQL"
         return "GENERATE_TOBE_SQL"
 
     def _retry_count(self, attempts: list[dict[str, Any]]) -> int:

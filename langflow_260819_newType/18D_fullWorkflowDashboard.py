@@ -296,7 +296,7 @@ class NewType18DFullWorkflowDashboard(Component):
 
     def _is_failure_status(self, status: Any) -> bool:
         value = str(status or "").strip().upper()
-        return value == "FAIL" or value.startswith("FAIL-")
+        return value.startswith("FAIL-")
 
     def _is_skipped(self, result: dict[str, Any]) -> bool:
         return bool(result.get("workflow_blocked") or result.get("not_runnable") or result.get("skipped") or result.get("tuning_skipped") or result.get("formatting_skipped"))
@@ -348,7 +348,7 @@ class NewType18DFullWorkflowDashboard(Component):
                 value = attempt.get(key)
                 if value not in (None, "", []):
                     stage = attempt.get("stage") or attempt.get("failed_stage") or "UNKNOWN"
-                    status = attempt.get("status") or attempt.get("failed_stage_status") or result.get("status") or "FAIL"
+                    status = attempt.get("status") or attempt.get("failed_stage_status") or result.get("status") or "FAIL-UNKNOWN"
                     return f"{stage} {status}: {value}"
         return str(result.get("message") or result.get("error") or result.get("status") or "").strip()
 

@@ -75,18 +75,26 @@ class NewType04Dashboard(Component):
     def _migration_summary(self) -> dict[str, Any]:
         # Build DB Migration dashboard counts and rates.
         table = self._qualify("NEXT_MIG_INFO")
+        target_scope = "UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'"
+        pending_where = f"{target_scope} AND STATUS IS NULL"
+        fail_where = f"{target_scope} AND ({self._fail_status_condition('STATUS')})"
+        edited_fail_where = f"{target_scope} AND {self._user_edited_condition()} AND ({self._detailed_fail_status_condition('STATUS')})"
+        target_where = f"{pending_where} OR ({edited_fail_where})"
         total = self._count(table)
-        target = self._count(table, "UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y' AND STATUS IS NULL")
-        pass_count = self._count(table, "UPPER(TRIM(NVL(STATUS, 'NULL'))) IN ('PASS', 'SUCCESS')")
-        fail_count = self._count(table, "UPPER(TRIM(NVL(STATUS, 'NULL'))) = 'FAIL' OR UPPER(TRIM(NVL(STATUS, 'NULL'))) LIKE 'FAIL-%'")
+        target = self._count(table, target_where)
+        pending = self._count(table, pending_where)
+        progress_base = self._count(table, target_scope)
+        pass_count = self._count(table, f"{target_scope} AND UPPER(TRIM(NVL(STATUS, 'NULL'))) IN ('PASS', 'SUCCESS')")
+        fail_count = self._count(table, fail_where)
         return self._stage_summary(
             agent="DB_MIGRATION",
             table=table,
-            target_condition="USE_YN='Y' AND STATUS IS NULL",
+            target_condition="USE_YN='Y' AND (STATUS IS NULL OR (USER_EDITED='Y' AND STATUS LIKE 'FAIL-%'))",
             total=total,
             target_count=target,
-            progress_count=pass_count,
-            progress_base=total,
+            pending_count=pending,
+            progress_count=pass_count + fail_count,
+            progress_base=progress_base,
             success_count=pass_count,
             success_base=pass_count + fail_count,
             pass_count=pass_count,
@@ -97,20 +105,23 @@ class NewType04Dashboard(Component):
     def _sql_conversion_summary(self) -> dict[str, Any]:
         # Build SQL Conversion dashboard counts and rates.
         table = self._qualify("NEXT_SQL_INFO")
+        pending_where = "STATUS_CONVERSION IS NULL"
+        fail_where = self._fail_status_condition("STATUS_CONVERSION")
+        edited_fail_where = f"{self._user_edited_condition()} AND ({self._detailed_fail_status_condition('STATUS_CONVERSION')})"
+        target_where = f"{pending_where} OR ({edited_fail_where})"
         total = self._count(table)
-        target = self._count(table, "STATUS_CONVERSION IS NULL")
+        target = self._count(table, target_where)
+        pending = self._count(table, pending_where)
         pass_count = self._count(table, "UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')")
-        fail_count = self._count(
-            table,
-            "UPPER(TRIM(NVL(STATUS_CONVERSION, 'NULL'))) = 'FAIL' OR UPPER(TRIM(NVL(STATUS_CONVERSION, 'NULL'))) LIKE 'FAIL-%'",
-        )
+        fail_count = self._count(table, fail_where)
         return self._stage_summary(
             agent="SQL_CONVERSION",
             table=table,
-            target_condition="STATUS_CONVERSION IS NULL",
+            target_condition="STATUS_CONVERSION IS NULL OR (USER_EDITED='Y' AND STATUS_CONVERSION LIKE 'FAIL-%')",
             total=total,
             target_count=target,
-            progress_count=pass_count,
+            pending_count=pending,
+            progress_count=pass_count + fail_count,
             progress_base=total,
             success_count=pass_count,
             success_base=pass_count + fail_count,
@@ -126,23 +137,25 @@ class NewType04Dashboard(Component):
         missing = [col for col in ("STATUS_TUNING", "STATUS_CONVERSION") if col not in columns]
         if missing:
             return self._unavailable("SQL_TUNING", table, f"missing columns: {', '.join(missing)}")
-        conversion_total = self._count(table)
         base_where = "UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')"
+        pending_where = f"{base_where} AND STATUS_TUNING IS NULL"
+        fail_where = f"{base_where} AND ({self._fail_status_condition('STATUS_TUNING')})"
+        edited_fail_where = f"{base_where} AND {self._user_edited_condition()} AND ({self._detailed_fail_status_condition('STATUS_TUNING')})"
+        target_where = f"{pending_where} OR ({edited_fail_where})"
         total = self._count(table, base_where)
-        target = self._count(table, f"{base_where} AND STATUS_TUNING IS NULL")
+        target = self._count(table, target_where)
+        pending = self._count(table, pending_where)
         pass_count = self._count(table, f"{base_where} AND UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING')")
-        fail_count = self._count(
-            table,
-            f"{base_where} AND (UPPER(TRIM(NVL(STATUS_TUNING, 'NULL'))) = 'FAIL' OR UPPER(TRIM(NVL(STATUS_TUNING, 'NULL'))) LIKE 'FAIL-%')",
-        )
+        fail_count = self._count(table, fail_where)
         return self._stage_summary(
             agent="SQL_TUNING",
             table=table,
-            target_condition="STATUS_TUNING IS NULL and STATUS_CONVERSION pass",
+            target_condition="STATUS_CONVERSION pass AND (STATUS_TUNING IS NULL OR (USER_EDITED='Y' AND STATUS_TUNING LIKE 'FAIL-%'))",
             total=total,
             target_count=target,
-            progress_count=pass_count,
-            progress_base=conversion_total,
+            pending_count=pending,
+            progress_count=pass_count + fail_count,
+            progress_base=total,
             success_count=pass_count,
             success_base=pass_count + fail_count,
             pass_count=pass_count,
@@ -157,7 +170,6 @@ class NewType04Dashboard(Component):
         missing = [col for col in ("STATUS_TUNING", "FORMATTED_SQL") if col not in columns]
         if missing:
             return self._unavailable("SQL_FORMATTING", table, f"missing columns: {', '.join(missing)}")
-        conversion_total = self._count(table)
         base_where = "UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING')"
         target_where = f"{base_where} AND (FORMATTED_SQL IS NULL OR NVL(DBMS_LOB.GETLENGTH(FORMATTED_SQL), 0) = 0)"
         applied_where = f"{base_where} AND FORMATTED_SQL IS NOT NULL AND DBMS_LOB.GETLENGTH(FORMATTED_SQL) > 0"
@@ -171,7 +183,7 @@ class NewType04Dashboard(Component):
             total=total,
             target_count=target,
             progress_count=applied,
-            progress_base=conversion_total,
+            progress_base=total,
             success_count=applied,
             success_base=0,
             pass_count=applied,
@@ -188,6 +200,7 @@ class NewType04Dashboard(Component):
         target_condition: str,
         total: int,
         target_count: int,
+        pending_count: int | None = None,
         progress_count: int,
         progress_base: int,
         success_count: int,
@@ -198,6 +211,7 @@ class NewType04Dashboard(Component):
         has_success_rate: bool = True,
     ) -> dict[str, Any]:
         # Assemble a normalized dashboard summary for one stage.
+        effective_pending_count = int(target_count if pending_count is None else pending_count or 0)
         return {
             "agent": agent,
             "available": True,
@@ -209,7 +223,7 @@ class NewType04Dashboard(Component):
             "pass_count": int(pass_count or 0),
             "fail_count": int(fail_count or 0),
             "other_count": max(
-                int(total or 0) - int(target_count or 0) - int(pass_count or 0) - int(fail_count or 0),
+                int(total or 0) - effective_pending_count - int(pass_count or 0) - int(fail_count or 0),
                 0,
             ),
             "progress": {
@@ -300,6 +314,18 @@ class NewType04Dashboard(Component):
             cur.execute(f"SELECT COUNT(*) FROM {table} WHERE {where_clause}")
             row = cur.fetchone()
         return int(row[0] if row else 0)
+
+    def _fail_status_condition(self, status_column: str) -> str:
+        # Match terminal failure statuses.
+        return f"UPPER(TRIM(NVL({status_column}, 'NULL'))) LIKE 'FAIL-%'"
+
+    def _detailed_fail_status_condition(self, status_column: str) -> str:
+        # HITL reruns are added only for detailed stage failures such as FAIL-BIND.
+        return f"UPPER(TRIM(NVL({status_column}, 'NULL'))) LIKE 'FAIL-%'"
+
+    def _user_edited_condition(self) -> str:
+        # Corrected HITL rows are eligible for rerun from their failed stage.
+        return "UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y'"
 
     def _status_counts(self, table: str, status_column: str, where_clause: str = "1=1") -> dict[str, int]:
         # Query grouped status counts for a dashboard stage.

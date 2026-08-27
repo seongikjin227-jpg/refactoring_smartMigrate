@@ -90,9 +90,15 @@ class NewType06GetRemainingJobs(Component):
                        M.PRIORITY,
                        M.PRIOR_MAP_ID
                   FROM {mig_table} M
-                  LEFT JOIN {mig_table} P ON P.MAP_ID = M.PRIOR_MAP_ID
+                 LEFT JOIN {mig_table} P ON P.MAP_ID = M.PRIOR_MAP_ID
                  WHERE UPPER(TRIM(NVL(M.USE_YN, 'N'))) = 'Y'
-                   AND M.STATUS IS NULL
+                   AND (
+                       M.STATUS IS NULL
+                       OR (
+                           UPPER(TRIM(NVL(M.USER_EDITED, 'N'))) = 'Y'
+                           AND UPPER(TRIM(NVL(M.STATUS, 'NULL'))) LIKE 'FAIL-%'
+                       )
+                   )
                  ORDER BY
                        CASE
                            WHEN M.PRIOR_MAP_ID IS NULL OR M.PRIOR_MAP_ID <= 0 THEN 0
@@ -113,6 +119,10 @@ class NewType06GetRemainingJobs(Component):
                        PRIORITY
                   FROM {sql_table}
                  WHERE STATUS_CONVERSION IS NULL
+                    OR (
+                        UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y'
+                        AND UPPER(TRIM(NVL(STATUS_CONVERSION, 'NULL'))) LIKE 'FAIL-%'
+                    )
                  ORDER BY PRIORITY ASC NULLS LAST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                 """,
                 "SQL_CONVERSION",
@@ -125,8 +135,14 @@ class NewType06GetRemainingJobs(Component):
                        TO_CHAR(SQL_ID) AS SQL_ID,
                        PRIORITY
                   FROM {sql_table}
-                 WHERE STATUS_TUNING IS NULL
-                   AND UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')
+                 WHERE UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')
+                   AND (
+                       STATUS_TUNING IS NULL
+                       OR (
+                           UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y'
+                           AND UPPER(TRIM(NVL(STATUS_TUNING, 'NULL'))) LIKE 'FAIL-%'
+                       )
+                   )
                  ORDER BY PRIORITY ASC NULLS LAST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                 """,
                 "SQL_TUNING",

@@ -147,7 +147,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                     last_status = FAIL_TUNED
                     last_message = "[POC] tuning rule application failed"
                     attempts.append({"attempt": attempt_no, "stage": "APPLY_TUNING_RULES", "status": last_status, "reason": last_message})
-                    self._insert_sql_log(db_config, job, "TUNED_TO_SQL", None, "FAIL", attempt_no, "APPLY_TUNING_RULES", last_message)
+                    self._insert_sql_log(db_config, job, "TUNED_TO_SQL", None, last_status, attempt_no, "APPLY_TUNING_RULES", last_message)
                     resume_stage = "APPLY_TUNING_RULES"
                     continue
 
@@ -185,7 +185,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                     last_status = FAIL_TEST
                     last_message = "[POC] tuned SQL validation failed"
                     attempts.append({"attempt": attempt_no, "stage": "VALIDATE_TUNED_SQL", "status": last_status, "reason": last_message})
-                    self._insert_sql_log(db_config, job, "TUNED_TEST_SQL", tuned_sql, "FAIL", attempt_no, "VALIDATE_TUNED_SQL", last_message)
+                    self._insert_sql_log(db_config, job, "TUNED_TEST_SQL", tuned_sql, last_status, attempt_no, "VALIDATE_TUNED_SQL", last_message)
                     resume_stage = "VALIDATE_TUNED_SQL"
                     continue
                 attempts.append({"attempt": attempt_no, "stage": "VALIDATE_TUNED_SQL", "status": TUNING_PASS})
@@ -263,7 +263,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                 {
                     "STATUS_TUNING": status,
                     "TUNED_RESULT": tuned_result,
-                    "LOG": f"FINAL FAIL stage=SQL_TUNING status={status} error={message}",
+                    "LOG": f"FINAL FAILURE stage=SQL_TUNING status={status} error={message}",
                     "RETRY_COUNT": self._configured_retry_limit(),
                 }
             )
