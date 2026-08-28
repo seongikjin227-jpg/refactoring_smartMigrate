@@ -105,19 +105,20 @@ class NewType04Dashboard(Component):
     def _sql_conversion_summary(self) -> dict[str, Any]:
         # Build SQL Conversion dashboard counts and rates.
         table = self._qualify("NEXT_SQL_INFO")
+        target_scope = self._sql_status_target_condition("STATUS_CONVERSION", ("PASS", "PASS-CONVERSION"))
         pending_where = "STATUS_CONVERSION IS NULL"
-        fail_where = self._fail_status_condition("STATUS_CONVERSION")
+        fail_where = f"{target_scope} AND ({self._fail_status_condition('STATUS_CONVERSION')})"
         edited_fail_where = f"{self._user_edited_condition()} AND ({self._detailed_fail_status_condition('STATUS_CONVERSION')})"
         target_where = f"{pending_where} OR ({edited_fail_where})"
-        total = self._count(table)
+        total = self._count(table, target_scope)
         target = self._count(table, target_where)
         pending = self._count(table, pending_where)
-        pass_count = self._count(table, "UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')")
+        pass_count = self._count(table, f"{target_scope} AND UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')")
         fail_count = self._count(table, fail_where)
         return self._stage_summary(
             agent="SQL_CONVERSION",
             table=table,
-            target_condition="STATUS_CONVERSION IS NULL OR (USER_EDITED='Y' AND STATUS_CONVERSION LIKE 'FAIL-%')",
+            target_condition="total excludes STATUS_CONVERSION='NA'; remaining is NULL or USER_EDITED='Y' FAIL-*",
             total=total,
             target_count=target,
             pending_count=pending,
@@ -127,7 +128,7 @@ class NewType04Dashboard(Component):
             success_base=pass_count + fail_count,
             pass_count=pass_count,
             fail_count=fail_count,
-            status_counts=self._status_counts(table, "STATUS_CONVERSION"),
+            status_counts=self._status_counts(table, "STATUS_CONVERSION", target_scope),
         )
 
     def _sql_tuning_summary(self) -> dict[str, Any]:
@@ -137,12 +138,13 @@ class NewType04Dashboard(Component):
         missing = [col for col in ("STATUS_TUNING", "STATUS_CONVERSION") if col not in columns]
         if missing:
             return self._unavailable("SQL_TUNING", table, f"missing columns: {', '.join(missing)}")
+        total_scope = self._sql_status_target_condition("STATUS_TUNING", ("PASS", "PASS-TUNING"))
         base_where = "UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')"
         pending_where = f"{base_where} AND STATUS_TUNING IS NULL"
         fail_where = f"{base_where} AND ({self._fail_status_condition('STATUS_TUNING')})"
         edited_fail_where = f"{base_where} AND {self._user_edited_condition()} AND ({self._detailed_fail_status_condition('STATUS_TUNING')})"
         target_where = f"{pending_where} OR ({edited_fail_where})"
-        total = self._count(table)
+        total = self._count(table, total_scope)
         target = self._count(table, target_where)
         pending = self._count(table, pending_where)
         pass_count = self._count(table, f"{base_where} AND UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING')")
@@ -150,7 +152,7 @@ class NewType04Dashboard(Component):
         return self._stage_summary(
             agent="SQL_TUNING",
             table=table,
-            target_condition="STATUS_CONVERSION pass AND (STATUS_TUNING IS NULL OR (USER_EDITED='Y' AND STATUS_TUNING LIKE 'FAIL-%'))",
+            target_condition="total excludes STATUS_TUNING='NA'; remaining requires conversion PASS and NULL or USER_EDITED='Y' FAIL-*",
             total=total,
             target_count=target,
             pending_count=pending,
@@ -160,7 +162,7 @@ class NewType04Dashboard(Component):
             success_base=pass_count + fail_count,
             pass_count=pass_count,
             fail_count=fail_count,
-            status_counts=self._status_counts(table, "STATUS_TUNING"),
+            status_counts=self._status_counts(table, "STATUS_TUNING", total_scope),
         )
 
     def _sql_formatting_summary(self) -> dict[str, Any]:
@@ -170,16 +172,17 @@ class NewType04Dashboard(Component):
         missing = [col for col in ("STATUS_TUNING", "FORMATTED_SQL") if col not in columns]
         if missing:
             return self._unavailable("SQL_FORMATTING", table, f"missing columns: {', '.join(missing)}")
+        total_scope = self._sql_status_target_condition("STATUS_TUNING", ("PASS", "PASS-TUNING"))
         base_where = "UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING')"
         target_where = f"{base_where} AND (FORMATTED_SQL IS NULL OR NVL(DBMS_LOB.GETLENGTH(FORMATTED_SQL), 0) = 0)"
         applied_where = f"{base_where} AND FORMATTED_SQL IS NOT NULL AND DBMS_LOB.GETLENGTH(FORMATTED_SQL) > 0"
-        total = self._count(table)
+        total = self._count(table, total_scope)
         target = self._count(table, target_where)
         applied = self._count(table, applied_where)
         return self._stage_summary(
             agent="SQL_FORMATTING",
             table=table,
-            target_condition="STATUS_TUNING PASS and FORMATTED_SQL empty",
+            target_condition="total excludes STATUS_TUNING='NA'; remaining requires tuning PASS and FORMATTED_SQL empty",
             total=total,
             target_count=target,
             progress_count=applied,
@@ -321,6 +324,11 @@ class NewType04Dashboard(Component):
     def _detailed_fail_status_condition(self, status_column: str) -> str:
         # HITL reruns are added only for detailed stage failures such as FAIL-BIND.
         return f"UPPER(TRIM(NVL({status_column}, 'NULL'))) LIKE 'FAIL-%'"
+
+    def _sql_status_target_condition(self, status_column: str, pass_statuses: tuple[str, ...]) -> str:
+        pass_list = ", ".join(f"'{status}'" for status in pass_statuses)
+        normalized = f"UPPER(TRIM(NVL({status_column}, 'NULL')))"
+        return f"({status_column} IS NULL OR {normalized} IN ({pass_list}) OR {normalized} LIKE 'FAIL-%')"
 
     def _user_edited_condition(self) -> str:
         # Corrected HITL rows are eligible for rerun from their failed stage.
