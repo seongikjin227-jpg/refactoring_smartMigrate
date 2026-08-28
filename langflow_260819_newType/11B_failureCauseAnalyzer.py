@@ -78,26 +78,21 @@ class NewType11BFailureCauseAnalyzer(Component):
             "retry_no",
         )
         max_failures = self._positive_int(getattr(self, "max_failures", None), 50)
-        failures = (mig_failures + sql_failures)[:max_failures]
+        failures = [self._llm_failure_item(item) for item in (mig_failures + sql_failures)[:max_failures]]
         return {
             "user_request": payload.get("user_request") or payload.get("original_request") or "",
-            "workflow_started_at": payload.get("workflow_started_at") or self._to_text(mig_started_at or sql_started_at),
             "workflow_summary": payload.get("workflow_summary") or {},
             "workflow_plan_counts": payload.get("workflow_plan_counts") or {},
             "workflow_aborted": bool(payload.get("workflow_aborted")),
             "abort_reason": payload.get("abort_reason") or "",
             "failures": failures,
-            "skipped_due_to_prior_fail": skipped,
-            "log_scope": {
-                "mig_started_at": self._to_text(mig_started_at),
-                "sql_started_at": self._to_text(sql_started_at),
-                "selection_rule": "latest WORKFLOW_START marker per log table, then STATUS LIKE 'FAIL-%'",
-            },
+            "skipped_due_to_prior_fail": [self._llm_failure_item(item) for item in skipped],
         }
 
     def _latest_mig_start_at(self) -> Any:
         table = self._qualify("NEXT_MIG_LOG")
-        columns = self._available_columns("NEXT_MIG_LOG")
+        column_types = self._available_column_types("NEXT_MIG_LOG")
+        columns = set(column_types)
         if not {"CREATED_AT", "STEP_NAME"}.issubset(columns):
             return None
         with self._connect() as conn:
@@ -132,7 +127,8 @@ class NewType11BFailureCauseAnalyzer(Component):
     def _query_mig_logs(self, started_at: Any, *, fail_only: bool = False, skip_only: bool = False) -> list[dict[str, Any]]:
         if started_at is None:
             return []
-        columns = self._available_columns("NEXT_MIG_LOG")
+        column_types = self._available_column_types("NEXT_MIG_LOG")
+        columns = set(column_types)
         required = {"CREATED_AT", "STATUS"}
         if not required.issubset(columns):
             return []
@@ -154,9 +150,8 @@ class NewType11BFailureCauseAnalyzer(Component):
                 {self._select_expr(columns, "LOG_TYPE")},
                 {self._select_expr(columns, "LOG_LEVEL")},
                 {self._select_expr(columns, "STEP_NAME")},
-                {self._select_expr(columns, "MESSAGE")},
-                {self._select_expr(columns, "RETRY_COUNT")},
-                {self._select_expr(columns, "GENERATE_SQL")}
+                {self._text_preview_expr(column_types, "MESSAGE", 100)},
+                {self._select_expr(columns, "RETRY_COUNT")}
               FROM {table}
              WHERE {" AND ".join(conditions)}
              ORDER BY CREATED_AT DESC
@@ -164,30 +159,45 @@ class NewType11BFailureCauseAnalyzer(Component):
         with self._connect() as conn:
             cur = conn.cursor()
             cur.execute(select_sql, params)
-            rows = cur.fetchall()
-        logs: list[dict[str, Any]] = []
-        for row in rows:
-            logs.append(
-                {
-                    "domain": "DB_MIGRATION",
-                    "job_key": f"MIG:{self._to_text(row[1])}",
-                    "created_at": self._to_text(row[0]),
-                    "map_id": self._json_value(row[1]),
-                    "status": self._to_text(row[2]),
-                    "log_type": self._to_text(row[3]),
-                    "log_level": self._to_text(row[4]),
-                    "stage_name": self._to_text(row[5]),
-                    "message": self._clip(self._to_text(row[6]), 1200),
-                    "retry_no": self._num(row[7]),
-                    "sql_snippet": self._clip(self._to_text(row[8]), 2000),
-                }
-            )
+            logs: list[dict[str, Any]] = []
+            for row in cur.fetchall():
+                logs.append(
+                    {
+                        "domain": "DB_MIGRATION",
+                        "job_key": f"MIG:{self._to_text(row[1])}",
+                        "created_at": self._to_text(row[0]),
+                        "map_id": self._json_value(row[1]),
+                        "status": self._to_text(row[2]),
+                        "log_type": self._to_text(row[3]),
+                        "log_level": self._to_text(row[4]),
+                        "stage_name": self._to_text(row[5]),
+                        "message": self._to_text(row[6]),
+                        "retry_no": self._num(row[7]),
+                        "sql_snippet": "",
+                    }
+                )
         return logs
+
+    def _llm_failure_item(self, item: dict[str, Any]) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "domain": item.get("domain") or "",
+            "status": item.get("status") or "",
+            "stage": item.get("stage_name") or "",
+            "retry": self._num(item.get("retry_no")),
+            "message": item.get("message") or "",
+        }
+        if item.get("map_id") not in (None, ""):
+            out["map_id"] = item.get("map_id")
+        if item.get("space_nm") or item.get("sql_id"):
+            out["space_nm"] = item.get("space_nm") or ""
+            out["sql_id"] = item.get("sql_id") or ""
+        return out
 
     def _query_sql_logs(self, started_at: Any, *, fail_only: bool = False, skip_only: bool = False) -> list[dict[str, Any]]:
         if started_at is None:
             return []
-        columns = self._available_columns("NEXT_SQL_LOG")
+        column_types = self._available_column_types("NEXT_SQL_LOG")
+        columns = set(column_types)
         required = {"CREATED_AT", "STATUS"}
         if not required.issubset(columns):
             return []
@@ -208,13 +218,12 @@ class NewType11BFailureCauseAnalyzer(Component):
                 {self._select_expr(columns, "SQL_ID")},
                 {self._select_expr(columns, "SQL_INFO_ROWID")},
                 {self._select_expr(columns, "SQL_KIND")},
-                {self._select_expr(columns, "SQL_CONTENT")},
                 {self._select_expr(columns, "STATUS")},
                 {self._select_expr(columns, "MODEL_NAME")},
                 {self._select_expr(columns, "ELAPSED_SECONDS")},
                 {self._select_expr(columns, "ATTEMPT_NO")},
                 {self._select_expr(columns, "STAGE_NAME")},
-                {self._select_expr(columns, "ERROR_MESSAGE")}
+                {self._text_preview_expr(column_types, "ERROR_MESSAGE", 100)}
               FROM {table}
              WHERE {" AND ".join(conditions)}
              ORDER BY CREATED_AT DESC
@@ -222,30 +231,29 @@ class NewType11BFailureCauseAnalyzer(Component):
         with self._connect() as conn:
             cur = conn.cursor()
             cur.execute(select_sql, params)
-            rows = cur.fetchall()
-        logs: list[dict[str, Any]] = []
-        for row in rows:
-            domain = self._sql_domain(row[4], row[10])
-            space_nm = self._to_text(row[1])
-            sql_id = self._to_text(row[2])
-            logs.append(
-                {
-                    "domain": domain,
-                    "job_key": f"{domain}:{space_nm}:{sql_id}",
-                    "created_at": self._to_text(row[0]),
-                    "space_nm": space_nm,
-                    "sql_id": sql_id,
-                    "row_id": self._to_text(row[3]),
-                    "sql_kind": self._to_text(row[4]),
-                    "status": self._to_text(row[6]),
-                    "model_name": self._to_text(row[7]),
-                    "elapsed_seconds": self._json_value(row[8]),
-                    "retry_no": self._num(row[9]),
-                    "stage_name": self._to_text(row[10]),
-                    "message": self._clip(self._to_text(row[11]), 1200),
-                    "sql_snippet": self._clip(self._to_text(row[5]), 2000),
-                }
-            )
+            logs: list[dict[str, Any]] = []
+            for row in cur.fetchall():
+                domain = self._sql_domain(row[4], row[9])
+                space_nm = self._to_text(row[1])
+                sql_id = self._to_text(row[2])
+                logs.append(
+                    {
+                        "domain": domain,
+                        "job_key": f"{domain}:{space_nm}:{sql_id}",
+                        "created_at": self._to_text(row[0]),
+                        "space_nm": space_nm,
+                        "sql_id": sql_id,
+                        "row_id": self._to_text(row[3]),
+                        "sql_kind": self._to_text(row[4]),
+                        "status": self._to_text(row[5]),
+                        "model_name": self._to_text(row[6]),
+                        "elapsed_seconds": self._json_value(row[7]),
+                        "retry_no": self._num(row[8]),
+                        "stage_name": self._to_text(row[9]),
+                        "message": self._to_text(row[10]),
+                        "sql_snippet": "",
+                    }
+                )
         return logs
 
     def _latest_per_job(self, logs: list[dict[str, Any]], retry_field: str) -> list[dict[str, Any]]:
@@ -316,8 +324,6 @@ class NewType11BFailureCauseAnalyzer(Component):
         return (
             "## Fail 원인 분석\n\n"
             "최신 WORKFLOW_START 이후 `FAIL-*` 로그가 없습니다.\n\n"
-            f"- 시작 기준: MIG={evidence['log_scope'].get('mig_started_at') or '-'}, "
-            f"SQL={evidence['log_scope'].get('sql_started_at') or '-'}\n"
             f"- Workflow aborted: {evidence.get('workflow_aborted')}"
         )
 
@@ -333,25 +339,37 @@ class NewType11BFailureCauseAnalyzer(Component):
         return "\n".join(lines)
 
     def _available_columns(self, table_name: str) -> set[str]:
+        return set(self._available_column_types(table_name))
+
+    def _available_column_types(self, table_name: str) -> dict[str, str]:
         table = self._clean_identifier(table_name)
         schema = str(self._db_config.get("system_schema") or "").strip().upper()
         with self._connect() as conn:
             cur = conn.cursor()
             if schema:
-                cur.execute("SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS WHERE OWNER = :1 AND TABLE_NAME = :2", [schema, table])
+                cur.execute("SELECT COLUMN_NAME, DATA_TYPE FROM ALL_TAB_COLUMNS WHERE OWNER = :1 AND TABLE_NAME = :2", [schema, table])
             else:
-                cur.execute("SELECT COLUMN_NAME FROM USER_TAB_COLUMNS WHERE TABLE_NAME = :1", [table])
+                cur.execute("SELECT COLUMN_NAME, DATA_TYPE FROM USER_TAB_COLUMNS WHERE TABLE_NAME = :1", [table])
             rows = cur.fetchall()
-        return {str(row[0]).upper() for row in rows}
+        return {str(row[0]).upper(): str(row[1]).upper() for row in rows}
 
     def _select_expr(self, columns: set[str], column: str) -> str:
         clean = self._clean_identifier(column)
         return clean if clean in columns else f"CAST(NULL AS VARCHAR2(4000)) AS {clean}"
 
+    def _text_preview_expr(self, column_types: dict[str, str], column: str, length: int) -> str:
+        clean = self._clean_identifier(column)
+        if clean not in column_types:
+            return f"CAST(NULL AS VARCHAR2({max(1, int(length))})) AS {clean}"
+        if column_types.get(clean) in {"CLOB", "NCLOB"}:
+            return f"DBMS_LOB.SUBSTR({clean}, {max(1, int(length))}, 1) AS {clean}"
+        return f"SUBSTR({clean}, 1, {max(1, int(length))}) AS {clean}"
+
     @contextmanager
     def _connect(self):
         import oracledb
 
+        oracledb.defaults.fetch_lobs = False
         dsn = oracledb.makedsn(
             str(self._db_config.get("db_host") or "").strip(),
             int(self._db_config.get("db_port") or 1521),
@@ -458,8 +476,8 @@ class NewType11BFailureCauseAnalyzer(Component):
 FAILURE_ANALYSIS_PROMPT = """
 You are the SmartMigrate workflow failure analyst.
 
-Input is a JSON object collected after one workflow loop.
-The code already filtered logs by the latest WORKFLOW_START marker and selected statuses matching FAIL-*.
+Input is a compact JSON object collected after one workflow loop.
+The code already filtered logs by the latest WORKFLOW_START marker, selected statuses matching FAIL-*, deduplicated retries, and removed low-value fields.
 SKIP-* records are not root causes; report them separately as jobs skipped because a prior phase failed.
 
 Write the answer in Korean Markdown.
@@ -475,7 +493,6 @@ Required structure:
 ### 실패 작업
 - Group by domain: DB Migration, SQL Conversion, SQL Tuning, SQL Formatting.
 - For each failed job, include identifier, status, stage, retry/attempt number, and the most likely cause.
-- Refer to SQL snippets only when useful. Do not paste long SQL.
 
 ### 선행 실패로 인한 미실행
 - Summarize SKIP-* records separately.
