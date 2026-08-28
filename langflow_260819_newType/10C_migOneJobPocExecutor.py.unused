@@ -1,0 +1,359 @@
+from __future__ import annotations
+
+import random
+import re
+import time
+from contextlib import contextmanager
+from typing import Any
+
+from lfx.custom.custom_component.component import Component
+from lfx.io import IntInput, MessageTextInput, Output
+from lfx.schema.data import Data
+from lfx.schema.message import Message
+
+try:
+    from lfx.io import DataInput
+except Exception:
+    DataInput = MessageTextInput
+
+
+MIGRATION_PASS = "PASS"
+FAIL_GENERATE = "FAIL-INSERT"
+FAIL_EXECUTE = "FAIL-INSERT"
+FAIL_VERIFY = "FAIL-TEST"
+POC_FAIL_PERCENT = 50
+
+
+class NewType10CMigOneJobPocExecutor(Component):
+    display_name = "10C MIG One Job POC Executor"
+    description = "Runs one DB Migration POC job with random PASS/FAIL simulation and DB status/log updates."
+    name = "NewType10CMigOneJobPocExecutor"
+    icon = "DatabaseZap"
+
+    inputs = [
+        DataInput(name="job_item", display_name="Job Item", required=True),
+        IntInput(name="max_retry", display_name="Max Retry", value=2, required=False),
+    ]
+
+    outputs = [Output(display_name="Job Result", name="job_result", method="run_job", types=["Data"])]
+
+    def run_job(self) -> Data:
+        started = time.perf_counter()
+        payload = self._parse_payload(getattr(self, "job_item", ""))
+        if not self._should_run_migration(payload):
+            result = self._pass_through(payload, started, "10C skipped because job_name is not migration.")
+            self.status = result
+            return Data(data=result)
+
+        map_id = self._to_int(payload.get("map_id"))
+        if map_id is None:
+            raise ValueError("MIG job item requires map_id")
+
+        db_config = self._db_config(payload)
+        self._require_db_config(db_config)
+        max_attempts = self._max_attempts(payload)
+        attempts: list[dict[str, Any]] = []
+        final_status = FAIL_VERIFY
+        final_message = "[POC] DB Migration failed."
+        migration_sql = self._poc_migration_sql(map_id)
+        verification_sql = self._poc_verification_sql(map_id)
+
+        self._mark_running(db_config, map_id)
+        for attempt_no in range(1, max_attempts + 1):
+            for stage, fail_status, sql_text in (
+                ("GENERATE_SQL", FAIL_GENERATE, migration_sql),
+                ("EXECUTE_SQL", FAIL_EXECUTE, migration_sql),
+                ("VERIFY", FAIL_VERIFY, verification_sql),
+            ):
+                if self._poc_stage_failed(map_id, attempt_no, stage):
+                    final_status = fail_status
+                    final_message = f"[POC] {stage} random failure"
+                    attempts.append({"attempt": attempt_no, "stage": stage, "status": fail_status, "reason": final_message})
+                    self._insert_log(db_config, map_id, "POC_STEP", "WARN", stage, fail_status, final_message, attempt_no - 1, sql_text)
+                    break
+
+                attempts.append({"attempt": attempt_no, "stage": stage, "status": MIGRATION_PASS})
+                self._insert_log(db_config, map_id, "POC_STEP", "INFO", stage, MIGRATION_PASS, f"[POC] {stage} passed", attempt_no - 1, sql_text)
+            else:
+                retry_count = attempt_no - 1
+                elapsed = int(time.perf_counter() - started)
+                final_message = "[POC] DB Migration random simulation passed"
+                self._update_job(db_config, map_id, MIGRATION_PASS, elapsed, retry_count, mark_user_edited=False)
+                self._insert_log(db_config, map_id, "POC_FINAL", "INFO", "VERIFY", MIGRATION_PASS, final_message, retry_count, verification_sql)
+                result = self._result(payload, ok=True, status=MIGRATION_PASS, elapsed=elapsed, attempts=attempts)
+                result.update(
+                    {
+                        "retry_count": retry_count,
+                        "message": final_message,
+                        "migration_sql": migration_sql,
+                        "verification_sql": verification_sql,
+                        "generated_sql_saved": False,
+                        "poc_random_simulation": True,
+                        "next_node": "12C_sqlConversionOneJobPocExecutor" if payload.get("full_workflow") else "10D_migIterationDashboard",
+                    }
+                )
+                self.status = result
+                return Data(data=result)
+
+        retry_count = max(0, max_attempts - 1)
+        elapsed = int(time.perf_counter() - started)
+        self._update_job(db_config, map_id, final_status, elapsed, retry_count, mark_user_edited=True)
+        self._insert_log(db_config, map_id, "POC_FINAL", "ERROR", "FINAL", final_status, final_message, retry_count, migration_sql)
+        result = self._result(payload, ok=False, status=final_status, elapsed=elapsed, attempts=attempts)
+        result.update(
+            {
+                "retry_count": retry_count,
+                "message": final_message,
+                "migration_sql": migration_sql,
+                "verification_sql": verification_sql,
+                "generated_sql_saved": False,
+                "poc_random_simulation": True,
+                "full_workflow_abort": bool(payload.get("full_workflow")),
+                "full_workflow_abort_phase": "DB_MIGRATION" if payload.get("full_workflow") else "",
+                "full_workflow_abort_reason": "DB Migration failed; SQL phases must not start." if payload.get("full_workflow") else "",
+                "next_node": "12C_sqlConversionOneJobPocExecutor" if payload.get("full_workflow") else "10D_migIterationDashboard",
+            }
+        )
+        self.status = result
+        return Data(data=result)
+
+    def _should_run_migration(self, payload: dict[str, Any]) -> bool:
+        return self._job_name(payload) == "migration"
+
+    def _job_name(self, payload: dict[str, Any]) -> str:
+        value = str(payload.get("job_name") or "").strip().lower()
+        if value:
+            return value
+        route = str(payload.get("planned_job_route") or payload.get("job_route") or "").strip().upper()
+        return {
+            "MIG": "migration",
+            "SQL_CONVERSION": "conversion",
+            "SQL_TUNING": "tuning",
+            "SQL_FORMATTING": "formatting",
+        }.get(route, "")
+
+    def _pass_through(self, payload: dict[str, Any], started: float, message: str) -> dict[str, Any]:
+        elapsed = time.perf_counter() - started
+        result = {
+            **payload,
+            "component": "10C_migOneJobPocExecutor",
+            "ok": bool(payload.get("ok", True)),
+            "status": payload.get("status") or "PASS-THROUGH",
+            "elapsed_seconds": round(elapsed, 3),
+            "attempt_count": int(payload.get("attempt_count") or 0),
+            "attempts": list(payload.get("attempts") or []),
+            "component_pass_through": True,
+            "pass_through_component": "10C",
+            "message": payload.get("message") or message,
+            "next_node": "12C_sqlConversionOneJobPocExecutor",
+        }
+        history = list(result.get("history") or [])
+        history.append({"step": "10C_pass_through", "message": message})
+        result["history"] = history
+        return result
+
+    def _result(self, payload: dict[str, Any], *, ok: bool, status: str, elapsed: int, attempts: list[dict[str, Any]]) -> dict[str, Any]:
+        total = int(payload.get("total_jobs") or 1)
+        index = int(payload.get("job_index") or 1)
+        stages = dict(payload.get("stages") or {})
+        stages["migration"] = {"ok": ok, "status": status, "attempts": attempts}
+        return {
+            **payload,
+            "component": "10C_migOneJobPocExecutor",
+            "ok": ok,
+            "status": status,
+            "migration_status": status,
+            "elapsed_seconds": elapsed,
+            "attempt_count": len(attempts),
+            "attempts": attempts,
+            "job_index": index,
+            "total_jobs": total,
+            "completed_count": index,
+            "remaining_count": max(total - index, 0),
+            "stages": stages,
+            "db_status_updated": True,
+        }
+
+    def _poc_stage_failed(self, map_id: int, attempt_no: int, stage: str) -> bool:
+        probability = self._fail_probability(attempt_no)
+        if probability <= 0:
+            return False
+        seed = f"DB_MIGRATION:{map_id}:{attempt_no}:{stage}"
+        return random.Random(seed).random() < probability
+
+    def _fail_probability(self, attempt_no: int) -> float:
+        base = max(0, min(100, POC_FAIL_PERCENT)) / 100
+        return base if attempt_no > 0 else 0.0
+
+    def _max_attempts(self, payload: dict[str, Any]) -> int:
+        raw = payload.get("max_retry")
+        if raw is None:
+            raw = getattr(self, "max_retry", None)
+        return max(1, int(raw or 2) + 1)
+
+    def _poc_migration_sql(self, map_id: int) -> str:
+        return f"/* POC DB_MIGRATION migration_sql map_id={map_id} */ SELECT 1 FROM DUAL"
+
+    def _poc_verification_sql(self, map_id: int) -> str:
+        return f"/* POC DB_MIGRATION verification_sql map_id={map_id} */ SELECT 0 AS DIFF_COUNT FROM DUAL"
+
+    def _mark_running(self, db_config: dict[str, Any], map_id: int) -> None:
+        self._update_job(db_config, map_id, "RUNNING", 0, 0, mark_user_edited=False)
+
+    def _update_job(self, db_config: dict[str, Any], map_id: int, status: str, elapsed: int, retry_count: int, *, mark_user_edited: bool) -> None:
+        table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
+        columns = self._table_columns(db_config, table)
+        set_clauses: list[str] = []
+        params: dict[str, Any] = {"status": status, "map_id": map_id}
+        if "STATUS" in columns:
+            set_clauses.append("STATUS = :status")
+        if "ELAPSED_SECONDS" in columns:
+            params["elapsed"] = elapsed
+            set_clauses.append("ELAPSED_SECONDS = :elapsed")
+        if "RETRY_COUNT" in columns:
+            params["retry_count"] = retry_count
+            set_clauses.append("RETRY_COUNT = :retry_count")
+        if mark_user_edited and "USER_EDITED" in columns:
+            params["user_edited"] = "Y"
+            set_clauses.append("USER_EDITED = :user_edited")
+        if "UPD_TS" in columns:
+            set_clauses.append("UPD_TS = CURRENT_TIMESTAMP")
+        if not set_clauses:
+            return
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                UPDATE {table}
+                   SET {", ".join(set_clauses)}
+                 WHERE MAP_ID = :map_id
+                """,
+                params,
+            )
+            conn.commit()
+
+    def _insert_log(
+        self,
+        db_config: dict[str, Any],
+        map_id: int,
+        log_type: str,
+        log_level: str,
+        step_name: str,
+        status: str,
+        message: str,
+        retry_count: int,
+        generated_sql: str = "",
+    ) -> None:
+        table = self._qualify("NEXT_MIG_LOG", db_config.get("system_schema"))
+        sequence = self._qualify("MIGRATION_LOG_SEQ", db_config.get("system_schema"))
+        column_types = self._table_column_types(db_config, table)
+        columns = set(column_types)
+        ts_columns = [column for column in ("CREATED_AT", "UPD_TS") if column in columns]
+        generate_sql_column = ", GENERATE_SQL" if "GENERATE_SQL" in columns else ""
+        generate_sql_value = ", :9" if "GENERATE_SQL" in columns else ""
+        ts_column_sql = "".join(f", {column}" for column in ts_columns)
+        ts_value_sql = "".join(", CURRENT_TIMESTAMP" for _ in ts_columns)
+        params = [map_id, "DB_MIG_POC_RANDOM", log_type, log_level, step_name, status, str(message)[:4000], retry_count]
+        if "GENERATE_SQL" in columns:
+            sql_text = str(generated_sql or "")
+            if column_types.get("GENERATE_SQL") not in {"CLOB", "NCLOB"}:
+                sql_text = sql_text[:4000]
+            params.append(sql_text)
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                INSERT INTO {table} (
+                    LOG_ID, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, RETRY_COUNT{generate_sql_column}{ts_column_sql}
+                ) VALUES ({sequence}.NEXTVAL, :1, :2, :3, :4, :5, :6, :7, :8{generate_sql_value}{ts_value_sql})
+                """,
+                params,
+            )
+            conn.commit()
+
+    def _table_columns(self, db_config: dict[str, Any], table: str) -> set[str]:
+        return set(self._table_column_types(db_config, table))
+
+    def _table_column_types(self, db_config: dict[str, Any], table: str) -> dict[str, str]:
+        owner, table_name = self._split_table_owner_and_name(table)
+        if owner:
+            sql = "SELECT COLUMN_NAME, DATA_TYPE FROM ALL_TAB_COLUMNS WHERE OWNER = :1 AND TABLE_NAME = :2"
+            params = [owner, table_name]
+        else:
+            sql = "SELECT COLUMN_NAME, DATA_TYPE FROM USER_TAB_COLUMNS WHERE TABLE_NAME = :1"
+            params = [table_name]
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(sql, params)
+            return {str(row[0]).upper(): str(row[1]).upper() for row in cur.fetchall()}
+
+    def _split_table_owner_and_name(self, table: str) -> tuple[str | None, str]:
+        text = str(table or "").strip().upper()
+        if "." in text:
+            owner, table_name = text.split(".", 1)
+            return owner, table_name
+        return None, text
+
+    @contextmanager
+    def _connect(self, db_config: dict[str, Any]):
+        import oracledb
+
+        dsn = oracledb.makedsn(
+            str(db_config.get("db_host") or "").strip(),
+            int(db_config.get("db_port") or 1521),
+            service_name=str(db_config.get("db_service_name") or "").strip(),
+        )
+        conn = oracledb.connect(
+            user=str(db_config.get("db_username") or "").strip(),
+            password=str(db_config.get("db_password") or ""),
+            dsn=dsn,
+        )
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    def _db_config(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return dict(payload.get("db_config") or {})
+
+    def _require_db_config(self, db_config: dict[str, Any]) -> None:
+        missing = [key for key in ("db_host", "db_service_name", "db_username") if not str(db_config.get(key) or "").strip()]
+        if missing:
+            raise ValueError(f"10C POC executor is not connected to database settings: missing {', '.join(missing)}")
+
+    def _qualify(self, table_name: str, schema: Any) -> str:
+        table = self._clean_identifier(table_name)
+        clean_schema = str(schema or "").strip().upper()
+        if clean_schema:
+            return f"{self._clean_identifier(clean_schema)}.{table}"
+        return table
+
+    def _clean_identifier(self, value: str) -> str:
+        clean = str(value or "").strip().upper()
+        if not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", clean):
+            raise ValueError(f"Invalid identifier: {clean}")
+        return clean
+
+    def _parse_payload(self, raw: Any) -> dict[str, Any]:
+        if isinstance(raw, Data):
+            return dict(raw.data or {})
+        if isinstance(raw, Message):
+            raw = raw.text
+        if isinstance(raw, dict):
+            return dict(raw)
+        import json
+
+        text = str(raw or "").strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
+            text = re.sub(r"\s*```$", "", text)
+        parsed = json.loads(text) if text else {}
+        if not isinstance(parsed, dict):
+            raise ValueError("job_item must be a JSON object")
+        return parsed
+
+    def _to_int(self, value: Any) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None

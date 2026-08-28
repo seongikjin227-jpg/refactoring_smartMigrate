@@ -675,15 +675,28 @@ class NewType10CMigOneJobPocExecutor(Component):
 
     def _ddl_info_block(self, context: dict[str, Any], from_table: str, to_table: str) -> str:
         parts: list[str] = []
-        source_ddl = list(context.get("source_ddl") or [])
-        if source_ddl:
-            parts.append(
-                "[Source table DDL]\n"
-                f"Table: {from_table}\n"
-                f"{'COLUMN':<30} {'DATA_TYPE':<25} NULLABLE\n"
-                f"{'-' * 70}\n"
-                f"{self._format_ddl_rows(source_ddl)}"
-            )
+        source_ddl = context.get("source_ddl") or []
+        if isinstance(source_ddl, dict):
+            table_blocks = []
+            for table_name, rows in source_ddl.items():
+                table_blocks.append(
+                    f"Table: {table_name}\n"
+                    f"{'COLUMN':<30} {'DATA_TYPE':<25} NULLABLE\n"
+                    f"{'-' * 70}\n"
+                    f"{self._format_ddl_rows(list(rows or []))}"
+                )
+            if table_blocks:
+                parts.append("[Source table DDL]\n" + "\n\n".join(table_blocks))
+        else:
+            source_rows = list(source_ddl or [])
+            if source_rows:
+                parts.append(
+                    "[Source table DDL]\n"
+                    f"Table: {from_table}\n"
+                    f"{'COLUMN':<30} {'DATA_TYPE':<25} NULLABLE\n"
+                    f"{'-' * 70}\n"
+                    f"{self._format_ddl_rows(source_rows)}"
+                )
         target_ddl = list(context.get("target_ddl") or [])
         if target_ddl:
             parts.append(
@@ -1142,9 +1155,54 @@ class NewType10CMigOneJobPocExecutor(Component):
             "saved_verification_sql": saved_verification_sql,
             "user_edited": user_edited,
             "mapping_details": details,
-            "source_ddl": self._fetch_table_columns(db_config, fr_table) if self._looks_like_table(fr_table) else [],
+            "source_ddl": self._source_ddl_for_prompt(db_config, map_type, fr_table),
             "target_ddl": self._fetch_table_columns(db_config, to_table) if self._looks_like_table(to_table) else [],
         }
+
+    def _source_ddl_for_prompt(self, db_config: dict[str, Any], map_type: str, fr_table: str) -> dict[str, list[dict[str, Any]]] | list[dict[str, Any]]:
+        """Return source DDL in the same shape as src for simple and COMPLEX mappings."""
+        source_tables = self._source_tables_for_ddl(map_type, fr_table)
+        if not source_tables:
+            return []
+        if str(map_type or "").strip().upper() != "COMPLEX":
+            source_table = source_tables[0]
+            return self._fetch_table_columns(db_config, source_table) if self._looks_like_table(source_table) else []
+
+        source_ddl: dict[str, list[dict[str, Any]]] = {}
+        for table_name in source_tables:
+            rows = self._fetch_table_columns(db_config, table_name) if self._looks_like_table(table_name) else []
+            if rows:
+                source_ddl[table_name] = rows
+        return source_ddl
+
+    def _source_tables_for_ddl(self, map_type: str, fr_table: str) -> list[str]:
+        """Return source physical tables used for DDL lookup."""
+        text = str(fr_table or "").strip()
+        if not text:
+            return []
+        if str(map_type or "").strip().upper() == "COMPLEX":
+            return self._extract_query_table_names(text)
+        return [text]
+
+    def _extract_query_table_names(self, sql_text: str) -> list[str]:
+        """Extract physical table names from a COMPLEX FR_TABLE SQL expression."""
+        text = re.sub(r"/\*.*?\*/", " ", sql_text or "", flags=re.DOTALL)
+        text = re.sub(r"--[^\n]*", " ", text)
+        tables: list[str] = []
+        seen: set[str] = set()
+        for match in re.finditer(
+            r"\b(?:FROM|JOIN)\s+([A-Z_][A-Z0-9_$#]*(?:\.[A-Z_][A-Z0-9_$#]*)?)",
+            text,
+            flags=re.IGNORECASE,
+        ):
+            table_name = match.group(1).strip()
+            if table_name.upper() in {"SELECT", "WITH"}:
+                continue
+            key = table_name.upper()
+            if key not in seen:
+                seen.add(key)
+                tables.append(table_name)
+        return tables
 
     def _fetch_table_columns(self, db_config: dict[str, Any], table: str) -> list[dict[str, Any]]:
         """Read Oracle column metadata for a source or target table."""
