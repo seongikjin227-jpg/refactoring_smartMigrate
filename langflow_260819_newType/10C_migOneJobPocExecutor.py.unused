@@ -59,11 +59,12 @@ class NewType10CMigOneJobPocExecutor(Component):
         verification_sql = self._poc_verification_sql(map_id)
 
         self._mark_running(db_config, map_id)
+        self._save_generated_sql(db_config, map_id, migration_sql, verification_sql)
         for attempt_no in range(1, max_attempts + 1):
-            for stage, fail_status, sql_text in (
-                ("GENERATE_SQL", FAIL_GENERATE, migration_sql),
-                ("EXECUTE_SQL", FAIL_EXECUTE, migration_sql),
-                ("VERIFY", FAIL_VERIFY, verification_sql),
+            for stage, fail_status, sql_text, success_status in (
+                ("GENERATE_SQL", FAIL_GENERATE, migration_sql, "SUCCESS"),
+                ("EXECUTE_SQL", FAIL_EXECUTE, migration_sql, "SUCCESS"),
+                ("VERIFY", FAIL_VERIFY, verification_sql, "PASS"),
             ):
                 if self._poc_stage_failed(map_id, attempt_no, stage):
                     final_status = fail_status
@@ -72,8 +73,8 @@ class NewType10CMigOneJobPocExecutor(Component):
                     self._insert_log(db_config, map_id, "POC_STEP", "WARN", stage, fail_status, final_message, attempt_no - 1, sql_text)
                     break
 
-                attempts.append({"attempt": attempt_no, "stage": stage, "status": MIGRATION_PASS})
-                self._insert_log(db_config, map_id, "POC_STEP", "INFO", stage, MIGRATION_PASS, f"[POC] {stage} passed", attempt_no - 1, sql_text)
+                attempts.append({"attempt": attempt_no, "stage": stage, "status": success_status})
+                self._insert_log(db_config, map_id, "POC_STEP", "INFO", stage, success_status, f"[POC] {stage} passed", attempt_no - 1, sql_text)
             else:
                 retry_count = attempt_no - 1
                 elapsed = int(time.perf_counter() - started)
@@ -87,7 +88,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                         "message": final_message,
                         "migration_sql": migration_sql,
                         "verification_sql": verification_sql,
-                        "generated_sql_saved": False,
+                        "generated_sql_saved": True,
                         "poc_random_simulation": True,
                         "next_node": "12C_sqlConversionOneJobPocExecutor" if payload.get("full_workflow") else "10D_migIterationDashboard",
                     }
@@ -106,7 +107,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                 "message": final_message,
                 "migration_sql": migration_sql,
                 "verification_sql": verification_sql,
-                "generated_sql_saved": False,
+                "generated_sql_saved": True,
                 "poc_random_simulation": True,
                 "full_workflow_abort": bool(payload.get("full_workflow")),
                 "full_workflow_abort_phase": "DB_MIGRATION" if payload.get("full_workflow") else "",
@@ -232,6 +233,33 @@ class NewType10CMigOneJobPocExecutor(Component):
             )
             conn.commit()
 
+    def _save_generated_sql(self, db_config: dict[str, Any], map_id: int, migration_sql: str, verification_sql: str) -> None:
+        table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
+        columns = self._table_columns(db_config, table)
+        set_clauses: list[str] = []
+        params: dict[str, Any] = {"map_id": map_id}
+        if "MIG_SQL" in columns:
+            params["mig_sql"] = migration_sql
+            set_clauses.append("MIG_SQL = :mig_sql")
+        if "VERIFY_SQL" in columns:
+            params["verify_sql"] = verification_sql
+            set_clauses.append("VERIFY_SQL = :verify_sql")
+        if "UPD_TS" in columns and set_clauses:
+            set_clauses.append("UPD_TS = CURRENT_TIMESTAMP")
+        if not set_clauses:
+            return
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                UPDATE {table}
+                   SET {", ".join(set_clauses)}
+                 WHERE MAP_ID = :map_id
+                """,
+                params,
+            )
+            conn.commit()
+
     def _insert_log(
         self,
         db_config: dict[str, Any],
@@ -244,32 +272,57 @@ class NewType10CMigOneJobPocExecutor(Component):
         retry_count: int,
         generated_sql: str = "",
     ) -> None:
-        table = self._qualify("NEXT_MIG_LOG", db_config.get("system_schema"))
-        sequence = self._qualify("MIGRATION_LOG_SEQ", db_config.get("system_schema"))
-        column_types = self._table_column_types(db_config, table)
-        columns = set(column_types)
-        ts_columns = [column for column in ("CREATED_AT", "UPD_TS") if column in columns]
-        generate_sql_column = ", GENERATE_SQL" if "GENERATE_SQL" in columns else ""
-        generate_sql_value = ", :9" if "GENERATE_SQL" in columns else ""
-        ts_column_sql = "".join(f", {column}" for column in ts_columns)
-        ts_value_sql = "".join(", CURRENT_TIMESTAMP" for _ in ts_columns)
-        params = [map_id, "DB_MIG_POC_RANDOM", log_type, log_level, step_name, status, str(message)[:4000], retry_count]
-        if "GENERATE_SQL" in columns:
+        """Insert a best-effort NEXT_MIG_LOG row using only available columns."""
+        try:
+            table = self._qualify("NEXT_MIG_LOG", db_config.get("system_schema"))
+            sequence = self._qualify("MIGRATION_LOG_SEQ", db_config.get("system_schema"))
+            column_types = self._table_column_types(db_config, table)
+            columns = set(column_types)
             sql_text = str(generated_sql or "")
             if column_types.get("GENERATE_SQL") not in {"CLOB", "NCLOB"}:
                 sql_text = sql_text[:4000]
-            params.append(sql_text)
-        with self._connect(db_config) as conn:
-            cur = conn.cursor()
-            cur.execute(
-                f"""
-                INSERT INTO {table} (
-                    LOG_ID, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, RETRY_COUNT{generate_sql_column}{ts_column_sql}
-                ) VALUES ({sequence}.NEXTVAL, :1, :2, :3, :4, :5, :6, :7, :8{generate_sql_value}{ts_value_sql})
-                """,
-                params,
-            )
-            conn.commit()
+            values: dict[str, Any] = {
+                "MAP_ID": map_id,
+                "MIG_KIND": "DB_MIG_POC_RANDOM",
+                "LOG_TYPE": log_type,
+                "LOG_LEVEL": log_level,
+                "STEP_NAME": step_name,
+                "STATUS": status,
+                "MESSAGE": str(message or "")[:4000],
+                "RETRY_COUNT": retry_count,
+                "GENERATE_SQL": sql_text,
+            }
+            insert_columns: list[str] = []
+            value_exprs: list[str] = []
+            params: dict[str, Any] = {}
+            if "LOG_ID" in columns:
+                insert_columns.append("LOG_ID")
+                value_exprs.append(f"{sequence}.NEXTVAL")
+            for column, value in values.items():
+                if column not in columns:
+                    continue
+                insert_columns.append(column)
+                bind_name = column.lower()
+                value_exprs.append(f":{bind_name}")
+                params[bind_name] = value
+            for column in ("CREATED_AT", "UPD_TS"):
+                if column in columns:
+                    insert_columns.append(column)
+                    value_exprs.append("CURRENT_TIMESTAMP")
+            if not insert_columns:
+                return
+            with self._connect(db_config) as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    f"""
+                    INSERT INTO {table} ({", ".join(insert_columns)})
+                    VALUES ({", ".join(value_exprs)})
+                    """,
+                    params,
+                )
+                conn.commit()
+        except Exception:
+            return
 
     def _table_columns(self, db_config: dict[str, Any], table: str) -> set[str]:
         return set(self._table_column_types(db_config, table))
