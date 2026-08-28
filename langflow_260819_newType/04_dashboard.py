@@ -80,10 +80,10 @@ class NewType04Dashboard(Component):
         fail_where = f"{target_scope} AND ({self._fail_status_condition('STATUS')})"
         edited_fail_where = f"{target_scope} AND {self._user_edited_condition()} AND ({self._detailed_fail_status_condition('STATUS')})"
         target_where = f"{pending_where} OR ({edited_fail_where})"
-        total = self._count(table)
+        total = self._count(table, target_scope)
         target = self._count(table, target_where)
         pending = self._count(table, pending_where)
-        progress_base = self._count(table, target_scope)
+        progress_base = total
         pass_count = self._count(table, f"{target_scope} AND UPPER(TRIM(NVL(STATUS, 'NULL'))) IN ('PASS', 'SUCCESS')")
         fail_count = self._count(table, fail_where)
         return self._stage_summary(
@@ -99,7 +99,7 @@ class NewType04Dashboard(Component):
             success_base=pass_count + fail_count,
             pass_count=pass_count,
             fail_count=fail_count,
-            status_counts=self._status_counts(table, "STATUS"),
+            status_counts=self._status_counts(table, "STATUS", target_scope),
         )
 
     def _sql_conversion_summary(self) -> dict[str, Any]:
@@ -142,7 +142,7 @@ class NewType04Dashboard(Component):
         fail_where = f"{base_where} AND ({self._fail_status_condition('STATUS_TUNING')})"
         edited_fail_where = f"{base_where} AND {self._user_edited_condition()} AND ({self._detailed_fail_status_condition('STATUS_TUNING')})"
         target_where = f"{pending_where} OR ({edited_fail_where})"
-        total = self._count(table, base_where)
+        total = self._count(table)
         target = self._count(table, target_where)
         pending = self._count(table, pending_where)
         pass_count = self._count(table, f"{base_where} AND UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING')")
@@ -160,7 +160,7 @@ class NewType04Dashboard(Component):
             success_base=pass_count + fail_count,
             pass_count=pass_count,
             fail_count=fail_count,
-            status_counts=self._status_counts(table, "STATUS_TUNING", base_where),
+            status_counts=self._status_counts(table, "STATUS_TUNING"),
         )
 
     def _sql_formatting_summary(self) -> dict[str, Any]:
@@ -173,7 +173,7 @@ class NewType04Dashboard(Component):
         base_where = "UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING')"
         target_where = f"{base_where} AND (FORMATTED_SQL IS NULL OR NVL(DBMS_LOB.GETLENGTH(FORMATTED_SQL), 0) = 0)"
         applied_where = f"{base_where} AND FORMATTED_SQL IS NOT NULL AND DBMS_LOB.GETLENGTH(FORMATTED_SQL) > 0"
-        total = self._count(table, base_where)
+        total = self._count(table)
         target = self._count(table, target_where)
         applied = self._count(table, applied_where)
         return self._stage_summary(
@@ -248,8 +248,8 @@ class NewType04Dashboard(Component):
         agents = dashboard.get("agents") or {}
         lines = ["# SmartMigrate Dashboard"]
         lines.append("## 작업 현황")
-        lines.append("| 순서 | 단계 | 작업 대상 | 잔여 | 성공 | 실패 | 기타 |")
-        lines.append("|---:|---|---:|---:|---:|---:|---:|")
+        lines.append("| 순서 | 단계 | 작업 대상 | 잔여 | 성공 | 실패 |")
+        lines.append("|---:|---|---:|---:|---:|---:|")
         for key, label in AGENT_ORDER:
             summary = agents.get(key) or {}
             priority = AGENT_ORDER.index((key, label)) + 1
@@ -263,14 +263,13 @@ class NewType04Dashboard(Component):
                 f"{self._num(summary.get('total'))} | "
                 f"{self._num(summary.get('remaining_count', summary.get('target_count')))} | "
                 f"{self._num(summary.get('pass_count'))} | "
-                f"{self._num(summary.get('fail_count'))} | "
-                f"{self._num(summary.get('other_count'))} |"
+                f"{self._num(summary.get('fail_count'))} |"
             )
 
         lines.append("")
         lines.append("## 진척률 / 성공률")
         lines.append("| 순서 | 단계 | 진척률 | 성공률 |")
-        lines.append("|---:|---|---:|---:|")
+        lines.append("|---:|---|---|---|")
         for key, label in AGENT_ORDER:
             summary = agents.get(key) or {}
             priority = AGENT_ORDER.index((key, label)) + 1

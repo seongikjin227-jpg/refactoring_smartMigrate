@@ -119,7 +119,9 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         started: float,
     ) -> dict[str, Any]:
         """Generate and store FORMATTED_SQL for one row."""
-        source_sql = str(payload.get("tuned_to_sql") or job.get("tuned_to_sql") or payload.get("to_sql") or job.get("to_sql") or "").strip()
+        existing_tuned_sql = str(payload.get("tuned_to_sql") or job.get("tuned_to_sql") or "").strip()
+        base_to_sql = str(payload.get("to_sql") or job.get("to_sql") or "").strip()
+        source_sql = existing_tuned_sql or self._build_poc_tuned_sql(base_to_sql)
         if not source_sql:
             return self._finish_failure(payload, job, started, "TUNED_TO_SQL/TO_SQL is empty")
 
@@ -127,7 +129,10 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         # - Call sql_indent_format_prompt.json through SqlLlmService.generate_formatted_sql().
         # - Store only FORMATTED_SQL; do not update STATUS_CONVERSION or STATUS_TUNING.
         formatted_sql = self._format_sql(source_sql)
-        self._update_row(db_config, job["row_id"], {"FORMATTED_SQL": formatted_sql})
+        update_values = {"FORMATTED_SQL": formatted_sql}
+        if not existing_tuned_sql and source_sql:
+            update_values["TUNED_TO_SQL"] = source_sql
+        self._update_row(db_config, job["row_id"], update_values)
         self._insert_sql_log(db_config, job, "FORMATTED_SQL", formatted_sql, "SUCCESS", 1, "GENERATE_FORMATTED_SQL", elapsed_seconds=time.perf_counter() - started)
         return self._result(
             payload=payload,
@@ -137,7 +142,13 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             elapsed=time.perf_counter() - started,
             attempts=[{"attempt": 1, "stage": "GENERATE_FORMATTED_SQL", "status": FORMATTED}],
             message="SQL formatting completed.",
-            extra={"formatting_status": FORMATTED, "formatted_sql": formatted_sql, "next_node": self._dashboard_node(payload)},
+            extra={
+                "formatting_status": FORMATTED,
+                "formatted_sql": formatted_sql,
+                "tuned_to_sql": source_sql,
+                "poc_tuned_to_sql_updated": not bool(existing_tuned_sql),
+                "next_node": self._dashboard_node(payload),
+            },
         )
 
     def _finish_failure(self, payload: dict[str, Any], job: dict[str, Any], started: float, message: str) -> dict[str, Any]:
@@ -237,6 +248,13 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         for keyword in sorted(keywords, key=len, reverse=True):
             text = re.sub(rf"\b{re.escape(keyword)}\b", f"\n{keyword}", text, flags=re.I)
         return "\n".join(line.strip() for line in text.splitlines() if line.strip())
+
+    def _build_poc_tuned_sql(self, to_sql: str) -> str:
+        """Create a deterministic POC TUNED_TO_SQL when formatting starts from TO_SQL."""
+        text = str(to_sql or "").strip()
+        if not text:
+            return ""
+        return text
 
     def _load_sql_job(self, db_config: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         """Load one NEXT_SQL_INFO row by ROWID or by SPACE_NM + SQL_ID."""

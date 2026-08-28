@@ -54,6 +54,11 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         self._require_db_config(db_config)
         job: dict[str, Any] = {}
         try:
+            prereq = self._migration_prerequisite_status(db_config)
+            if prereq.get("blocked"):
+                result = self._prerequisite_blocked(payload, started, prereq)
+                self.status = result
+                return Data(data=result)
             job = self._load_sql_job(db_config, payload)
             self._increment_batch_count(db_config, str(job["row_id"]))
             result = self._run_conversion(payload, job, db_config, started)
@@ -61,6 +66,36 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             result = self._finish_failure(payload, job, db_config, started, FAIL_TOBE, str(exc))
         self.status = result
         return Data(data=result)
+
+    def _prerequisite_blocked(self, payload: dict[str, Any], started: float, prereq: dict[str, Any]) -> dict[str, Any]:
+        elapsed = time.perf_counter() - started
+        total = int(payload.get("total_jobs") or 1)
+        index = int(payload.get("job_index") or 1)
+        message = (
+            "DB Migration 선행 작업이 남아 있어 SQL Conversion을 실행하지 않았습니다. "
+            f"pending={prereq.get('pending_count', 0)}, fail={prereq.get('fail_count', 0)}"
+        )
+        return {
+            **payload,
+            "component": "12C_sqlConversionOneJobPocExecutor",
+            "ok": False,
+            "status": "PREREQUISITE_REQUIRED",
+            "error_type": "DB_MIGRATION_PREREQUISITE_REQUIRED",
+            "message": message,
+            "elapsed_seconds": round(elapsed, 3),
+            "attempt_count": 0,
+            "attempts": [],
+            "job_index": index,
+            "total_jobs": total,
+            "completed_count": max(index - 1, 0),
+            "remaining_count": max(total - index + 1, 0),
+            "workflow_blocked": True,
+            "full_workflow_abort": bool(payload.get("full_workflow")),
+            "full_workflow_abort_phase": "DB_MIGRATION",
+            "full_workflow_abort_reason": message,
+            "db_status_updated": False,
+            "next_node": "12D_sqlConversionIterationDashboard",
+        }
 
     def _should_run_conversion(self, payload: dict[str, Any]) -> bool:
         return self._job_name(payload) == "conversion"
@@ -260,6 +295,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 "TEST_SQL": test_sql,
                 "TUNED_FR_SQL": tuned_fr_sql,
             },
+            mark_user_edited=True,
         )
 
     def _prepare_conversion_source(
@@ -336,6 +372,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         message: str,
         attempts: list[dict[str, Any]] | None = None,
         partial_values: dict[str, Any] | None = None,
+        mark_user_edited: bool = False,
     ) -> dict[str, Any]:
         """Persist a SQL conversion failure using the source status values."""
         failure_attempts = attempts or [{"attempt": 1, "stage": self._failure_stage(status), "status": status, "reason": message}]
@@ -352,6 +389,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                     "RETRY_COUNT": self._configured_retry_limit(),
                 }
             )
+            if mark_user_edited:
+                update_values["USER_EDITED"] = "Y"
             self._update_row(
                 db_config,
                 str(job["row_id"]),
@@ -693,6 +732,42 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             cur.execute(sql, params)
             return {str(row[0]).upper() for row in cur.fetchall()}
 
+    def _migration_prerequisite_status(self, db_config: dict[str, Any]) -> dict[str, Any]:
+        """Block SQL Conversion while any active DB Migration row is pending or failed."""
+        table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
+        columns = self._table_columns(db_config, table)
+        user_edited_expr = "USER_EDITED" if "USER_EDITED" in columns else "'N'"
+        status_expr = "STATUS" if "STATUS" in columns else "NULL"
+        use_expr = "USE_YN" if "USE_YN" in columns else "'Y'"
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                SELECT
+                       SUM(CASE WHEN {status_expr} IS NULL THEN 1 ELSE 0 END) AS PENDING_COUNT,
+                       SUM(CASE WHEN UPPER(TRIM(NVL({status_expr}, ''))) LIKE 'FAIL-%' THEN 1 ELSE 0 END) AS FAIL_COUNT,
+                       SUM(
+                           CASE
+                               WHEN UPPER(TRIM(NVL({user_edited_expr}, 'N'))) = 'Y'
+                                AND UPPER(TRIM(NVL({status_expr}, ''))) LIKE 'FAIL-%'
+                               THEN 1 ELSE 0
+                           END
+                       ) AS USER_EDITED_FAIL_COUNT
+                  FROM {table}
+                 WHERE UPPER(TRIM(NVL({use_expr}, 'N'))) = 'Y'
+                """
+            )
+            row = cur.fetchone() or (0, 0, 0)
+        pending_count = self._num(row[0])
+        fail_count = self._num(row[1])
+        user_edited_fail_count = self._num(row[2])
+        return {
+            "blocked": pending_count > 0 or fail_count > 0,
+            "pending_count": pending_count,
+            "fail_count": fail_count,
+            "user_edited_fail_count": user_edited_fail_count,
+        }
+
     @contextmanager
     def _connect(self, db_config: dict[str, Any]):
         """Open and close an Oracle database connection."""
@@ -763,6 +838,13 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         if len(encoded) <= max_len:
             return text
         return encoded[:max_len].decode("utf-8", errors="ignore")
+
+    def _num(self, value: Any) -> int:
+        """Convert nullable DB aggregate values to int."""
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         """Parse a Langflow Data, Message, dict, or JSON string payload."""

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
-from lfx.io import IntInput, MessageTextInput, Output
+from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
 from lfx.schema.data import Data
 from lfx.schema.message import Message
 
@@ -29,6 +29,13 @@ class NewType10CMigOneJobPocExecutor(Component):
     inputs = [
         DataInput(name="job_item", display_name="Job Item", required=True),
         IntInput(name="max_retry", display_name="Max Retry", value=2, required=False),
+        StrInput(name="llm_base_url", display_name="LLM Base URL", required=False),
+        SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=False),
+        StrInput(name="llm_model", display_name="LLM Model", value="GLM-5.1", required=False),
+        StrInput(name="llm_provider", display_name="LLM Provider", required=False, info="Optional: openai or anthropic. Leave blank to infer from model/base URL."),
+        IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=4096, required=False),
+        IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=900, required=False),
+        StrInput(name="llm_fallback_models", display_name="LLM Fallback Models", value="GLM-5.1,Qwen3.6-35B-A3B,Kimi-K2.5", required=False),
     ]
 
     outputs = [Output(display_name="Job Result", name="job_result", method="run_job", types=["Data"])]
@@ -81,7 +88,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                 return Data(data=result)
 
             self._mark_running(db_config, map_id)
-            base_context = {"job": job, "map_id": map_id, "attempt": 1}
+            base_context = {"job": job, "map_id": map_id, "attempt": 1, "llm_config": self._llm_config(job)}
             fetch_step = self._node_fetch_ddl(base_context)
             if fetch_step.get("status") != "PASS":
                 raise ValueError(fetch_step.get("message") or "FETCH_DDL failed")
@@ -138,6 +145,10 @@ class NewType10CMigOneJobPocExecutor(Component):
                 {
                     "retry_count": retry_count,
                     "message": message,
+                    "migration_sql": graph_result.get("current_migration_sql", ""),
+                    "verification_sql": graph_result.get("current_v_sql", ""),
+                    "llm_model": graph_result.get("llm_model", ""),
+                    "generated_sql_saved": bool(graph_result.get("generated_sql_saved")),
                     "next_node": "12C_sqlConversionOneJobPocExecutor" if job.get("full_workflow") else "10D_migIterationDashboard",
                 }
             )
@@ -334,6 +345,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                     next_state.get("current_migration_sql", ""),
                     next_state.get("current_v_sql", ""),
                 )
+                next_state["generated_sql_saved"] = True
             if step.get("stage") == "VERIFY":
                 next_state["status"] = "PASS"
             elif step.get("stage") == "GENERATE_SQL" and state.get("failure_status") == "FAIL-TEST":
@@ -497,6 +509,8 @@ class NewType10CMigOneJobPocExecutor(Component):
             ddl_sql, migration_sql, verification_sql, used_model = self._generate_migration_sqls(context, verify_only=verify_only)
             if verify_only:
                 migration_sql = str(context.get("current_migration_sql") or context.get("migration_sql") or "").strip()
+            migration_sql = self._clean_sql_statement(migration_sql)
+            verification_sql = self._clean_sql_statement(verification_sql)
             if not migration_sql:
                 raise ValueError("LLM response did not include migration_sql")
             if not verification_sql:
@@ -510,6 +524,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                     "migration_sql": migration_sql,
                     "verification_sql": verification_sql,
                     "llm_model": used_model,
+                    "generated_sql_saved": False,
                 },
             }
         except Exception as exc:
@@ -620,6 +635,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             system_openai=str(prompt_template.get("system_openai") or ""),
             system_anthropic=str(prompt_template.get("system_anthropic") or ""),
             prompt=prompt,
+            config=dict(context.get("llm_config") or {}),
         )
         result = self._extract_json_object(content)
         return (
@@ -724,27 +740,33 @@ class NewType10CMigOneJobPocExecutor(Component):
             row = cur.fetchone()
         return int(row[0] if row else 0) == 0
 
-    def _call_llm_json(self, *, system_openai: str, system_anthropic: str, prompt: str) -> tuple[str, str]:
+    def _call_llm_json(self, *, system_openai: str, system_anthropic: str, prompt: str, config: dict[str, Any] | None = None) -> tuple[str, str]:
         self._load_env_files()
-        api_key = os.getenv("LLM_API_KEY") or os.getenv("OPEN_API_KEY")
+        llm_config = dict(config or {})
+        api_key = str(llm_config.get("llm_api_key") or os.getenv("LLM_API_KEY") or os.getenv("OPEN_API_KEY") or "").strip()
         if not api_key:
-            raise ValueError("LLM_API_KEY or OPEN_API_KEY is required for DB Migration SQL generation")
-        provider = (os.getenv("LLM_PROVIDER") or "").strip().lower()
-        base_url = os.getenv("LLM_BASE_URL") or None
-        model = os.getenv("LLM_MODEL") or "GLM-5.1"
+            raise ValueError("LLM API key is required for DB Migration SQL generation")
+        provider = str(llm_config.get("llm_provider") or os.getenv("LLM_PROVIDER") or "").strip().lower()
+        base_url = str(llm_config.get("llm_base_url") or os.getenv("LLM_BASE_URL") or "").strip() or None
+        model = str(llm_config.get("llm_model") or os.getenv("LLM_MODEL") or "GLM-5.1").strip()
+        max_tokens = self._positive_int(llm_config.get("llm_max_tokens") or os.getenv("LLM_MAX_TOKENS"), 4096)
+        timeout_seconds = self._positive_int(llm_config.get("llm_timeout_seconds") or os.getenv("LLM_TIMEOUT_SECONDS"), 900)
+        fallback_models = str(llm_config.get("llm_fallback_models") or os.getenv("LLM_FALLBACK_MODELS") or "GLM-5.1,Qwen3.6-35B-A3B,Kimi-K2.5")
         if not provider:
             provider = "anthropic" if "anthropic" in str(base_url or "").lower() or model.lower().startswith("claude") else "openai"
+        if provider not in {"anthropic", "openai"}:
+            raise ValueError("llm_provider must be either 'anthropic' or 'openai'")
 
         last_error = ""
-        for candidate_model in self._model_candidates(model):
+        for candidate_model in self._model_candidates(model, fallback_models):
             try:
                 if provider == "anthropic":
                     import anthropic
 
-                    client = anthropic.Anthropic(api_key=api_key, base_url=(base_url or "https://api.anthropic.com").rstrip("/"))
+                    client = anthropic.Anthropic(api_key=api_key, base_url=(base_url or "https://api.anthropic.com").rstrip("/"), timeout=timeout_seconds)
                     response = client.messages.create(
                         model=candidate_model,
-                        max_tokens=int(os.getenv("LLM_MAX_TOKENS", "4096")),
+                        max_tokens=max_tokens,
                         temperature=0,
                         system=system_anthropic,
                         messages=[{"role": "user", "content": prompt}],
@@ -753,11 +775,11 @@ class NewType10CMigOneJobPocExecutor(Component):
                 else:
                     from openai import OpenAI
 
-                    client = OpenAI(api_key=api_key, base_url=base_url)
+                    client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout_seconds)
                     response = client.chat.completions.create(
                         model=candidate_model,
                         temperature=0,
-                        max_tokens=int(os.getenv("LLM_MAX_TOKENS", "4096")),
+                        max_tokens=max_tokens,
                         messages=[{"role": "system", "content": system_openai}, {"role": "user", "content": prompt}],
                     )
                     text = response.choices[0].message.content or ""
@@ -781,8 +803,8 @@ class NewType10CMigOneJobPocExecutor(Component):
                 if key and key not in os.environ:
                     os.environ[key] = value.strip().strip('"').strip("'")
 
-    def _model_candidates(self, primary_model: str) -> list[str]:
-        configured = os.getenv("LLM_FALLBACK_MODELS", "GLM-5.1,Qwen3.6-35B-A3B,Kimi-K2.5")
+    def _model_candidates(self, primary_model: str, configured_models: str | None = None) -> list[str]:
+        configured = configured_models or os.getenv("LLM_FALLBACK_MODELS", "GLM-5.1,Qwen3.6-35B-A3B,Kimi-K2.5")
         values = [primary_model, *configured.split(",")]
         out: list[str] = []
         seen: set[str] = set()
@@ -881,7 +903,51 @@ class NewType10CMigOneJobPocExecutor(Component):
         return [part.strip() for part in re.split(r"^\s*/\s*$", script, flags=re.M) if part.strip()]
 
     def _clean_sql_statement(self, statement: str) -> str:
-        return re.sub(r"[;/]\s*$", "", str(statement or "").strip()).strip()
+        cleaned = self._strip_sql_comments(str(statement or "").strip())
+        return re.sub(r"[;/]\s*$", "", cleaned).strip()
+
+    def _strip_sql_comments(self, sql: str) -> str:
+        """Remove SQL comments before sending statements to Oracle.
+
+        Oracle raises ORA-01742 when a generated block comment is truncated, e.g.
+        `/* POC map_id *`. Comments are not required for execution, so strip
+        both complete and dangling comments defensively.
+        """
+        text = str(sql or "")
+        out: list[str] = []
+        index = 0
+        length = len(text)
+        in_single = False
+        in_double = False
+        while index < length:
+            char = text[index]
+            next_char = text[index + 1] if index + 1 < length else ""
+            if char == "'" and not in_double:
+                out.append(char)
+                in_single = not in_single
+                index += 1
+                continue
+            if char == '"' and not in_single:
+                out.append(char)
+                in_double = not in_double
+                index += 1
+                continue
+            if not in_single and not in_double and char == "/" and next_char == "*":
+                end = text.find("*/", index + 2)
+                if end < 0:
+                    break
+                index = end + 2
+                continue
+            if not in_single and not in_double and char == "-" and next_char == "-":
+                end = text.find("\n", index + 2)
+                if end < 0:
+                    break
+                index = end + 1
+                out.append("\n")
+                continue
+            out.append(char)
+            index += 1
+        return "\n".join(line.rstrip() for line in "".join(out).splitlines()).strip()
 
     def _is_zero(self, value: Any) -> bool:
         value = self._lob_to_str(value)
@@ -977,18 +1043,31 @@ class NewType10CMigOneJobPocExecutor(Component):
     def _update_job(self, db_config: dict[str, Any], map_id: int, status: str, elapsed: int, retry_count: int) -> None:
         """Persist the current job status, elapsed time, and retry count."""
         table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
+        columns = self._table_columns(db_config, table)
+        set_clauses = [
+            "STATUS = :status",
+            "ELAPSED_SECONDS = :elapsed",
+            "RETRY_COUNT = :retry_count",
+        ]
+        params: dict[str, Any] = {
+            "status": status,
+            "elapsed": elapsed,
+            "retry_count": retry_count,
+            "map_id": map_id,
+        }
+        if "USER_EDITED" in columns and str(status or "").strip().upper().startswith("FAIL-"):
+            set_clauses.append("USER_EDITED = 'Y'")
+        if "UPD_TS" in columns:
+            set_clauses.append("UPD_TS = CURRENT_TIMESTAMP")
         with self._connect(db_config) as conn:
             cur = conn.cursor()
             cur.execute(
                 f"""
                 UPDATE {table}
-                   SET STATUS = :1,
-                       ELAPSED_SECONDS = :2,
-                       RETRY_COUNT = :3,
-                       UPD_TS = CURRENT_TIMESTAMP
-                 WHERE MAP_ID = :4
+                   SET {", ".join(set_clauses)}
+                 WHERE MAP_ID = :map_id
                 """,
-                [status, elapsed, retry_count, map_id],
+                params,
             )
             conn.commit()
 
@@ -1248,6 +1327,19 @@ class NewType10CMigOneJobPocExecutor(Component):
             "system_schema": str(item_config.get("system_schema") or "").strip(),
         }
 
+    def _llm_config(self, job: dict[str, Any]) -> dict[str, Any]:
+        """Extract LLM settings from Langflow inputs, falling back to the job payload."""
+        item_config = dict(job.get("llm_config") or {})
+        return {
+            "llm_base_url": str(getattr(self, "llm_base_url", "") or item_config.get("llm_base_url") or "").strip(),
+            "llm_api_key": self._secret_to_str(getattr(self, "llm_api_key", None)) or str(item_config.get("llm_api_key") or "").strip(),
+            "llm_model": str(getattr(self, "llm_model", "") or item_config.get("llm_model") or "").strip(),
+            "llm_provider": str(getattr(self, "llm_provider", "") or item_config.get("llm_provider") or "").strip(),
+            "llm_max_tokens": self._positive_int(getattr(self, "llm_max_tokens", None) or item_config.get("llm_max_tokens"), 4096),
+            "llm_timeout_seconds": self._positive_int(getattr(self, "llm_timeout_seconds", None) or item_config.get("llm_timeout_seconds"), 900),
+            "llm_fallback_models": str(getattr(self, "llm_fallback_models", "") or item_config.get("llm_fallback_models") or "").strip(),
+        }
+
     def _qualify(self, table_name: str, schema: Any) -> str:
         """Return a validated schema-qualified Oracle table name."""
         value = str(table_name or "").strip().upper()
@@ -1291,6 +1383,22 @@ class NewType10CMigOneJobPocExecutor(Component):
         if not isinstance(parsed, dict):
             raise ValueError("job_item must be a JSON object")
         return parsed
+
+    def _positive_int(self, value: Any, default: int) -> int:
+        """Convert a value to a positive int, or return default."""
+        try:
+            parsed = int(value)
+            return parsed if parsed > 0 else default
+        except (TypeError, ValueError):
+            return default
+
+    def _secret_to_str(self, value: Any) -> str:
+        """Convert a Langflow secret value into plain text."""
+        if value is None:
+            return ""
+        if hasattr(value, "get_secret_value"):
+            return str(value.get_secret_value())
+        return str(value)
 
     def _to_int(self, value: Any) -> int | None:
         """Convert a value to int, returning None for invalid input."""

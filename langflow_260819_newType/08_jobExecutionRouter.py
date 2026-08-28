@@ -217,14 +217,18 @@ class NewType08JobExecutionRouter(Component):
         elif route == "FULL_WORKFLOW" and sum(counts.values()) <= 0:
             decision = self._empty_decision("No runnable job target selected for Full Workflow.", targets)
         else:
-            selected_jobs = self._selected_jobs_for_hint(payload, route, requested_run_mode, targets)
-            if not selected_jobs:
-                decision = self._empty_decision(
-                    decision_hint.get("reason") or "Requested target was not found in pending job identifiers.",
-                    targets,
-                )
+            prereq_reason = self._prerequisite_reason(route, counts)
+            if prereq_reason:
+                decision = self._prerequisite_decision(prereq_reason, targets)
             else:
-                decision = self._execution_decision(route, requested_run_mode, targets, selected_jobs)
+                selected_jobs = self._selected_jobs_for_hint(payload, route, requested_run_mode, targets)
+                if not selected_jobs:
+                    decision = self._empty_decision(
+                        decision_hint.get("reason") or "Requested target was not found in pending job identifiers.",
+                        targets,
+                    )
+                else:
+                    decision = self._execution_decision(route, requested_run_mode, targets, selected_jobs)
 
         routed = {
             **payload,
@@ -247,6 +251,21 @@ class NewType08JobExecutionRouter(Component):
         )
         self._cached_routed_payload = routed
         return routed
+
+    def _prerequisite_reason(self, route: str, counts: dict[str, int]) -> str:
+        # Enforce prerequisite gates deterministically after the LLM route decision.
+        if route in {"MIG", "FULL_WORKFLOW", "PREREQUISITE_REQUIRED", "NO_RUNNABLE_JOB"}:
+            return ""
+        blockers: list[str] = []
+        if route in {"SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"} and counts.get("MIG", 0) > 0:
+            blockers.append(f"DB Migration 잔여/재처리 대상 {counts.get('MIG', 0)}건")
+        if route in {"SQL_TUNING", "SQL_FORMATTING"} and counts.get("SQL_CONVERSION", 0) > 0:
+            blockers.append(f"SQL Conversion 잔여/재처리 대상 {counts.get('SQL_CONVERSION', 0)}건")
+        if route == "SQL_FORMATTING" and counts.get("SQL_TUNING", 0) > 0:
+            blockers.append(f"SQL Tuning 잔여/재처리 대상 {counts.get('SQL_TUNING', 0)}건")
+        if not blockers:
+            return ""
+        return "선행 작업이 남아 있어 요청한 단계를 실행할 수 없습니다: " + ", ".join(blockers)
 
     def _route_with_llm(self, payload: dict[str, Any]) -> dict[str, Any]:
         # Call the configured LLM to decide the route.
