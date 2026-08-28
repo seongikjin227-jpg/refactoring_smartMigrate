@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from contextlib import contextmanager
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
@@ -36,10 +37,10 @@ class NewType10AMigJobsToLoopTable(Component):
     def build_jobs_table(self) -> DataFrame:
         # Build a Loop-compatible DataFrame where each row is one MIG job.
         payload = self._parse_payload(getattr(self, "payload_json", ""))
-        jobs = self._sort_by_dependency(self._mig_jobs(payload))
-        total = len(jobs)
         db_config = self._db_config(payload)
         self._require_db_config(db_config)
+        jobs = self._sort_by_dependency(self._mig_jobs(payload, db_config))
+        total = len(jobs)
         rows: list[dict[str, Any]] = []
         for index, job in enumerate(jobs, start=1):
             if job.get("map_id") is None or str(job.get("map_id")).strip() == "":
@@ -66,8 +67,11 @@ class NewType10AMigJobsToLoopTable(Component):
         self.status = status
         return DataFrame(rows)
 
-    def _mig_jobs(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
-        jobs = payload.get("selected_jobs") or payload.get("planned_jobs") or []
+    def _mig_jobs(self, payload: dict[str, Any], db_config: dict[str, Any]) -> list[dict[str, Any]]:
+        requested = payload.get("requested_jobs") if isinstance(payload.get("requested_jobs"), dict) else {}
+        jobs = payload.get("selected_jobs") or requested.get("migration_jobs") or payload.get("planned_jobs") or []
+        if self._should_load_all_pending(payload, jobs):
+            return self._load_all_pending_jobs(db_config)
         out = []
         for job in jobs:
             if not isinstance(job, dict):
@@ -75,6 +79,37 @@ class NewType10AMigJobsToLoopTable(Component):
             if str(job.get("job_route") or job.get("job_type") or "MIG").upper() == "MIG":
                 out.append(dict(job))
         return out
+
+    def _should_load_all_pending(self, payload: dict[str, Any], jobs: Any) -> bool:
+        if str(payload.get("run_mode") or "").lower() != "all_pending":
+            return False
+        return not isinstance(jobs, list) or not jobs
+
+    def _load_all_pending_jobs(self, db_config: dict[str, Any]) -> list[dict[str, Any]]:
+        table = self._qualify("NEXT_MIG_INFO", db_config)
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                SELECT MAP_ID, PRIORITY, PRIOR_MAP_ID
+                  FROM {table}
+                 WHERE UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
+                   AND (STATUS IS NULL OR (UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y' AND UPPER(TRIM(NVL(STATUS, 'NULL'))) LIKE 'FAIL-%'))
+                 ORDER BY PRIORITY ASC NULLS LAST, MAP_ID ASC
+                """
+            )
+            jobs: list[dict[str, Any]] = []
+            for row in cur.fetchall():
+                jobs.append(
+                    {
+                        "job_route": "MIG",
+                        "job_type": "MIG",
+                        "map_id": self._json_value(row[0]),
+                        "priority": self._json_value(row[1]),
+                        "prior_map_id": self._json_value(row[2]),
+                    }
+                )
+            return jobs
 
     def _db_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         payload_config = dict(payload.get("db_config") or {})
@@ -91,6 +126,36 @@ class NewType10AMigJobsToLoopTable(Component):
         missing = [key for key in ("db_host", "db_service_name", "db_username") if not str(db_config.get(key) or "").strip()]
         if missing:
             raise ValueError(f"10A MIG is not connected to database settings: missing {', '.join(missing)}")
+
+    @contextmanager
+    def _connect(self, db_config: dict[str, Any]):
+        import oracledb
+
+        dsn = oracledb.makedsn(
+            str(db_config.get("db_host") or "").strip(),
+            int(db_config.get("db_port") or 1521),
+            service_name=str(db_config.get("db_service_name") or "").strip(),
+        )
+        conn = oracledb.connect(
+            user=str(db_config.get("db_username") or "").strip(),
+            password=str(db_config.get("db_password") or ""),
+            dsn=dsn,
+        )
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    def _qualify(self, table_name: str, db_config: dict[str, Any]) -> str:
+        table = self._clean_identifier(table_name)
+        schema = str(db_config.get("system_schema") or "").strip().upper()
+        return f"{schema}.{table}" if schema else table
+
+    def _clean_identifier(self, value: str) -> str:
+        clean = str(value or "").strip().upper()
+        if not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", clean):
+            raise ValueError(f"Invalid identifier: {clean}")
+        return clean
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):
@@ -149,6 +214,15 @@ class NewType10AMigJobsToLoopTable(Component):
             return int(value)
         except (TypeError, ValueError):
             return None
+
+    def _json_value(self, value: Any) -> Any:
+        if value is None:
+            return None
+        if hasattr(value, "read"):
+            value = value.read()
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="ignore")
+        return value if isinstance(value, (str, int, float, bool)) else str(value)
 
     def _secret_to_str(self, value: Any) -> str:
         if value is None:

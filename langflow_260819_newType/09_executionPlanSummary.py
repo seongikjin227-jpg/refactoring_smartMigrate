@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import re
@@ -46,6 +46,7 @@ class NewType09ExecutionPlanSummary(Component):
         run_mode = str(payload.get("run_mode") or ("all_pending" if payload.get("run_all_pending") else "targeted"))
         jobs = self._jobs_for_route(payload, route)
         plan_counts = self._plan_counts(payload, route, jobs)
+        planned_job_count = sum(plan_counts.values()) if route == "FULL_WORKFLOW" else next(iter(plan_counts.values()), len(jobs))
         command = {
             "action": self._action_for_route(route),
             "run_mode": run_mode,
@@ -58,16 +59,16 @@ class NewType09ExecutionPlanSummary(Component):
             "run_mode": run_mode,
             "command_json": command,
             "planned_job_route": route,
-            "planned_job_count": len(jobs),
+            "planned_job_count": planned_job_count,
             "planned_job_counts": plan_counts,
             "planned_jobs": jobs,
-            "execution_plan_message": self._message(route, run_mode, jobs, plan_counts),
-            "execution_plan_prompt": self._llm_prompt(route, run_mode, jobs, plan_counts),
+            "execution_plan_message": self._message(route, run_mode, jobs, plan_counts, planned_job_count),
+            "execution_plan_prompt": self._llm_prompt(route, run_mode, jobs, plan_counts, planned_job_count),
             "notice_only": True,
             "next_node": "chat_output",
         }
         out.setdefault("history", []).append(
-            {"step": "execution_plan_summary", "message": f"route={route}, count={len(jobs)}"}
+            {"step": "execution_plan_summary", "message": f"route={route}, count={planned_job_count}"}
         )
         self._cached_payload = out
         return out
@@ -77,7 +78,8 @@ class NewType09ExecutionPlanSummary(Component):
         selected_jobs = payload.get("selected_jobs")
         if isinstance(selected_jobs, list) and selected_jobs:
             return [dict(job) for job in selected_jobs if isinstance(job, dict)]
-        jobs = payload.get("remaining_jobs") or payload.get("pending_jobs") or {}
+        requested = payload.get("requested_jobs") if isinstance(payload.get("requested_jobs"), dict) else {}
+        jobs = requested or payload.get("remaining_jobs") or payload.get("pending_jobs") or {}
         if route == "MIG":
             return list(jobs.get("migration_jobs") or [])
         if route == "SQL_CONVERSION":
@@ -97,9 +99,25 @@ class NewType09ExecutionPlanSummary(Component):
 
     def _plan_counts(self, payload: dict[str, Any], route: str, jobs: list[dict[str, Any]]) -> dict[str, int]:
         if route != "FULL_WORKFLOW":
-            return {route: len(jobs)} if route else {}
+            summary = payload.get("remaining_summary") or payload.get("pending_summary") or {}
+            key = {
+                "MIG": "migration_total",
+                "SQL_CONVERSION": "sql_conversion_total",
+                "SQL_TUNING": "sql_tuning_total",
+                "SQL_FORMATTING": "sql_formatting_total",
+            }.get(route)
+            count = self._to_int(summary.get(key)) if isinstance(summary, dict) and key else None
+            return {route: count if count is not None else len(jobs)} if route else {}
         counts = {"MIG": 0, "SQL_CONVERSION": 0, "SQL_TUNING": 0, "SQL_FORMATTING": 0}
-        pending = payload.get("remaining_jobs") or payload.get("pending_jobs") or {}
+        summary = payload.get("remaining_summary") or payload.get("pending_summary") or {}
+        if isinstance(summary, dict) and any(key in summary for key in ("migration_total", "sql_conversion_total", "sql_tuning_total", "sql_formatting_total")):
+            counts["MIG"] = self._to_int(summary.get("migration_total")) or 0
+            counts["SQL_CONVERSION"] = self._to_int(summary.get("sql_conversion_total")) or 0
+            counts["SQL_TUNING"] = self._to_int(summary.get("sql_tuning_total")) or 0
+            counts["SQL_FORMATTING"] = self._to_int(summary.get("sql_formatting_total")) or 0
+            return counts
+        requested = payload.get("requested_jobs") if isinstance(payload.get("requested_jobs"), dict) else {}
+        pending = requested or payload.get("remaining_jobs") or payload.get("pending_jobs") or {}
         if pending:
             counts["MIG"] = len(pending.get("migration_jobs") or [])
             counts["SQL_CONVERSION"] = len(pending.get("sql_conversion_jobs") or pending.get("sql_jobs") or [])
@@ -122,7 +140,7 @@ class NewType09ExecutionPlanSummary(Component):
             "FULL_WORKFLOW": "run_full_workflow",
         }.get(route, "run_remaining_jobs")
 
-    def _message(self, route: str, run_mode: str, jobs: list[dict[str, Any]], plan_counts: dict[str, int]) -> str:
+    def _message(self, route: str, run_mode: str, jobs: list[dict[str, Any]], plan_counts: dict[str, int], planned_job_count: int) -> str:
         # Format the execution-plan notice text.
         label = {
             "MIG": "DB Migration",
@@ -131,17 +149,17 @@ class NewType09ExecutionPlanSummary(Component):
             "SQL_FORMATTING": "SQL Formatting",
             "FULL_WORKFLOW": "Full Workflow",
         }.get(route, route or "Unknown")
-        mode_label = "전체 잔여 작업" if run_mode == "all_pending" else "지정 작업"
+        mode_label = "?꾩껜 ?붿뿬 ?묒뾽" if run_mode == "all_pending" else "吏???묒뾽"
         lines = [
             "component=09_executionPlanSummary",
-            f"{label} {mode_label}을 시작합니다.",
-            f"- 실행 예정 작업 수: {len(jobs)}",
+            f"{label} {mode_label}???쒖옉?⑸땲??",
+            f"- ?ㅽ뻾 ?덉젙 ?묒뾽 ?? {planned_job_count}",
         ]
         if route == "FULL_WORKFLOW":
             lines.extend(
                 [
                     "",
-                    "| 기능 | 실행 예정 |",
+                    "| 湲곕뒫 | ?ㅽ뻾 ?덉젙 |",
                     "|---|---:|",
                     f"| DB Migration | {plan_counts.get('MIG', 0)} |",
                     f"| SQL Conversion | {plan_counts.get('SQL_CONVERSION', 0)} |",
@@ -152,28 +170,28 @@ class NewType09ExecutionPlanSummary(Component):
         if jobs:
             if route == "FULL_WORKFLOW":
                 lines.append("")
-            lines.append("- 실행 예정 목록:")
+            lines.append("- ?ㅽ뻾 ?덉젙 紐⑸줉:")
             for job in jobs[:20]:
                 lines.append(f"  - {self._job_label(job)}")
             if len(jobs) > 20:
                 lines.append(f"  - ... and {len(jobs) - 20} more")
         return "\n".join(lines)
 
-    def _llm_prompt(self, route: str, run_mode: str, jobs: list[dict[str, Any]], plan_counts: dict[str, int]) -> str:
+    def _llm_prompt(self, route: str, run_mode: str, jobs: list[dict[str, Any]], plan_counts: dict[str, int], planned_job_count: int) -> str:
         # Build an optional LLM prompt for execution-plan messaging.
         return "\n".join(
             [
-                "아래 실행 계획을 사용자에게 한국어로 짧고 명확하게 안내하세요.",
-                "실제 실행 결과가 아니라 실행 전 계획임을 분명히 말하세요.",
-                "사용자가 지정한 작업이면 지정 작업이라고 말하고, 전체 대기 작업이면 전체 잔여 작업이라고 말하세요.",
-                "불필요한 설명은 하지 말고 실행 도메인, 실행 모드, 실행 예정 건수, 작업 목록만 포함하세요.",
+                "?꾨옒 ?ㅽ뻾 怨꾪쉷???ъ슜?먯뿉寃??쒓뎅?대줈 吏㏐퀬 紐낇솗?섍쾶 ?덈궡?섏꽭??",
+                "?ㅼ젣 ?ㅽ뻾 寃곌낵媛 ?꾨땲???ㅽ뻾 ??怨꾪쉷?꾩쓣 遺꾨챸??留먰븯?몄슂.",
+                "?ъ슜?먭? 吏?뺥븳 ?묒뾽?대㈃ 吏???묒뾽?대씪怨?留먰븯怨? ?꾩껜 ?湲??묒뾽?대㈃ ?꾩껜 ?붿뿬 ?묒뾽?대씪怨?留먰븯?몄슂.",
+                "遺덊븘?뷀븳 ?ㅻ챸? ?섏? 留먭퀬 ?ㅽ뻾 ?꾨찓?? ?ㅽ뻾 紐⑤뱶, ?ㅽ뻾 ?덉젙 嫄댁닔, ?묒뾽 紐⑸줉留??ы븿?섏꽭??",
                 "",
-                "실행 계획:",
+                "?ㅽ뻾 怨꾪쉷:",
                 json.dumps(
                     {
                         "job_route": route,
                         "run_mode": run_mode,
-                        "planned_job_count": len(jobs),
+                        "planned_job_count": planned_job_count,
                         "planned_job_counts": plan_counts,
                         "planned_jobs": [self._compact_job(job) for job in jobs[:50]],
                     },
@@ -217,3 +235,9 @@ class NewType09ExecutionPlanSummary(Component):
         if not isinstance(parsed, dict):
             raise ValueError("payload_json must be a JSON object")
         return parsed
+
+    def _to_int(self, value: Any) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None

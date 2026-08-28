@@ -18,25 +18,17 @@ except Exception:
     DataInput = MessageTextInput
 
 
-JOB_EXECUTION_ROUTER_PROMPT = """당신은 SmartMigrate의 잔여 작업 실행 라우터입니다. 반드시 JSON 객체만 반환하세요.
+JOB_EXECUTION_ROUTER_PROMPT = """당신은 SmartMigrate 작업 실행 라우터입니다.
+반드시 JSON 객체 하나만 반환하세요.
 
-역할:
-- 사용자 실행 요청을 하나의 실행 도메인과 실행 모드로 분류합니다.
-- 06 Get Remaining Jobs가 전달한 remaining_summary와 remaining_job_identifiers를 참고합니다.
-- 사용자 요청에 있는 map_id/sql_id/space_nm 값을 target_filter에 넣습니다.
-
-실행 도메인:
-- MIG: DB Migration 작업. 보통 map_id로 식별합니다.
-- SQL_CONVERSION: SQL Conversion 작업. 보통 sql_id 또는 space_nm으로 식별합니다.
-- SQL_TUNING: SQL Tuning 작업.
-- SQL_FORMATTING: SQL Formatting 작업.
-- FULL_WORKFLOW: DB Migration, SQL Conversion, SQL Tuning, SQL Formatting을 고정 순서로 모두 진행하는 전체 작업.
-- PREREQUISITE_REQUIRED: 잔여 작업은 있지만 선행 단계 또는 PRIOR_MAP_ID 의존성이 남아 있어 지금 실행하면 안 되는 경우.
-- NO_RUNNABLE_JOB: 실행할 대상이 없다고 판단되는 경우.
-
-실행 모드:
-- all_pending: 사용자가 전체 잔여/대기 작업 실행을 요청한 경우.
-- targeted: 사용자가 map_id/sql_id/space_nm으로 단건 또는 복수건 대상을 지정한 경우.
+입력으로 받는 주요 값:
+- user_request: 사용자 원문 요청
+- execution_scope: 01 LLM이 판단한 범위. all, domain, targeted, unknown 중 하나
+- requested_domain: 01 LLM이 판단한 도메인. MIG, SQL_CONVERSION, SQL_TUNING, SQL_FORMATTING, FULL_WORKFLOW, UNKNOWN 중 하나
+- target_filter: 01 LLM이 추출한 map_ids, sql_ids, space_nms
+- job_availability: 06이 DB에서 조회한 실행 가능 카운트
+- requested_target_status: 특정 target 요청이 있을 때 해당 target의 현재 상태
+- requested_job_identifiers: 특정 target 요청이 있을 때 현재 실행 가능한 대상 식별자
 
 반환 JSON schema:
 {
@@ -47,34 +39,42 @@ JOB_EXECUTION_ROUTER_PROMPT = """당신은 SmartMigrate의 잔여 작업 실행 
     "sql_ids": [],
     "space_nms": []
   },
-  "reason": "짧은 한국어 사유"
+  "reason": "짧은 한국어 이유"
 }
 
-규칙:
-- remaining_summary의 count key는 migration_total, sql_conversion_total, sql_tuning_total, sql_formatting_total입니다.
-- map_id가 있으면 job_route는 MIG, run_mode는 targeted입니다.
-- sql_id 또는 space_nm이 있고 튜닝 요청이면 SQL_TUNING입니다.
-- sql_id 또는 space_nm이 있고 포맷팅 요청이면 SQL_FORMATTING입니다.
-- sql_id 또는 space_nm이 있고 튜닝/포맷팅이 아니면 SQL_CONVERSION입니다.
-- 사용자가 "전체 작업", "전체 진행", "DB Migration부터 포맷팅까지", "처음부터 끝까지"처럼 전체 흐름을 요청하면 job_route는 FULL_WORKFLOW, run_mode는 all_pending입니다.
-- 사용자가 "작업 실행해줘", "진행해줘", "잔여 작업 실행해줘"처럼 특정 도메인이나 대상을 명시하지 않고 실행만 요청하면 job_route는 FULL_WORKFLOW, run_mode는 all_pending입니다.
-- FULL_WORKFLOW는 DB Migration부터 SQL Formatting까지 전체 큐를 처리하므로 migration_total, sql_conversion_total, sql_tuning_total이 남아 있어도 PREREQUISITE_REQUIRED로 분류하지 않습니다.
-- FULL_WORKFLOW 요청에서 migration_total, sql_conversion_total, sql_tuning_total, sql_formatting_total이 모두 0이면 NO_RUNNABLE_JOB을 선택합니다.
-- 명시 대상이 없고 전체/대기 작업 실행 요청이면 run_mode는 all_pending입니다.
-- SQL Conversion 실행 요청에서 remaining_summary.migration_total이 1건 이상이면 PREREQUISITE_REQUIRED를 선택합니다.
-- SQL Tuning 실행 요청에서 remaining_summary.migration_total 또는 remaining_summary.sql_conversion_total이 1건 이상이면 PREREQUISITE_REQUIRED를 선택합니다.
-- SQL Formatting 실행 요청에서 remaining_summary.migration_total, remaining_summary.sql_conversion_total, remaining_summary.sql_tuning_total 중 하나라도 1건 이상이면 PREREQUISITE_REQUIRED를 선택합니다.
-- targeted 요청에서 사용자가 요청한 잔여 작업은 있지만 PRIOR_MAP_ID 등 06 payload에서 확인 가능한 선행 조건이 남아 있으면 PREREQUISITE_REQUIRED를 선택합니다.
-- priority는 실행 정렬 기준일 뿐 선행 조건이 아닙니다. priority가 더 낮은 숫자인 작업이 실패했더라도 그것만으로 후속 작업을 PREREQUISITE_REQUIRED로 분류하지 않습니다.
-- targeted 요청에서 사용자가 요청한 map_id 또는 sql_id+space_nm 조합이 remaining_job_identifiers에 없으면 NO_RUNNABLE_JOB을 선택합니다.
-- all_pending 요청에서 해당 도메인의 remaining count가 0이면 NO_RUNNABLE_JOB을 선택합니다.
-- PREREQUISITE_REQUIRED의 reason에는 어떤 선행 작업이 남았는지 사용자에게 보여줄 한국어 메시지를 작성합니다.
+라우팅 규칙:
+- execution_scope가 targeted이면 run_mode는 targeted입니다.
+- execution_scope가 all이면 job_route는 FULL_WORKFLOW, run_mode는 all_pending입니다.
+- execution_scope가 domain이면 requested_domain을 job_route로 사용하고 run_mode는 all_pending입니다.
+- target_filter.map_ids가 있으면 기본 job_route는 MIG입니다.
+- target_filter.sql_ids 또는 target_filter.space_nms가 있으면 requested_domain을 우선 사용합니다. UNKNOWN이면 SQL_CONVERSION으로 둡니다.
+- 사용자가 "전체 작업", "전체 진행", "남은 작업 다", "처음부터 끝까지"처럼 전체 흐름을 요청하면 FULL_WORKFLOW입니다.
+- 사용자가 특정 도메인 없이 "작업 실행", "진행", "잔여 작업 실행"만 요청하면 FULL_WORKFLOW입니다.
+
+실행 가능성 규칙:
+- job_availability의 key는 total, migration_total, sql_conversion_total, sql_tuning_total, sql_formatting_total입니다.
+- FULL_WORKFLOW 요청에서 total이 0이면 NO_RUNNABLE_JOB입니다.
+- MIG all_pending 요청에서 migration_total이 0이면 NO_RUNNABLE_JOB입니다.
+- SQL_CONVERSION all_pending 요청에서 sql_conversion_total이 0이면 NO_RUNNABLE_JOB입니다.
+- SQL_TUNING all_pending 요청에서 sql_tuning_total이 0이면 NO_RUNNABLE_JOB입니다.
+- SQL_FORMATTING all_pending 요청에서 sql_formatting_total이 0이면 NO_RUNNABLE_JOB입니다.
+- targeted 요청에서 requested_job_identifiers에 실행 가능한 대상이 없으면 NO_RUNNABLE_JOB입니다.
+
+선행 조건 규칙:
+- FULL_WORKFLOW는 DB Migration부터 SQL Formatting까지 순서대로 처리하므로 선행 작업이 남아 있어도 PREREQUISITE_REQUIRED로 보내지 않습니다.
+- SQL_CONVERSION 단독 실행 요청에서 migration_total이 1 이상이면 PREREQUISITE_REQUIRED입니다.
+- SQL_TUNING 단독 실행 요청에서 migration_total 또는 sql_conversion_total이 1 이상이면 PREREQUISITE_REQUIRED입니다.
+- SQL_FORMATTING 단독 실행 요청에서 migration_total, sql_conversion_total, sql_tuning_total 중 하나라도 1 이상이면 PREREQUISITE_REQUIRED입니다.
+- targeted MIG 요청에서 requested_target_status의 PRIOR_MAP_ID 대상이 아직 완료되지 않았다고 확인되는 경우 PREREQUISITE_REQUIRED입니다.
+
+반드시 입력 JSON에 있는 구조화 값을 우선 신뢰하세요.
+사용자 원문은 보조 판단에만 사용하세요.
 """
 
 
 class NewType08JobExecutionRouter(Component):
     display_name = "08 Job Target Router"
-    description = "Routes job execution requests by domain and target mode: all pending or explicit map_id/sql_id/space_nm targets."
+    description = "Routes job execution requests by domain and target mode."
     name = "NewType08JobExecutionRouter"
     icon = "Route"
 
@@ -98,35 +98,27 @@ class NewType08JobExecutionRouter(Component):
     ]
 
     def mig_response(self) -> Data:
-        # Return the MIG execution branch when selected.
         return self._route_output("MIG", "mig_job")
 
     def sql_conversion_response(self) -> Data:
-        # Return the SQL Conversion execution branch when selected.
         return self._route_output("SQL_CONVERSION", "sql_conversion_job")
 
     def sql_tuning_response(self) -> Data:
-        # Return the SQL Tuning execution branch when selected.
         return self._route_output("SQL_TUNING", "sql_tuning_job")
 
     def sql_formatting_response(self) -> Data:
-        # Return the SQL Formatting execution branch when selected.
         return self._route_output("SQL_FORMATTING", "sql_formatting_job")
 
     def full_workflow_response(self) -> Data:
-        # Return the full DB Migration -> SQL Conversion -> SQL Tuning -> SQL Formatting branch.
         return self._route_output("FULL_WORKFLOW", "full_workflow_job")
 
     def prerequisite_required_response(self) -> Message:
-        # Return a message when prerequisite work must be completed first.
         return self._message_route_output("PREREQUISITE_REQUIRED", "prerequisite_required")
 
     def no_runnable_response(self) -> Message:
-        # Return a message when no runnable target exists.
         return self._message_route_output("NO_RUNNABLE_JOB", "no_runnable_job")
 
     def _route_output(self, expected_route: str, output_name: str) -> Data:
-        # Build a routed payload for the active output branch.
         try:
             routed = self._get_routed_payload()
             if routed.get("job_route") != expected_route:
@@ -141,7 +133,6 @@ class NewType08JobExecutionRouter(Component):
             return Data(data=result)
 
     def _message_route_output(self, expected_route: str, output_name: str) -> Message:
-        # Build a direct Message output for non-pipeline routes.
         try:
             routed = self._get_routed_payload()
             if routed.get("job_route") != expected_route:
@@ -152,47 +143,11 @@ class NewType08JobExecutionRouter(Component):
             self.status = {**routed, "answer_text": message}
             return Message(text=message)
         except Exception as exc:
-            message = f"component=08_jobExecutionRouter\n잔여 작업 라우팅 중 오류가 발생했습니다.\n오류: {exc}"
+            message = f"component=08_jobExecutionRouter\n작업 실행 라우팅 중 오류가 발생했습니다.\n오류: {exc}"
             self.status = {"ok": False, "component": "08_jobExecutionRouter", "error": str(exc), "answer_text": message}
             return Message(text=message)
 
-    def _build_message_route_text(self, routed: dict[str, Any]) -> str:
-        # Format a direct message route response.
-        route = str(routed.get("job_route") or "")
-        reason = str(routed.get("routing_reason") or "").strip()
-        user_request = str(routed.get("user_request") or routed.get("original_request") or "").strip()
-        targets = routed.get("target_filter") or {}
-        target_label = self._target_label(targets) or "요청하신 작업"
-        if route == "PREREQUISITE_REQUIRED":
-            message = reason or f"{target_label}은 선행 작업이 남아 있어 지금 실행할 수 없습니다."
-        else:
-            message = reason or f"{target_label}이 잔여 작업에서 조회되지 않았습니다."
-        lines = [message]
-        if user_request:
-            lines.append(f"요청: {user_request}")
-        if route == "PREREQUISITE_REQUIRED":
-            lines.append("선행 작업을 먼저 완료한 뒤 다시 실행해주세요.")
-        else:
-            lines.append("대상 상태를 변경하거나 Dashboard에서 잔여 작업을 먼저 확인해주세요.")
-        return "\n".join(lines)
-
-    def _target_label(self, targets: dict[str, Any]) -> str:
-        # Build a short Korean label for requested target filters.
-        map_ids = targets.get("map_ids") or []
-        sql_ids = targets.get("sql_ids") or []
-        space_nms = targets.get("space_nms") or []
-        if map_ids:
-            return f"map_id={', '.join(str(item) for item in map_ids)}"
-        if sql_ids and space_nms:
-            return f"space_nm={', '.join(str(item) for item in space_nms)}, sql_id={', '.join(str(item) for item in sql_ids)}"
-        if sql_ids:
-            return f"sql_id={', '.join(str(item) for item in sql_ids)}"
-        if space_nms:
-            return f"space_nm={', '.join(str(item) for item in space_nms)}"
-        return ""
-
     def _get_routed_payload(self) -> dict[str, Any]:
-        # Compute and cache the routed payload for this component.
         cached = getattr(self, "_cached_routed_payload", None)
         if cached is not None:
             return cached
@@ -201,34 +156,34 @@ class NewType08JobExecutionRouter(Component):
         decision_hint = self._normalize_llm_hint(self._route_with_llm(payload), payload)
         targets = decision_hint["target_filter"]
         route = decision_hint["job_route"]
-        requested_run_mode = decision_hint["run_mode"]
-        jobs = payload.get("remaining_jobs") or payload.get("pending_jobs") or {}
-        counts = self._counts(jobs)
+        run_mode = decision_hint["run_mode"]
+        counts = self._counts(payload)
 
+        if route is None:
+            route = self._route_from_payload(payload, targets)
         if route is None:
             route = self._first_available_route(counts)
 
         if route is None:
-            decision = self._empty_decision("No explicit target and no runnable remaining jobs found.", targets)
+            decision = self._empty_decision("실행 가능한 작업이 없습니다.", targets)
         elif route == "NO_RUNNABLE_JOB":
-            decision = self._empty_decision(decision_hint.get("reason") or "No runnable job target selected by LLM.", targets)
+            decision = self._empty_decision(decision_hint.get("reason") or "실행 가능한 작업이 없습니다.", targets)
         elif route == "PREREQUISITE_REQUIRED":
             decision = self._prerequisite_decision(decision_hint.get("reason") or "선행 작업이 남아 있어 지금 실행할 수 없습니다.", targets)
-        elif route == "FULL_WORKFLOW" and sum(counts.values()) <= 0:
-            decision = self._empty_decision("No runnable job target selected for Full Workflow.", targets)
+        elif route == "FULL_WORKFLOW" and counts["total"] <= 0:
+            decision = self._empty_decision("전체 워크플로우에서 실행 가능한 작업이 없습니다.", targets)
         else:
-            prereq_reason = self._prerequisite_reason(route, counts)
+            prereq_reason = self._prerequisite_reason(route, run_mode, counts)
             if prereq_reason:
                 decision = self._prerequisite_decision(prereq_reason, targets)
             else:
-                selected_jobs = self._selected_jobs_for_hint(payload, route, requested_run_mode, targets)
-                if not selected_jobs:
-                    decision = self._empty_decision(
-                        decision_hint.get("reason") or "Requested target was not found in pending job identifiers.",
-                        targets,
-                    )
+                selected_jobs = self._selected_jobs(payload, route, run_mode)
+                if run_mode == "targeted" and not selected_jobs:
+                    decision = self._empty_decision(decision_hint.get("reason") or "요청한 대상은 현재 실행 가능한 작업이 아닙니다.", targets)
+                elif run_mode == "all_pending" and self._route_count(route, counts) <= 0:
+                    decision = self._empty_decision(decision_hint.get("reason") or "해당 도메인에 실행 가능한 작업이 없습니다.", targets)
                 else:
-                    decision = self._execution_decision(route, requested_run_mode, targets, selected_jobs)
+                    decision = self._execution_decision(route, run_mode, targets, selected_jobs)
 
         routed = {
             **payload,
@@ -246,29 +201,13 @@ class NewType08JobExecutionRouter(Component):
         routed.setdefault("history", []).append(
             {
                 "step": "job_target_route",
-                "message": f"job_route={routed['job_route']}, run_mode={routed['run_mode']}, count={len(routed['selected_jobs'])}, router={decision_hint['source']}",
+                "message": f"job_route={routed['job_route']}, run_mode={routed['run_mode']}, selected={len(routed['selected_jobs'])}",
             }
         )
         self._cached_routed_payload = routed
         return routed
 
-    def _prerequisite_reason(self, route: str, counts: dict[str, int]) -> str:
-        # Enforce prerequisite gates deterministically after the LLM route decision.
-        if route in {"MIG", "FULL_WORKFLOW", "PREREQUISITE_REQUIRED", "NO_RUNNABLE_JOB"}:
-            return ""
-        blockers: list[str] = []
-        if route in {"SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"} and counts.get("MIG", 0) > 0:
-            blockers.append(f"DB Migration 잔여/재처리 대상 {counts.get('MIG', 0)}건")
-        if route in {"SQL_TUNING", "SQL_FORMATTING"} and counts.get("SQL_CONVERSION", 0) > 0:
-            blockers.append(f"SQL Conversion 잔여/재처리 대상 {counts.get('SQL_CONVERSION', 0)}건")
-        if route == "SQL_FORMATTING" and counts.get("SQL_TUNING", 0) > 0:
-            blockers.append(f"SQL Tuning 잔여/재처리 대상 {counts.get('SQL_TUNING', 0)}건")
-        if not blockers:
-            return ""
-        return "선행 작업이 남아 있어 요청한 단계를 실행할 수 없습니다: " + ", ".join(blockers)
-
     def _route_with_llm(self, payload: dict[str, Any]) -> dict[str, Any]:
-        # Call the configured LLM to decide the route.
         api_key = self._secret_to_str(getattr(self, "llm_api_key", None)).strip()
         model = str(getattr(self, "llm_model", "") or "").strip()
         base_url = str(getattr(self, "llm_base_url", "") or "").strip().rstrip("/")
@@ -288,8 +227,12 @@ class NewType08JobExecutionRouter(Component):
                     "content": json.dumps(
                         {
                             "user_request": payload.get("user_request") or payload.get("original_request") or payload.get("input") or "",
-                            "remaining_summary": payload.get("remaining_summary") or payload.get("pending_summary") or {},
-                            "remaining_job_identifiers": self._sample_jobs(payload),
+                            "execution_scope": payload.get("execution_scope") or "unknown",
+                            "requested_domain": payload.get("requested_domain") or "UNKNOWN",
+                            "target_filter": payload.get("target_filter") or {},
+                            "job_availability": payload.get("job_availability") or payload.get("remaining_summary") or {},
+                            "requested_target_status": payload.get("requested_target_status") or {},
+                            "requested_job_identifiers": self._requested_job_identifiers(payload),
                         },
                         ensure_ascii=False,
                         default=str,
@@ -306,33 +249,39 @@ class NewType08JobExecutionRouter(Component):
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=self._positive_int(getattr(self, "llm_timeout_seconds", None), 90)) as response:
-            raw = json.loads(response.read().decode("utf-8", errors="ignore"))
+        try:
+            with urllib.request.urlopen(request, timeout=self._positive_int(getattr(self, "llm_timeout_seconds", None), 90)) as response:
+                raw = json.loads(response.read().decode("utf-8", errors="ignore"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")
+            raise ValueError(f"08 Job Target Router LLM HTTP {exc.code}: {detail[:1000]}") from exc
         content = (((raw.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
         return self._parse_json_object(content)
 
     def _normalize_llm_hint(self, hint: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
-        # Validate and enrich the LLM job-routing decision.
+        # 01 should provide target_filter; local text extraction remains only for older 01 prompt outputs.
         extracted_targets = self._extract_targets(str(payload.get("user_request") or payload.get("original_request") or payload.get("input") or ""))
-        route = str(hint.get("job_route") or "").upper()
-        if route == "NO_RUNNABLE_JOB":
-            route = "NO_RUNNABLE_JOB"
-        if route not in {"MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING", "FULL_WORKFLOW", "PREREQUISITE_REQUIRED", "NO_RUNNABLE_JOB"}:
+        payload_targets = payload.get("target_filter") if isinstance(payload.get("target_filter"), dict) else {}
+        llm_targets = hint.get("target_filter") if isinstance(hint.get("target_filter"), dict) else {}
+        route = str(hint.get("job_route") or "").upper() or self._route_from_payload(payload, payload_targets)
+        if route is not None and route not in {"MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING", "FULL_WORKFLOW", "PREREQUISITE_REQUIRED", "NO_RUNNABLE_JOB"}:
             raise ValueError(f"Invalid LLM job_route: {route}")
-        run_mode = str(hint.get("run_mode") or "all_pending").lower()
+        run_mode = str(hint.get("run_mode") or self._run_mode_from_payload(payload, payload_targets)).lower()
         if run_mode not in {"all_pending", "targeted"}:
             raise ValueError(f"Invalid LLM run_mode: {run_mode}")
-        llm_targets = hint.get("target_filter") if isinstance(hint.get("target_filter"), dict) else {}
         targets = {
             "map_ids": self._merge_lists(
+                self._normalize_list(payload_targets.get("map_ids"), int),
                 self._normalize_list(llm_targets.get("map_ids"), int),
                 self._normalize_list(extracted_targets.get("map_ids"), int),
             ),
             "sql_ids": self._merge_lists(
+                self._normalize_list(payload_targets.get("sql_ids"), str),
                 self._normalize_list(llm_targets.get("sql_ids"), str),
                 self._normalize_list(extracted_targets.get("sql_ids"), str),
             ),
             "space_nms": self._merge_lists(
+                self._normalize_list(payload_targets.get("space_nms"), str),
                 self._normalize_list(llm_targets.get("space_nms"), str),
                 self._normalize_list(extracted_targets.get("space_nms"), str),
             ),
@@ -342,46 +291,77 @@ class NewType08JobExecutionRouter(Component):
             "run_mode": run_mode,
             "target_filter": targets,
             "reason": str(hint.get("reason") or ""),
-            "source": str(hint.get("source") or "LLM"),
         }
 
-    def _normalize_list(self, value: Any, caster: Any) -> list[Any]:
-        # Normalize scalar or list values with a caster.
-        if value is None:
+    def _selected_jobs(self, payload: dict[str, Any], route: str, run_mode: str) -> list[dict[str, Any]]:
+        if run_mode == "all_pending":
             return []
-        raw_values = value if isinstance(value, list) else [value]
-        out: list[Any] = []
-        for item in raw_values:
-            try:
-                casted = self._to_int(item) if caster is int else caster(item)
-            except (TypeError, ValueError):
-                continue
-            if casted is None:
-                continue
-            if casted not in out:
-                out.append(casted)
-        return out
+        requested = payload.get("requested_jobs") if isinstance(payload.get("requested_jobs"), dict) else {}
+        if route == "MIG":
+            return [dict(job) for job in requested.get("migration_jobs") or [] if isinstance(job, dict)]
+        if route == "SQL_CONVERSION":
+            return [dict(job) for job in requested.get("sql_conversion_jobs") or requested.get("sql_jobs") or [] if isinstance(job, dict)]
+        if route == "SQL_TUNING":
+            return [dict(job) for job in requested.get("sql_tuning_jobs") or [] if isinstance(job, dict)]
+        if route == "SQL_FORMATTING":
+            return [dict(job) for job in requested.get("sql_formatting_jobs") or [] if isinstance(job, dict)]
+        return []
 
-    def _merge_lists(self, first: list[Any], second: list[Any]) -> list[Any]:
-        # Merge two lists while preserving first-seen order.
-        out: list[Any] = []
-        for item in [*first, *second]:
-            if item not in out:
-                out.append(item)
-        return out
-
-    def _sample_jobs(self, payload: dict[str, Any]) -> dict[str, Any]:
-        # Build remaining-job identifiers for LLM routing context.
-        jobs = payload.get("remaining_jobs") or payload.get("pending_jobs") or {}
+    def _requested_job_identifiers(self, payload: dict[str, Any]) -> dict[str, Any]:
+        requested = payload.get("requested_jobs") if isinstance(payload.get("requested_jobs"), dict) else {}
         return {
-            "migration_jobs": list(jobs.get("migration_jobs") or []),
-            "sql_conversion_jobs": list(jobs.get("sql_conversion_jobs") or jobs.get("sql_jobs") or []),
-            "sql_tuning_jobs": list(jobs.get("sql_tuning_jobs") or []),
-            "sql_formatting_jobs": list(jobs.get("sql_formatting_jobs") or []),
+            "migration_jobs": list(requested.get("migration_jobs") or []),
+            "sql_conversion_jobs": list(requested.get("sql_conversion_jobs") or requested.get("sql_jobs") or []),
+            "sql_tuning_jobs": list(requested.get("sql_tuning_jobs") or []),
+            "sql_formatting_jobs": list(requested.get("sql_formatting_jobs") or []),
         }
+
+    def _prerequisite_reason(self, route: str, run_mode: str, counts: dict[str, int]) -> str:
+        if run_mode != "all_pending" or route in {"MIG", "FULL_WORKFLOW", "PREREQUISITE_REQUIRED", "NO_RUNNABLE_JOB"}:
+            return ""
+        blockers: list[str] = []
+        if route in {"SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"} and counts.get("MIG", 0) > 0:
+            blockers.append(f"DB Migration 잔여 {counts.get('MIG', 0)}건")
+        if route in {"SQL_TUNING", "SQL_FORMATTING"} and counts.get("SQL_CONVERSION", 0) > 0:
+            blockers.append(f"SQL Conversion 잔여 {counts.get('SQL_CONVERSION', 0)}건")
+        if route == "SQL_FORMATTING" and counts.get("SQL_TUNING", 0) > 0:
+            blockers.append(f"SQL Tuning 잔여 {counts.get('SQL_TUNING', 0)}건")
+        return "선행 작업이 남아 있어 요청한 단계를 실행할 수 없습니다: " + ", ".join(blockers) if blockers else ""
+
+    def _route_from_payload(self, payload: dict[str, Any], targets: dict[str, Any]) -> str | None:
+        domain = str(payload.get("requested_domain") or "").upper()
+        if domain in {"MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING", "FULL_WORKFLOW"}:
+            return domain
+        if targets.get("map_ids"):
+            return "MIG"
+        if targets.get("sql_ids") or targets.get("space_nms"):
+            return "SQL_CONVERSION"
+        scope = str(payload.get("execution_scope") or "").lower()
+        return "FULL_WORKFLOW" if scope == "all" else None
+
+    def _run_mode_from_payload(self, payload: dict[str, Any], targets: dict[str, Any]) -> str:
+        scope = str(payload.get("execution_scope") or "").lower()
+        if scope == "targeted" or any(targets.get(key) for key in ("map_ids", "sql_ids", "space_nms")):
+            return "targeted"
+        return "all_pending"
+
+    def _route_count(self, route: str, counts: dict[str, int]) -> int:
+        if route == "FULL_WORKFLOW":
+            return counts["total"]
+        return counts.get(route, 0)
+
+    def _counts(self, payload: dict[str, Any]) -> dict[str, int]:
+        summary = payload.get("job_availability") or payload.get("remaining_summary") or payload.get("pending_summary") or {}
+        counts = {
+            "MIG": self._to_int(summary.get("migration_total")) or 0,
+            "SQL_CONVERSION": self._to_int(summary.get("sql_conversion_total")) or 0,
+            "SQL_TUNING": self._to_int(summary.get("sql_tuning_total")) or 0,
+            "SQL_FORMATTING": self._to_int(summary.get("sql_formatting_total")) or 0,
+        }
+        counts["total"] = self._to_int(summary.get("total")) or sum(counts.values())
+        return counts
 
     def _empty_decision(self, reason: str, targets: dict[str, list[Any]]) -> dict[str, Any]:
-        # Create a no-runnable execution decision.
         return {
             "job_route": "NO_RUNNABLE_JOB",
             "run_mode": "none",
@@ -392,7 +372,6 @@ class NewType08JobExecutionRouter(Component):
         }
 
     def _prerequisite_decision(self, reason: str, targets: dict[str, list[Any]]) -> dict[str, Any]:
-        # Create a prerequisite-required execution decision.
         return {
             "job_route": "PREREQUISITE_REQUIRED",
             "run_mode": "none",
@@ -402,140 +381,48 @@ class NewType08JobExecutionRouter(Component):
             "reason": reason,
         }
 
-    def _execution_decision(
-        self,
-        route: str,
-        run_mode: str,
-        targets: dict[str, list[Any]],
-        selected_jobs: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        # Create a runnable execution decision.
+    def _execution_decision(self, route: str, run_mode: str, targets: dict[str, list[Any]], selected_jobs: list[dict[str, Any]]) -> dict[str, Any]:
         return {
             "job_route": route,
             "run_mode": run_mode,
             "run_all_pending": run_mode == "all_pending",
             "selected_jobs": selected_jobs,
             "target_filter": targets,
-            "reason": f"Run {len(selected_jobs)} {route} job target(s) in {run_mode} mode.",
-        }
-
-    def _selected_jobs_for_hint(
-        self,
-        payload: dict[str, Any],
-        route: str,
-        run_mode: str,
-        targets: dict[str, list[Any]],
-    ) -> list[dict[str, Any]]:
-        # Select jobs according to the normalized LLM hint.
-        if route == "FULL_WORKFLOW":
-            return self._jobs_for_route(payload, route)
-        if run_mode == "targeted" or any(targets.values()):
-            lookup_jobs = self._lookup_jobs_for_route(payload, route)
-            matched_lookup = [job for job in lookup_jobs if self._matches(job, targets)]
-            if matched_lookup:
-                return matched_lookup
-            return []
-        return self._jobs_for_route(payload, route)
-
-    def _jobs_for_route(self, payload: dict[str, Any], route: str) -> list[dict[str, Any]]:
-        # Select the planned jobs for the chosen execution route.
-        jobs = payload.get("remaining_jobs") or payload.get("pending_jobs") or {}
-        if route == "MIG":
-            return list(jobs.get("migration_jobs") or [])
-        if route == "SQL_CONVERSION":
-            return list(jobs.get("sql_conversion_jobs") or jobs.get("sql_jobs") or [])
-        if route == "SQL_TUNING":
-            return list(jobs.get("sql_tuning_jobs") or [])
-        if route == "SQL_FORMATTING":
-            return list(jobs.get("sql_formatting_jobs") or [])
-        if route == "FULL_WORKFLOW":
-            return [
-                *list(jobs.get("migration_jobs") or []),
-                *list(jobs.get("sql_conversion_jobs") or jobs.get("sql_jobs") or []),
-                *list(jobs.get("sql_tuning_jobs") or []),
-                *list(jobs.get("sql_formatting_jobs") or []),
-            ]
-        return []
-
-    def _lookup_jobs_for_route(self, payload: dict[str, Any], route: str) -> list[dict[str, Any]]:
-        # Return all lookup jobs for a specific route.
-        jobs = payload.get("remaining_jobs") or payload.get("pending_jobs") or {}
-        lookup = list(jobs.get("job_lookup_jobs") or jobs.get("all_jobs") or [])
-        if route == "FULL_WORKFLOW":
-            return lookup
-        return [job for job in lookup if str(job.get("job_route") or "").upper() == route]
-
-    def _matches(self, job: dict[str, Any], targets: dict[str, list[Any]]) -> bool:
-        # Check whether a job matches requested target filters.
-        map_ids = {item for item in (self._to_int(v) for v in targets.get("map_ids", [])) if item is not None}
-        sql_ids = {str(v).lower() for v in targets.get("sql_ids", [])}
-        space_nms = {str(v).lower() for v in targets.get("space_nms", [])}
-        if map_ids and self._to_int(job.get("map_id")) in map_ids:
-            return True
-        job_sql_id = str(job.get("sql_id") or "").lower()
-        job_space_nm = str(job.get("space_nm") or "").lower()
-        if sql_ids and space_nms:
-            return job_sql_id in sql_ids and job_space_nm in space_nms
-        if sql_ids and job_sql_id in sql_ids:
-            return True
-        if space_nms and job_space_nm in space_nms:
-            return True
-        return False
-
-    def _extract_targets(self, text: str) -> dict[str, list[Any]]:
-        # Extract target identifiers from the user request text.
-        return {
-            "map_ids": self._extract_map_ids(text),
-            "sql_ids": self._extract_text_values(text, r"sql[_\s-]*id|sqlid"),
-            "space_nms": self._extract_text_values(text, r"space[_\s-]*nm|spacenm|space"),
-        }
-
-    def _extract_map_ids(self, text: str) -> list[int]:
-        # Extract map_id values from request text.
-        values: list[int] = []
-        patterns = [
-            r"(?:map[_\s-]*id|mapid|map|맵\s*id|맵아이디)\s*[=:]?\s*([0-9,\s]+)",
-            r"([0-9]+)\s*번?\s*(?:map[_\s-]*id|mapid|map|맵\s*id|맵아이디)",
-        ]
-        for pattern in patterns:
-            for match in re.finditer(pattern, text, flags=re.I):
-                for item in re.findall(r"\d+", match.group(1)):
-                    values.append(int(item))
-        return list(dict.fromkeys(values))
-
-    def _extract_number_values(self, text: str, label_pattern: str) -> list[int]:
-        # Extract numeric values following a label pattern.
-        values: list[int] = []
-        for match in re.finditer(rf"(?:{label_pattern})\s*[=:]?\s*([0-9,\s]+)", text, flags=re.I):
-            for item in re.findall(r"\d+", match.group(1)):
-                values.append(int(item))
-        return list(dict.fromkeys(values))
-
-    def _extract_text_values(self, text: str, label_pattern: str) -> list[str]:
-        # Extract text identifiers following a label pattern.
-        values: list[str] = []
-        for match in re.finditer(rf"(?:{label_pattern})\s*[=:]?\s*([A-Za-z0-9_.:-]+(?:\s*,\s*[A-Za-z0-9_.:-]+)*)", text, flags=re.I):
-            values.extend([item.strip() for item in match.group(1).split(",") if item.strip()])
-        return list(dict.fromkeys(values))
-
-    def _counts(self, jobs: dict[str, Any]) -> dict[str, int]:
-        # Count runnable remaining jobs by route.
-        return {
-            "MIG": len(jobs.get("migration_jobs") or []),
-            "SQL_CONVERSION": len(jobs.get("sql_conversion_jobs") or jobs.get("sql_jobs") or []),
-            "SQL_TUNING": len(jobs.get("sql_tuning_jobs") or []),
-            "SQL_FORMATTING": len(jobs.get("sql_formatting_jobs") or []),
+            "reason": f"{route} 작업을 {run_mode} 모드로 실행합니다.",
         }
 
     def _first_available_route(self, counts: dict[str, int]) -> str | None:
-        # Return the first route with runnable jobs in priority order.
         for route in ("MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"):
             if counts.get(route, 0) > 0:
                 return route
         return None
 
+    def _build_message_route_text(self, routed: dict[str, Any]) -> str:
+        route = str(routed.get("job_route") or "")
+        reason = str(routed.get("routing_reason") or "").strip()
+        user_request = str(routed.get("user_request") or routed.get("original_request") or "").strip()
+        target_label = self._target_label(routed.get("target_filter") or {}) or "요청하신 작업"
+        if route == "PREREQUISITE_REQUIRED":
+            message = reason or f"{target_label}은 선행 작업이 남아 있어 지금 실행할 수 없습니다."
+        else:
+            message = reason or f"{target_label}은 현재 실행 가능한 작업이 아닙니다."
+        return "\n".join([message, f"요청: {user_request}"] if user_request else [message])
+
+    def _target_label(self, targets: dict[str, Any]) -> str:
+        map_ids = targets.get("map_ids") or []
+        sql_ids = targets.get("sql_ids") or []
+        space_nms = targets.get("space_nms") or []
+        if map_ids:
+            return f"map_id={', '.join(str(item) for item in map_ids)}"
+        if sql_ids and space_nms:
+            return f"space_nm={', '.join(str(item) for item in space_nms)}, sql_id={', '.join(str(item) for item in sql_ids)}"
+        if sql_ids:
+            return f"sql_id={', '.join(str(item) for item in sql_ids)}"
+        if space_nms:
+            return f"space_nm={', '.join(str(item) for item in space_nms)}"
+        return ""
+
     def _next_node(self, route: str) -> str:
-        # Resolve the execution-path component. 09 is connected in parallel for notice output only.
         if route == "MIG":
             return "10A_migJobsToLoopTable"
         if route == "SQL_CONVERSION":
@@ -548,18 +435,58 @@ class NewType08JobExecutionRouter(Component):
             return "18A_fullWorkflowJobsToLoopTable"
         return "13_finalSummary"
 
+    def _extract_targets(self, text: str) -> dict[str, list[Any]]:
+        return {
+            "map_ids": self._extract_map_ids(text),
+            "sql_ids": self._extract_text_values(text, r"sql[_\s-]*id|sqlid"),
+            "space_nms": self._extract_text_values(text, r"space[_\s-]*nm|spacenm|space"),
+        }
+
+    def _extract_map_ids(self, text: str) -> list[int]:
+        values: list[int] = []
+        patterns = [
+            r"(?:map[_\s-]*id|mapid|map|맵\s*아이디|맵아이디)\s*[=:]?\s*([0-9,\s]+)",
+            r"([0-9]+)\s*번?\s*(?:map[_\s-]*id|mapid|map|맵\s*아이디|맵아이디|맵)",
+        ]
+        for pattern in patterns:
+            for match in re.finditer(pattern, text, flags=re.I):
+                for item in re.findall(r"\d+", match.group(1)):
+                    values.append(int(item))
+        return list(dict.fromkeys(values))
+
+    def _extract_text_values(self, text: str, label_pattern: str) -> list[str]:
+        values: list[str] = []
+        for match in re.finditer(rf"(?:{label_pattern})\s*[=:]?\s*([A-Za-z0-9_.:-]+(?:\s*,\s*[A-Za-z0-9_.:-]+)*)", text, flags=re.I):
+            values.extend([item.strip() for item in match.group(1).split(",") if item.strip()])
+        return list(dict.fromkeys(values))
+
+    def _normalize_list(self, value: Any, caster: Any) -> list[Any]:
+        if value is None:
+            return []
+        raw_values = value if isinstance(value, list) else [value]
+        out: list[Any] = []
+        for item in raw_values:
+            try:
+                casted = self._to_int(item) if caster is int else caster(item)
+            except (TypeError, ValueError):
+                continue
+            if casted is not None and casted not in out:
+                out.append(casted)
+        return out
+
+    def _merge_lists(self, *lists: list[Any]) -> list[Any]:
+        out: list[Any] = []
+        for values in lists:
+            for item in values:
+                if item not in out:
+                    out.append(item)
+        return out
+
     def _to_int(self, value: Any) -> int | None:
-        # Convert a value to int when possible.
         if isinstance(value, Mapping):
             for key in ("value", "count", "total", "number", "amount"):
                 if key in value:
                     return self._to_int(value.get(key))
-            return None
-        if isinstance(value, list):
-            for item in value:
-                converted = self._to_int(item)
-                if converted is not None:
-                    return converted
             return None
         try:
             return int(value)
@@ -568,12 +495,9 @@ class NewType08JobExecutionRouter(Component):
 
     def _positive_int(self, value: Any, default: int) -> int:
         converted = self._to_int(value)
-        if converted is None or converted <= 0:
-            return default
-        return converted
+        return converted if converted is not None and converted > 0 else default
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
-        # Parse a Langflow Data, dict, or JSON string payload.
         if isinstance(raw, Data):
             return dict(raw.data or {})
         if isinstance(raw, dict):
@@ -581,20 +505,18 @@ class NewType08JobExecutionRouter(Component):
         return self._parse_json_object(str(raw or "").strip()) if str(raw or "").strip() else {}
 
     def _parse_json_object(self, text: str) -> dict[str, Any]:
-        # Parse a JSON object from raw LLM or text output.
-        text = str(text or "").strip()
-        if text.startswith("```"):
-            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
-            text = re.sub(r"\s*```$", "", text)
-        match = re.search(r"\{.*\}", text, flags=re.S)
-        text = match.group(0) if match else text
-        parsed = json.loads(text) if text else {}
+        clean = str(text or "").strip()
+        if clean.startswith("```"):
+            clean = re.sub(r"^```(?:json)?\s*", "", clean, flags=re.I)
+            clean = re.sub(r"\s*```$", "", clean)
+        match = re.search(r"\{.*\}", clean, flags=re.S)
+        clean = match.group(0) if match else clean
+        parsed = json.loads(clean) if clean else {}
         if not isinstance(parsed, dict):
             raise ValueError("payload_json must be a JSON object")
         return parsed
 
     def _secret_to_str(self, value: Any) -> str:
-        # Convert a Langflow secret value into a plain string.
         if value is None:
             return ""
         if hasattr(value, "get_secret_value"):

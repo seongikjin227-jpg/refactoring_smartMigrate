@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from contextlib import contextmanager
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
@@ -36,10 +37,10 @@ class NewType17ASqlFormattingJobsToLoopTable(Component):
     def build_jobs_table(self) -> DataFrame:
         """Build one Loop row per SQL formatting job."""
         payload = self._parse_payload(getattr(self, "payload_json", ""))
-        jobs = self._sql_jobs(payload)
-        total = len(jobs)
         db_config = self._db_config(payload)
         self._require_db_config(db_config)
+        jobs = self._sql_jobs(payload, db_config)
+        total = len(jobs)
         rows: list[dict[str, Any]] = []
         for index, job in enumerate(jobs, start=1):
             self._validate_sql_key(job, index)
@@ -60,9 +61,12 @@ class NewType17ASqlFormattingJobsToLoopTable(Component):
         self.status = {**payload, "component": "17A_sqlFormattingJobsToLoopTable", "loop_job_count": total, "next_node": "17B_sqlFormattingLoop"}
         return DataFrame(rows)
 
-    def _sql_jobs(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+    def _sql_jobs(self, payload: dict[str, Any], db_config: dict[str, Any]) -> list[dict[str, Any]]:
         """Return only SQL formatting jobs from the routed payload."""
-        jobs = payload.get("selected_jobs") or payload.get("planned_jobs") or []
+        requested = payload.get("requested_jobs") if isinstance(payload.get("requested_jobs"), dict) else {}
+        jobs = payload.get("selected_jobs") or requested.get("sql_formatting_jobs") or payload.get("planned_jobs") or []
+        if self._should_load_all_pending(payload, jobs):
+            return self._load_all_pending_jobs(db_config)
         out: list[dict[str, Any]] = []
         for job in jobs:
             if not isinstance(job, dict):
@@ -71,6 +75,35 @@ class NewType17ASqlFormattingJobsToLoopTable(Component):
             if route == "SQL_FORMATTING":
                 out.append(dict(job))
         return out
+
+    def _should_load_all_pending(self, payload: dict[str, Any], jobs: Any) -> bool:
+        if str(payload.get("run_mode") or "").lower() != "all_pending":
+            return False
+        return not isinstance(jobs, list) or not jobs
+
+    def _load_all_pending_jobs(self, db_config: dict[str, Any]) -> list[dict[str, Any]]:
+        table = self._qualify("NEXT_SQL_INFO", db_config)
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                SELECT TO_CHAR(SPACE_NM) AS SPACE_NM, TO_CHAR(SQL_ID) AS SQL_ID, PRIORITY
+                  FROM {table}
+                 WHERE UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING')
+                   AND (FORMATTED_SQL IS NULL OR NVL(DBMS_LOB.GETLENGTH(FORMATTED_SQL), 0) = 0)
+                 ORDER BY PRIORITY ASC NULLS LAST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
+                """
+            )
+            return [
+                {
+                    "job_route": "SQL_FORMATTING",
+                    "job_type": "SQL",
+                    "space_nm": self._json_value(row[0]),
+                    "sql_id": self._json_value(row[1]),
+                    "priority": self._json_value(row[2]),
+                }
+                for row in cur.fetchall()
+            ]
 
     def _validate_sql_key(self, job: dict[str, Any], index: int) -> None:
         """Require ROWID or the logical SQL key used by NEXT_SQL_INFO."""
@@ -98,6 +131,36 @@ class NewType17ASqlFormattingJobsToLoopTable(Component):
         if missing:
             raise ValueError(f"17A SQL Formatting is not connected to database settings: missing {', '.join(missing)}")
 
+    @contextmanager
+    def _connect(self, db_config: dict[str, Any]):
+        import oracledb
+
+        dsn = oracledb.makedsn(
+            str(db_config.get("db_host") or "").strip(),
+            int(db_config.get("db_port") or 1521),
+            service_name=str(db_config.get("db_service_name") or "").strip(),
+        )
+        conn = oracledb.connect(
+            user=str(db_config.get("db_username") or "").strip(),
+            password=str(db_config.get("db_password") or ""),
+            dsn=dsn,
+        )
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    def _qualify(self, table_name: str, db_config: dict[str, Any]) -> str:
+        table = self._clean_identifier(table_name)
+        schema = str(db_config.get("system_schema") or "").strip().upper()
+        return f"{schema}.{table}" if schema else table
+
+    def _clean_identifier(self, value: str) -> str:
+        clean = str(value or "").strip().upper()
+        if not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", clean):
+            raise ValueError(f"Invalid identifier: {clean}")
+        return clean
+
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         """Parse a Langflow Data, dict, or JSON string payload."""
         if isinstance(raw, Data):
@@ -120,3 +183,12 @@ class NewType17ASqlFormattingJobsToLoopTable(Component):
         if hasattr(value, "get_secret_value"):
             return str(value.get_secret_value())
         return str(value)
+
+    def _json_value(self, value: Any) -> Any:
+        if value is None:
+            return None
+        if hasattr(value, "read"):
+            value = value.read()
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="ignore")
+        return value if isinstance(value, (str, int, float, bool)) else str(value)

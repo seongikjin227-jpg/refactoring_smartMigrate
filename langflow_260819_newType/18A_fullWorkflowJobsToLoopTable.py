@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from contextlib import contextmanager
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
@@ -47,7 +48,7 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
         payload = self._parse_payload(getattr(self, "payload_json", ""))
         db_config = self._db_config(payload)
         max_retry = max(0, int(getattr(self, "max_retry", None) or 2))
-        grouped = self._group_jobs(payload)
+        grouped = self._group_jobs(payload, db_config)
         grouped["MIG"] = self._sort_migration_jobs(grouped["MIG"])
 
         total = sum(len(grouped[route]) for route in ROUTE_ORDER)
@@ -98,7 +99,7 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
         self.status = status
         return DataFrame(rows)
 
-    def _group_jobs(self, payload: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    def _group_jobs(self, payload: dict[str, Any], db_config: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
         grouped: dict[str, list[dict[str, Any]]] = {route: [] for route in ROUTE_ORDER}
         explicit_jobs = payload.get("selected_jobs")
         if isinstance(explicit_jobs, list) and explicit_jobs:
@@ -110,7 +111,8 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
                     grouped[route].append(dict(job))
             return grouped
 
-        jobs = payload.get("remaining_jobs") or payload.get("pending_jobs") or {}
+        requested = payload.get("requested_jobs") if isinstance(payload.get("requested_jobs"), dict) else {}
+        jobs = payload.get("remaining_jobs") or payload.get("pending_jobs") or requested or {}
         sources = {
             "MIG": jobs.get("migration_jobs") or [],
             "SQL_CONVERSION": jobs.get("sql_conversion_jobs") or jobs.get("sql_jobs") or [],
@@ -119,7 +121,76 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
         }
         for route, route_jobs in sources.items():
             grouped[route] = [dict(job) for job in route_jobs if isinstance(job, dict)]
+        if not any(grouped.values()) and str(payload.get("run_mode") or "").lower() == "all_pending":
+            return self._load_all_pending_jobs(db_config)
         return grouped
+
+    def _load_all_pending_jobs(self, db_config: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+        self._require_db_config(db_config)
+        mig_table = self._qualify("NEXT_MIG_INFO", db_config)
+        sql_table = self._qualify("NEXT_SQL_INFO", db_config)
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            return {
+                "MIG": self._query_jobs(
+                    cur,
+                    f"""
+                    SELECT MAP_ID, PRIORITY, PRIOR_MAP_ID
+                      FROM {mig_table}
+                     WHERE UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
+                       AND (STATUS IS NULL OR (UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y' AND UPPER(TRIM(NVL(STATUS, 'NULL'))) LIKE 'FAIL-%'))
+                     ORDER BY PRIORITY ASC NULLS LAST, MAP_ID ASC
+                    """,
+                    "MIG",
+                    ["map_id", "priority", "prior_map_id"],
+                ),
+                "SQL_CONVERSION": self._query_jobs(
+                    cur,
+                    f"""
+                    SELECT TO_CHAR(SPACE_NM) AS SPACE_NM, TO_CHAR(SQL_ID) AS SQL_ID, PRIORITY
+                      FROM {sql_table}
+                     WHERE STATUS_CONVERSION IS NULL
+                        OR (UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y' AND UPPER(TRIM(NVL(STATUS_CONVERSION, 'NULL'))) LIKE 'FAIL-%')
+                     ORDER BY PRIORITY ASC NULLS LAST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
+                    """,
+                    "SQL_CONVERSION",
+                    ["space_nm", "sql_id", "priority"],
+                ),
+                "SQL_TUNING": self._query_jobs(
+                    cur,
+                    f"""
+                    SELECT TO_CHAR(SPACE_NM) AS SPACE_NM, TO_CHAR(SQL_ID) AS SQL_ID, PRIORITY
+                      FROM {sql_table}
+                     WHERE UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')
+                       AND (STATUS_TUNING IS NULL OR (UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y' AND UPPER(TRIM(NVL(STATUS_TUNING, 'NULL'))) LIKE 'FAIL-%'))
+                     ORDER BY PRIORITY ASC NULLS LAST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
+                    """,
+                    "SQL_TUNING",
+                    ["space_nm", "sql_id", "priority"],
+                ),
+                "SQL_FORMATTING": self._query_jobs(
+                    cur,
+                    f"""
+                    SELECT TO_CHAR(SPACE_NM) AS SPACE_NM, TO_CHAR(SQL_ID) AS SQL_ID, PRIORITY
+                      FROM {sql_table}
+                     WHERE UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING')
+                       AND (FORMATTED_SQL IS NULL OR NVL(DBMS_LOB.GETLENGTH(FORMATTED_SQL), 0) = 0)
+                     ORDER BY PRIORITY ASC NULLS LAST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
+                    """,
+                    "SQL_FORMATTING",
+                    ["space_nm", "sql_id", "priority"],
+                ),
+            }
+
+    def _query_jobs(self, cur: Any, sql: str, route: str, columns: list[str]) -> list[dict[str, Any]]:
+        cur.execute(sql)
+        jobs: list[dict[str, Any]] = []
+        for row in cur.fetchall():
+            job = {"job_route": route, "job_type": "MIG" if route == "MIG" else "SQL"}
+            for index, column in enumerate(columns):
+                job[column] = self._json_value(row[index])
+            jobs.append(job)
+        return jobs
 
     def _validate_job(self, route: str, job: dict[str, Any], index: int) -> None:
         if route == "MIG":
@@ -200,6 +271,41 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
             "system_schema": str(payload_config.get("system_schema") or getattr(self, "system_schema", "") or "").strip(),
         }
 
+    def _require_db_config(self, db_config: dict[str, Any]) -> None:
+        missing = [key for key in ("db_host", "db_service_name", "db_username") if not str(db_config.get(key) or "").strip()]
+        if missing:
+            raise ValueError(f"18A Full Workflow is not connected to database settings: missing {', '.join(missing)}")
+
+    @contextmanager
+    def _connect(self, db_config: dict[str, Any]):
+        import oracledb
+
+        dsn = oracledb.makedsn(
+            str(db_config.get("db_host") or "").strip(),
+            int(db_config.get("db_port") or 1521),
+            service_name=str(db_config.get("db_service_name") or "").strip(),
+        )
+        conn = oracledb.connect(
+            user=str(db_config.get("db_username") or "").strip(),
+            password=str(db_config.get("db_password") or ""),
+            dsn=dsn,
+        )
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    def _qualify(self, table_name: str, db_config: dict[str, Any]) -> str:
+        table = self._clean_identifier(table_name)
+        schema = str(db_config.get("system_schema") or "").strip().upper()
+        return f"{schema}.{table}" if schema else table
+
+    def _clean_identifier(self, value: str) -> str:
+        clean = str(value or "").strip().upper()
+        if not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", clean):
+            raise ValueError(f"Invalid identifier: {clean}")
+        return clean
+
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):
             return dict(raw.data or {})
@@ -219,6 +325,15 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
             return int(value)
         except (TypeError, ValueError):
             return None
+
+    def _json_value(self, value: Any) -> Any:
+        if value is None:
+            return None
+        if hasattr(value, "read"):
+            value = value.read()
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="ignore")
+        return value if isinstance(value, (str, int, float, bool)) else str(value)
 
     def _secret_to_str(self, value: Any) -> str:
         if value is None:
