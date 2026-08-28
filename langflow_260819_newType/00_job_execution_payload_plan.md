@@ -135,3 +135,15 @@
 - SQL Conversion 잔여: `STATUS_CONVERSION IS NULL` 또는 `USER_EDITED='Y' AND STATUS_CONVERSION LIKE 'FAIL-%'`
 - SQL Tuning 잔여: `STATUS_CONVERSION IN ('PASS', 'PASS-CONVERSION')` 이고 `STATUS_TUNING IS NULL` 또는 `USER_EDITED='Y' AND STATUS_TUNING LIKE 'FAIL-%'`
 - SQL Formatting 잔여: `STATUS_TUNING IN ('PASS', 'PASS-TUNING')` 이고 `FORMATTED_SQL`이 비어 있음
+
+## 10C DB Migration PoC Executor 결정 사항
+
+- 운영 `src/smart_migrate/agents/db_migration` 코드는 이번 변경에서 수정하지 않는다.
+- 10C Langflow executor만 다음 기준을 적용한다.
+- `USER_EDITED='Y'`이고 `MIG_SQL`이 있으면 기존 `MIG_SQL`을 재사용한다.
+- `USER_EDITED='Y'`이고 `VERIFY_SQL`이 비어 있으면 LLM으로 `VERIFY_SQL`만 생성한다.
+- LLM이 생성한 `MIG_SQL`/`VERIFY_SQL`은 생성 성공 직후 `NEXT_MIG_INFO`에 저장한다.
+- migration SQL 실행 결과 `affected_rows=0`이어도 실행은 `PASS`로 본다.
+- 단, `affected_rows=0`인 사실은 step log message에 남긴다.
+- 10C의 migration prompt는 외부 파일 입력이나 파일 로딩이 아니라 코드 내부 최하단 상수로 관리한다.
+- 코드 내부 prompt 내용은 `src/smart_migrate/config/prompts/migration_prompt.json`을 최대한 그대로 유지한다.

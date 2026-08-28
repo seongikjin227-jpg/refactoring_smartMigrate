@@ -548,10 +548,13 @@ class NewType10CMigOneJobPocExecutor(Component):
             if str(context.get("trunc_yn") or "").strip().upper() == "Y":
                 self._truncate_table(db_config, target_table)
             affected_rows = self._execute_sql_script(db_config, str(context.get("current_migration_sql") or context.get("migration_sql") or ""))
+            message = "[REAL] migration SQL executed"
+            if affected_rows == 0:
+                message = "[REAL] migration SQL executed; affected_rows=0 treated as PASS"
             return {
                 "stage": "EXECUTE_SQL",
                 "status": "PASS",
-                "message": "[REAL] migration SQL executed",
+                "message": message,
                 "outputs": {"affected_rows": affected_rows},
             }
         except Exception as exc:
@@ -647,14 +650,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         )
 
     def _load_migration_prompt_template(self) -> dict[str, Any]:
-        candidates = [Path.cwd() / "src" / "smart_migrate" / "config" / "prompts" / "migration_prompt.json"]
-        file_name = globals().get("__file__")
-        if file_name:
-            candidates.append(Path(file_name).resolve().parent.parent / "src" / "smart_migrate" / "config" / "prompts" / "migration_prompt.json")
-        for path in candidates:
-            if path.exists():
-                return json.loads(path.read_text(encoding="utf-8-sig"))
-        raise FileNotFoundError("migration_prompt.json was not found under src/smart_migrate/config/prompts")
+        return dict(MIGRATION_PROMPT_TEMPLATE)
 
     def _source_table_prompt_value(self, context: dict[str, Any]) -> str:
         raw_from = str(context.get("fr_table") or "").strip()
@@ -1348,3 +1344,129 @@ class NewType10CMigOneJobPocExecutor(Component):
             return int(value)
         except (TypeError, ValueError):
             return None
+
+
+MIGRATION_PROMPT_TEMPLATE: dict[str, str] = {
+    "system_anthropic": "Generate SQL using Oracle 19c syntax. Return only one valid JSON object with ddl_sql, migration_sql, and verification_sql keys. Do not end SQL values with semicolons.",
+    "system_openai": "Generate SQL using Oracle 19c syntax. Return only one valid JSON object with ddl_sql, migration_sql, and verification_sql keys. Do not end SQL values with semicolons.",
+    "main_prompt": """
+You are an Oracle data migration SQL specialist.
+Generate or fix Oracle 19c SQL using only the provided mapping rules and DDL information.
+The target table already exists, so ddl_sql may be an empty string unless a safe DDL is explicitly needed.
+
+[Non-negotiable rules]
+1. Zero hallucination:
+   - Do not use tables or columns that are not present in the mapping rules or DDL information.
+2. Type safety:
+   - When comparing or converting NUMBER, VARCHAR2, DATE, or TIMESTAMP values, use explicit CAST, TO_NUMBER, TO_DATE, or TO_TIMESTAMP as needed.
+3. Oracle 19c compatibility:
+   - Keep aliases short, preferably 1-5 characters.
+   - Keep every alias within Oracle's 30 byte identifier limit.
+   - Do not use non-Oracle syntax such as LIMIT.
+4. Output:
+   - Return JSON only.
+   - Required keys: ddl_sql, migration_sql, verification_sql.
+   - Do not include markdown, comments, explanations, or trailing semicolons inside SQL values.
+
+{ddl_info_block}
+[Mapping rules]
+- Source table: {from_table}
+- Target table: {to_table}
+- Column mappings:
+{mapping_info}
+
+[Migration SQL requirements]
+- Prefer this shape unless retry guidance says otherwise:
+  INSERT INTO {to_table} (target_columns...)
+  SELECT source_expressions...
+  FROM {from_table} S
+  [WHERE condition]
+- Source filter condition: {condition}
+- If condition is blank, omit the WHERE clause.
+- If condition is present, apply the same source scope in migration_sql and verification_sql.
+- Target columns and expressions must follow the target DDL and mapping rules.
+
+{verification_instruction}
+
+[JSON shape]
+{{
+  "ddl_sql": "",
+  "migration_sql": "INSERT INTO ... SELECT ...",
+  "verification_sql": "SELECT ..."
+}}
+""",
+    "verification_append": """
+[Verification SQL requirements - append mode]
+- The target table already contains rows inserted by earlier jobs.
+- Do not compare the full target table count with the source count.
+- Verify only rows inserted by this job by filtering the target side with EXISTS against the current source scope.
+- Use one SELECT statement without UNION ALL.
+- Use the provided DDL to identify data types.
+- Exclude LOB/LONG columns from all verification column-count comparisons: CLOB, NCLOB, BLOB, LONG, LONG RAW.
+- Do not use LOB/LONG columns in COUNT(column), DISTINCT, GROUP BY, ORDER BY, MINUS, JOIN keys, equality predicates, or value comparisons.
+- Recommended shape:
+  SELECT ABS(S.TOT - T.TOT) AS DIFF_TOT,
+         ABS(S.C1 - T.C1) AS DIFF_C1,
+         ABS(S.C2 - T.C2) AS DIFF_C2
+  FROM (SELECT COUNT(*) TOT,
+               COUNT(source_non_lob_col1) C1,
+               COUNT(source_non_lob_col2) C2
+        FROM {from_table}
+        [WHERE CONDITION]) S,
+       (SELECT COUNT(*) TOT,
+               COUNT(target_non_lob_col1) C1,
+               COUNT(target_non_lob_col2) C2
+        FROM {to_table} T2
+        WHERE EXISTS (
+            SELECT 1
+            FROM {from_table} SRC
+            WHERE T2.target_key = SRC.source_key
+            [AND CONDITION]
+        )) T
+- Choose EXISTS keys from mapping rules and DDL. Prefer primary/unique keys or a stable non-LOB source discriminator.
+- The verification passes only when every DIFF_* column in the single result row is 0.""",
+    "verification_regular": """
+[Verification SQL requirements]
+- Use one SELECT statement without UNION ALL.
+- Compare total row count and mapped non-null column counts between source and target.
+- Use the provided DDL to identify data types.
+- Exclude LOB/LONG columns from all verification column-count comparisons: CLOB, NCLOB, BLOB, LONG, LONG RAW.
+- Do not use LOB/LONG columns in COUNT(column), DISTINCT, GROUP BY, ORDER BY, MINUS, JOIN keys, equality predicates, or value comparisons.
+- Recommended shape:
+  SELECT ABS(S.TOT - T.TOT) AS DIFF_TOT,
+         ABS(S.C1 - T.C1) AS DIFF_C1,
+         ABS(S.C2 - T.C2) AS DIFF_C2
+  FROM (SELECT COUNT(*) TOT,
+               COUNT(source_non_lob_col1) C1,
+               COUNT(source_non_lob_col2) C2
+        FROM {from_table}
+        [WHERE CONDITION]) S,
+       (SELECT COUNT(*) TOT,
+               COUNT(target_non_lob_col1) C1,
+               COUNT(target_non_lob_col2) C2
+        FROM {to_table}) T
+- The verification passes only when every DIFF_* column in the single result row is 0.""",
+    "error_suffix": """
+
+[Previous execution failure]
+- Failed SQL: {last_sql}
+- Error: {last_error}
+Analyze the error and regenerate corrected SQL.""",
+    "append_mode_suffix": """
+
+[Append mode migration_sql note]
+- Target table '{to_table}' already exists and may contain rows inserted by previous jobs.
+- Preserve existing rows.
+- Add only this job's source rows.
+- ddl_sql may be an empty string.""",
+    "dup_key_suffix": """
+
+[ORA-00001 duplicate key retry guidance - MERGE is forbidden]
+- The previous INSERT INTO failed because of a primary/unique key duplicate.
+- Do not use MERGE, MERGE INTO, UPDATE, or UPSERT-style SQL in DB Migration.
+- Keep migration_sql as INSERT INTO ... SELECT ... only.
+- Fix the duplicate by narrowing the source scope, applying the provided condition consistently, or removing duplicate source rows inside the SELECT.
+- If duplicate source rows are possible, use a deterministic ROW_NUMBER() filter or SELECT DISTINCT in the source subquery before INSERT.
+- Do not skip required target columns and do not reference unmapped columns.
+- ddl_sql may be an empty string.""",
+}
