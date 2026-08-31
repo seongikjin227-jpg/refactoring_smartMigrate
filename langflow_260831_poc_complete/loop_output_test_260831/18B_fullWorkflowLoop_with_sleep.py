@@ -124,6 +124,9 @@ class LoopOutputTest18BFullWorkflowLoopWithSleep(Component):
             if not data_list:
                 self.update_ctx({f"{self._id}_aggregated": [], f"{self._id}_iterated": True})
                 return []
+            first_payload = self._data_dict(data_list[0])
+            workflow_db_config = dict(first_payload.get("db_config") or {})
+            self._insert_log(workflow_db_config, 0, "WORKFLOW", "WORKFLOW_LOOP", "INFO", "LOOP_START", "START", f"start workflow loop total={len(data_list)}", 0, "")
             aggregated_results = []
             migration_failed = False
             abort_reason = ""
@@ -145,17 +148,21 @@ class LoopOutputTest18BFullWorkflowLoopWithSleep(Component):
                     self.log(abort_reason, name="Phase Gate")
                     break
 
+                db_config = dict(item_payload.get("db_config") or {})
+                self._insert_log(db_config, 0, "WORKFLOW", "WORKFLOW_ITEM", "INFO", "ITEM_START", "START", f"start one item {index + 1}/{len(data_list)}", 0, "")
                 item_results = await self.execute_loop_body([item], event_manager=self._event_manager)
                 aggregated_results.extend(item_results)
+                item_result_payload = self._data_dict(item_results[-1]) if item_results else {}
+                item_status = str(item_result_payload.get("status") or "END")
+                self._insert_log(db_config, 0, "WORKFLOW", "WORKFLOW_ITEM", "INFO", "ITEM_END", item_status, f"end one item {index + 1}/{len(data_list)}", 0, "")
                 for result in item_results:
                     result_payload = self._data_dict(result)
                     if self._migration_abort_signal(result_payload):
                         migration_failed = True
                 if sleep_seconds > 0 and index < len(data_list) - 1:
-                    db_config = dict(item_payload.get("db_config") or {})
-                    self._insert_log(db_config, 0, "SLEEP_PROBE", "INFO", "SLEEP_BEFORE", "SLEEP_BEFORE", "SLEEP_BEFORE", 0, "")
+                    self._insert_log(db_config, 0, "WORKFLOW", "SLEEP_PROBE", "INFO", "SLEEP_BEFORE", "SLEEP_BEFORE", "SLEEP_BEFORE", 0, "")
                     time.sleep(sleep_seconds)
-                    self._insert_log(db_config, 0, "SLEEP_PROBE", "INFO", "SLEEP_AFTER", "SLEEP_AFTER", "SLEEP_AFTER", 0, "")
+                    self._insert_log(db_config, 0, "WORKFLOW", "SLEEP_PROBE", "INFO", "SLEEP_AFTER", "SLEEP_AFTER", "SLEEP_AFTER", 0, "")
 
             self.update_ctx(
                 {
@@ -352,6 +359,7 @@ class LoopOutputTest18BFullWorkflowLoopWithSleep(Component):
         self,
         db_config: dict[str, Any],
         map_id: int,
+        mig_kind: str,
         log_type: str,
         log_level: str,
         step_name: str,
@@ -370,7 +378,7 @@ class LoopOutputTest18BFullWorkflowLoopWithSleep(Component):
         generate_sql_value = ", :9" if "GENERATE_SQL" in columns else ""
         ts_column_sql = "".join(f", {column}" for column in ts_columns)
         ts_value_sql = "".join(", CURRENT_TIMESTAMP" for _ in ts_columns)
-        params = [map_id, "DB_MIG", log_type, log_level, step_name, status, str(message)[:4000], retry_count]
+        params = [map_id, mig_kind, log_type, log_level, step_name, status, str(message)[:4000], retry_count]
         if "GENERATE_SQL" in columns:
             sql_text = str(generated_sql or "")
             if column_types.get("GENERATE_SQL") not in {"CLOB", "NCLOB"}:
