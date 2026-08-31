@@ -6,7 +6,11 @@ from typing import Any
 from lfx.custom.custom_component.component import Component
 from lfx.io import FloatInput, MessageTextInput, Output
 from lfx.schema.data import Data
-from lfx.schema.message import Message
+
+try:
+    from lfx.io import DataInput
+except Exception:
+    DataInput = MessageTextInput
 
 
 GENERIC_MESSAGE = "\ucd9c\ub825 \uc785\ub2c8\ub2e4."
@@ -14,12 +18,12 @@ GENERIC_MESSAGE = "\ucd9c\ub825 \uc785\ub2c8\ub2e4."
 
 class LoopOutputTest04DHardSleepOutputProbe(Component):
     display_name = "Loop Output Test 04D Hard Sleep Output Probe"
-    description = "Receives Chat Output.message_response, sleeps, and returns a generic loop feedback payload."
+    description = "Receives Data, sleeps, and returns the same payload as loop feedback."
     name = "LoopOutputTest04DHardSleepOutputProbe"
     icon = "TimerReset"
 
     inputs = [
-        MessageTextInput(name="chat_output_message", display_name="Chat Output Message", required=True),
+        DataInput(name="input_data", display_name="Input Data", required=True),
         FloatInput(name="sleep_seconds", display_name="Sleep Seconds", value=10.0, required=False),
     ]
 
@@ -29,30 +33,30 @@ class LoopOutputTest04DHardSleepOutputProbe(Component):
 
     def build_loop_result(self) -> Data:
         sleep_seconds = self._sleep_seconds()
-        chat_text = self._message_text(getattr(self, "chat_output_message", ""))
+        input_payload = self._data_dict(getattr(self, "input_data", None))
         started = time.perf_counter()
 
         time.sleep(sleep_seconds)
 
         elapsed = time.perf_counter() - started
         payload = {
+            **input_payload,
             "component": "LoopOutputTest04DHardSleepOutputProbe",
-            "status": "PASS",
-            "ok": True,
-            "message": GENERIC_MESSAGE,
-            "answer_text": GENERIC_MESSAGE,
-            "sleep_probe_position": "after_chat_output_message_response",
+            "sleep_probe_position": "after_input_data",
             "sleep_probe_seconds": sleep_seconds,
             "sleep_probe_elapsed_seconds": round(elapsed, 3),
-            "sleep_probe_chat_output_seen": bool(chat_text),
+            "message": input_payload.get("message") or GENERIC_MESSAGE,
+            "answer_text": input_payload.get("answer_text") or GENERIC_MESSAGE,
         }
         self.status = payload
         return Data(data=payload)
 
-    def _message_text(self, raw: Any) -> str:
-        if isinstance(raw, Message):
-            return str(raw.text or "").strip()
-        return str(raw or "").strip()
+    def _data_dict(self, raw: Any) -> dict[str, Any]:
+        if isinstance(raw, Data):
+            return dict(raw.data or {})
+        if isinstance(raw, dict):
+            return dict(raw)
+        return {"value": raw}
 
     def _sleep_seconds(self) -> float:
         return float(getattr(self, "sleep_seconds", 10.0) or 10.0)
