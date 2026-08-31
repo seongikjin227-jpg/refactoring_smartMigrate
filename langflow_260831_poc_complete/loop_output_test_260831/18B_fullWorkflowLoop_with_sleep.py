@@ -152,17 +152,6 @@ class LoopOutputTest18BFullWorkflowLoopWithSleep(Component):
                     if self._migration_abort_signal(result_payload):
                         migration_failed = True
                 if sleep_seconds > 0 and index < len(data_list) - 1:
-                    self.status = {
-                        "component": "LoopOutputTest18BFullWorkflowLoopWithSleep",
-                        "status": "SLEEPING_BETWEEN_ITEMS",
-                        "completed_items": len(aggregated_results),
-                        "total_items": len(data_list),
-                        "sleep_seconds": sleep_seconds,
-                    }
-                    self.log(
-                        f"Sleeping {sleep_seconds:.1f}s before next Full Workflow loop item",
-                        name="Sleep Between Items",
-                    )
                     time.sleep(sleep_seconds)
 
             self.update_ctx(
