@@ -21,14 +21,16 @@ except Exception:
 
 
 class NewType10CMigOneJobPocExecutor(Component):
-    display_name = "10C MIG One Job POC Executor"
-    description = "Runs one DB Migration POC job with real DB status/log updates and internal retry."
+    display_name = "10C MIG One Job Executor"
+    description = "Runs one DB Migration job with real DB status/log updates and internal retry."
     name = "NewType10CMigOneJobPocExecutor"
     icon = "DatabaseZap"
 
     inputs = [
         DataInput(name="job_item", display_name="Job Item", required=True),
         IntInput(name="max_retry", display_name="Max Retry", value=2, required=False),
+        StrInput(name="source_schema", display_name="Source Schema", required=False),
+        StrInput(name="target_schema", display_name="Target Schema", required=False),
         StrInput(name="llm_base_url", display_name="LLM Base URL", required=False),
         SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=False),
         StrInput(name="llm_provider", display_name="LLM Provider", required=False),
@@ -95,7 +97,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             self._insert_log(
                 db_config,
                 map_id,
-                "POC_STEP",
+                "GENERATE_SQL",
                 "INFO",
                 "FETCH_DDL",
                 "PASS",
@@ -104,7 +106,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                 "",
             )
             pipeline_context = {**base_context, **(fetch_step.get("outputs") or {})}
-            graph_result = self._run_poc_graph(pipeline_context, db_config, max_retry)
+            graph_result = self._run_migration_graph(pipeline_context, db_config, max_retry)
             attempts = list(graph_result.get("attempts") or [])
             final_status = str(graph_result.get("final_status") or "FAIL-TEST")
             final_ok = final_status == "PASS"
@@ -117,7 +119,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                 self._insert_log(
                     db_config,
                     map_id,
-                    "POC_FINAL",
+                    "INFO",
                     "INFO",
                     "VERIFY",
                     "PASS",
@@ -130,7 +132,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                 self._insert_log(
                     db_config,
                     map_id,
-                    "POC_FINAL",
+                    "JOB_FAIL",
                     "ERROR",
                     "FINAL",
                     final_status,
@@ -162,7 +164,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             except Exception:
                 pass
             result = self._result(job, ok=False, status="FAIL-INSERT", elapsed=elapsed, attempts=attempts)
-            result.update({"error_type": "SYSTEM_ERROR", "error": str(exc), "message": f"POC executor error: {exc}"})
+            result.update({"error_type": "SYSTEM_ERROR", "error": str(exc), "message": f"migration executor error: {exc}"})
             self.status = result
             return Data(data=result)
 
@@ -187,7 +189,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         index = int(job.get("job_index") or 1)
         result = {
             **job,
-            "component": "10C_migOneJobPocExecutor",
+            "component": "10C_migOneJobExecutor",
             "ok": bool(job.get("ok", True)),
             "status": job.get("status") or "PASS-THROUGH",
             "elapsed_seconds": elapsed,
@@ -207,7 +209,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         result["history"] = history
         return result
 
-    def _run_poc_graph(self, context: dict[str, Any], db_config: dict[str, Any], max_retry: int) -> dict[str, Any]:
+    def _run_migration_graph(self, context: dict[str, Any], db_config: dict[str, Any], max_retry: int) -> dict[str, Any]:
         """Build and execute the internal retry graph for one migration job."""
         from langgraph.graph import END, StateGraph
 
@@ -237,7 +239,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             self._insert_log(
                 db_config,
                 int(state["map_id"]),
-                "POC_RETRY",
+                "ROW_ERROR",
                 "WARN",
                 attempt["failed_stage"],
                 attempt["status"],
@@ -375,7 +377,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         status = "PASS" if ok else self._failure_status_from_state(state)
         failed_stage = "" if ok else str((failed_step or {}).get("stage") or "FINAL")
         message = (
-            f"[POC] map_id={state.get('map_id')} attempt={state.get('db_attempts')} migration pipeline passed"
+            f"[MIG] map_id={state.get('map_id')} attempt={state.get('db_attempts')} migration pipeline passed"
             if ok
             else str(state.get("last_error") or (failed_step or {}).get("message") or "")
         )
@@ -417,7 +419,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         return str(state.get("current_migration_sql") or state.get("migration_sql") or "")
 
     def _insert_step_log(self, state: dict[str, Any], step: dict[str, Any]) -> None:
-        """Insert a POC step log for the current graph node result."""
+        """Insert a migration step log for the current graph node result."""
         db_config = dict(state.get("db_config") or {})
         map_id = self._to_int(state.get("map_id"))
         if map_id is None:
@@ -429,7 +431,8 @@ class NewType10CMigOneJobPocExecutor(Component):
         stage_sql = self._log_sql_for_step(state, step)
         route_note = self._route_note(state, step)
         message = f"attempt={state.get('db_attempts')} stage={stage} status={status}; {step.get('message') or ''}{route_note}"
-        self._insert_log(db_config, map_id, "POC_STEP", log_level, stage, status, message, retry_count, stage_sql)
+        log_type = "ROW_ERROR" if status.startswith("FAIL-") else ("VERIFY_SQL" if stage == "VERIFY" else "GENERATE_SQL")
+        self._insert_log(db_config, map_id, log_type, log_level, stage, status, message, retry_count, stage_sql)
 
     def _log_sql_for_step(self, state: dict[str, Any], step: dict[str, Any]) -> str:
         """Choose the SQL snippet that matches the step being logged."""
@@ -460,7 +463,7 @@ class NewType10CMigOneJobPocExecutor(Component):
 
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
-    # Future development area: replace these POC stubs with real nodes.
+    # Future development area: replace these nodes as the migration workflow evolves.
     # - _node_generate_sql: connect to the LLM and generate MIG_SQL / VERIFY_SQL.
     # - _node_execute_sql: run TRUNCATE and INSERT against the target database.
     # - _node_verify: run verification SQL and classify validation failures.
@@ -479,7 +482,12 @@ class NewType10CMigOneJobPocExecutor(Component):
         return {
             "stage": "FETCH_DDL",
             "status": "PASS",
-            "message": "[REAL] migration mapping and DDL metadata loaded",
+            "message": (
+                "[REAL] migration mapping and DDL metadata loaded; "
+                f"system_schema={db_config.get('system_schema') or ''}, "
+                f"source_schema={db_config.get('source_schema') or ''}, "
+                f"target_schema={db_config.get('target_schema') or ''}"
+            ),
             "outputs": {
                 **metadata,
             },
@@ -595,19 +603,19 @@ class NewType10CMigOneJobPocExecutor(Component):
                 "outputs": {"diff_count": -1},
             }
 
-    def _build_poc_migration_sql(self, context: dict[str, Any], source_table: str, target_table: str, map_id: Any) -> str:
-        """Build a simple deterministic INSERT SQL for the POC executor."""
+    def _build_deterministic_migration_sql(self, context: dict[str, Any], source_table: str, target_table: str, map_id: Any) -> str:
+        """Build a simple deterministic INSERT SQL."""
         mapped_columns = self._mapped_columns(context.get("mapping_details") or [])
         if mapped_columns:
             to_cols = ", ".join(item["to_col"] for item in mapped_columns)
             fr_cols = ", ".join(item["fr_col"] for item in mapped_columns)
-            return f"INSERT INTO {target_table} ({to_cols}) SELECT {fr_cols} FROM {source_table} /* POC map_id={map_id} */"
-        return f"INSERT INTO {target_table} SELECT * FROM {source_table} /* POC map_id={map_id} */"
+            return f"INSERT INTO {target_table} ({to_cols}) SELECT {fr_cols} FROM {source_table} /* map_id={map_id} */"
+        return f"INSERT INTO {target_table} SELECT * FROM {source_table} /* map_id={map_id} */"
 
     def _generate_migration_sqls(self, context: dict[str, Any], *, verify_only: bool) -> tuple[str, str, str, str]:
         prompt_template = self._load_migration_prompt_template()
         from_table = self._source_table_prompt_value(context)
-        to_table = str(context.get("to_table") or "").strip()
+        to_table = self._qualify_to_table(str(context.get("to_table") or "").strip(), dict(context.get("db_config") or {}))
         mapping_info = self._mapping_info(context.get("mapping_details") or [])
         ddl_info_block = self._ddl_info_block(context, from_table, to_table)
         is_append = not self._is_first_target_run(context)
@@ -659,13 +667,13 @@ class NewType10CMigOneJobPocExecutor(Component):
         raw_from = str(context.get("fr_table") or "").strip()
         map_type = str(context.get("map_type") or "").strip().upper()
         if map_type != "COMPLEX":
-            return raw_from
+            return self._qualify_fr_table(raw_from, dict(context.get("db_config") or {}))
         stripped = raw_from.rstrip(";").strip()
         if not stripped or stripped.startswith("("):
-            return stripped
+            return self._qualify_source_tables_in_sql(stripped, dict(context.get("db_config") or {}))
         if re.match(r"^(SELECT|WITH)\b", stripped, flags=re.I):
-            return f"({stripped})"
-        return stripped
+            return f"({self._qualify_source_tables_in_sql(stripped, dict(context.get('db_config') or {}))})"
+        return self._qualify_source_tables_in_sql(stripped, dict(context.get("db_config") or {}))
 
     def _mapping_info(self, details: list[dict[str, Any]]) -> str:
         lines = []
@@ -732,7 +740,7 @@ class NewType10CMigOneJobPocExecutor(Component):
     def _is_first_target_run(self, context: dict[str, Any]) -> bool:
         db_config = dict(context.get("db_config") or {})
         map_id = self._to_int(context.get("map_id"))
-        to_table = str(context.get("to_table") or "").strip()
+        to_table = str(context.get("raw_to_table") or context.get("to_table") or "").strip()
         if map_id is None or not to_table:
             return True
         table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
@@ -786,16 +794,15 @@ class NewType10CMigOneJobPocExecutor(Component):
                     )
                     text = self._extract_anthropic_text(response)
                 else:
-                    from openai import OpenAI
-
-                    client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout_seconds)
-                    response = client.chat.completions.create(
+                    text = self._call_openai_compatible_http(
+                        api_key=api_key,
+                        base_url=base_url,
                         model=candidate_model,
-                        temperature=0,
+                        system_prompt=system_openai,
+                        user_prompt=prompt,
                         max_tokens=max_tokens,
-                        messages=[{"role": "system", "content": system_openai}, {"role": "user", "content": prompt}],
+                        timeout_seconds=timeout_seconds,
                     )
-                    text = response.choices[0].message.content or ""
                 if not str(text or "").strip():
                     raise ValueError(f"LLM returned an empty migration response. provider={provider} model={candidate_model}")
                 return text.strip(), candidate_model
@@ -806,6 +813,64 @@ class NewType10CMigOneJobPocExecutor(Component):
                 raise
 
         raise ValueError(f"LLM call failed for all model candidates: {last_error}")
+
+    def _call_openai_compatible_http(
+        self,
+        *,
+        api_key: str,
+        base_url: str | None,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int,
+        timeout_seconds: int,
+    ) -> str:
+        import urllib.error
+        import urllib.request
+
+        if not base_url:
+            from openai import OpenAI
+
+            response = OpenAI(api_key=api_key, timeout=timeout_seconds).chat.completions.create(
+                model=model,
+                temperature=0,
+                max_tokens=max_tokens,
+                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+            )
+            return (response.choices[0].message.content or "").strip()
+
+        root = str(base_url or "").strip().rstrip("/")
+        url = root if root.endswith("/chat/completions") else f"{root}/chat/completions"
+        body = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0,
+            "max_tokens": max_tokens,
+        }
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+                raw_text = response.read().decode("utf-8", errors="ignore")
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")
+            raise ValueError(f"LLM HTTP {exc.code}: {detail[:1000]}") from exc
+
+        if not raw_text.strip():
+            raise ValueError(f"LLM HTTP response body was empty. url={url} model={model}")
+        payload = json.loads(raw_text)
+        content = str((((payload.get("choices") or [{}])[0].get("message") or {}).get("content") or "")).strip()
+        if not content:
+            preview = raw_text[:1000].replace("\n", "\\n")
+            raise ValueError(f"LLM returned empty message content. url={url} model={model} response_preview={preview}")
+        return content
 
     def _resolve_llm_provider(self, llm_config: dict[str, Any], base_url: str | None, model: str) -> str:
         provider = str(llm_config.get("llm_provider") or os.getenv("LLM_PROVIDER") or "").strip().lower()
@@ -986,8 +1051,8 @@ class NewType10CMigOneJobPocExecutor(Component):
     def _strip_sql_comments(self, sql: str) -> str:
         """Remove SQL comments before sending statements to Oracle.
 
-        Oracle raises ORA-01742 when a generated block comment is truncated, e.g.
-        `/* POC map_id *`. Comments are not required for execution, so strip
+        Oracle raises ORA-01742 when a generated block comment is truncated.
+        Comments are not required for execution, so strip
         both complete and dangling comments defensively.
         """
         text = str(sql or "")
@@ -1063,7 +1128,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         should_abort_full_workflow = bool(job.get("full_workflow")) and self._job_name(job) == "migration" and not ok
         return {
             **job,
-            "component": "10C_migOneJobPocExecutor",
+            "component": "10C_migOneJobExecutor",
             "job_type": "MIG",
             "map_id": job.get("map_id"),
             "ok": ok,
@@ -1185,7 +1250,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         generate_sql_value = ", :9" if "GENERATE_SQL" in columns else ""
         ts_column_sql = "".join(f", {column}" for column in ts_columns)
         ts_value_sql = "".join(", CURRENT_TIMESTAMP" for _ in ts_columns)
-        params = [map_id, "DB_MIG_POC", log_type, log_level, step_name, status, str(message)[:4000], retry_count]
+        params = [map_id, "DB_MIG", log_type, log_level, step_name, status, str(message)[:4000], retry_count]
         if "GENERATE_SQL" in columns:
             sql_text = str(generated_sql or "")
             if column_types.get("GENERATE_SQL") not in {"CLOB", "NCLOB"}:
@@ -1259,7 +1324,8 @@ class NewType10CMigOneJobPocExecutor(Component):
         return {
             "map_type": map_type,
             "fr_table": fr_table,
-            "to_table": to_table,
+            "raw_to_table": to_table,
+            "to_table": self._qualify_to_table(to_table, db_config),
             "trunc_yn": trunc_yn,
             "condition": condition,
             "saved_migration_sql": saved_migration_sql,
@@ -1267,7 +1333,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             "user_edited": user_edited,
             "mapping_details": details,
             "source_ddl": self._source_ddl_for_prompt(db_config, map_type, fr_table),
-            "target_ddl": self._fetch_table_columns(db_config, to_table) if self._looks_like_table(to_table) else [],
+            "target_ddl": self._fetch_table_columns(db_config, self._qualify_to_table(to_table, db_config)) if self._looks_like_table(to_table) else [],
         }
 
     def _source_ddl_for_prompt(self, db_config: dict[str, Any], map_type: str, fr_table: str) -> dict[str, list[dict[str, Any]]] | list[dict[str, Any]]:
@@ -1276,14 +1342,15 @@ class NewType10CMigOneJobPocExecutor(Component):
         if not source_tables:
             return []
         if str(map_type or "").strip().upper() != "COMPLEX":
-            source_table = source_tables[0]
+            source_table = self._qualify_fr_table(source_tables[0], db_config)
             return self._fetch_table_columns(db_config, source_table) if self._looks_like_table(source_table) else []
 
         source_ddl: dict[str, list[dict[str, Any]]] = {}
         for table_name in source_tables:
-            rows = self._fetch_table_columns(db_config, table_name) if self._looks_like_table(table_name) else []
+            source_table = self._qualify_fr_table(table_name, db_config)
+            rows = self._fetch_table_columns(db_config, source_table) if self._looks_like_table(source_table) else []
             if rows:
-                source_ddl[table_name] = rows
+                source_ddl[source_table] = rows
         return source_ddl
 
     def _source_tables_for_ddl(self, map_type: str, fr_table: str) -> list[str]:
@@ -1419,6 +1486,12 @@ class NewType10CMigOneJobPocExecutor(Component):
             password=str(db_config.get("db_password") or ""),
             dsn=dsn,
         )
+        with conn.cursor() as cur:
+            cur.execute("ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD HH24:MI:SS'")
+            cur.execute("ALTER SESSION SET NLS_TIMESTAMP_FORMAT = 'YYYY-MM-DD HH24:MI:SS.FF'")
+            target_schema = str(db_config.get("target_schema") or "").strip().upper()
+            if target_schema:
+                cur.execute(f"ALTER SESSION SET CURRENT_SCHEMA = {self._clean_identifier(target_schema)}")
         try:
             yield conn
         finally:
@@ -1434,6 +1507,8 @@ class NewType10CMigOneJobPocExecutor(Component):
             "db_username": str(item_config.get("db_username") or "").strip(),
             "db_password": str(item_config.get("db_password") or ""),
             "system_schema": str(item_config.get("system_schema") or "").strip(),
+            "source_schema": str(getattr(self, "source_schema", "") or item_config.get("source_schema") or os.getenv("ORACLE_SCHEMA_SRC") or "").strip(),
+            "target_schema": str(getattr(self, "target_schema", "") or item_config.get("target_schema") or os.getenv("ORACLE_SCHEMA_TGT") or "").strip(),
         }
 
     def _llm_config(self, job: dict[str, Any]) -> dict[str, Any]:
@@ -1460,6 +1535,40 @@ class NewType10CMigOneJobPocExecutor(Component):
             clean_schema = self._clean_identifier(clean_schema)
             return f"{clean_schema}.{clean_table}"
         return clean_table
+
+    def _qualify_fr_table(self, table_name: str, db_config: dict[str, Any]) -> str:
+        """Return source schema-qualified physical table name."""
+        return self._qualify_domain_table(table_name, db_config.get("source_schema"))
+
+    def _qualify_to_table(self, table_name: str, db_config: dict[str, Any]) -> str:
+        """Return target schema-qualified physical table name."""
+        return self._qualify_domain_table(table_name, db_config.get("target_schema"))
+
+    def _qualify_domain_table(self, table_name: str, schema: Any) -> str:
+        value = str(table_name or "").strip()
+        if not value or "." in value or not self._looks_like_table(value):
+            return value
+        return self._qualify(value, schema)
+
+    def _qualify_source_tables_in_sql(self, sql_text: str, db_config: dict[str, Any]) -> str:
+        schema = str(db_config.get("source_schema") or "").strip().upper()
+        if not schema:
+            return sql_text
+        clean_schema = self._clean_identifier(schema)
+
+        def replace(match: re.Match[str]) -> str:
+            keyword = match.group(1)
+            table_name = match.group(2)
+            if "." in table_name or not self._looks_like_table(table_name):
+                return match.group(0)
+            return f"{keyword} {clean_schema}.{self._clean_identifier(table_name)}"
+
+        return re.sub(
+            r"\b(FROM|JOIN)\s+([A-Z_][A-Z0-9_$#]*)\b",
+            replace,
+            sql_text,
+            flags=re.I,
+        )
 
     def _clean_identifier(self, value: str) -> str:
         """Validate and normalize an Oracle identifier."""
@@ -1534,7 +1643,11 @@ The target table already exists, so ddl_sql may be an empty string unless a safe
    - Keep aliases short, preferably 1-5 characters.
    - Keep every alias within Oracle's 30 byte identifier limit.
    - Do not use non-Oracle syntax such as LIMIT.
-4. Output:
+4. Schema qualification:
+   - Use the exact schema-qualified Source table and Target table values provided below.
+   - Do not remove schema prefixes from physical AS-IS or TO-BE tables.
+   - Do not add schema prefixes to DUAL, CTE names, inline view aliases, table aliases, or subquery aliases.
+5. Output:
    - Return JSON only.
    - Required keys: ddl_sql, migration_sql, verification_sql.
    - Do not include markdown, comments, explanations, or trailing semicolons inside SQL values.
