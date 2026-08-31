@@ -31,7 +31,9 @@ class NewType10CMigOneJobPocExecutor(Component):
         IntInput(name="max_retry", display_name="Max Retry", value=2, required=False),
         StrInput(name="llm_base_url", display_name="LLM Base URL", required=False),
         SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=False),
+        StrInput(name="llm_provider", display_name="LLM Provider", required=False),
         StrInput(name="llm_model", display_name="LLM Model", value="GLM-5.1", required=False),
+        StrInput(name="llm_fallback_models", display_name="LLM Fallback Models", value="GLM-5.1,Qwen3.6-35B-A3B,Kimi-K2.5", required=False),
         IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=4096, required=False),
         IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=900, required=False),
     ]
@@ -637,6 +639,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         prompt += "\n\n[Output constraint]\n- Do not end migration_sql or verification_sql with a semicolon (;).\n"
 
         content, used_model = self._call_llm_json(
+            system_anthropic=str(prompt_template.get("system_anthropic") or prompt_template.get("system_openai") or ""),
             system_openai=str(prompt_template.get("system_openai") or ""),
             prompt=prompt,
             config=dict(context.get("llm_config") or {}),
@@ -750,7 +753,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             row = cur.fetchone()
         return int(row[0] if row else 0) == 0
 
-    def _call_llm_json(self, *, system_openai: str, prompt: str, config: dict[str, Any] | None = None) -> tuple[str, str]:
+    def _call_llm_json(self, *, system_anthropic: str, system_openai: str, prompt: str, config: dict[str, Any] | None = None) -> tuple[str, str]:
         self._load_env_files()
         llm_config = dict(config or {})
         api_key = str(llm_config.get("llm_api_key") or os.getenv("LLM_API_KEY") or os.getenv("OPEN_API_KEY") or "").strip()
@@ -760,18 +763,123 @@ class NewType10CMigOneJobPocExecutor(Component):
         model = str(llm_config.get("llm_model") or os.getenv("LLM_MODEL") or "GLM-5.1").strip()
         max_tokens = self._positive_int(llm_config.get("llm_max_tokens") or os.getenv("LLM_MAX_TOKENS"), 4096)
         timeout_seconds = self._positive_int(llm_config.get("llm_timeout_seconds") or os.getenv("LLM_TIMEOUT_SECONDS"), 900)
+        provider = self._resolve_llm_provider(llm_config, base_url, model)
+        candidates = self._model_candidates(model, llm_config)
+        last_error: Exception | None = None
 
-        from openai import OpenAI
+        for idx, candidate_model in enumerate(candidates):
+            try:
+                if provider == "anthropic":
+                    from anthropic import Anthropic
 
-        client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout_seconds)
-        response = client.chat.completions.create(
-            model=model,
-            temperature=0,
-            max_tokens=max_tokens,
-            messages=[{"role": "system", "content": system_openai}, {"role": "user", "content": prompt}],
+                    client = Anthropic(
+                        api_key=api_key,
+                        base_url=(base_url or "https://api.anthropic.com").rstrip("/"),
+                        timeout=timeout_seconds,
+                    )
+                    response = client.messages.create(
+                        model=candidate_model,
+                        max_tokens=max_tokens,
+                        temperature=0,
+                        system=system_anthropic,
+                        messages=[{"role": "user", "content": prompt}],
+                    )
+                    text = self._extract_anthropic_text(response)
+                else:
+                    from openai import OpenAI
+
+                    client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout_seconds)
+                    response = client.chat.completions.create(
+                        model=candidate_model,
+                        temperature=0,
+                        max_tokens=max_tokens,
+                        messages=[{"role": "system", "content": system_openai}, {"role": "user", "content": prompt}],
+                    )
+                    text = response.choices[0].message.content or ""
+                if not str(text or "").strip():
+                    raise ValueError(f"LLM returned an empty migration response. provider={provider} model={candidate_model}")
+                return text.strip(), candidate_model
+            except Exception as exc:
+                last_error = exc
+                if idx < len(candidates) - 1 and self._is_model_fallback_error(str(exc)):
+                    continue
+                raise
+
+        raise ValueError(f"LLM call failed for all model candidates: {last_error}")
+
+    def _resolve_llm_provider(self, llm_config: dict[str, Any], base_url: str | None, model: str) -> str:
+        provider = str(llm_config.get("llm_provider") or os.getenv("LLM_PROVIDER") or "").strip().lower()
+        if provider:
+            if provider not in {"anthropic", "openai"}:
+                raise ValueError("LLM_PROVIDER must be either 'anthropic' or 'openai'.")
+            return provider
+        base_text = str(base_url or "").lower()
+        model_text = str(model or "").lower()
+        if "anthropic" in base_text or model_text.startswith("claude"):
+            return "anthropic"
+        return "openai"
+
+    def _model_candidates(self, primary_model: str, llm_config: dict[str, Any]) -> list[str]:
+        fallback_raw = str(
+            llm_config.get("llm_fallback_models")
+            or os.getenv("LLM_FALLBACK_MODELS")
+            or "GLM-5.1,Qwen3.6-35B-A3B,Kimi-K2.5"
         )
-        text = response.choices[0].message.content or ""
-        return text.strip(), model
+        candidates = [str(primary_model or "").strip()]
+        candidates.extend(model.strip() for model in fallback_raw.split(",") if model.strip())
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            key = candidate.lower()
+            if candidate and key not in seen:
+                deduped.append(candidate)
+                seen.add(key)
+        return deduped
+
+    def _is_model_fallback_error(self, message: str) -> bool:
+        text = str(message or "").lower()
+        patterns = (
+            "no deployments available",
+            "no deployment available",
+            "deployment unavailable",
+            "selected model",
+            "rate limit exceed for api_key",
+            "rate limit exceeded for api_key",
+            "rate_limit_exceed_for_api_key",
+            "rate_limit_exceeded_for_api_key",
+            "error code: 500",
+            "status code: 500",
+            "internal server error",
+            "server error",
+            "http 500",
+            "connection reset",
+            "temporarily unavailable",
+            "service unavailable",
+            "bad gateway",
+            "502",
+            "model not allow",
+            "model_not_allow",
+            "model not allowed",
+            "model_not_allowed",
+            "not allowed to access model",
+            "team not allowed",
+            "team_not_allowed",
+            "model not found",
+            "model_not_found",
+            "model does not exist",
+            "does not exist",
+            "not supported",
+            "unsupported model",
+        )
+        return any(pattern in text for pattern in patterns)
+
+    def _extract_anthropic_text(self, response: Any) -> str:
+        chunks: list[str] = []
+        for item in getattr(response, "content", []) or []:
+            text = getattr(item, "text", None)
+            if text:
+                chunks.append(str(text))
+        return "".join(chunks).strip()
 
     def _load_env_files(self) -> None:
         for path in (Path.cwd() / ".env", Path.cwd() / "src" / ".env"):
@@ -788,6 +896,8 @@ class NewType10CMigOneJobPocExecutor(Component):
 
     def _extract_json_object(self, text: str) -> dict[str, Any]:
         raw = str(text or "").strip()
+        if not raw:
+            raise ValueError("LLM returned an empty migration response.")
         if raw.startswith("```"):
             raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.I)
             raw = re.sub(r"\s*```$", "", raw)
@@ -797,7 +907,8 @@ class NewType10CMigOneJobPocExecutor(Component):
             start = raw.find("{")
             end = raw.rfind("}")
             if start < 0 or end <= start:
-                raise
+                preview = raw[:500].replace("\n", "\\n")
+                raise ValueError(f"LLM response did not contain a JSON object. preview={preview}") from None
             parsed = json.loads(raw[start : end + 1])
         if not isinstance(parsed, dict):
             raise ValueError("LLM response JSON must be an object")
@@ -1331,7 +1442,9 @@ class NewType10CMigOneJobPocExecutor(Component):
         return {
             "llm_base_url": str(getattr(self, "llm_base_url", "") or item_config.get("llm_base_url") or "").strip(),
             "llm_api_key": self._secret_to_str(getattr(self, "llm_api_key", None)) or str(item_config.get("llm_api_key") or "").strip(),
+            "llm_provider": str(getattr(self, "llm_provider", "") or item_config.get("llm_provider") or "").strip(),
             "llm_model": str(getattr(self, "llm_model", "") or item_config.get("llm_model") or "").strip(),
+            "llm_fallback_models": str(getattr(self, "llm_fallback_models", "") or item_config.get("llm_fallback_models") or "").strip(),
             "llm_max_tokens": self._positive_int(getattr(self, "llm_max_tokens", None) or item_config.get("llm_max_tokens"), 4096),
             "llm_timeout_seconds": self._positive_int(getattr(self, "llm_timeout_seconds", None) or item_config.get("llm_timeout_seconds"), 900),
         }

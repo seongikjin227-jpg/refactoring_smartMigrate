@@ -1,62 +1,239 @@
 # Loop Output Test Plan - 260831
-## 3. Loop 중간 출력 실험 방향
 
-### 결론부터
+## 0. Current Test Status And Conclusion
 
-`sleep()`을 메인 스레드에 넣는 것만으로는 서비스 응답이 중간중간 push될 가능성이 낮다. 플랫폼 연동이 Langflow 실행 API의 최종 응답만 읽는다면, `sleep()`은 마지막 응답을 늦출 뿐이다.
+### Current Status
 
-### 테스트할 방식
-
-| 방법 | 목적 | 기대 결과 | 한계 |
+| Item | Component/File | Status | Result |
 |---|---|---|---|
-| A. `sleep()` interval만 적용 | Chat Output이 시간 차를 두면 서비스가 중간 응답을 잡는지 확인 | Langflow UI에서는 천천히 보임 | REST 최종 응답만 읽으면 마지막만 보임 |
-| B. 누적 transcript 출력 | 매 iteration 출력이 전체 진행 로그를 포함하게 함 | 서비스가 마지막만 받아도 전체 과정 확인 가능 | 실시간은 아니고 최종 누적 표시 |
-| C. side-channel progress sink | DB/파일/API에 progress event를 매 job 저장 | 서비스가 polling/SSE로 실시간 표시 가능 | 플랫폼 쪽 progress 조회 API 필요 |
-| D. Langflow streaming/event API 사용 | 실행 이벤트 자체를 클라이언트가 구독 | 진짜 스트리밍 가능 | 서비스 연동 코드 변경 필요 |
+| A | `04A_sleep_interval_output_probe.py` | Failed | `sleep()` interval did not make Chat Output appear step-by-step. Output was shown once after the component returned. |
+| D probe | `04D_in_flow_stream_probe.py` | Failed/Negative | `stream-probe step 1/5` through `step 5/5` appeared all at once. Intermediate `self.log()` and `self.status` updates were not rendered as Chat Output messages. |
+| D control | `04D_hard_sleep_output_probe.py` | Ready | Hard-coded 5-second sleep probe. Use only to confirm elapsed time and node refresh behavior. |
+| C | `04C_progress_side_channel_sink.py` | Ready/Not tested | Stores progress outside Chat Output. This is the most realistic fallback if API streaming cannot be used. |
+| D API | `04D_v2_workflow_background_tester.py` | Ready/Not tested | Requires checking whether the Langflow server/platform can use v2 workflow stream/background APIs. |
 
-PoC 이후 운영형으로는 C 또는 D가 맞다. B는 지금 구조에서 가장 적은 변경으로 “중간 과정이 최종 메시지에 모두 남는지” 확인하는 안전한 테스트다.
+### Current Conclusion
 
-## 4. 새 파일 구성
+`sleep()` is not a streaming implementation. It only delays execution.
 
-| 파일 | 용도 |
-|---|---|
-| `01_final_status_audit.py` | INFO/LOG 최종 상태 기준으로 성공/실패/스킵을 감사하는 Langflow 컴포넌트 |
-| `02_loop_progress_output_adapter.py` | 18D 뒤에 붙여 중간 진행 메시지를 누적하고 optional sleep을 적용하는 Langflow 컴포넌트 |
-| `03_progress_event_sink.py` | job마다 progress event를 JSONL 파일에 저장해서 외부 서비스 polling 테스트에 쓰는 컴포넌트 |
+The current test result shows this behavior:
 
-## 5. 권장 연결 실험
+```text
+Custom component starts
+custom component sleeps between internal steps
+custom component returns one final Message
+Chat Output displays that final Message once
+```
 
-### 실험 1: 최종 메시지 누적 방식
+So `sleep()` can only test whether an existing flush/event path is already available. It cannot create partial streaming by itself.
 
-기존:
+Current conclusion:
+
+```text
+The current Langflow Playground/Chat Output path does not flush custom component intermediate progress as chat messages.
+Using only sleep/interval inside the loop is not enough for real-time progress during a 4-5 hour workflow.
+```
+
+Practical remaining options:
+
+1. Check whether the platform can call Langflow v2 Workflow API in `stream` or `background` mode.
+2. If the platform caller cannot change, write progress events to a side-channel such as DB/API and let the platform poll them.
+3. Investigate whether Langflow exposes an internal event/message API that can explicitly emit intermediate Playground messages. No confirmed supported pattern has been found yet.
+
+### Answer Draft For Senior Engineer
+
+```text
+We tested the sleep/interval approach inside the loop/component.
+The sleep delayed execution, but Chat Output did not flush intermediate steps.
+In Langflow Playground, the steps were displayed all at once after the final return.
+
+Therefore, sleep/interval alone cannot provide real-time progress output in the current Chat Output path.
+
+Next checks:
+1. Confirm whether the platform caller can use Langflow v2 Workflow API stream/background events.
+2. If caller changes are difficult, store progress per loop iteration in a DB/API side-channel and let the platform poll it.
+```
+
+## 0.1 Questions For Platform/Langflow Owner
+
+These questions should be asked to the platform/Langflow owner because the caller and platform UI behavior are outside this component code.
+
+1. Which endpoint does the internal platform use to call Langflow?
+   - `/api/v1/run/{flow_id}` final-response mode?
+   - `/api/v1/run/{flow_id}?stream=true` streaming mode?
+   - `/api/v2/workflows` workflow API?
+
+2. Does the platform HTTP client actually read streaming responses?
+   - Does it use SSE/EventSource?
+   - Does it use `requests.post(..., stream=True)` or an equivalent streaming reader?
+   - Is reverse proxy / nginx / API gateway buffering enabled?
+
+3. What real-time update pattern does the platform chat UI support?
+   - Partial update of the same chat bubble?
+   - Appending new assistant messages?
+   - Only one final assistant message?
+
+4. Is Langflow v2 Workflow API available on the server?
+   - What is the Langflow server version?
+   - Is `LANGFLOW_DEVELOPER_API_ENABLED=true` enabled?
+   - Is `POST /api/v2/workflows` allowed by API key and network policy?
+
+5. Can long-running workflows use background job/status polling?
+   - Can caller receive `job_id` from `POST /api/v2/workflows`?
+   - Can caller poll `GET /api/v2/workflows?job_id=...`?
+   - Can caller attach to `GET /api/v2/workflows/{job_id}/events`?
+
+6. If changing the platform Langflow caller is difficult, can the platform add a separate progress read path?
+   - DB table polling?
+   - Internal API polling?
+   - Redis/message queue progress store?
+
+7. Can the platform and Langflow share a progress correlation key?
+   - Candidate keys: `run_key`, `session_id`, `job_id`
+   - A common key is required to match one user workflow run to progress rows/events.
+
+## 1. Goal
+
+Full Workflow loop is currently connected like this:
 
 ```text
 18D -> Chat Output
-18D -> 18B Loop Result
+18D -> 18B loop feedback
 ```
 
-테스트:
+Langflow Playground and the service appear to show only the final Chat Output message. The goal is to verify whether there is any way to show per-job progress in real time during a 4-5 hour loop.
+
+## 2. What sleep() Actually Tests
+
+`sleep()` does not create streaming.
+
+It only pauses the current Python function before it returns. It is useful only as a probe:
 
 ```text
-18D.Message -> 02 Adapter.payload
-18D.Loop Result -> 02 Adapter.loop_result_input
-02 Adapter.Message -> Chat Output
-02 Adapter.Loop Result -> 18B
+If the platform/Playground already flushes intermediate component events,
+then a delayed component may make those events visibly appear one by one.
 ```
 
-`02 Adapter`에서 `emit_mode=ACCUMULATED`, `sleep_seconds=0.5~1.0`으로 시작한다.
+But if Langflow waits for the component method to finish and only then sends the returned `Message` to Chat Output, then `sleep()` only delays the final single response.
 
-### 실험 2: side-channel progress 방식
+## 3. A Test Result - Sleep Interval
+
+Tested components:
 
 ```text
-18D.Loop Result -> 03 Progress Event Sink -> 18B
+04A_sleep_interval_output_probe.py
+04D_in_flow_stream_probe.py
 ```
 
-서비스는 `progress_events.jsonl` 또는 같은 구조의 DB/API sink를 polling한다. 운영 전환 시 파일 대신 `NEXT_WORKFLOW_PROGRESS` 같은 테이블을 권장한다.
+Observed result:
 
-## 6. 확인 질문
+```text
+stream-probe step 1/5 ... step 5/5 appeared all at once.
+04A sleep interval output probe also failed to produce partial Chat Output.
+```
 
-1. 서비스에서 Langflow를 호출하는 방식이 REST `run` 최종 응답인지, streaming/event endpoint인지 확인이 필요하다.
-2. 플랫폼이 한 채팅 말풍선 안에서 partial update를 지원하는지, 아니면 새 메시지 append만 지원하는지 확인이 필요하다.
-3. progress side-channel을 DB 테이블로 둘지, 서비스 메모리/API로 둘지 결정해야 한다.
-4. 11B는 실패 로그 분석 전용으로 유지할지, 성공/실패 최종 감사까지 포함할지 결정해야 한다.
+Interpretation:
+
+1. The visible Chat Output was emitted once at the end, not one message per step.
+2. `self.log()` and `self.status` updates did not become Chat Output messages.
+3. `sleep()` is not enough to create streaming.
+
+Follow-up control test:
+
+```text
+04D_hard_sleep_output_probe.py
+```
+
+This hard-codes 5-second sleeps. With `probe_steps=5`, total runtime should be about 20 seconds. If it still outputs only once at the end, the conclusion is confirmed:
+
+```text
+Custom component Message output is delivered to Chat Output only after the output method returns.
+```
+
+## 4. Current Hypothesis
+
+Chat Output is not a partial-streaming component for arbitrary custom component messages.
+
+The official Langflow v1 run API supports `?stream=true`, but the documentation describes this as LLM token response streaming. It does not show a supported pattern where a custom Chat Output component can yield multiple partial chat messages during one output method.
+
+The Langflow v2 Workflow API supports `sync`, `stream`, and `background` modes. In v2 background mode, a caller can get a `job_id`, poll `GET /api/v2/workflows?job_id=...`, or re-attach to `GET /api/v2/workflows/{job_id}/events`.
+
+That is promising, but it still requires the caller to use the v2 API or a separate tester to call it.
+
+## 5. Test Matrix
+
+| Test | Method | Status | Conclusion |
+|---|---|---|---|
+| A | `sleep()` inside custom component | Failed | Did not produce partial Chat Output in Playground |
+| A-control | hard-coded 5 sec sleep | Pending | Confirms whether UI parameter was ignored |
+| C | side-channel progress sink | Ready | Most reliable without relying on Chat Output streaming |
+| D-v1 | `/api/v1/run/{flow_id}?stream=true` | Ready | Mainly LLM token streaming, may not expose job progress |
+| D-v2-stream | `POST /api/v2/workflows` with `mode=stream` | Ready | Needs developer API enabled |
+| D-v2-background | `POST /api/v2/workflows` with `mode=background`, then poll/events | Ready | Best API-level test for long-running jobs |
+
+## 6. Replacement Options In The Flow
+
+### A - Sleep Probe
+
+```text
+18D.Message -> 04A Sleep Interval Output Probe.message_payload
+18D.Loop Result -> 04A Sleep Interval Output Probe.loop_result_input
+04A.Message -> Chat Output
+04A.Loop Result -> 18B
+```
+
+Expected answer:
+
+```text
+This only tests whether Chat Output or Playground flushes intermediate execution state.
+It does not implement streaming by itself.
+```
+
+### C - Side-Channel Progress
+
+```text
+18D.Message -> 04C Progress Side Channel Sink.message_payload
+18D.Loop Result -> 04C Progress Side Channel Sink.loop_result_input
+04C.Message -> Chat Output
+04C.Loop Result -> 18B
+```
+
+Start with:
+
+```text
+sink_mode = FILE
+output_file = progress_events.jsonl
+```
+
+If this works, use DB mode:
+
+```text
+sink_mode = ORACLE_DB
+progress_table = NEXT_WORKFLOW_PROGRESS
+```
+
+This does not depend on Chat Output partial streaming. It writes progress per job somewhere else, and the platform can read that progress separately.
+
+### D - API-Level Streaming/Background
+
+This is not a Chat Output component change.
+
+This tests whether Langflow's API can expose live events when the caller uses:
+
+```text
+POST /api/v2/workflows
+mode=stream
+```
+
+or:
+
+```text
+POST /api/v2/workflows
+mode=background
+GET /api/v2/workflows?job_id=...
+GET /api/v2/workflows/{job_id}/events
+```
+
+Important caution:
+
+Do not call `/api/v2/workflows` for the same long workflow from inside the same v1 flow as the last component. That starts another workflow execution and can cause duplicate execution or recursion. The v2 call should be made by a test script or by the platform caller.

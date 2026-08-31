@@ -149,17 +149,17 @@ class NewType09ExecutionPlanSummary(Component):
             "SQL_FORMATTING": "SQL Formatting",
             "FULL_WORKFLOW": "Full Workflow",
         }.get(route, route or "Unknown")
-        mode_label = "?꾩껜 ?붿뿬 ?묒뾽" if run_mode == "all_pending" else "吏???묒뾽"
+        mode_label = "전체 잔여 작업" if run_mode == "all_pending" else "지정 작업"
         lines = [
             "component=09_executionPlanSummary",
-            f"{label} {mode_label}???쒖옉?⑸땲??",
-            f"- ?ㅽ뻾 ?덉젙 ?묒뾽 ?? {planned_job_count}",
+            f"{label} {mode_label} 실행을 시작합니다.",
+            f"- 실행 예정 작업 수: {planned_job_count}",
         ]
         if route == "FULL_WORKFLOW":
             lines.extend(
                 [
                     "",
-                    "| 湲곕뒫 | ?ㅽ뻾 ?덉젙 |",
+                    "| 기능 | 실행 예정 |",
                     "|---|---:|",
                     f"| DB Migration | {plan_counts.get('MIG', 0)} |",
                     f"| SQL Conversion | {plan_counts.get('SQL_CONVERSION', 0)} |",
@@ -170,7 +170,7 @@ class NewType09ExecutionPlanSummary(Component):
         if jobs:
             if route == "FULL_WORKFLOW":
                 lines.append("")
-            lines.append("- ?ㅽ뻾 ?덉젙 紐⑸줉:")
+            lines.append("- 실행 예정 목록:")
             for job in jobs[:20]:
                 lines.append(f"  - {self._job_label(job)}")
             if len(jobs) > 20:
@@ -181,12 +181,12 @@ class NewType09ExecutionPlanSummary(Component):
         # Build an optional LLM prompt for execution-plan messaging.
         return "\n".join(
             [
-                "?꾨옒 ?ㅽ뻾 怨꾪쉷???ъ슜?먯뿉寃??쒓뎅?대줈 吏㏐퀬 紐낇솗?섍쾶 ?덈궡?섏꽭??",
-                "?ㅼ젣 ?ㅽ뻾 寃곌낵媛 ?꾨땲???ㅽ뻾 ??怨꾪쉷?꾩쓣 遺꾨챸??留먰븯?몄슂.",
-                "?ъ슜?먭? 吏?뺥븳 ?묒뾽?대㈃ 吏???묒뾽?대씪怨?留먰븯怨? ?꾩껜 ?湲??묒뾽?대㈃ ?꾩껜 ?붿뿬 ?묒뾽?대씪怨?留먰븯?몄슂.",
-                "遺덊븘?뷀븳 ?ㅻ챸? ?섏? 留먭퀬 ?ㅽ뻾 ?꾨찓?? ?ㅽ뻾 紐⑤뱶, ?ㅽ뻾 ?덉젙 嫄댁닔, ?묒뾽 紐⑸줉留??ы븿?섏꽭??",
+                "아래 실행 계획을 사용자에게 한국어로 짧고 명확하게 안내하세요.",
+                "실제 실행 결과가 아니라 실행 전 계획임을 분명히 말하세요.",
+                "사용자가 지정한 작업이면 지정 작업이라고 말하고, 전체 대기 작업이면 전체 잔여 작업이라고 말하세요.",
+                "불필요한 설명은 하지 말고 실행 도메인, 실행 모드, 실행 예정 건수, 작업 목록만 포함하세요.",
                 "",
-                "?ㅽ뻾 怨꾪쉷:",
+                "실행 계획:",
                 json.dumps(
                     {
                         "job_route": route,
