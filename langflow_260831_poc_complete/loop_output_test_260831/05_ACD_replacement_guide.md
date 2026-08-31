@@ -139,10 +139,19 @@ probe_label = stream-reader-check
 - 20초 후 최종 bullet list만 보이면, 현재 플랫폼은 streaming reader가 아니거나 중간 이벤트를 UI에 반영하지 않는 것이다.
 - Langflow UI에는 보이는데 플랫폼에는 안 보이면, Langflow 내부 이벤트는 발생하지만 플랫폼 연동 계층에서 버퍼링 또는 필터링 중이다.
 
+입력값 반영 여부가 애매하면 hard sleep probe를 단독 실행한다.
+
+```text
+Chat Input 또는 Text -> 04D Hard Sleep Output Probe -> Chat Output
+```
+
+`04D Hard Sleep Output Probe`는 interval을 코드에서 5초로 고정한다. `probe_steps=5`면 최소 약 20초가 걸려야 한다. 이것도 마지막에 한 번만 출력되면, custom component `Message` output은 메서드가 return된 후 한 번만 Chat Output으로 전달된다는 뜻이다.
+
 제공 파일:
 
 ```text
 04D_in_flow_stream_probe.py
+04D_hard_sleep_output_probe.py
 04D_langflow_streaming_client.py
 04D_langflow_streaming_proxy.py
 ```
