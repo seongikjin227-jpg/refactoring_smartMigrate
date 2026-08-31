@@ -201,6 +201,19 @@ class LoopOutputTest18BFullWorkflowLoopWithSleep(Component):
         data_list = self.ctx.get(f"{self._id}_data", [])
         first_payload = self._data_dict(data_list[0]) if data_list else {}
         results = [self._data_dict(item) for item in self.ctx.get(f"{self._id}_aggregated", [])]
+        workflow_summary = self._summary(results, data_list, self.ctx.get(f"{self._id}_skipped_plan_counts", {}))
+        self._insert_log(
+            dict(first_payload.get("db_config") or {}),
+            0,
+            "WORKFLOW",
+            "WORKFLOW_LOOP",
+            "INFO",
+            "LOOP_DONE",
+            "DONE",
+            f"done workflow loop completed={len(results)}/{len(data_list)}",
+            0,
+            "",
+        )
         payload = {
             "component": "LoopOutputTest18BFullWorkflowLoopWithSleep",
             "job_route": "FULL_WORKFLOW",
@@ -209,7 +222,7 @@ class LoopOutputTest18BFullWorkflowLoopWithSleep(Component):
             "db_config": dict(first_payload.get("db_config") or {}),
             "workflow_plan_counts": dict(first_payload.get("workflow_plan_counts") or self._plan_counts(data_list)),
             "aggregated_results": results,
-            "workflow_summary": self._summary(results, data_list, self.ctx.get(f"{self._id}_skipped_plan_counts", {})),
+            "workflow_summary": workflow_summary,
             "workflow_aborted": bool(self.ctx.get(f"{self._id}_workflow_aborted", False)),
             "abort_reason": str(self.ctx.get(f"{self._id}_abort_reason", "") or ""),
             "skipped_plan_counts": dict(self.ctx.get(f"{self._id}_skipped_plan_counts", {}) or {}),
