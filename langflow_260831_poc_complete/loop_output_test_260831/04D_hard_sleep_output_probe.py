@@ -20,7 +20,7 @@ class LoopOutputTest04DHardSleepOutputProbe(Component):
 
     inputs = [
         MessageTextInput(name="chat_output_message", display_name="Chat Output Message", required=True),
-        FloatInput(name="sleep_seconds", display_name="Sleep Seconds", value=5.0, required=False),
+        FloatInput(name="sleep_seconds", display_name="Sleep Seconds", value=10.0, required=False),
     ]
 
     outputs = [
@@ -32,17 +32,7 @@ class LoopOutputTest04DHardSleepOutputProbe(Component):
         chat_text = self._message_text(getattr(self, "chat_output_message", ""))
         started = time.perf_counter()
 
-        self.status = {
-            "component": "LoopOutputTest04DHardSleepOutputProbe",
-            "status": "SLEEPING_AFTER_CHAT_OUTPUT",
-            "message": GENERIC_MESSAGE,
-            "sleep_seconds": sleep_seconds,
-            "chat_output_seen": bool(chat_text),
-        }
-        self.log(GENERIC_MESSAGE, name="sleep-after-chat-output")
-
-        if sleep_seconds > 0:
-            time.sleep(sleep_seconds)
+        time.sleep(sleep_seconds)
 
         elapsed = time.perf_counter() - started
         payload = {
@@ -65,7 +55,4 @@ class LoopOutputTest04DHardSleepOutputProbe(Component):
         return str(raw or "").strip()
 
     def _sleep_seconds(self) -> float:
-        try:
-            return max(0.0, min(300.0, float(getattr(self, "sleep_seconds", 5.0) or 0.0)))
-        except (TypeError, ValueError):
-            return 5.0
+        return float(getattr(self, "sleep_seconds", 10.0) or 10.0)
