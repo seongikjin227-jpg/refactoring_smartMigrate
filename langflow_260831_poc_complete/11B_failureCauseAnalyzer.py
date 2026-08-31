@@ -21,7 +21,7 @@ except Exception:
 
 class NewType11BFailureCauseAnalyzer(Component):
     display_name = "11B Failure Cause Analyzer"
-    description = "Collects FAIL-* logs after the latest workflow start marker and asks an LLM for root-cause analysis."
+    description = "Collects current failed jobs after final INFO-state reconciliation and asks an LLM for root-cause analysis."
     name = "NewType11BFailureCauseAnalyzer"
     icon = "SearchX"
 
@@ -42,6 +42,9 @@ class NewType11BFailureCauseAnalyzer(Component):
     ]
 
     outputs = [Output(display_name="Failure Analysis", name="analysis", method="build_analysis", types=["Message"])]
+
+    SUCCESS_STATUSES = {"PASS", "SUCCESS", "PASS-CONVERSION", "PASS-TUNING", "SUCCESS-TEST", "FORMATTED"}
+    SKIP_STATUSES = {"PASS-THROUGH", "SKIP", "SKIPPED", "PREREQUISITE_REQUIRED"}
 
     def build_analysis(self) -> Message:
         try:
@@ -71,22 +74,26 @@ class NewType11BFailureCauseAnalyzer(Component):
     def _collect_failure_evidence(self, payload: dict[str, Any]) -> dict[str, Any]:
         mig_started_at = self._latest_mig_start_at()
         sql_started_at = self._latest_sql_start_at()
+        final_statuses = self._collect_final_statuses()
         mig_failures = self._latest_per_job(self._query_mig_logs(mig_started_at, fail_only=True), "retry_no")
         sql_failures = self._latest_per_job(self._query_sql_logs(sql_started_at, fail_only=True), "retry_no")
+        current_failures = self._filter_by_current_final_status(mig_failures + sql_failures, final_statuses)
         skipped = self._latest_per_job(
             self._query_mig_logs(mig_started_at, skip_only=True) + self._query_sql_logs(sql_started_at, skip_only=True),
             "retry_no",
         )
+        current_skipped = self._filter_by_current_final_status(skipped, final_statuses)
         max_failures = self._positive_int(getattr(self, "max_failures", None), 50)
-        failures = [self._llm_failure_item(item) for item in (mig_failures + sql_failures)[:max_failures]]
+        failures = [self._llm_failure_item(item) for item in current_failures[:max_failures]]
         return {
             "user_request": payload.get("user_request") or payload.get("original_request") or "",
             "workflow_summary": payload.get("workflow_summary") or {},
             "workflow_plan_counts": payload.get("workflow_plan_counts") or {},
             "workflow_aborted": bool(payload.get("workflow_aborted")),
             "abort_reason": payload.get("abort_reason") or "",
+            "final_status_summary": self._final_status_summary(final_statuses),
             "failures": failures,
-            "skipped_due_to_prior_fail": [self._llm_failure_item(item) for item in skipped],
+            "skipped_due_to_prior_fail": [self._llm_failure_item(item) for item in current_skipped],
         }
 
     def _latest_mig_start_at(self) -> Any:
@@ -139,7 +146,7 @@ class NewType11BFailureCauseAnalyzer(Component):
             conditions.append("CREATED_AT >= :started_at")
             params["started_at"] = started_at
         if fail_only:
-            conditions.append("UPPER(TRIM(NVL(STATUS, ''))) LIKE 'FAIL-%'")
+            conditions.append(self._failure_status_condition("STATUS"))
         if skip_only:
             conditions.append("UPPER(TRIM(NVL(STATUS, ''))) LIKE 'SKIP-%'")
         select_sql = f"""
@@ -185,6 +192,8 @@ class NewType11BFailureCauseAnalyzer(Component):
             "stage": item.get("stage_name") or "",
             "retry": self._num(item.get("retry_no")),
             "message": item.get("message") or "",
+            "final_status": item.get("final_status") or "",
+            "final_status_class": item.get("final_status_class") or "",
         }
         if item.get("map_id") not in (None, ""):
             out["map_id"] = item.get("map_id")
@@ -208,7 +217,7 @@ class NewType11BFailureCauseAnalyzer(Component):
             conditions.append("CREATED_AT >= :started_at")
             params["started_at"] = started_at
         if fail_only:
-            conditions.append("UPPER(TRIM(NVL(STATUS, ''))) LIKE 'FAIL-%'")
+            conditions.append(self._failure_status_condition("STATUS"))
         if skip_only:
             conditions.append("UPPER(TRIM(NVL(STATUS, ''))) LIKE 'SKIP-%'")
         select_sql = f"""
@@ -282,6 +291,132 @@ class NewType11BFailureCauseAnalyzer(Component):
             return "SQL_TUNING"
         return "SQL_CONVERSION"
 
+    def _collect_final_statuses(self) -> dict[str, dict[str, Any]]:
+        statuses: dict[str, dict[str, Any]] = {}
+        statuses.update(self._query_mig_final_statuses())
+        statuses.update(self._query_sql_final_statuses())
+        return statuses
+
+    def _query_mig_final_statuses(self) -> dict[str, dict[str, Any]]:
+        column_types = self._available_column_types("NEXT_MIG_INFO")
+        columns = set(column_types)
+        if "STATUS" not in columns:
+            return {}
+        table = self._qualify("NEXT_MIG_INFO")
+        map_expr = "MAP_ID" if "MAP_ID" in columns else "CAST(NULL AS VARCHAR2(100)) AS MAP_ID"
+        use_expr = "USE_YN" if "USE_YN" in columns else "'Y'"
+        with self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                SELECT {map_expr}, STATUS
+                  FROM {table}
+                 WHERE UPPER(TRIM(NVL({use_expr}, 'Y'))) = 'Y'
+                """
+            )
+            rows = cur.fetchall()
+        statuses: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            map_id = self._to_text(row[0])
+            status = self._status(row[1])
+            statuses[f"MIG:{map_id}"] = {
+                "domain": "DB_MIGRATION",
+                "job_key": f"MIG:{map_id}",
+                "status": status,
+                "class": self._status_class(status),
+            }
+        return statuses
+
+    def _query_sql_final_statuses(self) -> dict[str, dict[str, Any]]:
+        column_types = self._available_column_types("NEXT_SQL_INFO")
+        columns = set(column_types)
+        if not columns:
+            return {}
+        table = self._qualify("NEXT_SQL_INFO")
+        select_sql = ", ".join(
+            [
+                self._select_expr(columns, "SPACE_NM"),
+                self._select_expr(columns, "SQL_ID"),
+                self._select_expr(columns, "STATUS_CONVERSION"),
+                self._select_expr(columns, "STATUS_TUNING"),
+                self._formatted_status_expr(columns),
+            ]
+        )
+        with self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute(f"SELECT {select_sql} FROM {table}")
+            rows = cur.fetchall()
+        statuses: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            space_nm = self._to_text(row[0])
+            sql_id = self._to_text(row[1])
+            base_key = f"{space_nm}:{sql_id}"
+            for domain, status in (
+                ("SQL_CONVERSION", row[2]),
+                ("SQL_TUNING", row[3]),
+                ("SQL_FORMATTING", row[4]),
+            ):
+                normalized = self._status(status)
+                job_key = f"{domain}:{base_key}"
+                statuses[job_key] = {
+                    "domain": domain,
+                    "job_key": job_key,
+                    "space_nm": space_nm,
+                    "sql_id": sql_id,
+                    "status": normalized,
+                    "class": self._status_class(normalized),
+                }
+        return statuses
+
+    def _filter_by_current_final_status(
+        self,
+        logs: list[dict[str, Any]],
+        final_statuses: dict[str, dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        filtered: list[dict[str, Any]] = []
+        for log in logs:
+            current = final_statuses.get(str(log.get("job_key") or ""))
+            if current and current.get("class") == "success":
+                continue
+            enriched = dict(log)
+            if current:
+                enriched["final_status"] = current.get("status") or ""
+                enriched["final_status_class"] = current.get("class") or ""
+            else:
+                enriched["final_status"] = ""
+                enriched["final_status_class"] = "unknown"
+            filtered.append(enriched)
+        return filtered
+
+    def _final_status_summary(self, final_statuses: dict[str, dict[str, Any]]) -> dict[str, int]:
+        summary = {"total": len(final_statuses), "success": 0, "fail": 0, "pending": 0, "skipped": 0, "unknown": 0}
+        for item in final_statuses.values():
+            cls = str(item.get("class") or "unknown")
+            summary[cls] = summary.get(cls, 0) + 1
+        return summary
+
+    def _formatted_status_expr(self, columns: set[str]) -> str:
+        if "FORMATTED_SQL" in columns:
+            return "CASE WHEN FORMATTED_SQL IS NOT NULL THEN 'FORMATTED' ELSE NULL END AS STATUS_FORMATTING"
+        return "CAST(NULL AS VARCHAR2(20)) AS STATUS_FORMATTING"
+
+    def _failure_status_condition(self, column: str) -> str:
+        clean = self._clean_identifier(column)
+        normalized = f"UPPER(TRIM(NVL({clean}, '')))"
+        return f"({normalized} IN ('FAIL', 'FAILED') OR {normalized} LIKE 'FAIL-%')"
+
+    def _status_class(self, status: Any) -> str:
+        value = self._status(status)
+        if not value:
+            return "pending"
+        if value in self.SUCCESS_STATUSES or value.startswith("PASS-") or value.startswith("SUCCESS-"):
+            return "success"
+        if value in {"FAIL", "FAILED"} or value.startswith("FAIL-"):
+            return "fail"
+        if value in self.SKIP_STATUSES or value.startswith("SKIP-"):
+            return "skipped"
+        return "unknown"
+
     def _call_llm(self, evidence: dict[str, Any]) -> str:
         api_key = self._secret_to_str(getattr(self, "llm_api_key", None)).strip() or os.getenv("LLM_API_KEY") or os.getenv("OPEN_API_KEY") or ""
         model = str(getattr(self, "llm_model", "") or os.getenv("LLM_MODEL") or "GLM-5.1").strip()
@@ -321,6 +456,18 @@ class NewType11BFailureCauseAnalyzer(Component):
         return answer or self._fallback_answer(evidence, "LLM returned an empty response.")
 
     def _no_failure_answer(self, evidence: dict[str, Any]) -> str:
+        return self._render_no_failure_answer(evidence)
+        summary = evidence.get("final_status_summary") or {}
+        return (
+            "## Fail ?먯씤 遺꾩꽍\n\n"
+            "Current final INFO status has no failed job after reconciling prior retry logs.\n\n"
+            f"- Workflow aborted: {evidence.get('workflow_aborted')}\n"
+            f"- Final status total: {summary.get('total', 0)}\n"
+            f"- Final success: {summary.get('success', 0)}\n"
+            f"- Final pending: {summary.get('pending', 0)}\n"
+            f"- Final skipped: {summary.get('skipped', 0)}\n"
+            f"- Final unknown: {summary.get('unknown', 0)}"
+        )
         return (
             "## Fail 원인 분석\n\n"
             "최신 WORKFLOW_START 이후 `FAIL-*` 로그가 없습니다.\n\n"
@@ -333,10 +480,25 @@ class NewType11BFailureCauseAnalyzer(Component):
         lines.append(f"- 선행 실패로 인한 미실행 수: {len(evidence.get('skipped_due_to_prior_fail') or [])}")
         if evidence.get("abort_reason"):
             lines.append(f"- 중단 사유: {evidence.get('abort_reason')}")
+        if evidence.get("final_status_summary"):
+            lines.append(f"- Final status summary: {evidence.get('final_status_summary')}")
         for item in evidence.get("failures") or []:
             ident = item.get("map_id") or f"{item.get('space_nm')}.{item.get('sql_id')}"
-            lines.append(f"- {item.get('domain')} {ident}: {item.get('status')} / {item.get('stage_name')} / {item.get('message')}")
+            lines.append(f"- {item.get('domain')} {ident}: {item.get('status')} / {item.get('stage')} / {item.get('message')}")
         return "\n".join(lines)
+
+    def _render_no_failure_answer(self, evidence: dict[str, Any]) -> str:
+        summary = evidence.get("final_status_summary") or {}
+        return (
+            "## Failure Analysis\n\n"
+            "Current final INFO status has no failed job after reconciling prior retry logs.\n\n"
+            f"- Workflow aborted: {evidence.get('workflow_aborted')}\n"
+            f"- Final status total: {summary.get('total', 0)}\n"
+            f"- Final success: {summary.get('success', 0)}\n"
+            f"- Final pending: {summary.get('pending', 0)}\n"
+            f"- Final skipped: {summary.get('skipped', 0)}\n"
+            f"- Final unknown: {summary.get('unknown', 0)}"
+        )
 
     def _available_columns(self, table_name: str) -> set[str]:
         return set(self._available_column_types(table_name))
@@ -436,6 +598,9 @@ class NewType11BFailureCauseAnalyzer(Component):
         if isinstance(value, bytes):
             return value.decode("utf-8", errors="ignore")
         return str(value)
+
+    def _status(self, value: Any) -> str:
+        return self._to_text(value).strip().upper()
 
     def _json_value(self, value: Any) -> Any:
         if value is None:
