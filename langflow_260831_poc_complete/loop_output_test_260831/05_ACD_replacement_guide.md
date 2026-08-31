@@ -113,9 +113,36 @@ SELECT EVENT_TS,
 
 목적: 서비스가 REST 최종 응답 대신 streaming response를 읽도록 바꿨을 때 실시간 표시가 가능한지 확인한다.
 
+플랫폼 호출부를 바꾸기 어렵고, 이미 플랫폼이 streaming reader를 붙이고 있다고 가정한다면 먼저 아래 in-flow probe를 테스트한다.
+
+```text
+04D_in_flow_stream_probe.py
+```
+
+단독 테스트 연결:
+
+```text
+Chat Input 또는 임의 Payload -> 04D In Flow Stream Probe -> Chat Output
+```
+
+권장 설정:
+
+```text
+probe_steps = 10
+interval_seconds = 2.0
+probe_label = stream-reader-check
+```
+
+판정:
+
+- 플랫폼 화면에 2초 간격으로 `stream-reader-check step n/10`이 보이면, 플랫폼이 Langflow 실행 이벤트 또는 component log/status 이벤트를 실시간으로 읽고 있는 것이다.
+- 20초 후 최종 bullet list만 보이면, 현재 플랫폼은 streaming reader가 아니거나 중간 이벤트를 UI에 반영하지 않는 것이다.
+- Langflow UI에는 보이는데 플랫폼에는 안 보이면, Langflow 내부 이벤트는 발생하지만 플랫폼 연동 계층에서 버퍼링 또는 필터링 중이다.
+
 제공 파일:
 
 ```text
+04D_in_flow_stream_probe.py
 04D_langflow_streaming_client.py
 04D_langflow_streaming_proxy.py
 ```
