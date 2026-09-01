@@ -21,18 +21,19 @@ def _insert_log(
     generated_sql: str = "",
 ) -> None:
     """Copy this method into a component and call self._insert_log(...)."""
-    import oracledb
-
-    dsn = oracledb.makedsn(self.DB_HOST, int(self.DB_PORT or 1521), service_name=self.DB_SERVICE_NAME)
-    conn = oracledb.connect(user=self.DB_USERNAME, password=self.DB_PASSWORD, dsn=dsn)
+    conn = None
     try:
+        import oracledb
+
+        dsn = oracledb.makedsn(self.DB_HOST, int(self.DB_PORT or 1521), service_name=self.DB_SERVICE_NAME)
+        conn = oracledb.connect(user=self.DB_USERNAME, password=self.DB_PASSWORD, dsn=dsn)
         cur = conn.cursor()
         cur.execute(
             """
             INSERT INTO SFAADM.NEXT_MIG_LOG (
-                LOG_ID, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, RETRY_COUNT, CREATED_AT, UPD_TS
+                LOG_ID, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, RETRY_COUNT, CREATED_AT
             ) VALUES (
-                SFAADM.MIGRATION_LOG_SEQ.NEXTVAL, :1, :2, :3, :4, :5, :6, :7, :8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                SFAADM.MIGRATION_LOG_SEQ.NEXTVAL, :1, :2, :3, :4, :5, :6, :7, :8, CURRENT_TIMESTAMP
             )
             """,
             [
@@ -47,8 +48,11 @@ def _insert_log(
             ],
         )
         conn.commit()
+    except Exception as exc:
+        self.status = f"NEXT_MIG_LOG insert failed: {exc}"
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 # Examples:
