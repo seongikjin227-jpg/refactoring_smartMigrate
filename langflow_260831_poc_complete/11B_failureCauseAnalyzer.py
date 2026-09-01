@@ -49,21 +49,7 @@ class NewType11BFailureCauseAnalyzer(Component):
     SKIP_STATUSES = {"PASS-THROUGH", "SKIP", "SKIPPED", "PREREQUISITE_REQUIRED"}
 
     def build_analysis(self) -> Message:
-        logging.getLogger("smartmigrate.workflow").info(
-            "before build_analysis",
-            extra={
-                "workflow_log": {
-                    "map_id": 0,
-                    "mig_kind": "WORKFLOW",
-                    "log_type": "11B_FAIL_CAUSE",
-                    "log_level": "INFO",
-                    "step_name": "BUILD_ANALYSIS",
-                    "status": "START",
-                    "message": "before build_analysis",
-                    "retry_count": 0,
-                }
-            },
-        )
+        logging.getLogger("smartmigrate.workflow").info("before build_analysis", extra={"workflow_log": [0, "WORKFLOW", "11B_FAIL_CAUSE", "INFO", "BUILD_ANALYSIS", "START", "before build_analysis", 0]})
         try:
             try:
                 payload = self._parse_payload(getattr(self, "loop_done", ""))
@@ -84,73 +70,17 @@ class NewType11BFailureCauseAnalyzer(Component):
                     "final": True,
                 }
                 __log_result = Message(text=answer)
-                logging.getLogger("smartmigrate.workflow").info(
-                    "after build_analysis",
-                    extra={
-                        "workflow_log": {
-                            "map_id": 0,
-                            "mig_kind": "WORKFLOW",
-                            "log_type": "11B_FAIL_CAUSE",
-                            "log_level": "INFO",
-                            "step_name": "BUILD_ANALYSIS",
-                            "status": "END",
-                            "message": "after build_analysis",
-                            "retry_count": 0,
-                        }
-                    },
-                )
+                logging.getLogger("smartmigrate.workflow").info("after build_analysis", extra={"workflow_log": [0, "WORKFLOW", "11B_FAIL_CAUSE", "INFO", "BUILD_ANALYSIS", "END", "after build_analysis", 0]})
                 return __log_result
             except Exception as exc:
                 answer = f"## Fail 원인 분석\n\nFail 원인 분석 생성에 실패했습니다.\n\nError: {exc}"
                 self.status = {"ok": False, "component": "11B_failureCauseAnalyzer", "error": str(exc), "answer_text": answer}
                 __log_result = Message(text=answer)
-                logging.getLogger("smartmigrate.workflow").error(
-                    "error build_analysis",
-                    extra={
-                        "workflow_log": {
-                            "map_id": 0,
-                            "mig_kind": "WORKFLOW",
-                            "log_type": "11B_FAIL_CAUSE",
-                            "log_level": "ERROR",
-                            "step_name": "BUILD_ANALYSIS",
-                            "status": "ERROR",
-                            "message": "error build_analysis",
-                            "retry_count": 0,
-                        }
-                    },
-                )
+                logging.getLogger("smartmigrate.workflow").error("error build_analysis", extra={"workflow_log": [0, "WORKFLOW", "11B_FAIL_CAUSE", "ERROR", "BUILD_ANALYSIS", "ERROR", "error build_analysis", 0]})
                 return __log_result
-            logging.getLogger("smartmigrate.workflow").info(
-                "after build_analysis",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "11B_FAIL_CAUSE",
-                        "log_level": "INFO",
-                        "step_name": "BUILD_ANALYSIS",
-                        "status": "END",
-                        "message": "after build_analysis",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").info("after build_analysis", extra={"workflow_log": [0, "WORKFLOW", "11B_FAIL_CAUSE", "INFO", "BUILD_ANALYSIS", "END", "after build_analysis", 0]})
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(
-                f"error build_analysis: {exc}",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "11B_FAIL_CAUSE",
-                        "log_level": "ERROR",
-                        "step_name": "BUILD_ANALYSIS",
-                        "status": "ERROR",
-                        "message": f"error build_analysis: {exc}",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").error(f"error build_analysis: {exc}", extra={"workflow_log": [0, "WORKFLOW", "11B_FAIL_CAUSE", "ERROR", "BUILD_ANALYSIS", "ERROR", f"error build_analysis: {exc}", 0]})
             raise
 
     def _collect_failure_evidence(self, payload: dict[str, Any]) -> dict[str, Any]:

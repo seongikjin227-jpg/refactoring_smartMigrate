@@ -28,21 +28,7 @@ class NewType12SqlConversionPipeline(Component):
 
     def run_pipeline(self) -> Data:
         # Run the POC pipeline and return test execution results.
-        logging.getLogger("smartmigrate.workflow").info(
-            "before run_pipeline",
-            extra={
-                "workflow_log": {
-                    "map_id": 0,
-                    "mig_kind": "WORKFLOW",
-                    "log_type": "12_PIPELINE",
-                    "log_level": "INFO",
-                    "step_name": "RUN_PIPELINE",
-                    "status": "START",
-                    "message": "before run_pipeline",
-                    "retry_count": 0,
-                }
-            },
-        )
+        logging.getLogger("smartmigrate.workflow").info("before run_pipeline", extra={"workflow_log": [0, "WORKFLOW", "12_PIPELINE", "INFO", "RUN_PIPELINE", "START", "before run_pipeline", 0]})
         try:
             payload = self._parse_payload(getattr(self, "payload_json", ""))
             processed = [self._mock_result(job, index) for index, job in enumerate(self._execution_jobs(payload), start=1)]
@@ -60,38 +46,10 @@ class NewType12SqlConversionPipeline(Component):
             out = {**payload, "component": "12_sqlConversionPipeline", "pipeline_status": result["status"], "job_result": result, "next_node": "13_finalSummary"}
             self.status = out
             __log_result = Data(data=out)
-            logging.getLogger("smartmigrate.workflow").info(
-                "after run_pipeline",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "12_PIPELINE",
-                        "log_level": "INFO",
-                        "step_name": "RUN_PIPELINE",
-                        "status": "END",
-                        "message": "after run_pipeline",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").info("after run_pipeline", extra={"workflow_log": [0, "WORKFLOW", "12_PIPELINE", "INFO", "RUN_PIPELINE", "END", "after run_pipeline", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(
-                f"error run_pipeline: {exc}",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "12_PIPELINE",
-                        "log_level": "ERROR",
-                        "step_name": "RUN_PIPELINE",
-                        "status": "ERROR",
-                        "message": f"error run_pipeline: {exc}",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").error(f"error run_pipeline: {exc}", extra={"workflow_log": [0, "WORKFLOW", "12_PIPELINE", "ERROR", "RUN_PIPELINE", "ERROR", f"error run_pipeline: {exc}", 0]})
             raise
 
     def _execution_jobs(self, payload: dict[str, Any]) -> list[dict[str, Any]]:

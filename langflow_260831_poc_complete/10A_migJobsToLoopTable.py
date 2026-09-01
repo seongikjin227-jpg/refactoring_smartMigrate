@@ -38,21 +38,7 @@ class NewType10AMigJobsToLoopTable(Component):
 
     def build_jobs_table(self) -> DataFrame:
         # Build a Loop-compatible DataFrame where each row is one MIG job.
-        logging.getLogger("smartmigrate.workflow").info(
-            "before build_jobs_table",
-            extra={
-                "workflow_log": {
-                    "map_id": 0,
-                    "mig_kind": "WORKFLOW",
-                    "log_type": "10A_MIG_JOBS",
-                    "log_level": "INFO",
-                    "step_name": "BUILD_JOBS_TABLE",
-                    "status": "START",
-                    "message": "before build_jobs_table",
-                    "retry_count": 0,
-                }
-            },
-        )
+        logging.getLogger("smartmigrate.workflow").info("before build_jobs_table", extra={"workflow_log": [0, "WORKFLOW", "10A_MIG_JOBS", "INFO", "BUILD_JOBS_TABLE", "START", "before build_jobs_table", 0]})
         try:
             payload = self._parse_payload(getattr(self, "payload_json", ""))
             db_config = self._db_config(payload)
@@ -84,38 +70,10 @@ class NewType10AMigJobsToLoopTable(Component):
             }
             self.status = status
             __log_result = DataFrame(rows)
-            logging.getLogger("smartmigrate.workflow").info(
-                "after build_jobs_table",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "10A_MIG_JOBS",
-                        "log_level": "INFO",
-                        "step_name": "BUILD_JOBS_TABLE",
-                        "status": "END",
-                        "message": "after build_jobs_table",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").info("after build_jobs_table", extra={"workflow_log": [0, "WORKFLOW", "10A_MIG_JOBS", "INFO", "BUILD_JOBS_TABLE", "END", "after build_jobs_table", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(
-                f"error build_jobs_table: {exc}",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "10A_MIG_JOBS",
-                        "log_level": "ERROR",
-                        "step_name": "BUILD_JOBS_TABLE",
-                        "status": "ERROR",
-                        "message": f"error build_jobs_table: {exc}",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").error(f"error build_jobs_table: {exc}", extra={"workflow_log": [0, "WORKFLOW", "10A_MIG_JOBS", "ERROR", "BUILD_JOBS_TABLE", "ERROR", f"error build_jobs_table: {exc}", 0]})
             raise
 
     def _mig_jobs(self, payload: dict[str, Any], db_config: dict[str, Any]) -> list[dict[str, Any]]:

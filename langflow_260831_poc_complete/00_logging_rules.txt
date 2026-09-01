@@ -27,6 +27,8 @@ Chat Input
 
 중간 컴포넌트는 `self.log()`를 기준으로 삼지 않고, `NEXT_MIG_LOG`에 직접 insert하지도 않는다. DB 접속 정보와 insert SQL은 새 런타임 로그 기준으로는 `00B_logDbUpdate.py`에만 둔다.
 
+SmartMigrate workflow 로그 수집은 Root Logger를 사용하지 않는다. `logging.getLogger()`에 handler를 붙이면 Langflow 내부 로그(`lfx.custom.validate` 등)까지 함께 수집될 수 있으므로, 전용 logger인 `logging.getLogger("smartmigrate.workflow")`만 사용한다.
+
 ## 1. 목적과 적용 범위
 
 목적은 Langflow에서 실제로 어떤 컴포넌트가 어떤 순서로 실행됐는지 나중에 확인할 수 있게 하는 것이다.
@@ -80,24 +82,14 @@ Chat Input -> 00A Log Runtime Start -> 첫 번째 기존 컴포넌트
 
 모든 컴포넌트는 실제 output method 또는 실제 업무 처리가 시작되는 위치에서 `START` 로그를 남긴다. 정상 return 직전에는 `END` 로그를 남긴다. 예외를 다시 던지거나 실패 payload를 반환하는 위치에서는 가능하면 `ERROR` 로그를 남긴다.
 
-기본 호출 형태는 Python `logging`이다.
+기본 호출 형태는 Python `logging`이다. `workflow_log`는 아래 순서의 list로 적는다.
+
+```text
+map_id, mig_kind, log_type, log_level, step_name, status, message, retry_count
+```
 
 ```python
-logging.getLogger("smartmigrate.workflow").info(
-    "before build_result",
-    extra={
-        "workflow_log": {
-            "map_id": 0,
-            "mig_kind": "WORKFLOW",
-            "log_type": "18D_FULL_WORKFLOW_DASHBOARD",
-            "log_level": "INFO",
-            "step_name": "BUILD_RESULT",
-            "status": "START",
-            "message": "before build_result",
-            "retry_count": 0,
-        }
-    },
-)
+logging.getLogger("smartmigrate.workflow").info("before build_result", extra={"workflow_log": [0, "WORKFLOW", "18D_FULL_WORKFLOW_DASHBOARD", "INFO", "BUILD_RESULT", "START", "before build_result", 0]})
 ```
 
 권장 값은 다음과 같다.
@@ -116,13 +108,19 @@ logging.getLogger("smartmigrate.workflow").info(
 
 `00A_logRuntimeStart.py`는 워크플로우 시작 시 다음 일을 한다.
 
-- 기존 `smartmigrate.workflow` memory handler 제거
-- 새 `WorkflowMemoryLogHandler` 등록
+- `logging.getLogger("smartmigrate.workflow")` 획득
+- 해당 logger에 등록된 기존 handler 전부 제거 및 `close()`
+- logger level을 `logging.DEBUG`로 설정
+- `logger.propagate = False` 설정
+- 새 `SmartMigrateMemoryHandler` 하나만 등록
+- handler marker는 `handler_marker = "SmartMigrateHandler"`로 설정
 - run id 생성
 - 첫 시작 로그 1건 기록
 - 입력 텍스트를 그대로 다음 컴포넌트로 전달
 
 `00A`가 먼저 실행되지 않으면 중간 컴포넌트의 logging 이벤트를 모을 handler가 없으므로 runtime log가 수집되지 않는다.
+
+Handler 검색은 `isinstance()`나 `id()`를 기준으로 하지 않는다. Langflow Custom Component reload/recompile 시 같은 클래스명이어도 Python class object가 달라질 수 있으므로, `00B`는 marker attribute 기준으로 handler를 찾는다.
 
 ## 6. 00B Log DB Update
 

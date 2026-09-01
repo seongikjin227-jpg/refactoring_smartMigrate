@@ -39,22 +39,7 @@ ROUTE_ACTIONS = {
 
 
 def _workflow_log(step_name: str, status: str, message: str, log_level: str = "INFO") -> None:
-    logging.getLogger("smartmigrate.workflow").log(
-        logging.ERROR if str(log_level).upper() == "ERROR" else logging.INFO,
-        str(message or ""),
-        extra={
-            "workflow_log": {
-                "map_id": 0,
-                "mig_kind": "WORKFLOW",
-                "log_type": "MULTI_TOOL_01_FULL_WORKFLOW_JOBS_TO_AGENT_MESSAGE",
-                "log_level": str(log_level or "INFO").upper(),
-                "step_name": str(step_name or "")[:50],
-                "status": str(status or "")[:20],
-                "message": str(message or "")[:4000],
-                "retry_count": 0,
-            }
-        },
-    )
+    logging.getLogger("smartmigrate.workflow").log(logging.ERROR if str(log_level).upper() == "ERROR" else logging.INFO, str(message or ""), extra={"workflow_log": [0, "WORKFLOW", "MULTI_TOOL_01_FULL_WORKFLOW_JOBS_TO_AGENT_MESSAGE", str(log_level or "INFO").upper(), str(step_name or "")[:50], str(status or "")[:20], str(message or "")[:4000], 0]})
 
 class MultiToolPoc01FullWorkflowJobsToAgentMessage(Component):
     display_name = "01 Full Workflow Jobs To Agent Message"

@@ -41,21 +41,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
     outputs = [Output(display_name="Job Result", name="job_result", method="run_job", types=["Data"])]
 
     def run_job(self) -> Data:
-        logging.getLogger("smartmigrate.workflow").info(
-            "before run_job",
-            extra={
-                "workflow_log": {
-                    "map_id": 0,
-                    "mig_kind": "WORKFLOW",
-                    "log_type": "15C_SQL_TUNE",
-                    "log_level": "INFO",
-                    "step_name": "RUN_JOB",
-                    "status": "START",
-                    "message": "before run_job",
-                    "retry_count": 0,
-                }
-            },
-        )
+        logging.getLogger("smartmigrate.workflow").info("before run_job", extra={"workflow_log": [0, "WORKFLOW", "15C_SQL_TUNE", "INFO", "RUN_JOB", "START", "before run_job", 0]})
         try:
             """Run one tuning job or pass through when upstream conversion failed."""
             started = time.perf_counter()
@@ -65,21 +51,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                 result = self._component_pass_through(payload, started, "15C skipped because job_name is not conversion or tuning.")
                 self.status = result
                 __log_result = Data(data=result)
-                logging.getLogger("smartmigrate.workflow").info(
-                    "after run_job",
-                    extra={
-                        "workflow_log": {
-                            "map_id": 0,
-                            "mig_kind": "WORKFLOW",
-                            "log_type": "15C_SQL_TUNE",
-                            "log_level": "INFO",
-                            "step_name": "RUN_JOB",
-                            "status": "END",
-                            "message": "after run_job",
-                            "retry_count": 0,
-                        }
-                    },
-                )
+                logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "15C_SQL_TUNE", "INFO", "RUN_JOB", "END", "after run_job", 0]})
                 return __log_result
             db_config = self._db_config(payload)
             self._require_db_config(db_config)
@@ -99,21 +71,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                     )
                     self.status = result
                     __log_result = Data(data=result)
-                    logging.getLogger("smartmigrate.workflow").info(
-                        "after run_job",
-                        extra={
-                            "workflow_log": {
-                                "map_id": 0,
-                                "mig_kind": "WORKFLOW",
-                                "log_type": "15C_SQL_TUNE",
-                                "log_level": "INFO",
-                                "step_name": "RUN_JOB",
-                                "status": "END",
-                                "message": "after run_job",
-                                "retry_count": 0,
-                            }
-                        },
-                    )
+                    logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "15C_SQL_TUNE", "INFO", "RUN_JOB", "END", "after run_job", 0]})
                     return __log_result
 
                 self._increment_batch_count(db_config, str(job["row_id"]))
@@ -122,38 +80,10 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                 result = self._finish_failure(payload, job, db_config, started, FAIL_TUNED, str(exc))
             self.status = result
             __log_result = Data(data=result)
-            logging.getLogger("smartmigrate.workflow").info(
-                "after run_job",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "15C_SQL_TUNE",
-                        "log_level": "INFO",
-                        "step_name": "RUN_JOB",
-                        "status": "END",
-                        "message": "after run_job",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "15C_SQL_TUNE", "INFO", "RUN_JOB", "END", "after run_job", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(
-                f"error run_job: {exc}",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "15C_SQL_TUNE",
-                        "log_level": "ERROR",
-                        "step_name": "RUN_JOB",
-                        "status": "ERROR",
-                        "message": f"error run_job: {exc}",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").error(f"error run_job: {exc}", extra={"workflow_log": [0, "WORKFLOW", "15C_SQL_TUNE", "ERROR", "RUN_JOB", "ERROR", f"error run_job: {exc}", 0]})
             raise
 
     def _should_run_tuning(self, payload: dict[str, Any]) -> bool:

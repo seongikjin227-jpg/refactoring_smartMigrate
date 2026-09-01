@@ -11,19 +11,31 @@ from lfx.schema.message import Message
 
 
 LOGGER_NAME = "smartmigrate.workflow"
+HANDLER_MARKER = "SmartMigrateHandler"
 
 
-class WorkflowMemoryLogHandler(logging.Handler):
-    smartmigrate_workflow_handler = True
+class SmartMigrateMemoryHandler(logging.Handler):
 
-    def __init__(self, run_id: str):
-        super().__init__(level=logging.INFO)
-        self.run_id = run_id
+    def __init__(self):
+        super().__init__(level=logging.DEBUG)
+        self.handler_marker = HANDLER_MARKER
+        self.run_id = f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
         self.records: list[dict] = []
         self.persisted = False
 
     def emit(self, record: logging.LogRecord) -> None:
         event = getattr(record, "workflow_log", None)
+        if isinstance(event, (list, tuple)):
+            event = {
+                "map_id": event[0] if len(event) > 0 else 0,
+                "mig_kind": event[1] if len(event) > 1 else "WORKFLOW",
+                "log_type": event[2] if len(event) > 2 else "PY_LOG",
+                "log_level": event[3] if len(event) > 3 else "noLevelName",
+                "step_name": event[4] if len(event) > 4 else "LOGGING",
+                "status": event[5] if len(event) > 5 else "noStatus",
+                "message": event[6] if len(event) > 6 else "noMessage",
+                "retry_count": event[7] if len(event) > 7 else 0,
+            }
         if not isinstance(event, dict):
             event = {
                 "map_id": 0,
@@ -66,27 +78,16 @@ class NewType00ALogRuntimeStart(Component):
 
     def run(self) -> Message:
         text = str(getattr(self, "input_text", "") or "")
-        run_id = f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
         logger = logging.getLogger(LOGGER_NAME)
         for handler in list(logger.handlers):
             logger.removeHandler(handler)
-            handler.close()
-        logger.setLevel(logging.INFO)
+            try:
+                handler.close()
+            except Exception:
+                pass
+        logger.setLevel(logging.DEBUG)
         logger.propagate = False
-        logger.addHandler(WorkflowMemoryLogHandler(run_id))
-        logger.info(
-            f"workflow start input_len={len(text)}",
-            extra={
-                "workflow_log": {
-                    "map_id": 0,
-                    "mig_kind": "WORKFLOW",
-                    "log_type": "LOG_RUNTIME_START",
-                    "log_level": "INFO",
-                    "step_name": "RUN",
-                    "status": "START",
-                    "message": f"workflow start input_len={len(text)}",
-                    "retry_count": 0,
-                }
-            },
-        )
+        handler = SmartMigrateMemoryHandler()
+        logger.addHandler(handler)
+        logger.info(f"workflow start input_len={len(text)}", extra={"workflow_log": [0, "WORKFLOW", "LOG_RUNTIME_START", "INFO", "RUN", "START", f"workflow start input_len={len(text)}", 0]})
         return Message(text=text)

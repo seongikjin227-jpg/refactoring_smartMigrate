@@ -100,367 +100,73 @@ class NewType08JobExecutionRouter(Component):
     ]
 
     def mig_response(self) -> Data:
-        logging.getLogger("smartmigrate.workflow").info(
-            "before mig_response",
-            extra={
-                "workflow_log": {
-                    "map_id": 0,
-                    "mig_kind": "WORKFLOW",
-                    "log_type": "08_JOB_ROUTER",
-                    "log_level": "INFO",
-                    "step_name": "MIG_RESPONSE",
-                    "status": "START",
-                    "message": "before mig_response",
-                    "retry_count": 0,
-                }
-            },
-        )
+        logging.getLogger("smartmigrate.workflow").info("before mig_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "MIG_RESPONSE", "START", "before mig_response", 0]})
         try:
             __log_result = self._route_output("MIG", "mig_job")
-            logging.getLogger("smartmigrate.workflow").info(
-                "after mig_response",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "08_JOB_ROUTER",
-                        "log_level": "INFO",
-                        "step_name": "MIG_RESPONSE",
-                        "status": "END",
-                        "message": "after mig_response",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").info("after mig_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "MIG_RESPONSE", "END", "after mig_response", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(
-                f"error mig_response: {exc}",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "08_JOB_ROUTER",
-                        "log_level": "ERROR",
-                        "step_name": "MIG_RESPONSE",
-                        "status": "ERROR",
-                        "message": f"error mig_response: {exc}",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").error(f"error mig_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "ERROR", "MIG_RESPONSE", "ERROR", f"error mig_response: {exc}", 0]})
             raise
 
     def sql_conversion_response(self) -> Data:
-        logging.getLogger("smartmigrate.workflow").info(
-            "before sql_conversion_response",
-            extra={
-                "workflow_log": {
-                    "map_id": 0,
-                    "mig_kind": "WORKFLOW",
-                    "log_type": "08_JOB_ROUTER",
-                    "log_level": "INFO",
-                    "step_name": "SQL_CONVERSION_RESPONSE",
-                    "status": "START",
-                    "message": "before sql_conversion_response",
-                    "retry_count": 0,
-                }
-            },
-        )
+        logging.getLogger("smartmigrate.workflow").info("before sql_conversion_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "SQL_CONVERSION_RESPONSE", "START", "before sql_conversion_response", 0]})
         try:
             __log_result = self._route_output("SQL_CONVERSION", "sql_conversion_job")
-            logging.getLogger("smartmigrate.workflow").info(
-                "after sql_conversion_response",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "08_JOB_ROUTER",
-                        "log_level": "INFO",
-                        "step_name": "SQL_CONVERSION_RESPONSE",
-                        "status": "END",
-                        "message": "after sql_conversion_response",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").info("after sql_conversion_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "SQL_CONVERSION_RESPONSE", "END", "after sql_conversion_response", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(
-                f"error sql_conversion_response: {exc}",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "08_JOB_ROUTER",
-                        "log_level": "ERROR",
-                        "step_name": "SQL_CONVERSION_RESPONSE",
-                        "status": "ERROR",
-                        "message": f"error sql_conversion_response: {exc}",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").error(f"error sql_conversion_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "ERROR", "SQL_CONVERSION_RESPONSE", "ERROR", f"error sql_conversion_response: {exc}", 0]})
             raise
 
     def sql_tuning_response(self) -> Data:
-        logging.getLogger("smartmigrate.workflow").info(
-            "before sql_tuning_response",
-            extra={
-                "workflow_log": {
-                    "map_id": 0,
-                    "mig_kind": "WORKFLOW",
-                    "log_type": "08_JOB_ROUTER",
-                    "log_level": "INFO",
-                    "step_name": "SQL_TUNING_RESPONSE",
-                    "status": "START",
-                    "message": "before sql_tuning_response",
-                    "retry_count": 0,
-                }
-            },
-        )
+        logging.getLogger("smartmigrate.workflow").info("before sql_tuning_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "SQL_TUNING_RESPONSE", "START", "before sql_tuning_response", 0]})
         try:
             __log_result = self._route_output("SQL_TUNING", "sql_tuning_job")
-            logging.getLogger("smartmigrate.workflow").info(
-                "after sql_tuning_response",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "08_JOB_ROUTER",
-                        "log_level": "INFO",
-                        "step_name": "SQL_TUNING_RESPONSE",
-                        "status": "END",
-                        "message": "after sql_tuning_response",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").info("after sql_tuning_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "SQL_TUNING_RESPONSE", "END", "after sql_tuning_response", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(
-                f"error sql_tuning_response: {exc}",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "08_JOB_ROUTER",
-                        "log_level": "ERROR",
-                        "step_name": "SQL_TUNING_RESPONSE",
-                        "status": "ERROR",
-                        "message": f"error sql_tuning_response: {exc}",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").error(f"error sql_tuning_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "ERROR", "SQL_TUNING_RESPONSE", "ERROR", f"error sql_tuning_response: {exc}", 0]})
             raise
 
     def sql_formatting_response(self) -> Data:
-        logging.getLogger("smartmigrate.workflow").info(
-            "before sql_formatting_response",
-            extra={
-                "workflow_log": {
-                    "map_id": 0,
-                    "mig_kind": "WORKFLOW",
-                    "log_type": "08_JOB_ROUTER",
-                    "log_level": "INFO",
-                    "step_name": "SQL_FORMATTING_RESPONSE",
-                    "status": "START",
-                    "message": "before sql_formatting_response",
-                    "retry_count": 0,
-                }
-            },
-        )
+        logging.getLogger("smartmigrate.workflow").info("before sql_formatting_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "SQL_FORMATTING_RESPONSE", "START", "before sql_formatting_response", 0]})
         try:
             __log_result = self._route_output("SQL_FORMATTING", "sql_formatting_job")
-            logging.getLogger("smartmigrate.workflow").info(
-                "after sql_formatting_response",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "08_JOB_ROUTER",
-                        "log_level": "INFO",
-                        "step_name": "SQL_FORMATTING_RESPONSE",
-                        "status": "END",
-                        "message": "after sql_formatting_response",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").info("after sql_formatting_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "SQL_FORMATTING_RESPONSE", "END", "after sql_formatting_response", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(
-                f"error sql_formatting_response: {exc}",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "08_JOB_ROUTER",
-                        "log_level": "ERROR",
-                        "step_name": "SQL_FORMATTING_RESPONSE",
-                        "status": "ERROR",
-                        "message": f"error sql_formatting_response: {exc}",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").error(f"error sql_formatting_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "ERROR", "SQL_FORMATTING_RESPONSE", "ERROR", f"error sql_formatting_response: {exc}", 0]})
             raise
 
     def full_workflow_response(self) -> Data:
-        logging.getLogger("smartmigrate.workflow").info(
-            "before full_workflow_response",
-            extra={
-                "workflow_log": {
-                    "map_id": 0,
-                    "mig_kind": "WORKFLOW",
-                    "log_type": "08_JOB_ROUTER",
-                    "log_level": "INFO",
-                    "step_name": "FULL_WORKFLOW_RESPONSE",
-                    "status": "START",
-                    "message": "before full_workflow_response",
-                    "retry_count": 0,
-                }
-            },
-        )
+        logging.getLogger("smartmigrate.workflow").info("before full_workflow_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "FULL_WORKFLOW_RESPONSE", "START", "before full_workflow_response", 0]})
         try:
             __log_result = self._route_output("FULL_WORKFLOW", "full_workflow_job")
-            logging.getLogger("smartmigrate.workflow").info(
-                "after full_workflow_response",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "08_JOB_ROUTER",
-                        "log_level": "INFO",
-                        "step_name": "FULL_WORKFLOW_RESPONSE",
-                        "status": "END",
-                        "message": "after full_workflow_response",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").info("after full_workflow_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "FULL_WORKFLOW_RESPONSE", "END", "after full_workflow_response", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(
-                f"error full_workflow_response: {exc}",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "08_JOB_ROUTER",
-                        "log_level": "ERROR",
-                        "step_name": "FULL_WORKFLOW_RESPONSE",
-                        "status": "ERROR",
-                        "message": f"error full_workflow_response: {exc}",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").error(f"error full_workflow_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "ERROR", "FULL_WORKFLOW_RESPONSE", "ERROR", f"error full_workflow_response: {exc}", 0]})
             raise
 
     def prerequisite_required_response(self) -> Message:
-        logging.getLogger("smartmigrate.workflow").info(
-            "before prerequisite_required_response",
-            extra={
-                "workflow_log": {
-                    "map_id": 0,
-                    "mig_kind": "WORKFLOW",
-                    "log_type": "08_JOB_ROUTER",
-                    "log_level": "INFO",
-                    "step_name": "PREREQUISITE_REQUIRED_RESPONSE",
-                    "status": "START",
-                    "message": "before prerequisite_required_response",
-                    "retry_count": 0,
-                }
-            },
-        )
+        logging.getLogger("smartmigrate.workflow").info("before prerequisite_required_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "PREREQUISITE_REQUIRED_RESPONSE", "START", "before prerequisite_required_response", 0]})
         try:
             __log_result = self._message_route_output("PREREQUISITE_REQUIRED", "prerequisite_required")
-            logging.getLogger("smartmigrate.workflow").info(
-                "after prerequisite_required_response",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "08_JOB_ROUTER",
-                        "log_level": "INFO",
-                        "step_name": "PREREQUISITE_REQUIRED_RESPONSE",
-                        "status": "END",
-                        "message": "after prerequisite_required_response",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").info("after prerequisite_required_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "PREREQUISITE_REQUIRED_RESPONSE", "END", "after prerequisite_required_response", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(
-                f"error prerequisite_required_response: {exc}",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "08_JOB_ROUTER",
-                        "log_level": "ERROR",
-                        "step_name": "PREREQUISITE_REQUIRED_RESPONSE",
-                        "status": "ERROR",
-                        "message": f"error prerequisite_required_response: {exc}",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").error(f"error prerequisite_required_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "ERROR", "PREREQUISITE_REQUIRED_RESPONSE", "ERROR", f"error prerequisite_required_response: {exc}", 0]})
             raise
 
     def no_runnable_response(self) -> Message:
-        logging.getLogger("smartmigrate.workflow").info(
-            "before no_runnable_response",
-            extra={
-                "workflow_log": {
-                    "map_id": 0,
-                    "mig_kind": "WORKFLOW",
-                    "log_type": "08_JOB_ROUTER",
-                    "log_level": "INFO",
-                    "step_name": "NO_RUNNABLE_RESPONSE",
-                    "status": "START",
-                    "message": "before no_runnable_response",
-                    "retry_count": 0,
-                }
-            },
-        )
+        logging.getLogger("smartmigrate.workflow").info("before no_runnable_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "NO_RUNNABLE_RESPONSE", "START", "before no_runnable_response", 0]})
         try:
             __log_result = self._message_route_output("NO_RUNNABLE_JOB", "no_runnable_job")
-            logging.getLogger("smartmigrate.workflow").info(
-                "after no_runnable_response",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "08_JOB_ROUTER",
-                        "log_level": "INFO",
-                        "step_name": "NO_RUNNABLE_RESPONSE",
-                        "status": "END",
-                        "message": "after no_runnable_response",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").info("after no_runnable_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "NO_RUNNABLE_RESPONSE", "END", "after no_runnable_response", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(
-                f"error no_runnable_response: {exc}",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "08_JOB_ROUTER",
-                        "log_level": "ERROR",
-                        "step_name": "NO_RUNNABLE_RESPONSE",
-                        "status": "ERROR",
-                        "message": f"error no_runnable_response: {exc}",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").error(f"error no_runnable_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "ERROR", "NO_RUNNABLE_RESPONSE", "ERROR", f"error no_runnable_response: {exc}", 0]})
             raise
 
     def _route_output(self, expected_route: str, output_name: str) -> Data:

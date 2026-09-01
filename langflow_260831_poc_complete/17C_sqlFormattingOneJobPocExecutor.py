@@ -38,21 +38,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
     outputs = [Output(display_name="Job Result", name="job_result", method="run_job", types=["Data"])]
 
     def run_job(self) -> Data:
-        logging.getLogger("smartmigrate.workflow").info(
-            "before run_job",
-            extra={
-                "workflow_log": {
-                    "map_id": 0,
-                    "mig_kind": "WORKFLOW",
-                    "log_type": "17C_SQL_FORMAT",
-                    "log_level": "INFO",
-                    "step_name": "RUN_JOB",
-                    "status": "START",
-                    "message": "before run_job",
-                    "retry_count": 0,
-                }
-            },
-        )
+        logging.getLogger("smartmigrate.workflow").info("before run_job", extra={"workflow_log": [0, "WORKFLOW", "17C_SQL_FORMAT", "INFO", "RUN_JOB", "START", "before run_job", 0]})
         try:
             """Run one formatting job or pass through when tuning did not pass."""
             started = time.perf_counter()
@@ -61,21 +47,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                 result = self._component_pass_through(payload, started, "17C skipped because job_name is migration.")
                 self.status = result
                 __log_result = Data(data=result)
-                logging.getLogger("smartmigrate.workflow").info(
-                    "after run_job",
-                    extra={
-                        "workflow_log": {
-                            "map_id": 0,
-                            "mig_kind": "WORKFLOW",
-                            "log_type": "17C_SQL_FORMAT",
-                            "log_level": "INFO",
-                            "step_name": "RUN_JOB",
-                            "status": "END",
-                            "message": "after run_job",
-                            "retry_count": 0,
-                        }
-                    },
-                )
+                logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "17C_SQL_FORMAT", "INFO", "RUN_JOB", "END", "after run_job", 0]})
                 return __log_result
             db_config = self._db_config(payload)
             self._require_db_config(db_config)
@@ -95,21 +67,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                     )
                     self.status = result
                     __log_result = Data(data=result)
-                    logging.getLogger("smartmigrate.workflow").info(
-                        "after run_job",
-                        extra={
-                            "workflow_log": {
-                                "map_id": 0,
-                                "mig_kind": "WORKFLOW",
-                                "log_type": "17C_SQL_FORMAT",
-                                "log_level": "INFO",
-                                "step_name": "RUN_JOB",
-                                "status": "END",
-                                "message": "after run_job",
-                                "retry_count": 0,
-                            }
-                        },
-                    )
+                    logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "17C_SQL_FORMAT", "INFO", "RUN_JOB", "END", "after run_job", 0]})
                     return __log_result
 
                 self._increment_batch_count(db_config, str(job["row_id"]))
@@ -118,38 +76,10 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                 result = self._finish_failure(payload, job, started, str(exc))
             self.status = result
             __log_result = Data(data=result)
-            logging.getLogger("smartmigrate.workflow").info(
-                "after run_job",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "17C_SQL_FORMAT",
-                        "log_level": "INFO",
-                        "step_name": "RUN_JOB",
-                        "status": "END",
-                        "message": "after run_job",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "17C_SQL_FORMAT", "INFO", "RUN_JOB", "END", "after run_job", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(
-                f"error run_job: {exc}",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "17C_SQL_FORMAT",
-                        "log_level": "ERROR",
-                        "step_name": "RUN_JOB",
-                        "status": "ERROR",
-                        "message": f"error run_job: {exc}",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").error(f"error run_job: {exc}", extra={"workflow_log": [0, "WORKFLOW", "17C_SQL_FORMAT", "ERROR", "RUN_JOB", "ERROR", f"error run_job: {exc}", 0]})
             raise
 
     def _should_run_formatting(self, payload: dict[str, Any]) -> bool:

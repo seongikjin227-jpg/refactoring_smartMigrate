@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
 
@@ -9,6 +9,7 @@ from lfx.schema.message import Message
 
 
 LOGGER_NAME = "smartmigrate.workflow"
+HANDLER_MARKER = "SmartMigrateHandler"
 
 
 class NewType00BLogDbUpdate(Component):
@@ -65,27 +66,12 @@ class NewType00BLogDbUpdate(Component):
         status = "ERROR" if self._looks_like_error(text) else "END"
         log_level = "ERROR" if status == "ERROR" else "INFO"
         message = f"workflow final status={status} output_len={len(text)}"
-        logging.getLogger(LOGGER_NAME).log(
-            logging.ERROR if log_level == "ERROR" else logging.INFO,
-            message,
-            extra={
-                "workflow_log": {
-                    "map_id": 0,
-                    "mig_kind": "WORKFLOW",
-                    "log_type": "LOG_DB_UPDATE",
-                    "log_level": log_level,
-                    "step_name": "RUN",
-                    "status": status,
-                    "message": message,
-                    "retry_count": 0,
-                }
-            },
-        )
+        logging.getLogger(LOGGER_NAME).log(logging.ERROR if log_level == "ERROR" else logging.INFO, message, extra={"workflow_log": [0, "WORKFLOW", "LOG_DB_UPDATE", log_level, "RUN", status, message, 0]})
 
     def _workflow_handler(self):
         logger = logging.getLogger(LOGGER_NAME)
         for handler in logger.handlers:
-            if getattr(handler, "smartmigrate_workflow_handler", False):
+            if getattr(handler, "handler_marker", None) == HANDLER_MARKER:
                 return handler
         return None
 

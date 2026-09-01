@@ -62,7 +62,6 @@ class NewType10BMigLoop(Component):
                 map_ids.append(int(payload.get("map_id")))
             except (TypeError, ValueError):
                 raise ValueError(f"10B MIG job row {index} requires map_id") from None
-        self.log(f"Normalized MIG loop map_ids={map_ids}", name="Input")
         self.update_ctx(
             {
                 f"{self._id}_data": data_list,
@@ -135,44 +134,26 @@ class NewType10BMigLoop(Component):
         try:
             self.initialize_data()
             data_list = self.ctx.get(f"{self._id}_data", [])
-            self.log(f"Starting MIG loop over {len(data_list)} job(s)", name="Start")
             if not data_list:
                 self.update_ctx({f"{self._id}_aggregated": [], f"{self._id}_iterated": True})
-                self.log("No MIG jobs to iterate", name="Skipped")
                 return []
             aggregated_results = await self.execute_loop_body(data_list, event_manager=self._event_manager)
         except Exception as exc:
             from lfx.log.logger import logger
 
             elapsed = time.perf_counter() - started_at
-            self.log(f"MIG loop failed after {elapsed:.3f}s: {exc}", name="Error")
             await logger.aexception(f"MIG loop {self._id} failed while executing loop body")
             self.update_ctx({f"{self._id}_iteration_error": exc, f"{self._id}_iterated": True})
             raise
 
         elapsed = time.perf_counter() - started_at
-        self.log(f"Completed {len(aggregated_results)} MIG iteration(s) in {elapsed:.3f}s", name="Complete")
         self.update_ctx({f"{self._id}_aggregated": aggregated_results, f"{self._id}_iterated": True})
         return aggregated_results
 
     async def item_output(self) -> Data:
         # The Item output is only the loop-body entry point. Its normal return
         # value must never continue through the outer graph into 10C.
-        logging.getLogger("smartmigrate.workflow").info(
-            "before item_output",
-            extra={
-                "workflow_log": {
-                    "map_id": 0,
-                    "mig_kind": "WORKFLOW",
-                    "log_type": "10B_MIG_LOOP",
-                    "log_level": "INFO",
-                    "step_name": "ITEM_OUTPUT",
-                    "status": "START",
-                    "message": "before item_output",
-                    "retry_count": 0,
-                }
-            },
-        )
+        logging.getLogger("smartmigrate.workflow").info("before item_output", extra={"workflow_log": [0, "WORKFLOW", "10B_MIG_LOOP", "INFO", "ITEM_OUTPUT", "START", "before item_output", 0]})
         try:
             self.stop("item")
             try:
@@ -185,57 +166,15 @@ class NewType10BMigLoop(Component):
                 self.stop("item")
             data_list = self.ctx.get(f"{self._id}_data", [])
             __log_result = Data(data={"count": len(data_list), "items": [self._data_dict(item) for item in data_list]})
-            logging.getLogger("smartmigrate.workflow").info(
-                "after item_output",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "10B_MIG_LOOP",
-                        "log_level": "INFO",
-                        "step_name": "ITEM_OUTPUT",
-                        "status": "END",
-                        "message": "after item_output",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").info("after item_output", extra={"workflow_log": [0, "WORKFLOW", "10B_MIG_LOOP", "INFO", "ITEM_OUTPUT", "END", "after item_output", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(
-                f"error item_output: {exc}",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "10B_MIG_LOOP",
-                        "log_level": "ERROR",
-                        "step_name": "ITEM_OUTPUT",
-                        "status": "ERROR",
-                        "message": f"error item_output: {exc}",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").error(f"error item_output: {exc}", extra={"workflow_log": [0, "WORKFLOW", "10B_MIG_LOOP", "ERROR", "ITEM_OUTPUT", "ERROR", f"error item_output: {exc}", 0]})
             raise
 
     async def done_output(self) -> Data:
         # The Done output is the post-loop path. Connect it to 11.
-        logging.getLogger("smartmigrate.workflow").info(
-            "before done_output",
-            extra={
-                "workflow_log": {
-                    "map_id": 0,
-                    "mig_kind": "WORKFLOW",
-                    "log_type": "10B_MIG_LOOP",
-                    "log_level": "INFO",
-                    "step_name": "DONE_OUTPUT",
-                    "status": "START",
-                    "message": "before done_output",
-                    "retry_count": 0,
-                }
-            },
-        )
+        logging.getLogger("smartmigrate.workflow").info("before done_output", extra={"workflow_log": [0, "WORKFLOW", "10B_MIG_LOOP", "INFO", "DONE_OUTPUT", "START", "before done_output", 0]})
         try:
             if self._vertex is not None:
                 await self._iterate()
@@ -250,38 +189,10 @@ class NewType10BMigLoop(Component):
             }
             self.status = payload
             __log_result = Data(data=payload)
-            logging.getLogger("smartmigrate.workflow").info(
-                "after done_output",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "10B_MIG_LOOP",
-                        "log_level": "INFO",
-                        "step_name": "DONE_OUTPUT",
-                        "status": "END",
-                        "message": "after done_output",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").info("after done_output", extra={"workflow_log": [0, "WORKFLOW", "10B_MIG_LOOP", "INFO", "DONE_OUTPUT", "END", "after done_output", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(
-                f"error done_output: {exc}",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "10B_MIG_LOOP",
-                        "log_level": "ERROR",
-                        "step_name": "DONE_OUTPUT",
-                        "status": "ERROR",
-                        "message": f"error done_output: {exc}",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").error(f"error done_output: {exc}", extra={"workflow_log": [0, "WORKFLOW", "10B_MIG_LOOP", "ERROR", "DONE_OUTPUT", "ERROR", f"error done_output: {exc}", 0]})
             raise
 
     def _data_dict(self, item: Any) -> dict[str, Any]:

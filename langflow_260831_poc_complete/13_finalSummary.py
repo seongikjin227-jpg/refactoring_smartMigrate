@@ -28,21 +28,7 @@ class NewType13FinalSummary(Component):
 
     def summarize(self) -> Message:
         # Create the final user-facing flow summary message.
-        logging.getLogger("smartmigrate.workflow").info(
-            "before summarize",
-            extra={
-                "workflow_log": {
-                    "map_id": 0,
-                    "mig_kind": "WORKFLOW",
-                    "log_type": "13_FINAL_SUMMARY",
-                    "log_level": "INFO",
-                    "step_name": "SUMMARIZE",
-                    "status": "START",
-                    "message": "before summarize",
-                    "retry_count": 0,
-                }
-            },
-        )
+        logging.getLogger("smartmigrate.workflow").info("before summarize", extra={"workflow_log": [0, "WORKFLOW", "13_FINAL_SUMMARY", "INFO", "SUMMARIZE", "START", "before summarize", 0]})
         try:
             try:
                 payload = self._parse_payload(getattr(self, "payload_json", ""))
@@ -50,73 +36,17 @@ class NewType13FinalSummary(Component):
                 result = {**payload, "component": "13_finalSummary", "answer_text": answer, "final": True}
                 self.status = result
                 __log_result = Message(text=answer)
-                logging.getLogger("smartmigrate.workflow").info(
-                    "after summarize",
-                    extra={
-                        "workflow_log": {
-                            "map_id": 0,
-                            "mig_kind": "WORKFLOW",
-                            "log_type": "13_FINAL_SUMMARY",
-                            "log_level": "INFO",
-                            "step_name": "SUMMARIZE",
-                            "status": "END",
-                            "message": "after summarize",
-                            "retry_count": 0,
-                        }
-                    },
-                )
+                logging.getLogger("smartmigrate.workflow").info("after summarize", extra={"workflow_log": [0, "WORKFLOW", "13_FINAL_SUMMARY", "INFO", "SUMMARIZE", "END", "after summarize", 0]})
                 return __log_result
             except Exception as exc:
                 result = {"ok": False, "component": "13_finalSummary", "error": str(exc), "answer_text": f"POC flow failed: {exc}"}
                 self.status = result
                 __log_result = Message(text=result["answer_text"])
-                logging.getLogger("smartmigrate.workflow").error(
-                    "error summarize",
-                    extra={
-                        "workflow_log": {
-                            "map_id": 0,
-                            "mig_kind": "WORKFLOW",
-                            "log_type": "13_FINAL_SUMMARY",
-                            "log_level": "ERROR",
-                            "step_name": "SUMMARIZE",
-                            "status": "ERROR",
-                            "message": "error summarize",
-                            "retry_count": 0,
-                        }
-                    },
-                )
+                logging.getLogger("smartmigrate.workflow").error("error summarize", extra={"workflow_log": [0, "WORKFLOW", "13_FINAL_SUMMARY", "ERROR", "SUMMARIZE", "ERROR", "error summarize", 0]})
                 return __log_result
-            logging.getLogger("smartmigrate.workflow").info(
-                "after summarize",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "13_FINAL_SUMMARY",
-                        "log_level": "INFO",
-                        "step_name": "SUMMARIZE",
-                        "status": "END",
-                        "message": "after summarize",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").info("after summarize", extra={"workflow_log": [0, "WORKFLOW", "13_FINAL_SUMMARY", "INFO", "SUMMARIZE", "END", "after summarize", 0]})
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(
-                f"error summarize: {exc}",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "13_FINAL_SUMMARY",
-                        "log_level": "ERROR",
-                        "step_name": "SUMMARIZE",
-                        "status": "ERROR",
-                        "message": f"error summarize: {exc}",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").error(f"error summarize: {exc}", extra={"workflow_log": [0, "WORKFLOW", "13_FINAL_SUMMARY", "ERROR", "SUMMARIZE", "ERROR", f"error summarize: {exc}", 0]})
             raise
 
     def _answer_text(self, payload: dict[str, Any]) -> str:

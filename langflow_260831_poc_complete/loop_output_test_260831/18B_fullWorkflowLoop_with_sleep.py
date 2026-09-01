@@ -121,7 +121,6 @@ class LoopOutputTest18BFullWorkflowLoopWithSleep(Component):
         try:
             self.initialize_data()
             data_list = self.ctx.get(f"{self._id}_data", [])
-            self.log(f"Starting Full Workflow loop over {len(data_list)} job(s)", name="Start")
             if not data_list:
                 self.update_ctx({f"{self._id}_aggregated": [], f"{self._id}_iterated": True})
                 return []
@@ -139,13 +138,11 @@ class LoopOutputTest18BFullWorkflowLoopWithSleep(Component):
                     if db_gate.get("block_sql"):
                         skipped_plan_counts = self._plan_counts(data_list[index:])
                         abort_reason = str(db_gate.get("reason") or "DB Migration failed; SQL phases were not started.")
-                        self.log(f"{abort_reason} stats={db_gate}", name="DB Phase Gate")
                         break
 
                 if migration_failed and self._route(item_payload) != "MIG":
                     skipped_plan_counts = self._plan_counts(data_list[index:])
-                    abort_reason = "DB Migration 결과에 실패/미완료 작업이 있어 SQL Conversion 이후 작업을 시작하지 않았습니다."
-                    self.log(abort_reason, name="Phase Gate")
+                    abort_reason = "DB Migration 寃곌낵???ㅽ뙣/誘몄셿猷??묒뾽???덉뼱 SQL Conversion ?댄썑 ?묒뾽???쒖옉?섏? ?딆븯?듬땲??"
                     break
 
                 self._log_workflow("WORKFLOW_ITEM", "INFO", "ITEM_START", "START", f"start one item {index + 1}/{len(data_list)}")
@@ -174,13 +171,11 @@ class LoopOutputTest18BFullWorkflowLoopWithSleep(Component):
             from lfx.log.logger import logger
 
             elapsed = time.perf_counter() - started_at
-            self.log(f"Full Workflow loop failed after {elapsed:.3f}s: {exc}", name="Error")
             await logger.aexception(f"Full Workflow loop {self._id} failed while executing loop body")
             self.update_ctx({f"{self._id}_iteration_error": exc, f"{self._id}_iterated": True})
             raise
 
         elapsed = time.perf_counter() - started_at
-        self.log(f"Completed {len(aggregated_results)} Full Workflow iteration(s) in {elapsed:.3f}s", name="Complete")
         self.update_ctx({f"{self._id}_aggregated": aggregated_results, f"{self._id}_iterated": True})
         return aggregated_results
 
@@ -318,7 +313,6 @@ class LoopOutputTest18BFullWorkflowLoopWithSleep(Component):
                 )
                 row = cur.fetchone() or (0, 0)
         except Exception as exc:
-            self.log(f"DB migration phase gate query failed: {exc}", name="DB Phase Gate")
             return {"block_sql": False, "reason": f"DB phase gate query failed: {exc}"}
 
         pending_null_count = self._num(row[0])
@@ -329,7 +323,7 @@ class LoopOutputTest18BFullWorkflowLoopWithSleep(Component):
             "pending_null_count": pending_null_count,
             "fail_count": fail_count,
             "reason": (
-                f"DB Migration 종료 후 실패 상태가 {fail_count}건 있어 SQL Conversion 이후 작업을 시작하지 않았습니다."
+                f"DB Migration 醫낅즺 ???ㅽ뙣 ?곹깭媛 {fail_count}嫄??덉뼱 SQL Conversion ?댄썑 ?묒뾽???쒖옉?섏? ?딆븯?듬땲??"
                 if block_sql
                 else ""
             ),
@@ -357,22 +351,7 @@ class LoopOutputTest18BFullWorkflowLoopWithSleep(Component):
         return all(str(db_config.get(key) or "").strip() for key in ("db_host", "db_service_name", "db_username"))
 
     def _log_workflow(self, log_type: str, log_level: str, step_name: str, status: str, message: str) -> None:
-        logging.getLogger("smartmigrate.workflow").log(
-            logging.ERROR if str(log_level).upper() == "ERROR" else logging.INFO,
-            str(message or ""),
-            extra={
-                "workflow_log": {
-                    "map_id": 0,
-                    "mig_kind": "WORKFLOW",
-                    "log_type": str(log_type or "")[:20],
-                    "log_level": str(log_level or "")[:20],
-                    "step_name": str(step_name or "")[:50],
-                    "status": str(status or "")[:20],
-                    "message": str(message or "")[:4000],
-                    "retry_count": 0,
-                }
-            },
-        )
+        logging.getLogger("smartmigrate.workflow").log(logging.ERROR if str(log_level).upper() == "ERROR" else logging.INFO, str(message or ""), extra={"workflow_log": [0, "WORKFLOW", str(log_type or "")[:20], str(log_level or "")[:20], str(step_name or "")[:50], str(status or "")[:20], str(message or "")[:4000], 0]})
 
     @contextmanager
     def _connect(self, db_config: dict[str, Any]):

@@ -30,22 +30,7 @@ SKIP_STATUSES = {"PASS-THROUGH", "SKIP", "SKIPPED", "PREREQUISITE_REQUIRED"}
 
 
 def _workflow_log(step_name: str, status: str, message: str, log_level: str = "INFO") -> None:
-    logging.getLogger("smartmigrate.workflow").log(
-        logging.ERROR if str(log_level).upper() == "ERROR" else logging.INFO,
-        str(message or ""),
-        extra={
-            "workflow_log": {
-                "map_id": 0,
-                "mig_kind": "WORKFLOW",
-                "log_type": "LOOP_TEST_01_FINAL_STATUS_AUDIT",
-                "log_level": str(log_level or "INFO").upper(),
-                "step_name": str(step_name or "")[:50],
-                "status": str(status or "")[:20],
-                "message": str(message or "")[:4000],
-                "retry_count": 0,
-            }
-        },
-    )
+    logging.getLogger("smartmigrate.workflow").log(logging.ERROR if str(log_level).upper() == "ERROR" else logging.INFO, str(message or ""), extra={"workflow_log": [0, "WORKFLOW", "LOOP_TEST_01_FINAL_STATUS_AUDIT", str(log_level or "INFO").upper(), str(step_name or "")[:50], str(status or "")[:20], str(message or "")[:4000], 0]})
 
 class LoopOutputTest01FinalStatusAudit(Component):
     display_name = "Loop Output Test 01 Final Status Audit"

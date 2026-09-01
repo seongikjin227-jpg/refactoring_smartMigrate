@@ -115,7 +115,6 @@ class NewType18BFullWorkflowLoop(Component):
         try:
             self.initialize_data()
             data_list = self.ctx.get(f"{self._id}_data", [])
-            self.log(f"Starting Full Workflow loop over {len(data_list)} job(s)", name="Start")
             if not data_list:
                 self.update_ctx({f"{self._id}_aggregated": [], f"{self._id}_iterated": True})
                 return []
@@ -130,13 +129,11 @@ class NewType18BFullWorkflowLoop(Component):
                     if db_gate.get("block_sql"):
                         skipped_plan_counts = self._plan_counts(data_list[index:])
                         abort_reason = str(db_gate.get("reason") or "DB Migration failed; SQL phases were not started.")
-                        self.log(f"{abort_reason} stats={db_gate}", name="DB Phase Gate")
                         break
 
                 if migration_failed and self._route(item_payload) != "MIG":
                     skipped_plan_counts = self._plan_counts(data_list[index:])
-                    abort_reason = "DB Migration 결과에 실패/미완료 작업이 있어 SQL Conversion 이후 작업을 시작하지 않았습니다."
-                    self.log(abort_reason, name="Phase Gate")
+                    abort_reason = "DB Migration 寃곌낵???ㅽ뙣/誘몄셿猷??묒뾽???덉뼱 SQL Conversion ?댄썑 ?묒뾽???쒖옉?섏? ?딆븯?듬땲??"
                     break
 
                 item_results = await self.execute_loop_body([item], event_manager=self._event_manager)
@@ -157,32 +154,16 @@ class NewType18BFullWorkflowLoop(Component):
             from lfx.log.logger import logger
 
             elapsed = time.perf_counter() - started_at
-            self.log(f"Full Workflow loop failed after {elapsed:.3f}s: {exc}", name="Error")
             await logger.aexception(f"Full Workflow loop {self._id} failed while executing loop body")
             self.update_ctx({f"{self._id}_iteration_error": exc, f"{self._id}_iterated": True})
             raise
 
         elapsed = time.perf_counter() - started_at
-        self.log(f"Completed {len(aggregated_results)} Full Workflow iteration(s) in {elapsed:.3f}s", name="Complete")
         self.update_ctx({f"{self._id}_aggregated": aggregated_results, f"{self._id}_iterated": True})
         return aggregated_results
 
     async def item_output(self) -> Data:
-        logging.getLogger("smartmigrate.workflow").info(
-            "before item_output",
-            extra={
-                "workflow_log": {
-                    "map_id": 0,
-                    "mig_kind": "WORKFLOW",
-                    "log_type": "18B_FULL_LOOP",
-                    "log_level": "INFO",
-                    "step_name": "ITEM_OUTPUT",
-                    "status": "START",
-                    "message": "before item_output",
-                    "retry_count": 0,
-                }
-            },
-        )
+        logging.getLogger("smartmigrate.workflow").info("before item_output", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "ITEM_OUTPUT", "START", "before item_output", 0]})
         try:
             self.stop("item")
             try:
@@ -192,56 +173,14 @@ class NewType18BFullWorkflowLoop(Component):
                 self.stop("item")
             data_list = self.ctx.get(f"{self._id}_data", [])
             __log_result = Data(data={"count": len(data_list), "items": [self._data_dict(item) for item in data_list]})
-            logging.getLogger("smartmigrate.workflow").info(
-                "after item_output",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "18B_FULL_LOOP",
-                        "log_level": "INFO",
-                        "step_name": "ITEM_OUTPUT",
-                        "status": "END",
-                        "message": "after item_output",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").info("after item_output", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "ITEM_OUTPUT", "END", "after item_output", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(
-                f"error item_output: {exc}",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "18B_FULL_LOOP",
-                        "log_level": "ERROR",
-                        "step_name": "ITEM_OUTPUT",
-                        "status": "ERROR",
-                        "message": f"error item_output: {exc}",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").error(f"error item_output: {exc}", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "ERROR", "ITEM_OUTPUT", "ERROR", f"error item_output: {exc}", 0]})
             raise
 
     async def done_output(self) -> Data:
-        logging.getLogger("smartmigrate.workflow").info(
-            "before done_output",
-            extra={
-                "workflow_log": {
-                    "map_id": 0,
-                    "mig_kind": "WORKFLOW",
-                    "log_type": "18B_FULL_LOOP",
-                    "log_level": "INFO",
-                    "step_name": "DONE_OUTPUT",
-                    "status": "START",
-                    "message": "before done_output",
-                    "retry_count": 0,
-                }
-            },
-        )
+        logging.getLogger("smartmigrate.workflow").info("before done_output", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "DONE_OUTPUT", "START", "before done_output", 0]})
         try:
             if self._vertex is not None:
                 await self._iterate()
@@ -264,38 +203,10 @@ class NewType18BFullWorkflowLoop(Component):
             }
             self.status = payload
             __log_result = Data(data=payload)
-            logging.getLogger("smartmigrate.workflow").info(
-                "after done_output",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "18B_FULL_LOOP",
-                        "log_level": "INFO",
-                        "step_name": "DONE_OUTPUT",
-                        "status": "END",
-                        "message": "after done_output",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").info("after done_output", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "DONE_OUTPUT", "END", "after done_output", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(
-                f"error done_output: {exc}",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "18B_FULL_LOOP",
-                        "log_level": "ERROR",
-                        "step_name": "DONE_OUTPUT",
-                        "status": "ERROR",
-                        "message": f"error done_output: {exc}",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").error(f"error done_output: {exc}", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "ERROR", "DONE_OUTPUT", "ERROR", f"error done_output: {exc}", 0]})
             raise
 
     def _validate_job(self, payload: dict[str, Any], index: int) -> None:
@@ -391,7 +302,6 @@ class NewType18BFullWorkflowLoop(Component):
                 )
                 row = cur.fetchone() or (0, 0)
         except Exception as exc:
-            self.log(f"DB migration phase gate query failed: {exc}", name="DB Phase Gate")
             return {"block_sql": False, "reason": f"DB phase gate query failed: {exc}"}
 
         pending_null_count = self._num(row[0])
@@ -402,7 +312,7 @@ class NewType18BFullWorkflowLoop(Component):
             "pending_null_count": pending_null_count,
             "fail_count": fail_count,
             "reason": (
-                f"DB Migration 종료 후 실패 상태가 {fail_count}건 있어 SQL Conversion 이후 작업을 시작하지 않았습니다."
+                f"DB Migration 醫낅즺 ???ㅽ뙣 ?곹깭媛 {fail_count}嫄??덉뼱 SQL Conversion ?댄썑 ?묒뾽???쒖옉?섏? ?딆븯?듬땲??"
                 if block_sql
                 else ""
             ),

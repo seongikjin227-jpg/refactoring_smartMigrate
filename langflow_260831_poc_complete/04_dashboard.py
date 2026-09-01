@@ -45,21 +45,7 @@ class NewType04Dashboard(Component):
 
     def run(self) -> Message:
         # Execute the component and return a Langflow message.
-        logging.getLogger("smartmigrate.workflow").info(
-            "before run",
-            extra={
-                "workflow_log": {
-                    "map_id": 0,
-                    "mig_kind": "WORKFLOW",
-                    "log_type": "04_DASHBOARD",
-                    "log_level": "INFO",
-                    "step_name": "RUN",
-                    "status": "START",
-                    "message": "before run",
-                    "retry_count": 0,
-                }
-            },
-        )
+        logging.getLogger("smartmigrate.workflow").info("before run", extra={"workflow_log": [0, "WORKFLOW", "04_DASHBOARD", "INFO", "RUN", "START", "before run", 0]})
         try:
             try:
                 payload = self._parse_payload(getattr(self, "payload_json", ""))
@@ -73,73 +59,17 @@ class NewType04Dashboard(Component):
                     "final": True,
                 }
                 __log_result = Message(text=answer)
-                logging.getLogger("smartmigrate.workflow").info(
-                    "after run",
-                    extra={
-                        "workflow_log": {
-                            "map_id": 0,
-                            "mig_kind": "WORKFLOW",
-                            "log_type": "04_DASHBOARD",
-                            "log_level": "INFO",
-                            "step_name": "RUN",
-                            "status": "END",
-                            "message": "after run",
-                            "retry_count": 0,
-                        }
-                    },
-                )
+                logging.getLogger("smartmigrate.workflow").info("after run", extra={"workflow_log": [0, "WORKFLOW", "04_DASHBOARD", "INFO", "RUN", "END", "after run", 0]})
                 return __log_result
             except Exception as exc:
                 answer = f"[Dashboard 조회 결과]\nDashboard 조회 중 오류가 발생했습니다.\n오류: {exc}"
                 self.status = {"ok": False, "component": "04_dashboard", "error": str(exc), "answer_text": answer}
                 __log_result = Message(text=answer)
-                logging.getLogger("smartmigrate.workflow").error(
-                    "error run",
-                    extra={
-                        "workflow_log": {
-                            "map_id": 0,
-                            "mig_kind": "WORKFLOW",
-                            "log_type": "04_DASHBOARD",
-                            "log_level": "ERROR",
-                            "step_name": "RUN",
-                            "status": "ERROR",
-                            "message": "error run",
-                            "retry_count": 0,
-                        }
-                    },
-                )
+                logging.getLogger("smartmigrate.workflow").error("error run", extra={"workflow_log": [0, "WORKFLOW", "04_DASHBOARD", "ERROR", "RUN", "ERROR", "error run", 0]})
                 return __log_result
-            logging.getLogger("smartmigrate.workflow").info(
-                "after run",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "04_DASHBOARD",
-                        "log_level": "INFO",
-                        "step_name": "RUN",
-                        "status": "END",
-                        "message": "after run",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").info("after run", extra={"workflow_log": [0, "WORKFLOW", "04_DASHBOARD", "INFO", "RUN", "END", "after run", 0]})
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(
-                f"error run: {exc}",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "04_DASHBOARD",
-                        "log_level": "ERROR",
-                        "step_name": "RUN",
-                        "status": "ERROR",
-                        "message": f"error run: {exc}",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").error(f"error run: {exc}", extra={"workflow_log": [0, "WORKFLOW", "04_DASHBOARD", "ERROR", "RUN", "ERROR", f"error run: {exc}", 0]})
             raise
 
     def _query_dashboard(self) -> dict[str, Any]:

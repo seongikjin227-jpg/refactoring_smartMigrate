@@ -36,42 +36,14 @@ class NewType06GetRemainingJobs(Component):
     outputs = [Output(display_name="Payload", name="payload", method="get_remaining_jobs")]
 
     def get_remaining_jobs(self) -> Data:
-        logging.getLogger("smartmigrate.workflow").info(
-            "before get_remaining_jobs",
-            extra={
-                "workflow_log": {
-                    "map_id": 0,
-                    "mig_kind": "WORKFLOW",
-                    "log_type": "06_GET_JOBS",
-                    "log_level": "INFO",
-                    "step_name": "GET_REMAINING_JOBS",
-                    "status": "START",
-                    "message": "before get_remaining_jobs",
-                    "retry_count": 0,
-                }
-            },
-        )
+        logging.getLogger("smartmigrate.workflow").info("before get_remaining_jobs", extra={"workflow_log": [0, "WORKFLOW", "06_GET_JOBS", "INFO", "GET_REMAINING_JOBS", "START", "before get_remaining_jobs", 0]})
         try:
             try:
                 payload = self._parse_payload(getattr(self, "payload_json", ""))
                 if not payload.get("should_execute", True):
                     payload.update({"component": "06_getRemainingJobs", "next_node": "chat_output", "final": True})
                     __log_result = Data(data=payload)
-                    logging.getLogger("smartmigrate.workflow").info(
-                        "after get_remaining_jobs",
-                        extra={
-                            "workflow_log": {
-                                "map_id": 0,
-                                "mig_kind": "WORKFLOW",
-                                "log_type": "06_GET_JOBS",
-                                "log_level": "INFO",
-                                "step_name": "GET_REMAINING_JOBS",
-                                "status": "END",
-                                "message": "after get_remaining_jobs",
-                                "retry_count": 0,
-                            }
-                        },
-                    )
+                    logging.getLogger("smartmigrate.workflow").info("after get_remaining_jobs", extra={"workflow_log": [0, "WORKFLOW", "06_GET_JOBS", "INFO", "GET_REMAINING_JOBS", "END", "after get_remaining_jobs", 0]})
                     return __log_result
 
                 if not self._has_db_config():
@@ -117,73 +89,17 @@ class NewType06GetRemainingJobs(Component):
                 )
                 self.status = payload
                 __log_result = Data(data=payload)
-                logging.getLogger("smartmigrate.workflow").info(
-                    "after get_remaining_jobs",
-                    extra={
-                        "workflow_log": {
-                            "map_id": 0,
-                            "mig_kind": "WORKFLOW",
-                            "log_type": "06_GET_JOBS",
-                            "log_level": "INFO",
-                            "step_name": "GET_REMAINING_JOBS",
-                            "status": "END",
-                            "message": "after get_remaining_jobs",
-                            "retry_count": 0,
-                        }
-                    },
-                )
+                logging.getLogger("smartmigrate.workflow").info("after get_remaining_jobs", extra={"workflow_log": [0, "WORKFLOW", "06_GET_JOBS", "INFO", "GET_REMAINING_JOBS", "END", "after get_remaining_jobs", 0]})
                 return __log_result
             except Exception as exc:
                 result = {"ok": False, "component": "06_getRemainingJobs", "error": str(exc)}
                 self.status = result
                 __log_result = Data(data=result)
-                logging.getLogger("smartmigrate.workflow").error(
-                    "error get_remaining_jobs",
-                    extra={
-                        "workflow_log": {
-                            "map_id": 0,
-                            "mig_kind": "WORKFLOW",
-                            "log_type": "06_GET_JOBS",
-                            "log_level": "ERROR",
-                            "step_name": "GET_REMAINING_JOBS",
-                            "status": "ERROR",
-                            "message": "error get_remaining_jobs",
-                            "retry_count": 0,
-                        }
-                    },
-                )
+                logging.getLogger("smartmigrate.workflow").error("error get_remaining_jobs", extra={"workflow_log": [0, "WORKFLOW", "06_GET_JOBS", "ERROR", "GET_REMAINING_JOBS", "ERROR", "error get_remaining_jobs", 0]})
                 return __log_result
-            logging.getLogger("smartmigrate.workflow").info(
-                "after get_remaining_jobs",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "06_GET_JOBS",
-                        "log_level": "INFO",
-                        "step_name": "GET_REMAINING_JOBS",
-                        "status": "END",
-                        "message": "after get_remaining_jobs",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").info("after get_remaining_jobs", extra={"workflow_log": [0, "WORKFLOW", "06_GET_JOBS", "INFO", "GET_REMAINING_JOBS", "END", "after get_remaining_jobs", 0]})
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(
-                f"error get_remaining_jobs: {exc}",
-                extra={
-                    "workflow_log": {
-                        "map_id": 0,
-                        "mig_kind": "WORKFLOW",
-                        "log_type": "06_GET_JOBS",
-                        "log_level": "ERROR",
-                        "step_name": "GET_REMAINING_JOBS",
-                        "status": "ERROR",
-                        "message": f"error get_remaining_jobs: {exc}",
-                        "retry_count": 0,
-                    }
-                },
-            )
+            logging.getLogger("smartmigrate.workflow").error(f"error get_remaining_jobs: {exc}", extra={"workflow_log": [0, "WORKFLOW", "06_GET_JOBS", "ERROR", "GET_REMAINING_JOBS", "ERROR", f"error get_remaining_jobs: {exc}", 0]})
             raise
 
     def _load_counts(self, conn: Any) -> dict[str, int]:
