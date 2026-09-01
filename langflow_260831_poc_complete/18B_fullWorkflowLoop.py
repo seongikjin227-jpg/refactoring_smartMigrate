@@ -25,6 +25,12 @@ ROUTE_ORDER = ("MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING")
 
 
 class NewType18BFullWorkflowLoop(Component):
+    DB_HOST = ""
+    DB_PORT = 1521
+    DB_SERVICE_NAME = ""
+    DB_USERNAME = ""
+    DB_PASSWORD = ""
+
     display_name = "18B Full Workflow Loop"
     description = "Runs the Full Workflow queue one item at a time, preserving phase order."
     documentation = "https://docs.langflow.org/loop"
@@ -166,37 +172,51 @@ class NewType18BFullWorkflowLoop(Component):
         return aggregated_results
 
     async def item_output(self) -> Data:
-        self.stop("item")
+        self._insert_log(0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "ITEM_OUTPUT", "START", "before item_output", 0, "")
+        try:
+            self.stop("item")
+            try:
+                if self._vertex is not None:
+                    await self._iterate()
+            finally:
+                self.stop("item")
+            data_list = self.ctx.get(f"{self._id}_data", [])
+            __log_result = Data(data={"count": len(data_list), "items": [self._data_dict(item) for item in data_list]})
+            self._insert_log(0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "ITEM_OUTPUT", "END", "after item_output", 0, "")
+            return __log_result
+        except Exception as exc:
+            self._insert_log(0, "WORKFLOW", "18B_FULL_LOOP", "ERROR", "ITEM_OUTPUT", "ERROR", f"error item_output: {exc}", 0, "")
+            raise
+
+    async def done_output(self) -> Data:
+        self._insert_log(0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "DONE_OUTPUT", "START", "before done_output", 0, "")
         try:
             if self._vertex is not None:
                 await self._iterate()
-        finally:
-            self.stop("item")
-        data_list = self.ctx.get(f"{self._id}_data", [])
-        return Data(data={"count": len(data_list), "items": [self._data_dict(item) for item in data_list]})
-
-    async def done_output(self) -> Data:
-        if self._vertex is not None:
-            await self._iterate()
-        data_list = self.ctx.get(f"{self._id}_data", [])
-        first_payload = self._data_dict(data_list[0]) if data_list else {}
-        results = [self._data_dict(item) for item in self.ctx.get(f"{self._id}_aggregated", [])]
-        payload = {
-            "component": "18B_fullWorkflowLoop",
-            "job_route": "FULL_WORKFLOW",
-            "full_workflow": True,
-            "loop_done": True,
-            "db_config": dict(first_payload.get("db_config") or {}),
-            "workflow_plan_counts": dict(first_payload.get("workflow_plan_counts") or self._plan_counts(data_list)),
-            "aggregated_results": results,
-            "workflow_summary": self._summary(results, data_list, self.ctx.get(f"{self._id}_skipped_plan_counts", {})),
-            "workflow_aborted": bool(self.ctx.get(f"{self._id}_workflow_aborted", False)),
-            "abort_reason": str(self.ctx.get(f"{self._id}_abort_reason", "") or ""),
-            "skipped_plan_counts": dict(self.ctx.get(f"{self._id}_skipped_plan_counts", {}) or {}),
-            "next_node": "18D_fullWorkflowDashboard",
-        }
-        self.status = payload
-        return Data(data=payload)
+            data_list = self.ctx.get(f"{self._id}_data", [])
+            first_payload = self._data_dict(data_list[0]) if data_list else {}
+            results = [self._data_dict(item) for item in self.ctx.get(f"{self._id}_aggregated", [])]
+            payload = {
+                "component": "18B_fullWorkflowLoop",
+                "job_route": "FULL_WORKFLOW",
+                "full_workflow": True,
+                "loop_done": True,
+                "db_config": dict(first_payload.get("db_config") or {}),
+                "workflow_plan_counts": dict(first_payload.get("workflow_plan_counts") or self._plan_counts(data_list)),
+                "aggregated_results": results,
+                "workflow_summary": self._summary(results, data_list, self.ctx.get(f"{self._id}_skipped_plan_counts", {})),
+                "workflow_aborted": bool(self.ctx.get(f"{self._id}_workflow_aborted", False)),
+                "abort_reason": str(self.ctx.get(f"{self._id}_abort_reason", "") or ""),
+                "skipped_plan_counts": dict(self.ctx.get(f"{self._id}_skipped_plan_counts", {}) or {}),
+                "next_node": "18D_fullWorkflowDashboard",
+            }
+            self.status = payload
+            __log_result = Data(data=payload)
+            self._insert_log(0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "DONE_OUTPUT", "END", "after done_output", 0, "")
+            return __log_result
+        except Exception as exc:
+            self._insert_log(0, "WORKFLOW", "18B_FULL_LOOP", "ERROR", "DONE_OUTPUT", "ERROR", f"error done_output: {exc}", 0, "")
+            raise
 
     def _validate_job(self, payload: dict[str, Any], index: int) -> None:
         route = str(payload.get("planned_job_route") or payload.get("job_route") or "").upper()
@@ -390,3 +410,48 @@ class NewType18BFullWorkflowLoop(Component):
         except Exception:
             return None
         return parsed if isinstance(parsed, dict) else None
+
+    def _insert_log(
+        self,
+        map_id,
+        mig_kind,
+        log_type,
+        log_level,
+        step_name,
+        status,
+        message,
+        retry_count,
+        generated_sql="",
+    ):
+        conn = None
+        try:
+            import oracledb
+
+            dsn = oracledb.makedsn(self.DB_HOST, int(self.DB_PORT or 1521), service_name=self.DB_SERVICE_NAME)
+            conn = oracledb.connect(user=self.DB_USERNAME, password=self.DB_PASSWORD, dsn=dsn)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO SFAADM.NEXT_MIG_LOG (
+                    LOG_ID, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, RETRY_COUNT, CREATED_AT
+                ) VALUES (
+                    SFAADM.MIGRATION_LOG_SEQ.NEXTVAL, :1, :2, :3, :4, :5, :6, :7, :8, CURRENT_TIMESTAMP
+                )
+                """,
+                [
+                    map_id,
+                    str(mig_kind or "")[:100],
+                    str(log_type or "")[:20],
+                    str(log_level or "")[:20],
+                    str(step_name or "")[:50],
+                    str(status or "")[:20],
+                    str(message or "")[:4000],
+                    retry_count,
+                ],
+            )
+            conn.commit()
+        except Exception as exc:
+            self.status = f"NEXT_MIG_LOG insert failed: {exc}"
+        finally:
+            if conn is not None:
+                conn.close()

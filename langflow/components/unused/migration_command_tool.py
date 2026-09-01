@@ -1444,6 +1444,10 @@ class MigrationCommandTool(Component):
         log_table = self._qualify_table("NEXT_MIG_LOG", self.system_schema)
         seq = self._qualify_table("MIGRATION_LOG_SEQ", self.system_schema)
         safe_message = str(message or "")[:4000]
+        safe_status = str(status or "")[:20]
+        safe_log_type = str(log_type or "")[:20]
+        safe_log_level = str(log_level or "")[:20]
+        safe_step_name = str(step_name or "")[:50]
         try:
             with self._connect() as conn:
                 cur = conn.cursor()
@@ -1456,7 +1460,7 @@ class MigrationCommandTool(Component):
                         (CURRENT_TIMESTAMP, :1, :2, {seq}.NEXTVAL, :3, :4,
                          :5, :6, :7, 'DB_MIG', :8)
                     """,
-                    [status, safe_message, map_id, log_type, log_level, step_name, retry_count, generate_sql],
+                    [safe_status, safe_message, map_id, safe_log_type, safe_log_level, safe_step_name, retry_count, generate_sql],
                 )
                 conn.commit()
         except Exception:

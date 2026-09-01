@@ -17,6 +17,12 @@ except Exception:
 
 
 class NewType15ASqlTuningJobsToLoopTable(Component):
+    DB_HOST = ""
+    DB_PORT = 1521
+    DB_SERVICE_NAME = ""
+    DB_USERNAME = ""
+    DB_PASSWORD = ""
+
     display_name = "15A SQL Tuning Jobs To Loop Table"
     description = "Converts selected SQL Tuning jobs into Loop rows."
     name = "NewType15ASqlTuningJobsToLoopTable"
@@ -35,31 +41,38 @@ class NewType15ASqlTuningJobsToLoopTable(Component):
     outputs = [Output(display_name="Jobs Table", name="jobs_table", method="build_jobs_table")]
 
     def build_jobs_table(self) -> DataFrame:
-        """Build one Loop row per SQL tuning job."""
-        payload = self._parse_payload(getattr(self, "payload_json", ""))
-        db_config = self._db_config(payload)
-        self._require_db_config(db_config)
-        jobs = self._sql_jobs(payload, db_config)
-        total = len(jobs)
-        rows: list[dict[str, Any]] = []
-        for index, job in enumerate(jobs, start=1):
-            self._validate_sql_key(job, index)
-            rows.append(
-                {
-                    **job,
-                    "component": "15A_sqlTuningJobsToLoopTable",
-                    "job_route": "SQL_TUNING",
-                    "job_type": "SQL",
-                    "run_mode": payload.get("run_mode") or "targeted",
-                    "job_index": index,
-                    "total_jobs": total,
-                    "completed_before": index - 1,
-                    "db_config": db_config,
-                    "history": list(payload.get("history") or []),
-                }
-            )
-        self.status = {**payload, "component": "15A_sqlTuningJobsToLoopTable", "loop_job_count": total, "next_node": "15B_sqlTuningLoop"}
-        return DataFrame(rows)
+        self._insert_log(0, "WORKFLOW", "15A_SQL_JOBS", "INFO", "BUILD_JOBS_TABLE", "START", "before build_jobs_table", 0, "")
+        try:
+            """Build one Loop row per SQL tuning job."""
+            payload = self._parse_payload(getattr(self, "payload_json", ""))
+            db_config = self._db_config(payload)
+            self._require_db_config(db_config)
+            jobs = self._sql_jobs(payload, db_config)
+            total = len(jobs)
+            rows: list[dict[str, Any]] = []
+            for index, job in enumerate(jobs, start=1):
+                self._validate_sql_key(job, index)
+                rows.append(
+                    {
+                        **job,
+                        "component": "15A_sqlTuningJobsToLoopTable",
+                        "job_route": "SQL_TUNING",
+                        "job_type": "SQL",
+                        "run_mode": payload.get("run_mode") or "targeted",
+                        "job_index": index,
+                        "total_jobs": total,
+                        "completed_before": index - 1,
+                        "db_config": db_config,
+                        "history": list(payload.get("history") or []),
+                    }
+                )
+            self.status = {**payload, "component": "15A_sqlTuningJobsToLoopTable", "loop_job_count": total, "next_node": "15B_sqlTuningLoop"}
+            __log_result = DataFrame(rows)
+            self._insert_log(0, "WORKFLOW", "15A_SQL_JOBS", "INFO", "BUILD_JOBS_TABLE", "END", "after build_jobs_table", 0, "")
+            return __log_result
+        except Exception as exc:
+            self._insert_log(0, "WORKFLOW", "15A_SQL_JOBS", "ERROR", "BUILD_JOBS_TABLE", "ERROR", f"error build_jobs_table: {exc}", 0, "")
+            raise
 
     def _sql_jobs(self, payload: dict[str, Any], db_config: dict[str, Any]) -> list[dict[str, Any]]:
         """Return only SQL tuning jobs from the routed payload."""
@@ -192,3 +205,48 @@ class NewType15ASqlTuningJobsToLoopTable(Component):
         if isinstance(value, bytes):
             return value.decode("utf-8", errors="ignore")
         return value if isinstance(value, (str, int, float, bool)) else str(value)
+
+    def _insert_log(
+        self,
+        map_id,
+        mig_kind,
+        log_type,
+        log_level,
+        step_name,
+        status,
+        message,
+        retry_count,
+        generated_sql="",
+    ):
+        conn = None
+        try:
+            import oracledb
+
+            dsn = oracledb.makedsn(self.DB_HOST, int(self.DB_PORT or 1521), service_name=self.DB_SERVICE_NAME)
+            conn = oracledb.connect(user=self.DB_USERNAME, password=self.DB_PASSWORD, dsn=dsn)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO SFAADM.NEXT_MIG_LOG (
+                    LOG_ID, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, RETRY_COUNT, CREATED_AT
+                ) VALUES (
+                    SFAADM.MIGRATION_LOG_SEQ.NEXTVAL, :1, :2, :3, :4, :5, :6, :7, :8, CURRENT_TIMESTAMP
+                )
+                """,
+                [
+                    map_id,
+                    str(mig_kind or "")[:100],
+                    str(log_type or "")[:20],
+                    str(log_level or "")[:20],
+                    str(step_name or "")[:50],
+                    str(status or "")[:20],
+                    str(message or "")[:4000],
+                    retry_count,
+                ],
+            )
+            conn.commit()
+        except Exception as exc:
+            self.status = f"NEXT_MIG_LOG insert failed: {exc}"
+        finally:
+            if conn is not None:
+                conn.close()

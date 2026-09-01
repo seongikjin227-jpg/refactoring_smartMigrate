@@ -21,6 +21,12 @@ from lfx.components.processing.converter import convert_to_data
 
 
 class NewType12BSqlConversionLoop(Component):
+    DB_HOST = ""
+    DB_PORT = 1521
+    DB_SERVICE_NAME = ""
+    DB_USERNAME = ""
+    DB_PASSWORD = ""
+
     display_name = "12B SQL Conversion Loop"
     description = "SQL Conversion loop that iterates one SQL row at a time and emits Done."
     documentation = "https://docs.langflow.org/loop"
@@ -149,33 +155,47 @@ class NewType12BSqlConversionLoop(Component):
     async def item_output(self) -> Data:
         # The Item output is only the loop-body entry point. Its normal return
         # value must never continue through the outer graph into 12C.
-        self.stop("item")
+        self._insert_log(0, "WORKFLOW", "12B_SQL_LOOP", "INFO", "ITEM_OUTPUT", "START", "before item_output", 0, "")
         try:
-            if self._vertex is not None:
-                await self._iterate()
-        finally:
-            # Running the loop body builds a nested graph. Re-assert the stop
-            # after it finishes so the inspection payload below cannot be
-            # dispatched to 12C as one additional job.
             self.stop("item")
-        data_list = self.ctx.get(f"{self._id}_data", [])
-        return Data(data={"count": len(data_list), "items": [self._data_dict(item) for item in data_list]})
+            try:
+                if self._vertex is not None:
+                    await self._iterate()
+            finally:
+                # Running the loop body builds a nested graph. Re-assert the stop
+                # after it finishes so the inspection payload below cannot be
+                # dispatched to 12C as one additional job.
+                self.stop("item")
+            data_list = self.ctx.get(f"{self._id}_data", [])
+            __log_result = Data(data={"count": len(data_list), "items": [self._data_dict(item) for item in data_list]})
+            self._insert_log(0, "WORKFLOW", "12B_SQL_LOOP", "INFO", "ITEM_OUTPUT", "END", "after item_output", 0, "")
+            return __log_result
+        except Exception as exc:
+            self._insert_log(0, "WORKFLOW", "12B_SQL_LOOP", "ERROR", "ITEM_OUTPUT", "ERROR", f"error item_output: {exc}", 0, "")
+            raise
 
     async def done_output(self) -> Data:
         # The Done output is the post-loop path. Connect it to 11.
-        if self._vertex is not None:
-            await self._iterate()
-        data_list = self.ctx.get(f"{self._id}_data", [])
-        first_payload = self._data_dict(data_list[0]) if data_list else {}
-        payload = {
-            "component": "12B_sqlConversionLoop",
-            "job_route": "SQL_CONVERSION",
-            "loop_done": True,
-            "db_config": dict(first_payload.get("db_config") or {}),
-            "next_node": "11_finalDashboard",
-        }
-        self.status = payload
-        return Data(data=payload)
+        self._insert_log(0, "WORKFLOW", "12B_SQL_LOOP", "INFO", "DONE_OUTPUT", "START", "before done_output", 0, "")
+        try:
+            if self._vertex is not None:
+                await self._iterate()
+            data_list = self.ctx.get(f"{self._id}_data", [])
+            first_payload = self._data_dict(data_list[0]) if data_list else {}
+            payload = {
+                "component": "12B_sqlConversionLoop",
+                "job_route": "SQL_CONVERSION",
+                "loop_done": True,
+                "db_config": dict(first_payload.get("db_config") or {}),
+                "next_node": "11_finalDashboard",
+            }
+            self.status = payload
+            __log_result = Data(data=payload)
+            self._insert_log(0, "WORKFLOW", "12B_SQL_LOOP", "INFO", "DONE_OUTPUT", "END", "after done_output", 0, "")
+            return __log_result
+        except Exception as exc:
+            self._insert_log(0, "WORKFLOW", "12B_SQL_LOOP", "ERROR", "DONE_OUTPUT", "ERROR", f"error done_output: {exc}", 0, "")
+            raise
 
     def _validate_sql_key(self, payload: dict[str, Any], index: int) -> None:
         if str(payload.get("row_id") or "").strip():
@@ -215,3 +235,48 @@ class NewType12BSqlConversionLoop(Component):
         except Exception:
             return None
         return parsed if isinstance(parsed, dict) else None
+
+    def _insert_log(
+        self,
+        map_id,
+        mig_kind,
+        log_type,
+        log_level,
+        step_name,
+        status,
+        message,
+        retry_count,
+        generated_sql="",
+    ):
+        conn = None
+        try:
+            import oracledb
+
+            dsn = oracledb.makedsn(self.DB_HOST, int(self.DB_PORT or 1521), service_name=self.DB_SERVICE_NAME)
+            conn = oracledb.connect(user=self.DB_USERNAME, password=self.DB_PASSWORD, dsn=dsn)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO SFAADM.NEXT_MIG_LOG (
+                    LOG_ID, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, RETRY_COUNT, CREATED_AT
+                ) VALUES (
+                    SFAADM.MIGRATION_LOG_SEQ.NEXTVAL, :1, :2, :3, :4, :5, :6, :7, :8, CURRENT_TIMESTAMP
+                )
+                """,
+                [
+                    map_id,
+                    str(mig_kind or "")[:100],
+                    str(log_type or "")[:20],
+                    str(log_level or "")[:20],
+                    str(step_name or "")[:50],
+                    str(status or "")[:20],
+                    str(message or "")[:4000],
+                    retry_count,
+                ],
+            )
+            conn.commit()
+        except Exception as exc:
+            self.status = f"NEXT_MIG_LOG insert failed: {exc}"
+        finally:
+            if conn is not None:
+                conn.close()

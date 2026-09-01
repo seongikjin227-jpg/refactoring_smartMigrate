@@ -20,6 +20,12 @@ ROUTE_ORDER = ("MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING")
 
 
 class NewType18SWorkflowStartLogger(Component):
+    DB_HOST = ""
+    DB_PORT = 1521
+    DB_SERVICE_NAME = ""
+    DB_USERNAME = ""
+    DB_PASSWORD = ""
+
     display_name = "18S Workflow Start Logger"
     description = "Writes one workflow start marker to NEXT_MIG_LOG and NEXT_SQL_LOG, then passes jobs through to 18B."
     name = "NewType18SWorkflowStartLogger"
@@ -43,36 +49,43 @@ class NewType18SWorkflowStartLogger(Component):
     outputs = [Output(display_name="Jobs Table", name="jobs_table", method="build_jobs_table")]
 
     def build_jobs_table(self) -> DataFrame:
-        data_list = self._validate_data(getattr(self, "data", None))
-        rows = [self._data_dict(item) for item in data_list]
-        db_config = self._db_config(rows[0] if rows else {})
-        self._require_db_config(db_config)
+        self._insert_log(0, "WORKFLOW", "18S_START_LOG", "INFO", "BUILD_JOBS_TABLE", "START", "before build_jobs_table", 0, "")
+        try:
+            data_list = self._validate_data(getattr(self, "data", None))
+            rows = [self._data_dict(item) for item in data_list]
+            db_config = self._db_config(rows[0] if rows else {})
+            self._require_db_config(db_config)
 
-        started_at = datetime.now().isoformat(timespec="seconds")
-        plan_counts = self._plan_counts(rows)
-        message = self._start_message(started_at, len(rows), plan_counts)
-        warnings = self._insert_start_markers(db_config, message, plan_counts)
+            started_at = datetime.now().isoformat(timespec="seconds")
+            plan_counts = self._plan_counts(rows)
+            message = self._start_message(started_at, len(rows), plan_counts)
+            warnings = self._insert_start_markers(db_config, message, plan_counts)
 
-        out_rows = [
-            {
-                **row,
+            out_rows = [
+                {
+                    **row,
+                    "workflow_started_at": started_at,
+                    "workflow_start_marker_logged": not warnings,
+                    "workflow_start_log_warnings": warnings,
+                }
+                for row in rows
+            ]
+            self.status = {
+                "component": "18S_workflowStartLogger",
+                "full_workflow": True,
+                "loop_job_count": len(out_rows),
                 "workflow_started_at": started_at,
+                "workflow_plan_counts": plan_counts,
                 "workflow_start_marker_logged": not warnings,
                 "workflow_start_log_warnings": warnings,
+                "next_node": "18B_fullWorkflowLoop",
             }
-            for row in rows
-        ]
-        self.status = {
-            "component": "18S_workflowStartLogger",
-            "full_workflow": True,
-            "loop_job_count": len(out_rows),
-            "workflow_started_at": started_at,
-            "workflow_plan_counts": plan_counts,
-            "workflow_start_marker_logged": not warnings,
-            "workflow_start_log_warnings": warnings,
-            "next_node": "18B_fullWorkflowLoop",
-        }
-        return DataFrame(out_rows)
+            __log_result = DataFrame(out_rows)
+            self._insert_log(0, "WORKFLOW", "18S_START_LOG", "INFO", "BUILD_JOBS_TABLE", "END", "after build_jobs_table", 0, "")
+            return __log_result
+        except Exception as exc:
+            self._insert_log(0, "WORKFLOW", "18S_START_LOG", "ERROR", "BUILD_JOBS_TABLE", "ERROR", f"error build_jobs_table: {exc}", 0, "")
+            raise
 
     def _insert_start_markers(self, db_config: dict[str, Any], message: str, plan_counts: dict[str, int]) -> list[str]:
         warnings: list[str] = []
@@ -92,11 +105,11 @@ class NewType18SWorkflowStartLogger(Component):
         columns = self._table_columns(db_config, table)
         values: dict[str, Any] = {
             "MAP_ID": 0,
-            "MIG_KIND": "FULL_WORKFLOW_POC",
+            "MIG_KIND": self._fit_text("FULL_WORKFLOW_POC", 100),
             "LOG_TYPE": "RUN_MARKER",
             "LOG_LEVEL": "INFO",
-            "STEP_NAME": "WORKFLOW_START",
-            "STATUS": "RUNNING",
+            "STEP_NAME": self._fit_text("WORKFLOW_START", 50),
+            "STATUS": self._fit_text("RUNNING", 20),
             "MESSAGE": self._fit_text(message, 4000),
             "RETRY_COUNT": 0,
         }
@@ -113,7 +126,7 @@ class NewType18SWorkflowStartLogger(Component):
             bind_name = column.lower()
             value_exprs.append(f":{bind_name}")
             params[bind_name] = value
-        for column in ("CREATED_AT", "UPD_TS"):
+        for column in ("CREATED_AT",):
             if column in columns:
                 insert_columns.append(column)
                 value_exprs.append("CURRENT_TIMESTAMP")
@@ -289,3 +302,48 @@ class NewType18SWorkflowStartLogger(Component):
         if hasattr(value, "get_secret_value"):
             return str(value.get_secret_value())
         return str(value)
+
+    def _insert_log(
+        self,
+        map_id,
+        mig_kind,
+        log_type,
+        log_level,
+        step_name,
+        status,
+        message,
+        retry_count,
+        generated_sql="",
+    ):
+        conn = None
+        try:
+            import oracledb
+
+            dsn = oracledb.makedsn(self.DB_HOST, int(self.DB_PORT or 1521), service_name=self.DB_SERVICE_NAME)
+            conn = oracledb.connect(user=self.DB_USERNAME, password=self.DB_PASSWORD, dsn=dsn)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO SFAADM.NEXT_MIG_LOG (
+                    LOG_ID, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, RETRY_COUNT, CREATED_AT
+                ) VALUES (
+                    SFAADM.MIGRATION_LOG_SEQ.NEXTVAL, :1, :2, :3, :4, :5, :6, :7, :8, CURRENT_TIMESTAMP
+                )
+                """,
+                [
+                    map_id,
+                    str(mig_kind or "")[:100],
+                    str(log_type or "")[:20],
+                    str(log_level or "")[:20],
+                    str(step_name or "")[:50],
+                    str(status or "")[:20],
+                    str(message or "")[:4000],
+                    retry_count,
+                ],
+            )
+            conn.commit()
+        except Exception as exc:
+            self.status = f"NEXT_MIG_LOG insert failed: {exc}"
+        finally:
+            if conn is not None:
+                conn.close()

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import re
@@ -16,6 +16,12 @@ except Exception:
 
 
 class NewType06GetRemainingJobs(Component):
+    DB_HOST = ""
+    DB_PORT = 1521
+    DB_SERVICE_NAME = ""
+    DB_USERNAME = ""
+    DB_PASSWORD = ""
+
     display_name = "06 Get Remaining Jobs"
     description = "Loads dashboard-like remaining counts plus exact target status when requested."
     name = "NewType06GetRemainingJobs"
@@ -34,59 +40,71 @@ class NewType06GetRemainingJobs(Component):
     outputs = [Output(display_name="Payload", name="payload", method="get_remaining_jobs")]
 
     def get_remaining_jobs(self) -> Data:
+        self._insert_log(0, "WORKFLOW", "06_GET_JOBS", "INFO", "GET_REMAINING_JOBS", "START", "before get_remaining_jobs", 0, "")
         try:
-            payload = self._parse_payload(getattr(self, "payload_json", ""))
-            if not payload.get("should_execute", True):
-                payload.update({"component": "06_getRemainingJobs", "next_node": "chat_output", "final": True})
-                return Data(data=payload)
+            try:
+                payload = self._parse_payload(getattr(self, "payload_json", ""))
+                if not payload.get("should_execute", True):
+                    payload.update({"component": "06_getRemainingJobs", "next_node": "chat_output", "final": True})
+                    __log_result = Data(data=payload)
+                    self._insert_log(0, "WORKFLOW", "06_GET_JOBS", "INFO", "GET_REMAINING_JOBS", "END", "after get_remaining_jobs", 0, "")
+                    return __log_result
 
-            if not self._has_db_config():
-                raise ValueError("DB connection settings are required for 06 Get Remaining Jobs")
+                if not self._has_db_config():
+                    raise ValueError("DB connection settings are required for 06 Get Remaining Jobs")
 
-            # 01 LLM owns natural-language target extraction; regex extraction here is only a legacy fallback.
-            targets = self._extract_targets(payload)
-            with self._connect() as conn:
-                counts = self._load_counts(conn)
-                requested_jobs = self._empty_requested_jobs()
-                target_statuses = self._load_target_statuses(conn, targets)
-                if self._has_exact_target(targets):
-                    requested_jobs = self._load_target_jobs(conn, targets)
+                # 01 LLM owns natural-language target extraction; regex extraction here is only a legacy fallback.
+                targets = self._extract_targets(payload)
+                with self._connect() as conn:
+                    counts = self._load_counts(conn)
+                    requested_jobs = self._empty_requested_jobs()
+                    target_statuses = self._load_target_statuses(conn, targets)
+                    if self._has_exact_target(targets):
+                        requested_jobs = self._load_target_jobs(conn, targets)
 
-            summary = {
-                "total": sum(counts.values()),
-                "migration_total": counts["MIG"],
-                "sql_conversion_total": counts["SQL_CONVERSION"],
-                "sql_tuning_total": counts["SQL_TUNING"],
-                "sql_formatting_total": counts["SQL_FORMATTING"],
-            }
-            payload.update(
-                {
-                    "component": "06_getRemainingJobs",
-                    "job_availability": summary,
-                    "requested_jobs": requested_jobs,
-                    "requested_target_status": target_statuses,
-                    "remaining_summary": summary,
-                    "pending_summary": summary,
-                    "target_filter": payload.get("target_filter") or targets,
-                    "job_detail_mode": "requested_jobs" if self._has_exact_target(targets) else "counts_only",
-                    "next_node": "08_jobExecutionRouter",
+                summary = {
+                    "total": sum(counts.values()),
+                    "migration_total": counts["MIG"],
+                    "sql_conversion_total": counts["SQL_CONVERSION"],
+                    "sql_tuning_total": counts["SQL_TUNING"],
+                    "sql_formatting_total": counts["SQL_FORMATTING"],
                 }
-            )
-            payload.setdefault("history", []).append(
-                {
-                    "step": "get_remaining_jobs",
-                    "message": (
-                        f"total={summary['total']}, mig={summary['migration_total']}, "
-                        f"sql_conversion={summary['sql_conversion_total']}, detail={payload['job_detail_mode']}"
-                    ),
-                }
-            )
-            self.status = payload
-            return Data(data=payload)
+                payload.update(
+                    {
+                        "component": "06_getRemainingJobs",
+                        "job_availability": summary,
+                        "requested_jobs": requested_jobs,
+                        "requested_target_status": target_statuses,
+                        "remaining_summary": summary,
+                        "pending_summary": summary,
+                        "target_filter": payload.get("target_filter") or targets,
+                        "job_detail_mode": "requested_jobs" if self._has_exact_target(targets) else "counts_only",
+                        "next_node": "08_jobExecutionRouter",
+                    }
+                )
+                payload.setdefault("history", []).append(
+                    {
+                        "step": "get_remaining_jobs",
+                        "message": (
+                            f"total={summary['total']}, mig={summary['migration_total']}, "
+                            f"sql_conversion={summary['sql_conversion_total']}, detail={payload['job_detail_mode']}"
+                        ),
+                    }
+                )
+                self.status = payload
+                __log_result = Data(data=payload)
+                self._insert_log(0, "WORKFLOW", "06_GET_JOBS", "INFO", "GET_REMAINING_JOBS", "END", "after get_remaining_jobs", 0, "")
+                return __log_result
+            except Exception as exc:
+                result = {"ok": False, "component": "06_getRemainingJobs", "error": str(exc)}
+                self.status = result
+                __log_result = Data(data=result)
+                self._insert_log(0, "WORKFLOW", "06_GET_JOBS", "ERROR", "GET_REMAINING_JOBS", "ERROR", "error get_remaining_jobs", 0, "")
+                return __log_result
+            self._insert_log(0, "WORKFLOW", "06_GET_JOBS", "INFO", "GET_REMAINING_JOBS", "END", "after get_remaining_jobs", 0, "")
         except Exception as exc:
-            result = {"ok": False, "component": "06_getRemainingJobs", "error": str(exc)}
-            self.status = result
-            return Data(data=result)
+            self._insert_log(0, "WORKFLOW", "06_GET_JOBS", "ERROR", "GET_REMAINING_JOBS", "ERROR", f"error get_remaining_jobs: {exc}", 0, "")
+            raise
 
     def _load_counts(self, conn: Any) -> dict[str, int]:
         mig_table = self._qualify("NEXT_MIG_INFO")
@@ -418,3 +436,48 @@ class NewType06GetRemainingJobs(Component):
         if hasattr(value, "get_secret_value"):
             return str(value.get_secret_value())
         return str(value)
+
+    def _insert_log(
+        self,
+        map_id,
+        mig_kind,
+        log_type,
+        log_level,
+        step_name,
+        status,
+        message,
+        retry_count,
+        generated_sql="",
+    ):
+        conn = None
+        try:
+            import oracledb
+
+            dsn = oracledb.makedsn(self.DB_HOST, int(self.DB_PORT or 1521), service_name=self.DB_SERVICE_NAME)
+            conn = oracledb.connect(user=self.DB_USERNAME, password=self.DB_PASSWORD, dsn=dsn)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO SFAADM.NEXT_MIG_LOG (
+                    LOG_ID, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, RETRY_COUNT, CREATED_AT
+                ) VALUES (
+                    SFAADM.MIGRATION_LOG_SEQ.NEXTVAL, :1, :2, :3, :4, :5, :6, :7, :8, CURRENT_TIMESTAMP
+                )
+                """,
+                [
+                    map_id,
+                    str(mig_kind or "")[:100],
+                    str(log_type or "")[:20],
+                    str(log_level or "")[:20],
+                    str(step_name or "")[:50],
+                    str(status or "")[:20],
+                    str(message or "")[:4000],
+                    retry_count,
+                ],
+            )
+            conn.commit()
+        except Exception as exc:
+            self.status = f"NEXT_MIG_LOG insert failed: {exc}"
+        finally:
+            if conn is not None:
+                conn.close()

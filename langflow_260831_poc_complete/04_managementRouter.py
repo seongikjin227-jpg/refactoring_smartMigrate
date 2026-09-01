@@ -46,6 +46,12 @@ Dashboard 조회, Status/priority/USE_YN 변경, Correct SQL 입력 중 어떤 �
 
 
 class NewType04ManagementRouter(Component):
+    DB_HOST = ""
+    DB_PORT = 1521
+    DB_SERVICE_NAME = ""
+    DB_USERNAME = ""
+    DB_PASSWORD = ""
+
     display_name = "04 Management LLM Router"
     description = "Routes management requests to Dashboard, Status Change, Correct SQL Input, or Exception."
     name = "NewType04ManagementRouter"
@@ -69,24 +75,54 @@ class NewType04ManagementRouter(Component):
 
     def dashboard_response(self) -> Data:
         # Return the dashboard branch when management routing matches.
-        return self._route_output("DASHBOARD", "dashboard")
+        self._insert_log(0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "DASHBOARD_RESPONSE", "START", "before dashboard_response", 0, "")
+        try:
+            __log_result = self._route_output("DASHBOARD", "dashboard")
+            self._insert_log(0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "DASHBOARD_RESPONSE", "END", "after dashboard_response", 0, "")
+            return __log_result
+        except Exception as exc:
+            self._insert_log(0, "WORKFLOW", "04_MGMT_ROUTER", "ERROR", "DASHBOARD_RESPONSE", "ERROR", f"error dashboard_response: {exc}", 0, "")
+            raise
 
     def status_change_response(self) -> Data:
         # Return the status-change branch when management routing matches.
-        return self._route_output("STATUS_CHANGE", "status_change")
+        self._insert_log(0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "STATUS_CHANGE_RESPONSE", "START", "before status_change_response", 0, "")
+        try:
+            __log_result = self._route_output("STATUS_CHANGE", "status_change")
+            self._insert_log(0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "STATUS_CHANGE_RESPONSE", "END", "after status_change_response", 0, "")
+            return __log_result
+        except Exception as exc:
+            self._insert_log(0, "WORKFLOW", "04_MGMT_ROUTER", "ERROR", "STATUS_CHANGE_RESPONSE", "ERROR", f"error status_change_response: {exc}", 0, "")
+            raise
 
     def correct_sql_input_response(self) -> Data:
         # Return the Correct SQL branch when management routing matches.
-        return self._route_output("CORRECT_SQL_INPUT", "correct_sql_input")
+        self._insert_log(0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "CORRECT_SQL_INPUT_RESPONSE", "START", "before correct_sql_input_response", 0, "")
+        try:
+            __log_result = self._route_output("CORRECT_SQL_INPUT", "correct_sql_input")
+            self._insert_log(0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "CORRECT_SQL_INPUT_RESPONSE", "END", "after correct_sql_input_response", 0, "")
+            return __log_result
+        except Exception as exc:
+            self._insert_log(0, "WORKFLOW", "04_MGMT_ROUTER", "ERROR", "CORRECT_SQL_INPUT_RESPONSE", "ERROR", f"error correct_sql_input_response: {exc}", 0, "")
+            raise
 
     def exception_response(self) -> Message:
         # Return a user-facing exception message for ambiguous management requests.
-        routed = self._get_routed_payload()
-        if routed.get("management_route") != "EXCEPTION":
-            self.stop("exception")
-            return Message(text="")
-        self.status = {**routed, "selected_output": "exception", "answer_text": EXCEPTION_MESSAGE, "final": True}
-        return Message(text=EXCEPTION_MESSAGE)
+        self._insert_log(0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "EXCEPTION_RESPONSE", "START", "before exception_response", 0, "")
+        try:
+            routed = self._get_routed_payload()
+            if routed.get("management_route") != "EXCEPTION":
+                self.stop("exception")
+                __log_result = Message(text="")
+                self._insert_log(0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "EXCEPTION_RESPONSE", "END", "after exception_response", 0, "")
+                return __log_result
+            self.status = {**routed, "selected_output": "exception", "answer_text": EXCEPTION_MESSAGE, "final": True}
+            __log_result = Message(text=EXCEPTION_MESSAGE)
+            self._insert_log(0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "EXCEPTION_RESPONSE", "END", "after exception_response", 0, "")
+            return __log_result
+        except Exception as exc:
+            self._insert_log(0, "WORKFLOW", "04_MGMT_ROUTER", "ERROR", "EXCEPTION_RESPONSE", "ERROR", f"error exception_response: {exc}", 0, "")
+            raise
 
     def _route_output(self, expected_route: str, output_name: str) -> Data:
         # Build a routed payload for the active output branch.
@@ -211,3 +247,48 @@ class NewType04ManagementRouter(Component):
         if hasattr(value, "get_secret_value"):
             return str(value.get_secret_value())
         return str(value)
+
+    def _insert_log(
+        self,
+        map_id,
+        mig_kind,
+        log_type,
+        log_level,
+        step_name,
+        status,
+        message,
+        retry_count,
+        generated_sql="",
+    ):
+        conn = None
+        try:
+            import oracledb
+
+            dsn = oracledb.makedsn(self.DB_HOST, int(self.DB_PORT or 1521), service_name=self.DB_SERVICE_NAME)
+            conn = oracledb.connect(user=self.DB_USERNAME, password=self.DB_PASSWORD, dsn=dsn)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO SFAADM.NEXT_MIG_LOG (
+                    LOG_ID, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, RETRY_COUNT, CREATED_AT
+                ) VALUES (
+                    SFAADM.MIGRATION_LOG_SEQ.NEXTVAL, :1, :2, :3, :4, :5, :6, :7, :8, CURRENT_TIMESTAMP
+                )
+                """,
+                [
+                    map_id,
+                    str(mig_kind or "")[:100],
+                    str(log_type or "")[:20],
+                    str(log_level or "")[:20],
+                    str(step_name or "")[:50],
+                    str(status or "")[:20],
+                    str(message or "")[:4000],
+                    retry_count,
+                ],
+            )
+            conn.commit()
+        except Exception as exc:
+            self.status = f"NEXT_MIG_LOG insert failed: {exc}"
+        finally:
+            if conn is not None:
+                conn.close()

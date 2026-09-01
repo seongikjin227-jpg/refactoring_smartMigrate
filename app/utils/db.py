@@ -251,25 +251,18 @@ def get_mig_logs(map_id: int) -> list[dict]:
             if "CREATED_AT" in available_columns
             else "CAST(NULL AS VARCHAR2(4000)) AS CREATED_AT"
         )
-        upd_ts_column = (
-            "TO_CHAR(UPD_TS, 'YYYY-MM-DD HH24:MI:SS') AS UPD_TS"
-            if "UPD_TS" in available_columns
-            else "CAST(NULL AS VARCHAR2(4000)) AS UPD_TS"
-        )
         generate_sql_column = _optional_column_expr("GENERATE_SQL", available_columns, data_type="CLOB")
         q = """
             SELECT LOG_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL,
                    STEP_NAME, STATUS, MESSAGE, RETRY_COUNT,
                    {generate_sql_column},
-                   {created_at_column},
-                   {upd_ts_column}
+                   {created_at_column}
             FROM NEXT_MIG_LOG
             WHERE MAP_ID = :1
             ORDER BY LOG_ID ASC
         """.format(
             generate_sql_column=generate_sql_column,
             created_at_column=created_at_column,
-            upd_ts_column=upd_ts_column,
         )
         with get_connection() as conn:
             cur = conn.cursor()
@@ -829,7 +822,6 @@ def get_mig_failure_analysis_rows(limit: int = 200) -> list[dict]:
     try:
         log_columns = _get_available_columns("NEXT_MIG_LOG")
         created_at_column = "CREATED_AT" if "CREATED_AT" in log_columns else "CAST(NULL AS TIMESTAMP) AS CREATED_AT"
-        upd_ts_column = "UPD_TS" if "UPD_TS" in log_columns else "CAST(NULL AS TIMESTAMP) AS UPD_TS"
         generate_sql_column = "GENERATE_SQL" if "GENERATE_SQL" in log_columns else "CAST(NULL AS CLOB) AS GENERATE_SQL"
 
         q = f"""
@@ -859,10 +851,9 @@ def get_mig_failure_analysis_rows(limit: int = 200) -> list[dict]:
                 FROM {MIG_TABLE} M
                 LEFT JOIN (
                     SELECT MAP_ID, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, GENERATE_SQL, RETRY_COUNT,
-                           COALESCE(UPD_TS, CREATED_AT) AS LOG_TIME
+                           CREATED_AT AS LOG_TIME
                     FROM (
                         SELECT MAP_ID, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, {generate_sql_column}, RETRY_COUNT,
-                               {upd_ts_column},
                                {created_at_column},
                                ROW_NUMBER() OVER (PARTITION BY MAP_ID ORDER BY LOG_ID DESC) AS RN
                         FROM NEXT_MIG_LOG

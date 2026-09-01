@@ -21,6 +21,12 @@ except Exception:
 
 
 class NewType10CMigOneJobPocExecutor(Component):
+    DB_HOST = ""
+    DB_PORT = 1521
+    DB_SERVICE_NAME = ""
+    DB_USERNAME = ""
+    DB_PASSWORD = ""
+
     display_name = "10C MIG One Job Executor"
     description = "Runs one DB Migration job with real DB status/log updates and internal retry."
     name = "NewType10CMigOneJobPocExecutor"
@@ -43,130 +49,144 @@ class NewType10CMigOneJobPocExecutor(Component):
     outputs = [Output(display_name="Job Result", name="job_result", method="run_job", types=["Data"])]
 
     def run_job(self) -> Data:
-        """Run one migration job and return the final job result payload."""
-        started = time.perf_counter()
-        job = self._parse_payload(getattr(self, "job_item", ""))
-        if not self._should_run_migration(job):
-            result = self._pass_through(job, started, "10C skipped because job_name is not migration.")
-            self.status = result
-            return Data(data=result)
-        map_id = self._to_int(job.get("map_id"))
-        if map_id is None:
-            raise ValueError("MIG job item requires map_id")
-        max_retry = max(0, int(job.get("max_retry") if job.get("max_retry") is not None else (getattr(self, "max_retry", None) or 2)))
-        db_config = self._db_config(job)
-        attempts: list[dict[str, Any]] = []
-
+        self._insert_log(0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "START", "before run_job", 0, "")
         try:
-            dep_status = self._dependency_status(db_config, map_id, job.get("prior_map_id"))
-            if dep_status != "READY":
+            """Run one migration job and return the final job result payload."""
+            started = time.perf_counter()
+            job = self._parse_payload(getattr(self, "job_item", ""))
+            if not self._should_run_migration(job):
+                result = self._pass_through(job, started, "10C skipped because job_name is not migration.")
+                self.status = result
+                __log_result = Data(data=result)
+                self._insert_log(0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "END", "after run_job", 0, "")
+                return __log_result
+            map_id = self._to_int(job.get("map_id"))
+            if map_id is None:
+                raise ValueError("MIG job item requires map_id")
+            max_retry = max(0, int(job.get("max_retry") if job.get("max_retry") is not None else (getattr(self, "max_retry", None) or 2)))
+            db_config = self._db_config(job)
+            attempts: list[dict[str, Any]] = []
+
+            try:
+                dep_status = self._dependency_status(db_config, map_id, job.get("prior_map_id"))
+                if dep_status != "READY":
+                    elapsed = int(time.perf_counter() - started)
+                    if self._is_dependency_failure_status(dep_status):
+                        status = "SKIP-PRIOR-FAIL"
+                        self._update_job(db_config, map_id, status, elapsed, 0)
+                        self._insert_mig_log(
+                            db_config,
+                            map_id,
+                            "JOB_SKIP",
+                            "WARN",
+                            "DEP_CHECK",
+                            status,
+                            f"prior_map_id={job.get('prior_map_id')} status={dep_status}",
+                            0,
+                            "",
+                        )
+                        result = self._result(job, ok=False, status=status, elapsed=elapsed, attempts=attempts)
+                        result.update({"skipped": True, "db_status_updated": True})
+                    else:
+                        result = self._result(job, ok=False, status="NOT_RUNNABLE", elapsed=elapsed, attempts=attempts)
+                        result.update({"not_runnable": True, "db_status_updated": False})
+                    result.update(
+                        {
+                            "error_type": "DEPENDENCY_NOT_READY",
+                            "message": f"prior_map_id={job.get('prior_map_id')} status={dep_status}",
+                        }
+                    )
+                    self.status = result
+                    __log_result = Data(data=result)
+                    self._insert_log(0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "END", "after run_job", 0, "")
+                    return __log_result
+
+                self._mark_running(db_config, map_id)
+                base_context = {"job": job, "map_id": map_id, "attempt": 1, "llm_config": self._llm_config(job)}
+                fetch_step = self._node_fetch_ddl(base_context)
+                if fetch_step.get("status") != "PASS":
+                    raise ValueError(fetch_step.get("message") or "FETCH_DDL failed")
+                self._insert_mig_log(
+                    db_config,
+                    map_id,
+                    "GENERATE_SQL",
+                    "INFO",
+                    "FETCH_DDL",
+                    "PASS",
+                    fetch_step.get("message") or "FETCH_DDL completed",
+                    0,
+                    "",
+                )
+                pipeline_context = {**base_context, **(fetch_step.get("outputs") or {})}
+                graph_result = self._run_migration_graph(pipeline_context, db_config, max_retry)
+                attempts = list(graph_result.get("attempts") or [])
+                final_status = str(graph_result.get("final_status") or "FAIL-TEST")
+                final_ok = final_status == "PASS"
+                retry_count = max(0, int(graph_result.get("db_attempts") or 1) - 1)
+                message = str(graph_result.get("message") or "")
+
                 elapsed = int(time.perf_counter() - started)
-                if self._is_dependency_failure_status(dep_status):
-                    status = "SKIP-PRIOR-FAIL"
-                    self._update_job(db_config, map_id, status, elapsed, 0)
-                    self._insert_log(
+                if final_ok:
+                    self._update_job(db_config, map_id, "PASS", elapsed, retry_count)
+                    self._insert_mig_log(
                         db_config,
                         map_id,
-                        "JOB_SKIP",
-                        "WARN",
-                        "DEP_CHECK",
-                        status,
-                        f"prior_map_id={job.get('prior_map_id')} status={dep_status}",
-                        0,
-                        "",
+                        "INFO",
+                        "INFO",
+                        "VERIFY",
+                        "PASS",
+                        message,
+                        retry_count,
+                        graph_result.get("verification_sql", ""),
                     )
-                    result = self._result(job, ok=False, status=status, elapsed=elapsed, attempts=attempts)
-                    result.update({"skipped": True, "db_status_updated": True})
                 else:
-                    result = self._result(job, ok=False, status="NOT_RUNNABLE", elapsed=elapsed, attempts=attempts)
-                    result.update({"not_runnable": True, "db_status_updated": False})
+                    self._update_job(db_config, map_id, final_status, elapsed, retry_count)
+                    self._insert_mig_log(
+                        db_config,
+                        map_id,
+                        "JOB_FAIL",
+                        "ERROR",
+                        "FINAL",
+                        final_status,
+                        message,
+                        retry_count,
+                        graph_result.get("stage_sql", ""),
+                    )
+
+                elapsed = int(time.perf_counter() - started)
+                result = self._result(job, ok=final_ok, status="PASS" if final_ok else final_status, elapsed=elapsed, attempts=attempts)
                 result.update(
                     {
-                        "error_type": "DEPENDENCY_NOT_READY",
-                        "message": f"prior_map_id={job.get('prior_map_id')} status={dep_status}",
+                        "retry_count": retry_count,
+                        "message": message,
+                        "migration_sql": graph_result.get("current_migration_sql", ""),
+                        "verification_sql": graph_result.get("current_v_sql", ""),
+                        "llm_model": graph_result.get("llm_model", ""),
+                        "generated_sql_saved": bool(graph_result.get("generated_sql_saved")),
+                        "next_node": "12C_sqlConversionOneJobPocExecutor" if job.get("full_workflow") else "10D_migIterationDashboard",
                     }
                 )
                 self.status = result
-                return Data(data=result)
-
-            self._mark_running(db_config, map_id)
-            base_context = {"job": job, "map_id": map_id, "attempt": 1, "llm_config": self._llm_config(job)}
-            fetch_step = self._node_fetch_ddl(base_context)
-            if fetch_step.get("status") != "PASS":
-                raise ValueError(fetch_step.get("message") or "FETCH_DDL failed")
-            self._insert_log(
-                db_config,
-                map_id,
-                "GENERATE_SQL",
-                "INFO",
-                "FETCH_DDL",
-                "PASS",
-                fetch_step.get("message") or "FETCH_DDL completed",
-                0,
-                "",
-            )
-            pipeline_context = {**base_context, **(fetch_step.get("outputs") or {})}
-            graph_result = self._run_migration_graph(pipeline_context, db_config, max_retry)
-            attempts = list(graph_result.get("attempts") or [])
-            final_status = str(graph_result.get("final_status") or "FAIL-TEST")
-            final_ok = final_status == "PASS"
-            retry_count = max(0, int(graph_result.get("db_attempts") or 1) - 1)
-            message = str(graph_result.get("message") or "")
-
-            elapsed = int(time.perf_counter() - started)
-            if final_ok:
-                self._update_job(db_config, map_id, "PASS", elapsed, retry_count)
-                self._insert_log(
-                    db_config,
-                    map_id,
-                    "INFO",
-                    "INFO",
-                    "VERIFY",
-                    "PASS",
-                    message,
-                    retry_count,
-                    graph_result.get("verification_sql", ""),
-                )
-            else:
-                self._update_job(db_config, map_id, final_status, elapsed, retry_count)
-                self._insert_log(
-                    db_config,
-                    map_id,
-                    "JOB_FAIL",
-                    "ERROR",
-                    "FINAL",
-                    final_status,
-                    message,
-                    retry_count,
-                    graph_result.get("stage_sql", ""),
-                )
-
-            elapsed = int(time.perf_counter() - started)
-            result = self._result(job, ok=final_ok, status="PASS" if final_ok else final_status, elapsed=elapsed, attempts=attempts)
-            result.update(
-                {
-                    "retry_count": retry_count,
-                    "message": message,
-                    "migration_sql": graph_result.get("current_migration_sql", ""),
-                    "verification_sql": graph_result.get("current_v_sql", ""),
-                    "llm_model": graph_result.get("llm_model", ""),
-                    "generated_sql_saved": bool(graph_result.get("generated_sql_saved")),
-                    "next_node": "12C_sqlConversionOneJobPocExecutor" if job.get("full_workflow") else "10D_migIterationDashboard",
-                }
-            )
-            self.status = result
-            return Data(data=result)
+                __log_result = Data(data=result)
+                self._insert_log(0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "END", "after run_job", 0, "")
+                return __log_result
+            except Exception as exc:
+                elapsed = int(time.perf_counter() - started)
+                try:
+                    self._update_job(db_config, map_id, "FAIL-INSERT", elapsed, max(0, len(attempts) - 1))
+                    self._insert_mig_log(db_config, map_id, "JOB_FAIL", "ERROR", "FINAL", "FAIL-INSERT", f"System error: {exc}", max(0, len(attempts) - 1), "")
+                except Exception:
+                    pass
+                result = self._result(job, ok=False, status="FAIL-INSERT", elapsed=elapsed, attempts=attempts)
+                result.update({"error_type": "SYSTEM_ERROR", "error": str(exc), "message": f"migration executor error: {exc}"})
+                self.status = result
+                __log_result = Data(data=result)
+                self._insert_log(0, "WORKFLOW", "10C_MIG_EXEC", "ERROR", "RUN_JOB", "ERROR", "error run_job", 0, "")
+                return __log_result
+            self._insert_log(0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "END", "after run_job", 0, "")
         except Exception as exc:
-            elapsed = int(time.perf_counter() - started)
-            try:
-                self._update_job(db_config, map_id, "FAIL-INSERT", elapsed, max(0, len(attempts) - 1))
-                self._insert_log(db_config, map_id, "JOB_FAIL", "ERROR", "FINAL", "FAIL-INSERT", f"System error: {exc}", max(0, len(attempts) - 1), "")
-            except Exception:
-                pass
-            result = self._result(job, ok=False, status="FAIL-INSERT", elapsed=elapsed, attempts=attempts)
-            result.update({"error_type": "SYSTEM_ERROR", "error": str(exc), "message": f"migration executor error: {exc}"})
-            self.status = result
-            return Data(data=result)
+            self._insert_log(0, "WORKFLOW", "10C_MIG_EXEC", "ERROR", "RUN_JOB", "ERROR", f"error run_job: {exc}", 0, "")
+            raise
 
     def _should_run_migration(self, job: dict[str, Any]) -> bool:
         return self._job_name(job) == "migration"
@@ -236,7 +256,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             attempt = self._attempt_result_from_state(state, ok=False)
             retry_count = int(state.get("db_attempts") or 1)
             self._update_job(db_config, int(state["map_id"]), attempt["status"], 0, retry_count)
-            self._insert_log(
+            self._insert_mig_log(
                 db_config,
                 int(state["map_id"]),
                 "ROW_ERROR",
@@ -432,7 +452,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         route_note = self._route_note(state, step)
         message = f"attempt={state.get('db_attempts')} stage={stage} status={status}; {step.get('message') or ''}{route_note}"
         log_type = "ROW_ERROR" if status.startswith("FAIL-") else ("VERIFY_SQL" if stage == "VERIFY" else "GENERATE_SQL")
-        self._insert_log(db_config, map_id, log_type, log_level, stage, status, message, retry_count, stage_sql)
+        self._insert_mig_log(db_config, map_id, log_type, log_level, stage, status, message, retry_count, stage_sql)
 
     def _log_sql_for_step(self, state: dict[str, Any], step: dict[str, Any]) -> str:
         """Choose the SQL snippet that matches the step being logged."""
@@ -1228,7 +1248,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             )
             conn.commit()
 
-    def _insert_log(
+    def _insert_mig_log(
         self,
         db_config: dict[str, Any],
         map_id: int,
@@ -1245,12 +1265,21 @@ class NewType10CMigOneJobPocExecutor(Component):
         sequence = self._qualify("MIGRATION_LOG_SEQ", db_config.get("system_schema"))
         column_types = self._table_column_types(db_config, table)
         columns = set(column_types)
-        ts_columns = [column for column in ("CREATED_AT", "UPD_TS") if column in columns]
+        ts_columns = [column for column in ("CREATED_AT",) if column in columns]
         generate_sql_column = ", GENERATE_SQL" if "GENERATE_SQL" in columns else ""
         generate_sql_value = ", :9" if "GENERATE_SQL" in columns else ""
         ts_column_sql = "".join(f", {column}" for column in ts_columns)
         ts_value_sql = "".join(", CURRENT_TIMESTAMP" for _ in ts_columns)
-        params = [map_id, "DB_MIG", log_type, log_level, step_name, status, str(message)[:4000], retry_count]
+        params = [
+            map_id,
+            "DB_MIG",
+            str(log_type or "")[:20],
+            str(log_level or "")[:20],
+            str(step_name or "")[:50],
+            str(status or "")[:20],
+            str(message or "")[:4000],
+            retry_count,
+        ]
         if "GENERATE_SQL" in columns:
             sql_text = str(generated_sql or "")
             if column_types.get("GENERATE_SQL") not in {"CLOB", "NCLOB"}:
@@ -1625,6 +1654,52 @@ class NewType10CMigOneJobPocExecutor(Component):
         except (TypeError, ValueError):
             return None
 
+
+
+    def _insert_log(
+        self,
+        map_id,
+        mig_kind,
+        log_type,
+        log_level,
+        step_name,
+        status,
+        message,
+        retry_count,
+        generated_sql="",
+    ):
+        conn = None
+        try:
+            import oracledb
+
+            dsn = oracledb.makedsn(self.DB_HOST, int(self.DB_PORT or 1521), service_name=self.DB_SERVICE_NAME)
+            conn = oracledb.connect(user=self.DB_USERNAME, password=self.DB_PASSWORD, dsn=dsn)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO SFAADM.NEXT_MIG_LOG (
+                    LOG_ID, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, RETRY_COUNT, CREATED_AT
+                ) VALUES (
+                    SFAADM.MIGRATION_LOG_SEQ.NEXTVAL, :1, :2, :3, :4, :5, :6, :7, :8, CURRENT_TIMESTAMP
+                )
+                """,
+                [
+                    map_id,
+                    str(mig_kind or "")[:100],
+                    str(log_type or "")[:20],
+                    str(log_level or "")[:20],
+                    str(step_name or "")[:50],
+                    str(status or "")[:20],
+                    str(message or "")[:4000],
+                    retry_count,
+                ],
+            )
+            conn.commit()
+        except Exception as exc:
+            self.status = f"NEXT_MIG_LOG insert failed: {exc}"
+        finally:
+            if conn is not None:
+                conn.close()
 
 MIGRATION_PROMPT_TEMPLATE: dict[str, str] = {
     "system_anthropic": "Generate SQL using Oracle 19c syntax. Return only one valid JSON object with ddl_sql, migration_sql, and verification_sql keys. Do not end SQL values with semicolons.",

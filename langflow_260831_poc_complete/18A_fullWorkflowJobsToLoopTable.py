@@ -26,6 +26,12 @@ ROUTE_LABELS = {
 
 
 class NewType18AFullWorkflowJobsToLoopTable(Component):
+    DB_HOST = ""
+    DB_PORT = 1521
+    DB_SERVICE_NAME = ""
+    DB_USERNAME = ""
+    DB_PASSWORD = ""
+
     display_name = "18A Full Workflow Jobs To Loop Table"
     description = "Builds one ordered Full Workflow queue: DB Migration, SQL Conversion, SQL Tuning, SQL Formatting."
     name = "NewType18AFullWorkflowJobsToLoopTable"
@@ -45,59 +51,66 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
     outputs = [Output(display_name="Jobs Table", name="jobs_table", method="build_jobs_table")]
 
     def build_jobs_table(self) -> DataFrame:
-        payload = self._parse_payload(getattr(self, "payload_json", ""))
-        db_config = self._db_config(payload)
-        max_retry = max(0, int(getattr(self, "max_retry", None) or 2))
-        grouped = self._group_jobs(payload, db_config)
-        grouped["MIG"] = self._sort_migration_jobs(grouped["MIG"])
+        self._insert_log(0, "WORKFLOW", "18A_FULL_JOBS", "INFO", "BUILD_JOBS_TABLE", "START", "before build_jobs_table", 0, "")
+        try:
+            payload = self._parse_payload(getattr(self, "payload_json", ""))
+            db_config = self._db_config(payload)
+            max_retry = max(0, int(getattr(self, "max_retry", None) or 2))
+            grouped = self._group_jobs(payload, db_config)
+            grouped["MIG"] = self._sort_migration_jobs(grouped["MIG"])
 
-        total = sum(len(grouped[route]) for route in ROUTE_ORDER)
-        rows: list[dict[str, Any]] = []
-        global_index = 0
-        route_totals = {route: len(grouped[route]) for route in ROUTE_ORDER}
+            total = sum(len(grouped[route]) for route in ROUTE_ORDER)
+            rows: list[dict[str, Any]] = []
+            global_index = 0
+            route_totals = {route: len(grouped[route]) for route in ROUTE_ORDER}
 
-        for phase_index, route in enumerate(ROUTE_ORDER, start=1):
-            route_jobs = grouped[route]
-            for route_index, job in enumerate(route_jobs, start=1):
-                global_index += 1
-                self._validate_job(route, job, route_index)
-                rows.append(
-                    {
-                        **job,
-                        "component": "18A_fullWorkflowJobsToLoopTable",
-                        "job_route": route,
-                        "planned_job_route": route,
-                        "job_name": self._job_name(route),
-                        "job_type": "MIG" if route == "MIG" else "SQL",
-                        "route_label": ROUTE_LABELS[route],
-                        "run_mode": payload.get("run_mode") or "all_pending",
-                        "full_workflow": True,
-                        "phase_index": phase_index,
-                        "phase_count": len(ROUTE_ORDER),
-                        "route_job_index": route_index,
-                        "route_total_jobs": route_totals[route],
-                        "job_index": global_index,
-                        "total_jobs": total,
-                        "completed_before": global_index - 1,
-                        "max_retry": max_retry,
-                        "db_config": db_config,
-                        "history": list(payload.get("history") or []),
-                        "workflow_plan_counts": dict(route_totals),
-                    }
-                )
+            for phase_index, route in enumerate(ROUTE_ORDER, start=1):
+                route_jobs = grouped[route]
+                for route_index, job in enumerate(route_jobs, start=1):
+                    global_index += 1
+                    self._validate_job(route, job, route_index)
+                    rows.append(
+                        {
+                            **job,
+                            "component": "18A_fullWorkflowJobsToLoopTable",
+                            "job_route": route,
+                            "planned_job_route": route,
+                            "job_name": self._job_name(route),
+                            "job_type": "MIG" if route == "MIG" else "SQL",
+                            "route_label": ROUTE_LABELS[route],
+                            "run_mode": payload.get("run_mode") or "all_pending",
+                            "full_workflow": True,
+                            "phase_index": phase_index,
+                            "phase_count": len(ROUTE_ORDER),
+                            "route_job_index": route_index,
+                            "route_total_jobs": route_totals[route],
+                            "job_index": global_index,
+                            "total_jobs": total,
+                            "completed_before": global_index - 1,
+                            "max_retry": max_retry,
+                            "db_config": db_config,
+                            "history": list(payload.get("history") or []),
+                            "workflow_plan_counts": dict(route_totals),
+                        }
+                    )
 
-        status = {
-            **payload,
-            "component": "18A_fullWorkflowJobsToLoopTable",
-            "job_route": "FULL_WORKFLOW",
-            "full_workflow": True,
-            "loop_job_count": total,
-            "workflow_plan_counts": route_totals,
-            "planned_jobs": rows,
-            "next_node": "18B_fullWorkflowLoop",
-        }
-        self.status = status
-        return DataFrame(rows)
+            status = {
+                **payload,
+                "component": "18A_fullWorkflowJobsToLoopTable",
+                "job_route": "FULL_WORKFLOW",
+                "full_workflow": True,
+                "loop_job_count": total,
+                "workflow_plan_counts": route_totals,
+                "planned_jobs": rows,
+                "next_node": "18B_fullWorkflowLoop",
+            }
+            self.status = status
+            __log_result = DataFrame(rows)
+            self._insert_log(0, "WORKFLOW", "18A_FULL_JOBS", "INFO", "BUILD_JOBS_TABLE", "END", "after build_jobs_table", 0, "")
+            return __log_result
+        except Exception as exc:
+            self._insert_log(0, "WORKFLOW", "18A_FULL_JOBS", "ERROR", "BUILD_JOBS_TABLE", "ERROR", f"error build_jobs_table: {exc}", 0, "")
+            raise
 
     def _group_jobs(self, payload: dict[str, Any], db_config: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
         grouped: dict[str, list[dict[str, Any]]] = {route: [] for route in ROUTE_ORDER}
@@ -341,3 +354,48 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
         if hasattr(value, "get_secret_value"):
             return str(value.get_secret_value())
         return str(value)
+
+    def _insert_log(
+        self,
+        map_id,
+        mig_kind,
+        log_type,
+        log_level,
+        step_name,
+        status,
+        message,
+        retry_count,
+        generated_sql="",
+    ):
+        conn = None
+        try:
+            import oracledb
+
+            dsn = oracledb.makedsn(self.DB_HOST, int(self.DB_PORT or 1521), service_name=self.DB_SERVICE_NAME)
+            conn = oracledb.connect(user=self.DB_USERNAME, password=self.DB_PASSWORD, dsn=dsn)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO SFAADM.NEXT_MIG_LOG (
+                    LOG_ID, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, RETRY_COUNT, CREATED_AT
+                ) VALUES (
+                    SFAADM.MIGRATION_LOG_SEQ.NEXTVAL, :1, :2, :3, :4, :5, :6, :7, :8, CURRENT_TIMESTAMP
+                )
+                """,
+                [
+                    map_id,
+                    str(mig_kind or "")[:100],
+                    str(log_type or "")[:20],
+                    str(log_level or "")[:20],
+                    str(step_name or "")[:50],
+                    str(status or "")[:20],
+                    str(message or "")[:4000],
+                    retry_count,
+                ],
+            )
+            conn.commit()
+        except Exception as exc:
+            self.status = f"NEXT_MIG_LOG insert failed: {exc}"
+        finally:
+            if conn is not None:
+                conn.close()

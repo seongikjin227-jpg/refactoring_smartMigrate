@@ -217,7 +217,7 @@ class MigrationCommandTool(Component):
             cur.execute(
                 """
                 SELECT LOG_ID, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE,
-                       TO_CHAR(COALESCE(UPD_TS, CREATED_AT), 'YYYY-MM-DD HH24:MI:SS') AS LOG_TIME
+                       TO_CHAR(CREATED_AT, 'YYYY-MM-DD HH24:MI:SS') AS LOG_TIME
                 FROM NEXT_MIG_LOG
                 WHERE MAP_ID = :1
                 ORDER BY LOG_ID DESC

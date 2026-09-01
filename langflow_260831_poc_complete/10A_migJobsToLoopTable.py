@@ -17,6 +17,12 @@ except Exception:
 
 
 class NewType10AMigJobsToLoopTable(Component):
+    DB_HOST = ""
+    DB_PORT = 1521
+    DB_SERVICE_NAME = ""
+    DB_USERNAME = ""
+    DB_PASSWORD = ""
+
     display_name = "10A MIG Jobs To Loop Table"
     description = "Converts selected MIG jobs into Loop input rows for one-job-at-a-time POC execution."
     name = "NewType10AMigJobsToLoopTable"
@@ -36,36 +42,43 @@ class NewType10AMigJobsToLoopTable(Component):
 
     def build_jobs_table(self) -> DataFrame:
         # Build a Loop-compatible DataFrame where each row is one MIG job.
-        payload = self._parse_payload(getattr(self, "payload_json", ""))
-        db_config = self._db_config(payload)
-        self._require_db_config(db_config)
-        jobs = self._sort_by_dependency(self._mig_jobs(payload, db_config))
-        total = len(jobs)
-        rows: list[dict[str, Any]] = []
-        for index, job in enumerate(jobs, start=1):
-            if job.get("map_id") is None or str(job.get("map_id")).strip() == "":
-                raise ValueError(f"10A MIG job row {index} requires map_id")
-            row = {
-                **job,
+        self._insert_log(0, "WORKFLOW", "10A_MIG_JOBS", "INFO", "BUILD_JOBS_TABLE", "START", "before build_jobs_table", 0, "")
+        try:
+            payload = self._parse_payload(getattr(self, "payload_json", ""))
+            db_config = self._db_config(payload)
+            self._require_db_config(db_config)
+            jobs = self._sort_by_dependency(self._mig_jobs(payload, db_config))
+            total = len(jobs)
+            rows: list[dict[str, Any]] = []
+            for index, job in enumerate(jobs, start=1):
+                if job.get("map_id") is None or str(job.get("map_id")).strip() == "":
+                    raise ValueError(f"10A MIG job row {index} requires map_id")
+                row = {
+                    **job,
+                    "component": "10A_migJobsToLoopTable",
+                    "job_route": "MIG",
+                    "job_type": "MIG",
+                    "run_mode": payload.get("run_mode") or "targeted",
+                    "job_index": index,
+                    "total_jobs": total,
+                    "completed_before": index - 1,
+                    "db_config": db_config,
+                    "history": list(payload.get("history") or []),
+                }
+                rows.append(row)
+            status = {
+                **payload,
                 "component": "10A_migJobsToLoopTable",
-                "job_route": "MIG",
-                "job_type": "MIG",
-                "run_mode": payload.get("run_mode") or "targeted",
-                "job_index": index,
-                "total_jobs": total,
-                "completed_before": index - 1,
-                "db_config": db_config,
-                "history": list(payload.get("history") or []),
+                "loop_job_count": total,
+                "next_node": "10B_migLoop",
             }
-            rows.append(row)
-        status = {
-            **payload,
-            "component": "10A_migJobsToLoopTable",
-            "loop_job_count": total,
-            "next_node": "10B_migLoop",
-        }
-        self.status = status
-        return DataFrame(rows)
+            self.status = status
+            __log_result = DataFrame(rows)
+            self._insert_log(0, "WORKFLOW", "10A_MIG_JOBS", "INFO", "BUILD_JOBS_TABLE", "END", "after build_jobs_table", 0, "")
+            return __log_result
+        except Exception as exc:
+            self._insert_log(0, "WORKFLOW", "10A_MIG_JOBS", "ERROR", "BUILD_JOBS_TABLE", "ERROR", f"error build_jobs_table: {exc}", 0, "")
+            raise
 
     def _mig_jobs(self, payload: dict[str, Any], db_config: dict[str, Any]) -> list[dict[str, Any]]:
         requested = payload.get("requested_jobs") if isinstance(payload.get("requested_jobs"), dict) else {}
@@ -230,3 +243,48 @@ class NewType10AMigJobsToLoopTable(Component):
         if hasattr(value, "get_secret_value"):
             return str(value.get_secret_value())
         return str(value)
+
+    def _insert_log(
+        self,
+        map_id,
+        mig_kind,
+        log_type,
+        log_level,
+        step_name,
+        status,
+        message,
+        retry_count,
+        generated_sql="",
+    ):
+        conn = None
+        try:
+            import oracledb
+
+            dsn = oracledb.makedsn(self.DB_HOST, int(self.DB_PORT or 1521), service_name=self.DB_SERVICE_NAME)
+            conn = oracledb.connect(user=self.DB_USERNAME, password=self.DB_PASSWORD, dsn=dsn)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO SFAADM.NEXT_MIG_LOG (
+                    LOG_ID, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, RETRY_COUNT, CREATED_AT
+                ) VALUES (
+                    SFAADM.MIGRATION_LOG_SEQ.NEXTVAL, :1, :2, :3, :4, :5, :6, :7, :8, CURRENT_TIMESTAMP
+                )
+                """,
+                [
+                    map_id,
+                    str(mig_kind or "")[:100],
+                    str(log_type or "")[:20],
+                    str(log_level or "")[:20],
+                    str(step_name or "")[:50],
+                    str(status or "")[:20],
+                    str(message or "")[:4000],
+                    retry_count,
+                ],
+            )
+            conn.commit()
+        except Exception as exc:
+            self.status = f"NEXT_MIG_LOG insert failed: {exc}"
+        finally:
+            if conn is not None:
+                conn.close()

@@ -1,0 +1,248 @@
+# Langflow 워크플로우 로깅 규칙
+
+## 0. Langflow 로깅 테스트 결과 요약
+
+첨부 PDF는 Langflow 환경에서 로깅 방법을 직접 테스트한 결과를 정리한 참고 자료다. 해당 PDF는 우리 SmartMigrate 워크플로우 구조를 모른다는 전제에서 작성된 환경 테스트 문서이므로, 최종 적용 규칙은 현재 `langflow_260831_poc_complete` 코드 구조를 기준으로 한다.
+
+테스트 결과 기준으로 정리하면 다음과 같다.
+
+| 방식 | 테스트 결과 | 최종 판단 |
+|---|---|---|
+| `self.log()` | Langflow IDE나 컴포넌트 실행 중 디버깅 메시지 확인에는 사용 가능 | DB 기준 실행 순서 추적용으로는 사용하지 않음 |
+| `lfx.log.logger` / Python logger | 서버 로그 확인에는 사용 가능 | 사용자가 Langflow 결과 화면에서 보기 어렵고 DB에 남지 않음 |
+| 커스텀 메모리 핸들러 | 같은 프로세스 안에서는 로그를 모을 수 있음 | 프로세스 재시작/분산 실행 시 유실 가능성이 있어 기준 방식으로 사용하지 않음 |
+| 컴포넌트별 DB 직접 insert | `NEXT_MIG_LOG`에 실행 순서를 남길 수 있음 | 현재 워크플로우 실행 추적의 기준 방식으로 채택 |
+| 최종 컴포넌트 Result Table output | DB에 쌓인 로그를 다시 조회해서 Langflow IDE 결과 패널에서 확인 가능 | `00B Log DB Update`에 `Result Table` output을 추가해 보조 확인용으로 사용 |
+
+따라서 현재 로깅 처리는 두 단계로 가져간다. 실행 순서의 원본은 `SFAADM.NEXT_MIG_LOG`에 저장하고, Langflow IDE에서 사람이 바로 확인해야 할 때는 `00B Log DB Update`의 `Result Table` output을 열어 DB에 저장된 로그를 조회한다. Chat Output에 로그를 출력하지는 않는다.
+
+## 1. 목적과 적용 범위
+
+이 문서는 현재 `langflow_260831_poc_complete` 플로우에서 사용할 로깅 규칙을 정리한다.
+
+목적은 Langflow에서 실제로 어떤 컴포넌트가 어떤 순서로 실행됐는지 DB에서 다시 확인할 수 있게 하는 것이다. 콘솔 로그나 IDE 화면용 `self.log()` 기록이 원본이 아니며, 기존 마이그레이션/SQL 감사 로그도 대체하지 않는다.
+
+- 워크플로우 실행 순서 추적: `SFAADM.NEXT_MIG_LOG`
+- 기존 마이그레이션 실행 및 생성 SQL 이력: `10C`의 기존 `_insert_log()` 유지
+- 기존 SQL 변환/튜닝/포맷팅 상세 이력: `12C`/`15C`/`17C`의 기존 `_insert_sql_log()` 유지
+- 런타임 로깅을 추가하더라도 기존 SQL 생성, DB 상태 업데이트, 재시도, 상세 로그 코드는 제거하거나 이동하지 않는다.
+
+`00B Log DB Update`는 Chat Output 직전에 최종 로그를 DB에 저장하고, 별도 `Result Table` output으로 `NEXT_MIG_LOG`의 workflow 로그를 조회해 보여준다. 이 output은 Chat Output으로 사용자에게 노출하기 위한 것이 아니라, Langflow IDE의 Result 화면에서 실행 순서를 확인하기 위한 보조 결과다.
+
+## 2. 기준 테이블과 실제 테스트 DB 차이
+
+저장소의 DDL(`scripts/full_table_ddl.sql`) 기준 `NEXT_MIG_LOG` 컬럼은 다음과 같다.
+
+```text
+LOG_ID        NUMBER, primary key, MIGRATION_LOG_SEQ 사용
+MAP_ID        NUMBER
+MIG_KIND      VARCHAR2(100)
+LOG_TYPE      VARCHAR2(20)
+LOG_LEVEL     VARCHAR2(20)
+STEP_NAME     VARCHAR2(50)
+STATUS        VARCHAR2(20)
+MESSAGE       VARCHAR2(4000)
+RETRY_COUNT   NUMBER
+GENERATE_SQL  CLOB
+CREATED_AT    TIMESTAMP
+```
+
+Langflow 테스트 DB 기준 `NEXT_MIG_LOG`에는 `CREATED_AT`만 있고 `UPD_TS`는 없다. 런타임 로그 insert와 조회는 `UPD_TS`에 의존하지 않는다.
+
+직접 DB에 기록하는 최소 헬퍼는 아래 컬럼만 대상으로 한다.
+
+```text
+LOG_ID, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL,
+STEP_NAME, STATUS, MESSAGE, RETRY_COUNT, CREATED_AT
+```
+
+순수 워크플로우 실행 순서 로그에서는 `GENERATE_SQL`을 비워 둔다. 생성 SQL이나 실행 SQL은 기존 `10C` 로직에서 기록하고, SQL 변환/튜닝/포맷팅 상세 내용은 기존 `NEXT_SQL_LOG` 기록을 유지한다. `MESSAGE`는 `VARCHAR2(4000)`이므로 긴 내용은 넣지 않는다.
+
+## 3. 전체 로깅 모델
+
+로그는 이전 행을 수정하는 방식이 아니라 이벤트마다 새 행을 추가하는 방식으로 남긴다. 그래야 중간에 실패해도 마지막으로 어디까지 실행됐는지 순서가 보인다.
+
+```text
+Chat Input
+  -> Log Runtime Start
+  -> 기존 라우팅 및 컴포넌트 실행
+  -> 각 컴포넌트 START / END / ERROR / SKIP 로그
+  -> Log DB Update
+  -> Chat Output
+```
+
+`Log Runtime Start`와 `Log DB Update`는 패스스루 컴포넌트로 둔다. 입력받은 payload를 그대로 다음 컴포넌트로 넘겨야 하며, 로깅 컴포넌트를 추가해도 기존 업무 데이터나 라우팅 결과가 바뀌면 안 된다.
+
+`Log DB Update`는 모든 `Chat Output` 바로 앞에 둔다. Chat Output으로 직접 연결되는 분기가 여러 개면 각 분기마다 `Log DB Update -> Chat Output` 형태로 연결해야 한다.
+
+`Log DB Update`에는 `Message` output과 `Result Table` output이 있다. `Message` output은 기존 Chat Output으로 연결하고, `Result Table` output은 필요할 때 Langflow IDE에서 열어 `NEXT_MIG_LOG`에 저장된 workflow timeline을 확인한다.
+
+## 4. 필수 연결 규칙
+
+### 4.1 모든 테스트와 워크플로우 실행
+
+모든 실행은 아래 연결로 시작한다.
+
+```text
+Chat Input -> Log Runtime Start -> 첫 번째 기존 컴포넌트
+```
+
+현재 메인 플로우에서 첫 번째 기존 컴포넌트는 `01 Request Classifier LLM`이다.
+
+모든 Chat Output 경로는 아래 연결로 끝난다.
+
+```text
+마지막 결과 컴포넌트 -> Log DB Update -> Chat Output
+```
+
+현재 구조에서 최소 적용 대상은 다음 경로들이다. // 대시보드나 03,04 는 없어도 괜찮음. 나머지는 진행
+
+```text
+03 LLM Response -> Log DB Update -> Chat Output
+04 Dashboard -> Log DB Update -> Chat Output
+04 Status Change -> Log DB Update -> Chat Output
+04 Correct SQL Input -> Log DB Update -> Chat Output
+04 Exception Message -> Log DB Update -> Chat Output
+08 Job Execution Router prerequisite/no-target -> Log DB Update -> Chat Output
+08R Confirmation Rejected -> Log DB Update -> Chat Output
+10D / 11 Final Dashboard -> Log DB Update -> Chat Output
+12D / 11 Final Dashboard -> Log DB Update -> Chat Output
+15D / 11 Final Dashboard -> Log DB Update -> Chat Output
+17D / 11 Final Dashboard -> Log DB Update -> Chat Output
+18D Full Workflow Dashboard -> Log DB Update -> Chat Output
+13 Final Summary -> Log DB Update -> Chat Output
+```
+
+Langflow에서 어떤 컴포넌트가 Chat Output으로 직접 연결돼 있으면 반드시 중간에 `Log DB Update`를 끼워야 한다. 그렇지 않으면 해당 실행 경로의 종료 로그가 DB에 보장되지 않는다.
+
+### 4.2 Full Workflow 실행 순서
+
+현재 전체 워크플로우의 기준 흐름은 다음과 같다.
+
+```text
+Chat Input -> Log Runtime Start -> 01 -> 02 -> 06 -> 08 -> 08H + 20 Human Input
+-> 18A -> 18B
+   item: 10C -> 12C -> 15C -> 17C -> 18D
+   done: 18D
+-> Log DB Update -> Chat Output
+```
+
+`18S Workflow Start Logger`는 기존 full-workflow 시작 마커에 가깝다. 승인 이후 jobs table을 받은 뒤 실행되는 컴포넌트이므로, 전체 공통 규칙인 `Chat Input -> Log Runtime Start`를 대체할 수 없다.
+
+## 5. 컴포넌트별 기록 규칙
+
+모든 커스텀 컴포넌트는 실제 output method가 실행되는 첫 위치에서 `START` 로그를 남긴다. 정상 return 직전에는 `END` 로그를 남긴다. 예외를 잡는 위치가 있으면 error payload를 반환하거나 예외를 다시 던지기 전에 `ERROR` 로그를 남긴다. 의도적으로 실행을 건너뛰는 분기에서는 pass-through return 전에 `SKIP` 로그를 남긴다.
+
+기본 호출 형태는 하나로 고정한다.
+
+```python
+self._insert_log(
+    map_id,
+    "WORKFLOW",
+    "<COMPONENT_ID>",
+    "INFO",
+    "<STEP_NAME>",
+    "START",
+    "before <component_id>",
+    0,
+    "",
+)
+```
+
+정상 종료 시에는 아래처럼 기록한다.
+
+```python
+self._insert_log(
+    map_id,
+    "WORKFLOW",
+    "<COMPONENT_ID>",
+    "INFO",
+    "<STEP_NAME>",
+    "END",
+    "after <component_id>",
+    0,
+    "",
+)
+```
+
+`LOG_TYPE`에는 안정적인 컴포넌트 식별자를 넣는다. 예시는 `01_REQUEST_CLASSIFIER`, `10C_MIG_EXECUTOR`, `18B_FULL_WORKFLOW_LOOP`이다.
+
+`STEP_NAME`에는 실행 단계나 메서드 성격을 넣는다. 예시는 `RUN`, `BUILD_JOBS_TABLE`, `ITEM`, `DONE`, `SUMMARIZE`이다.
+
+워크플로우 전체 단위 로그는 `MAP_ID = 0`을 사용한다. 특정 migration job에 속한 로그는 실제 `map_id`를 사용한다. SQL 작업 중 map id가 없는 경우는 `0`을 사용하고, SQL 상세 감사는 기존 `NEXT_SQL_LOG`에 남긴다.
+
+권장 이벤트 값은 다음과 같다.
+
+| 상황 | LOG_LEVEL | STATUS |
+|---|---|---|
+| 메서드 진입 | `INFO` | `START` |
+| 정상 반환 | `INFO` | `END` |
+| 예외 발생 | `ERROR` | `ERROR` |
+| 의도적 건너뜀 | `INFO` | `SKIP` |
+| 재시도 시작 | `WARN` | `RETRY` |
+
+## 6. 직접 DB insert 헬퍼 사용 규칙
+
+`99.LogHelper.py`는 일반 import 모듈이 아니라 복사용 헬퍼 파일로 둔다. 필요한 컴포넌트 클래스 안에 DB 상수와 `_insert_log(self, ...)` 메서드 하나를 붙여 넣어 사용한다.
+
+`_insert_log`는 인스턴스 메서드이므로 같은 클래스의 다른 메서드 안에서 호출해야 한다.
+
+```python
+def run_job(self):
+    self._insert_log(0, "WORKFLOW", "10C_MIG_EXECUTOR", "INFO", "RUN", "START", "before run_job", 0, "")
+    # 기존 업무 로직은 그대로 유지
+```
+
+`self._insert_log`만 적으면 함수가 실행되지 않는다. 그것은 메서드를 가리키는 표현일 뿐이다. 반드시 `self._insert_log(...)`처럼 괄호와 인자를 넣어 호출해야 한다.
+
+`self is not defined` 오류는 해당 호출이 클래스의 인스턴스 메서드 밖에 있다는 뜻이다. 호출 위치를 `def ... (self):` 안으로 옮겨야 한다.
+
+헬퍼는 `self.DB_HOST`, `self.DB_PORT`, `self.DB_SERVICE_NAME`, `self.DB_USERNAME`, `self.DB_PASSWORD`를 사용한다. 따라서 같은 컴포넌트 클래스 안에 해당 값을 정의한 뒤 호출해야 한다.
+
+`oracledb`는 헬퍼 메서드 내부에서 import하므로 파일 상단에 별도 import를 추가할 필요는 없다. 다만 Langflow 실행 환경에는 `oracledb` 패키지가 설치돼 있어야 한다.
+
+로깅은 업무 로직을 방해하지 않는 보조 기능으로 둔다. 로그 insert 실패가 원래 업무 예외를 덮어쓰거나 정상 흐름을 바꾸면 안 된다.
+
+## 7. 기존 감사 로그 유지 대상
+
+아래 기존 로그는 그대로 유지한다.
+
+| 컴포넌트 | 기존 기록 대상 | 유지 이유 |
+|---|---|---|
+| `10C_migOneJobPocExecutor` | `NEXT_MIG_LOG` | migration 단계, retry, 생성/실행 SQL, 실패 이력 |
+| `12C_sqlConversionOneJobPocExecutor` | `NEXT_SQL_LOG` | SQL 변환 결과와 단계 메타데이터 |
+| `15C_sqlTuningOneJobPocExecutor` | `NEXT_SQL_LOG` | SQL 튜닝 결과와 단계 메타데이터 |
+| `17C_sqlFormattingOneJobPocExecutor` | `NEXT_SQL_LOG` | SQL 포맷팅 결과와 단계 메타데이터 |
+| `18S_workflowStartLogger` | `NEXT_MIG_LOG`, `NEXT_SQL_LOG` | 현재 full-workflow 시작 마커 동작 |
+
+새 런타임 로그는 위 로그를 보완한다. 상세 SQL 로그를 대체하지 않고, 별도 progress table이나 공유 메모리 핸들러를 요구하지 않는다.
+
+## 8. 확인 쿼리와 완료 기준
+
+테스트 실행 후 컴포넌트 순서를 확인할 때는 아래 쿼리를 사용한다. `MAP_ID = 0`은 워크플로우 전체 타임라인 확인용이다. 특정 migration job을 볼 때는 실제 map id로 바꾸거나 조건을 제거한다.
+
+```sql
+SELECT LOG_ID,
+       CREATED_AT,
+       MAP_ID,
+       MIG_KIND,
+       LOG_TYPE,
+       LOG_LEVEL,
+       STEP_NAME,
+       STATUS,
+       MESSAGE,
+       RETRY_COUNT
+  FROM SFAADM.NEXT_MIG_LOG
+ WHERE MAP_ID = 0
+ ORDER BY LOG_ID;
+```
+
+정상 적용된 실행은 다음 조건을 만족해야 한다.
+
+1. `LOG_RUNTIME_START`의 `START` 로그가 Chat Input 직후 기록된다.
+2. 실제 실행된 모든 컴포넌트에 `START`와 `END`, `ERROR`, `SKIP` 중 하나의 종료 상태가 기록된다.
+3. 각 Chat Output 직전에 `LOG_DB_UPDATE` 로그가 기록된다.
+4. 런타임 insert SQL이 `UPD_TS` 컬럼을 요구하지 않는다.
+5. 기존 `10C`, `12C`, `15C`, `17C` 상세 로그가 기존 방식대로 계속 기록된다.
+
+에러 상황에서는 최종 logger가 error payload나 예외 경로 결과를 받은 경우에만 `ERROR`를 기록한다. 처리되지 않은 예외 뒤에 무조건 `END`를 기록하면 DB 타임라인이 실제 실행 결과와 달라지므로 피한다.

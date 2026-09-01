@@ -73,6 +73,12 @@ JOB_EXECUTION_ROUTER_PROMPT = """당신은 SmartMigrate 작업 실행 라우터�
 
 
 class NewType08JobExecutionRouter(Component):
+    DB_HOST = ""
+    DB_PORT = 1521
+    DB_SERVICE_NAME = ""
+    DB_USERNAME = ""
+    DB_PASSWORD = ""
+
     display_name = "08 Job Target Router"
     description = "Routes job execution requests by domain and target mode."
     name = "NewType08JobExecutionRouter"
@@ -98,25 +104,74 @@ class NewType08JobExecutionRouter(Component):
     ]
 
     def mig_response(self) -> Data:
-        return self._route_output("MIG", "mig_job")
+        self._insert_log(0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "MIG_RESPONSE", "START", "before mig_response", 0, "")
+        try:
+            __log_result = self._route_output("MIG", "mig_job")
+            self._insert_log(0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "MIG_RESPONSE", "END", "after mig_response", 0, "")
+            return __log_result
+        except Exception as exc:
+            self._insert_log(0, "WORKFLOW", "08_JOB_ROUTER", "ERROR", "MIG_RESPONSE", "ERROR", f"error mig_response: {exc}", 0, "")
+            raise
 
     def sql_conversion_response(self) -> Data:
-        return self._route_output("SQL_CONVERSION", "sql_conversion_job")
+        self._insert_log(0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "SQL_CONVERSION_RESPONSE", "START", "before sql_conversion_response", 0, "")
+        try:
+            __log_result = self._route_output("SQL_CONVERSION", "sql_conversion_job")
+            self._insert_log(0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "SQL_CONVERSION_RESPONSE", "END", "after sql_conversion_response", 0, "")
+            return __log_result
+        except Exception as exc:
+            self._insert_log(0, "WORKFLOW", "08_JOB_ROUTER", "ERROR", "SQL_CONVERSION_RESPONSE", "ERROR", f"error sql_conversion_response: {exc}", 0, "")
+            raise
 
     def sql_tuning_response(self) -> Data:
-        return self._route_output("SQL_TUNING", "sql_tuning_job")
+        self._insert_log(0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "SQL_TUNING_RESPONSE", "START", "before sql_tuning_response", 0, "")
+        try:
+            __log_result = self._route_output("SQL_TUNING", "sql_tuning_job")
+            self._insert_log(0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "SQL_TUNING_RESPONSE", "END", "after sql_tuning_response", 0, "")
+            return __log_result
+        except Exception as exc:
+            self._insert_log(0, "WORKFLOW", "08_JOB_ROUTER", "ERROR", "SQL_TUNING_RESPONSE", "ERROR", f"error sql_tuning_response: {exc}", 0, "")
+            raise
 
     def sql_formatting_response(self) -> Data:
-        return self._route_output("SQL_FORMATTING", "sql_formatting_job")
+        self._insert_log(0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "SQL_FORMATTING_RESPONSE", "START", "before sql_formatting_response", 0, "")
+        try:
+            __log_result = self._route_output("SQL_FORMATTING", "sql_formatting_job")
+            self._insert_log(0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "SQL_FORMATTING_RESPONSE", "END", "after sql_formatting_response", 0, "")
+            return __log_result
+        except Exception as exc:
+            self._insert_log(0, "WORKFLOW", "08_JOB_ROUTER", "ERROR", "SQL_FORMATTING_RESPONSE", "ERROR", f"error sql_formatting_response: {exc}", 0, "")
+            raise
 
     def full_workflow_response(self) -> Data:
-        return self._route_output("FULL_WORKFLOW", "full_workflow_job")
+        self._insert_log(0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "FULL_WORKFLOW_RESPONSE", "START", "before full_workflow_response", 0, "")
+        try:
+            __log_result = self._route_output("FULL_WORKFLOW", "full_workflow_job")
+            self._insert_log(0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "FULL_WORKFLOW_RESPONSE", "END", "after full_workflow_response", 0, "")
+            return __log_result
+        except Exception as exc:
+            self._insert_log(0, "WORKFLOW", "08_JOB_ROUTER", "ERROR", "FULL_WORKFLOW_RESPONSE", "ERROR", f"error full_workflow_response: {exc}", 0, "")
+            raise
 
     def prerequisite_required_response(self) -> Message:
-        return self._message_route_output("PREREQUISITE_REQUIRED", "prerequisite_required")
+        self._insert_log(0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "PREREQUISITE_REQUIRED_RESPONSE", "START", "before prerequisite_required_response", 0, "")
+        try:
+            __log_result = self._message_route_output("PREREQUISITE_REQUIRED", "prerequisite_required")
+            self._insert_log(0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "PREREQUISITE_REQUIRED_RESPONSE", "END", "after prerequisite_required_response", 0, "")
+            return __log_result
+        except Exception as exc:
+            self._insert_log(0, "WORKFLOW", "08_JOB_ROUTER", "ERROR", "PREREQUISITE_REQUIRED_RESPONSE", "ERROR", f"error prerequisite_required_response: {exc}", 0, "")
+            raise
 
     def no_runnable_response(self) -> Message:
-        return self._message_route_output("NO_RUNNABLE_JOB", "no_runnable_job")
+        self._insert_log(0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "NO_RUNNABLE_RESPONSE", "START", "before no_runnable_response", 0, "")
+        try:
+            __log_result = self._message_route_output("NO_RUNNABLE_JOB", "no_runnable_job")
+            self._insert_log(0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "NO_RUNNABLE_RESPONSE", "END", "after no_runnable_response", 0, "")
+            return __log_result
+        except Exception as exc:
+            self._insert_log(0, "WORKFLOW", "08_JOB_ROUTER", "ERROR", "NO_RUNNABLE_RESPONSE", "ERROR", f"error no_runnable_response: {exc}", 0, "")
+            raise
 
     def _route_output(self, expected_route: str, output_name: str) -> Data:
         try:
@@ -522,3 +577,48 @@ class NewType08JobExecutionRouter(Component):
         if hasattr(value, "get_secret_value"):
             return str(value.get_secret_value())
         return str(value)
+
+    def _insert_log(
+        self,
+        map_id,
+        mig_kind,
+        log_type,
+        log_level,
+        step_name,
+        status,
+        message,
+        retry_count,
+        generated_sql="",
+    ):
+        conn = None
+        try:
+            import oracledb
+
+            dsn = oracledb.makedsn(self.DB_HOST, int(self.DB_PORT or 1521), service_name=self.DB_SERVICE_NAME)
+            conn = oracledb.connect(user=self.DB_USERNAME, password=self.DB_PASSWORD, dsn=dsn)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO SFAADM.NEXT_MIG_LOG (
+                    LOG_ID, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, RETRY_COUNT, CREATED_AT
+                ) VALUES (
+                    SFAADM.MIGRATION_LOG_SEQ.NEXTVAL, :1, :2, :3, :4, :5, :6, :7, :8, CURRENT_TIMESTAMP
+                )
+                """,
+                [
+                    map_id,
+                    str(mig_kind or "")[:100],
+                    str(log_type or "")[:20],
+                    str(log_level or "")[:20],
+                    str(step_name or "")[:50],
+                    str(status or "")[:20],
+                    str(message or "")[:4000],
+                    retry_count,
+                ],
+            )
+            conn.commit()
+        except Exception as exc:
+            self.status = f"NEXT_MIG_LOG insert failed: {exc}"
+        finally:
+            if conn is not None:
+                conn.close()

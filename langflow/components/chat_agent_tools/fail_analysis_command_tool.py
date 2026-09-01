@@ -73,16 +73,16 @@ class FailAnalysisCommandTool(Component):
         # support map_id or sql_id+space_nm
         if cmd.get("map_id"):
             map_id = int(cmd["map_id"])
-            rows = self._query(f"SELECT * FROM {self._qualify('NEXT_MIG_LOG')} WHERE MAP_ID = :1 ORDER BY LOG_TS DESC", [map_id])
+            rows = self._query(f"SELECT * FROM {self._qualify('NEXT_MIG_LOG')} WHERE MAP_ID = :1 ORDER BY CREATED_AT DESC, LOG_ID DESC", [map_id])
             logs = [{"row": list(r)} for r in rows]
             return {"ok": True, "action": "query_failure_log", "result": {"map_id": map_id, "logs": logs}}
         if cmd.get("sql_id"):
             sql_id = str(cmd["sql_id"])
             space = cmd.get("space_nm")
             if space:
-                rows = self._query(f"SELECT * FROM {self._qualify('NEXT_SQL_LOG')} WHERE SQL_ID = :1 AND SPACE_NM = :2 ORDER BY LOG_TS DESC", [sql_id, space])
+                rows = self._query(f"SELECT * FROM {self._qualify('NEXT_SQL_LOG')} WHERE SQL_ID = :1 AND SPACE_NM = :2 ORDER BY CREATED_AT DESC", [sql_id, space])
             else:
-                rows = self._query(f"SELECT * FROM {self._qualify('NEXT_SQL_LOG')} WHERE SQL_ID = :1 ORDER BY LOG_TS DESC", [sql_id])
+                rows = self._query(f"SELECT * FROM {self._qualify('NEXT_SQL_LOG')} WHERE SQL_ID = :1 ORDER BY CREATED_AT DESC", [sql_id])
             logs = [{"row": list(r)} for r in rows]
             return {"ok": True, "action": "query_failure_log", "result": {"sql_id": sql_id, "space_nm": space, "logs": logs}}
         raise ValueError("map_id or sql_id is required for query_failure_log")

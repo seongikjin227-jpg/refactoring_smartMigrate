@@ -16,6 +16,12 @@ except Exception:
 
 
 class NewType10DMigIterationDashboard(Component):
+    DB_HOST = ""
+    DB_PORT = 1521
+    DB_SERVICE_NAME = ""
+    DB_USERNAME = ""
+    DB_PASSWORD = ""
+
     display_name = "10D MIG Iteration Dashboard"
     description = "Formats one completed MIG POC iteration for Chat Output and loop feedback."
     name = "NewType10DMigIterationDashboard"
@@ -28,14 +34,28 @@ class NewType10DMigIterationDashboard(Component):
     ]
 
     def build_message(self) -> Message:
-        payload = self._build()
-        self.status = payload
-        return Message(text=str(payload.get("answer_text") or ""))
+        self._insert_log(0, "WORKFLOW", "10D_MIG_DASH", "INFO", "BUILD_MESSAGE", "START", "before build_message", 0, "")
+        try:
+            payload = self._build()
+            self.status = payload
+            __log_result = Message(text=str(payload.get("answer_text") or ""))
+            self._insert_log(0, "WORKFLOW", "10D_MIG_DASH", "INFO", "BUILD_MESSAGE", "END", "after build_message", 0, "")
+            return __log_result
+        except Exception as exc:
+            self._insert_log(0, "WORKFLOW", "10D_MIG_DASH", "ERROR", "BUILD_MESSAGE", "ERROR", f"error build_message: {exc}", 0, "")
+            raise
 
     def build_loop_result(self) -> Data:
-        payload = self._build()
-        self.status = payload
-        return Data(data=payload.get("loop_result") or payload)
+        self._insert_log(0, "WORKFLOW", "10D_MIG_DASH", "INFO", "BUILD_LOOP_RESULT", "START", "before build_loop_result", 0, "")
+        try:
+            payload = self._build()
+            self.status = payload
+            __log_result = Data(data=payload.get("loop_result") or payload)
+            self._insert_log(0, "WORKFLOW", "10D_MIG_DASH", "INFO", "BUILD_LOOP_RESULT", "END", "after build_loop_result", 0, "")
+            return __log_result
+        except Exception as exc:
+            self._insert_log(0, "WORKFLOW", "10D_MIG_DASH", "ERROR", "BUILD_LOOP_RESULT", "ERROR", f"error build_loop_result: {exc}", 0, "")
+            raise
 
     def _build(self) -> dict[str, Any]:
         cached = getattr(self, "_cached_payload", None)
@@ -143,3 +163,48 @@ class NewType10DMigIterationDashboard(Component):
         if not isinstance(parsed, dict):
             raise ValueError("job_result must be a JSON object")
         return parsed
+
+    def _insert_log(
+        self,
+        map_id,
+        mig_kind,
+        log_type,
+        log_level,
+        step_name,
+        status,
+        message,
+        retry_count,
+        generated_sql="",
+    ):
+        conn = None
+        try:
+            import oracledb
+
+            dsn = oracledb.makedsn(self.DB_HOST, int(self.DB_PORT or 1521), service_name=self.DB_SERVICE_NAME)
+            conn = oracledb.connect(user=self.DB_USERNAME, password=self.DB_PASSWORD, dsn=dsn)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO SFAADM.NEXT_MIG_LOG (
+                    LOG_ID, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, RETRY_COUNT, CREATED_AT
+                ) VALUES (
+                    SFAADM.MIGRATION_LOG_SEQ.NEXTVAL, :1, :2, :3, :4, :5, :6, :7, :8, CURRENT_TIMESTAMP
+                )
+                """,
+                [
+                    map_id,
+                    str(mig_kind or "")[:100],
+                    str(log_type or "")[:20],
+                    str(log_level or "")[:20],
+                    str(step_name or "")[:50],
+                    str(status or "")[:20],
+                    str(message or "")[:4000],
+                    retry_count,
+                ],
+            )
+            conn.commit()
+        except Exception as exc:
+            self.status = f"NEXT_MIG_LOG insert failed: {exc}"
+        finally:
+            if conn is not None:
+                conn.close()

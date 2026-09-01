@@ -23,6 +23,12 @@ FAIL_FORMATTING = "FAIL-FORMATTING"
 
 
 class NewType17CSqlFormattingOneJobPocExecutor(Component):
+    DB_HOST = ""
+    DB_PORT = 1521
+    DB_SERVICE_NAME = ""
+    DB_USERNAME = ""
+    DB_PASSWORD = ""
+
     display_name = "17C SQL Formatting One Job POC Executor"
     description = "Formats one SQL job and stores FORMATTED_SQL without changing conversion/tuning statuses."
     name = "NewType17CSqlFormattingOneJobPocExecutor"
@@ -36,38 +42,49 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
     outputs = [Output(display_name="Job Result", name="job_result", method="run_job", types=["Data"])]
 
     def run_job(self) -> Data:
-        """Run one formatting job or pass through when tuning did not pass."""
-        started = time.perf_counter()
-        payload = self._parse_payload(getattr(self, "job_item", ""))
-        if not self._should_run_formatting(payload):
-            result = self._component_pass_through(payload, started, "17C skipped because job_name is migration.")
-            self.status = result
-            return Data(data=result)
-        db_config = self._db_config(payload)
-        self._require_db_config(db_config)
-        job: dict[str, Any] = {}
+        self._insert_log(0, "WORKFLOW", "17C_SQL_FORMAT", "INFO", "RUN_JOB", "START", "before run_job", 0, "")
         try:
-            job = self._load_sql_job(db_config, payload)
-            merged = {**job, **payload}
-
-            tuning_status = self._status(merged.get("tuning_status") or merged.get("status_tuning") or job.get("status_tuning"))
-            if not self._is_tuning_pass(tuning_status):
-                result = self._pass_through(
-                    payload=merged,
-                    job=job,
-                    started=started,
-                    status=self._status(merged.get("status")) or tuning_status or "NOT-RUN",
-                    message=f"SQL formatting passed through without DB update because tuning status is {tuning_status or 'NULL'}.",
-                )
+            """Run one formatting job or pass through when tuning did not pass."""
+            started = time.perf_counter()
+            payload = self._parse_payload(getattr(self, "job_item", ""))
+            if not self._should_run_formatting(payload):
+                result = self._component_pass_through(payload, started, "17C skipped because job_name is migration.")
                 self.status = result
-                return Data(data=result)
+                __log_result = Data(data=result)
+                self._insert_log(0, "WORKFLOW", "17C_SQL_FORMAT", "INFO", "RUN_JOB", "END", "after run_job", 0, "")
+                return __log_result
+            db_config = self._db_config(payload)
+            self._require_db_config(db_config)
+            job: dict[str, Any] = {}
+            try:
+                job = self._load_sql_job(db_config, payload)
+                merged = {**job, **payload}
 
-            self._increment_batch_count(db_config, str(job["row_id"]))
-            result = self._run_formatting(merged, job, db_config, started)
+                tuning_status = self._status(merged.get("tuning_status") or merged.get("status_tuning") or job.get("status_tuning"))
+                if not self._is_tuning_pass(tuning_status):
+                    result = self._pass_through(
+                        payload=merged,
+                        job=job,
+                        started=started,
+                        status=self._status(merged.get("status")) or tuning_status or "NOT-RUN",
+                        message=f"SQL formatting passed through without DB update because tuning status is {tuning_status or 'NULL'}.",
+                    )
+                    self.status = result
+                    __log_result = Data(data=result)
+                    self._insert_log(0, "WORKFLOW", "17C_SQL_FORMAT", "INFO", "RUN_JOB", "END", "after run_job", 0, "")
+                    return __log_result
+
+                self._increment_batch_count(db_config, str(job["row_id"]))
+                result = self._run_formatting(merged, job, db_config, started)
+            except Exception as exc:
+                result = self._finish_failure(payload, job, started, str(exc))
+            self.status = result
+            __log_result = Data(data=result)
+            self._insert_log(0, "WORKFLOW", "17C_SQL_FORMAT", "INFO", "RUN_JOB", "END", "after run_job", 0, "")
+            return __log_result
         except Exception as exc:
-            result = self._finish_failure(payload, job, started, str(exc))
-        self.status = result
-        return Data(data=result)
+            self._insert_log(0, "WORKFLOW", "17C_SQL_FORMAT", "ERROR", "RUN_JOB", "ERROR", f"error run_job: {exc}", 0, "")
+            raise
 
     def _should_run_formatting(self, payload: dict[str, Any]) -> bool:
         return self._job_name(payload) in {"conversion", "tuning", "formatting"}
@@ -537,3 +554,48 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         if not isinstance(parsed, dict):
             raise ValueError("job_item must be a JSON object")
         return parsed
+
+    def _insert_log(
+        self,
+        map_id,
+        mig_kind,
+        log_type,
+        log_level,
+        step_name,
+        status,
+        message,
+        retry_count,
+        generated_sql="",
+    ):
+        conn = None
+        try:
+            import oracledb
+
+            dsn = oracledb.makedsn(self.DB_HOST, int(self.DB_PORT or 1521), service_name=self.DB_SERVICE_NAME)
+            conn = oracledb.connect(user=self.DB_USERNAME, password=self.DB_PASSWORD, dsn=dsn)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO SFAADM.NEXT_MIG_LOG (
+                    LOG_ID, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, RETRY_COUNT, CREATED_AT
+                ) VALUES (
+                    SFAADM.MIGRATION_LOG_SEQ.NEXTVAL, :1, :2, :3, :4, :5, :6, :7, :8, CURRENT_TIMESTAMP
+                )
+                """,
+                [
+                    map_id,
+                    str(mig_kind or "")[:100],
+                    str(log_type or "")[:20],
+                    str(log_level or "")[:20],
+                    str(step_name or "")[:50],
+                    str(status or "")[:20],
+                    str(message or "")[:4000],
+                    retry_count,
+                ],
+            )
+            conn.commit()
+        except Exception as exc:
+            self.status = f"NEXT_MIG_LOG insert failed: {exc}"
+        finally:
+            if conn is not None:
+                conn.close()

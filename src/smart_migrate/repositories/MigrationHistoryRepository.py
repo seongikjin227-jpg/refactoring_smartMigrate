@@ -115,16 +115,21 @@ def log_business_history(
 
     try:
         available_columns = _table_columns(log_table)
-        timestamp_columns = [
-            column
-            for column in ("CREATED_AT", "UPD_TS")
-            if column in available_columns
-        ]
+        timestamp_columns = [column for column in ("CREATED_AT",) if column in available_columns]
         timestamp_column_sql = "".join(f", {column}" for column in timestamp_columns)
         timestamp_value_sql = "".join(", CURRENT_TIMESTAMP" for _ in timestamp_columns)
         generate_sql_column_sql = ", GENERATE_SQL" if "GENERATE_SQL" in available_columns else ""
         generate_sql_value_sql = ", :9" if "GENERATE_SQL" in available_columns else ""
-        params = [map_id, mig_kind, log_type, log_level, step_name, status, msg_str, retry_count]
+        params = [
+            map_id,
+            str(mig_kind or "")[:100],
+            str(log_type or "")[:20],
+            str(log_level or "")[:20],
+            str(step_name or "")[:50],
+            str(status or "")[:20],
+            msg_str,
+            retry_count,
+        ]
         if "GENERATE_SQL" in available_columns:
             params.append(sql_str)
         query = f"""

@@ -31,16 +31,15 @@ COMMENT ON COLUMN NEXT_MIG_INFO_DTL.TO_COL IS '대상 컬럼. 빈 값이면 INSE
 COMMENT ON TABLE NEXT_MIG_LOG IS 'DB 이관 실행 로그. 생성, 실행, 검증, 실패 원인을 단계별로 남긴다.';
 COMMENT ON COLUMN NEXT_MIG_LOG.LOG_ID IS '로그 식별자. MIGRATION_LOG_SEQ로 증가시키며 최신 로그 정렬에 사용한다.';
 COMMENT ON COLUMN NEXT_MIG_LOG.MAP_ID IS '관련 이관 작업 식별자. MAP_ID별 실행 이력을 조회한다.';
-COMMENT ON COLUMN NEXT_MIG_LOG.MIG_KIND IS '이관 구분. 기본값 DB_MIG로 DB 이관 로그를 구분한다.';
-COMMENT ON COLUMN NEXT_MIG_LOG.LOG_TYPE IS '로그 유형. GENERATE_SQL, ROW_ERROR, JOB_FAIL 등 원인 분류에 사용한다.';
+COMMENT ON COLUMN NEXT_MIG_LOG.MIG_KIND IS '이관 구분. WORKFLOW, DB_MIG 등 실행 범주를 기록한다.';
+COMMENT ON COLUMN NEXT_MIG_LOG.LOG_TYPE IS '로그 유형. 컴포넌트 또는 작업 유형을 20자 이내로 기록한다.';
 COMMENT ON COLUMN NEXT_MIG_LOG.LOG_LEVEL IS '로그 등급. INFO, WARN, ERROR 기준으로 장애 분석에 사용한다.';
-COMMENT ON COLUMN NEXT_MIG_LOG.STEP_NAME IS '실행 단계명. SQL 생성, 이관 실행, 검증 단계 구분에 사용한다.';
-COMMENT ON COLUMN NEXT_MIG_LOG.STATUS IS '단계 처리 상태. PASS, FAIL, WAITING 등 단계 결과를 기록한다.';
+COMMENT ON COLUMN NEXT_MIG_LOG.STEP_NAME IS '실행 단계명. 50자 이내로 컴포넌트 메서드 또는 처리 단계를 기록한다.';
+COMMENT ON COLUMN NEXT_MIG_LOG.STATUS IS '단계 처리 상태. START, END, ERROR, SKIP, PASS, FAIL 등 결과를 기록한다.';
 COMMENT ON COLUMN NEXT_MIG_LOG.MESSAGE IS '로그 메시지. 실패 요약과 사용자 안내 문구로 사용한다.';
 COMMENT ON COLUMN NEXT_MIG_LOG.RETRY_COUNT IS '로그 발생 시점의 재시도 번호. 반복 실패 흐름을 추적한다.';
 COMMENT ON COLUMN NEXT_MIG_LOG.GENERATE_SQL IS '해당 단계에서 생성 또는 실행한 SQL. 실패 재현과 분석에 사용한다.';
 COMMENT ON COLUMN NEXT_MIG_LOG.CREATED_AT IS '로그 생성 시각. 실행 이력 시간순 조회에 사용한다.';
-COMMENT ON COLUMN NEXT_MIG_LOG.UPD_TS IS '로그 수정 시각. 보정 또는 후처리 시 갱신한다.';
 
 COMMENT ON TABLE NEXT_SQL_INFO IS 'SQL 변환 작업 마스터. 변환, 튜닝, 바인드, 검증, 포맷팅 결과를 저장한다.';
 COMMENT ON COLUMN NEXT_SQL_INFO.TAG_KIND IS 'Mapper 태그 유형. SELECT가 아니면 변환 후 튜닝 없이 완료 처리할 수 있다.';
