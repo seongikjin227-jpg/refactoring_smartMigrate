@@ -1,6 +1,6 @@
 ### NEXT_MIG_LOG insert helper
 ########################################################################################################
-# Fill these values directly in this file before using the helper.
+# Copy these values into the component class and fill them directly.
 DB_HOST = ""
 DB_PORT = 1521
 DB_SERVICE_NAME = ""
@@ -23,8 +23,8 @@ def _insert_log(
     """Copy this method into a component and call self._insert_log(...)."""
     import oracledb
 
-    dsn = oracledb.makedsn(DB_HOST, int(DB_PORT or 1521), service_name=DB_SERVICE_NAME)
-    conn = oracledb.connect(user=DB_USERNAME, password=DB_PASSWORD, dsn=dsn)
+    dsn = oracledb.makedsn(self.DB_HOST, int(self.DB_PORT or 1521), service_name=self.DB_SERVICE_NAME)
+    conn = oracledb.connect(user=self.DB_USERNAME, password=self.DB_PASSWORD, dsn=dsn)
     try:
         cur = conn.cursor()
         cur.execute(
