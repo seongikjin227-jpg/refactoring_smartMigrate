@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import json
 import re
 import time
@@ -17,6 +18,25 @@ try:
 except Exception:
     DataInput = MessageTextInput
 
+
+
+def _workflow_log(step_name: str, status: str, message: str, log_level: str = "INFO") -> None:
+    logging.getLogger("smartmigrate.workflow").log(
+        logging.ERROR if str(log_level).upper() == "ERROR" else logging.INFO,
+        str(message or ""),
+        extra={
+            "workflow_log": {
+                "map_id": 0,
+                "mig_kind": "WORKFLOW",
+                "log_type": "LOOP_TEST_04C_PROGRESS_SIDE_CHANNEL_SINK",
+                "log_level": str(log_level or "INFO").upper(),
+                "step_name": str(step_name or "")[:50],
+                "status": str(status or "")[:20],
+                "message": str(message or "")[:4000],
+                "retry_count": 0,
+            }
+        },
+    )
 
 class LoopOutputTest04CProgressSideChannelSink(Component):
     display_name = "Loop Output Test 04C Progress Side Channel Sink"
@@ -56,6 +76,7 @@ class LoopOutputTest04CProgressSideChannelSink(Component):
         return Data(data=result["loop_result"])
 
     def _build(self) -> dict[str, Any]:
+        _workflow_log("_BUILD", "START", "before _build")
         cached = getattr(self, "_cached_payload", None)
         if cached is not None:
             return cached
@@ -92,6 +113,7 @@ class LoopOutputTest04CProgressSideChannelSink(Component):
             },
         }
         self._cached_payload = result
+        _workflow_log("_BUILD", "END", "after _build")
         return result
 
     def _event(self, run_key: str, message_payload: dict[str, Any], loop_result: dict[str, Any]) -> dict[str, Any]:

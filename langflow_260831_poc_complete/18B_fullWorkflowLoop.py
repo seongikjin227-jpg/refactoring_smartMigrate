@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from contextlib import contextmanager
 from typing import Any
@@ -25,11 +26,6 @@ ROUTE_ORDER = ("MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING")
 
 
 class NewType18BFullWorkflowLoop(Component):
-    DB_HOST = ""
-    DB_PORT = 1521
-    DB_SERVICE_NAME = ""
-    DB_USERNAME = ""
-    DB_PASSWORD = ""
 
     display_name = "18B Full Workflow Loop"
     description = "Runs the Full Workflow queue one item at a time, preserving phase order."
@@ -172,7 +168,21 @@ class NewType18BFullWorkflowLoop(Component):
         return aggregated_results
 
     async def item_output(self) -> Data:
-        self._insert_log(0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "ITEM_OUTPUT", "START", "before item_output", 0, "")
+        logging.getLogger("smartmigrate.workflow").info(
+            "before item_output",
+            extra={
+                "workflow_log": {
+                    "map_id": 0,
+                    "mig_kind": "WORKFLOW",
+                    "log_type": "18B_FULL_LOOP",
+                    "log_level": "INFO",
+                    "step_name": "ITEM_OUTPUT",
+                    "status": "START",
+                    "message": "before item_output",
+                    "retry_count": 0,
+                }
+            },
+        )
         try:
             self.stop("item")
             try:
@@ -182,14 +192,56 @@ class NewType18BFullWorkflowLoop(Component):
                 self.stop("item")
             data_list = self.ctx.get(f"{self._id}_data", [])
             __log_result = Data(data={"count": len(data_list), "items": [self._data_dict(item) for item in data_list]})
-            self._insert_log(0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "ITEM_OUTPUT", "END", "after item_output", 0, "")
+            logging.getLogger("smartmigrate.workflow").info(
+                "after item_output",
+                extra={
+                    "workflow_log": {
+                        "map_id": 0,
+                        "mig_kind": "WORKFLOW",
+                        "log_type": "18B_FULL_LOOP",
+                        "log_level": "INFO",
+                        "step_name": "ITEM_OUTPUT",
+                        "status": "END",
+                        "message": "after item_output",
+                        "retry_count": 0,
+                    }
+                },
+            )
             return __log_result
         except Exception as exc:
-            self._insert_log(0, "WORKFLOW", "18B_FULL_LOOP", "ERROR", "ITEM_OUTPUT", "ERROR", f"error item_output: {exc}", 0, "")
+            logging.getLogger("smartmigrate.workflow").error(
+                f"error item_output: {exc}",
+                extra={
+                    "workflow_log": {
+                        "map_id": 0,
+                        "mig_kind": "WORKFLOW",
+                        "log_type": "18B_FULL_LOOP",
+                        "log_level": "ERROR",
+                        "step_name": "ITEM_OUTPUT",
+                        "status": "ERROR",
+                        "message": f"error item_output: {exc}",
+                        "retry_count": 0,
+                    }
+                },
+            )
             raise
 
     async def done_output(self) -> Data:
-        self._insert_log(0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "DONE_OUTPUT", "START", "before done_output", 0, "")
+        logging.getLogger("smartmigrate.workflow").info(
+            "before done_output",
+            extra={
+                "workflow_log": {
+                    "map_id": 0,
+                    "mig_kind": "WORKFLOW",
+                    "log_type": "18B_FULL_LOOP",
+                    "log_level": "INFO",
+                    "step_name": "DONE_OUTPUT",
+                    "status": "START",
+                    "message": "before done_output",
+                    "retry_count": 0,
+                }
+            },
+        )
         try:
             if self._vertex is not None:
                 await self._iterate()
@@ -212,10 +264,38 @@ class NewType18BFullWorkflowLoop(Component):
             }
             self.status = payload
             __log_result = Data(data=payload)
-            self._insert_log(0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "DONE_OUTPUT", "END", "after done_output", 0, "")
+            logging.getLogger("smartmigrate.workflow").info(
+                "after done_output",
+                extra={
+                    "workflow_log": {
+                        "map_id": 0,
+                        "mig_kind": "WORKFLOW",
+                        "log_type": "18B_FULL_LOOP",
+                        "log_level": "INFO",
+                        "step_name": "DONE_OUTPUT",
+                        "status": "END",
+                        "message": "after done_output",
+                        "retry_count": 0,
+                    }
+                },
+            )
             return __log_result
         except Exception as exc:
-            self._insert_log(0, "WORKFLOW", "18B_FULL_LOOP", "ERROR", "DONE_OUTPUT", "ERROR", f"error done_output: {exc}", 0, "")
+            logging.getLogger("smartmigrate.workflow").error(
+                f"error done_output: {exc}",
+                extra={
+                    "workflow_log": {
+                        "map_id": 0,
+                        "mig_kind": "WORKFLOW",
+                        "log_type": "18B_FULL_LOOP",
+                        "log_level": "ERROR",
+                        "step_name": "DONE_OUTPUT",
+                        "status": "ERROR",
+                        "message": f"error done_output: {exc}",
+                        "retry_count": 0,
+                    }
+                },
+            )
             raise
 
     def _validate_job(self, payload: dict[str, Any], index: int) -> None:
@@ -410,48 +490,3 @@ class NewType18BFullWorkflowLoop(Component):
         except Exception:
             return None
         return parsed if isinstance(parsed, dict) else None
-
-    def _insert_log(
-        self,
-        map_id,
-        mig_kind,
-        log_type,
-        log_level,
-        step_name,
-        status,
-        message,
-        retry_count,
-        generated_sql="",
-    ):
-        conn = None
-        try:
-            import oracledb
-
-            dsn = oracledb.makedsn(self.DB_HOST, int(self.DB_PORT or 1521), service_name=self.DB_SERVICE_NAME)
-            conn = oracledb.connect(user=self.DB_USERNAME, password=self.DB_PASSWORD, dsn=dsn)
-            cur = conn.cursor()
-            cur.execute(
-                """
-                INSERT INTO SFAADM.NEXT_MIG_LOG (
-                    LOG_ID, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, RETRY_COUNT, CREATED_AT
-                ) VALUES (
-                    SFAADM.MIGRATION_LOG_SEQ.NEXTVAL, :1, :2, :3, :4, :5, :6, :7, :8, CURRENT_TIMESTAMP
-                )
-                """,
-                [
-                    map_id,
-                    str(mig_kind or "")[:100],
-                    str(log_type or "")[:20],
-                    str(log_level or "")[:20],
-                    str(step_name or "")[:50],
-                    str(status or "")[:20],
-                    str(message or "")[:4000],
-                    retry_count,
-                ],
-            )
-            conn.commit()
-        except Exception as exc:
-            self.status = f"NEXT_MIG_LOG insert failed: {exc}"
-        finally:
-            if conn is not None:
-                conn.close()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import json
 import re
 from typing import Any
@@ -16,11 +17,6 @@ except Exception:
 
 
 class NewType09ExecutionPlanSummary(Component):
-    DB_HOST = ""
-    DB_PORT = 1521
-    DB_SERVICE_NAME = ""
-    DB_USERNAME = ""
-    DB_PASSWORD = ""
 
     display_name = "09 Execution Plan Summary"
     description = "Builds a parallel pre-execution notice from the 08 router payload."
@@ -32,7 +28,21 @@ class NewType09ExecutionPlanSummary(Component):
 
     def build_notice(self) -> Message:
         # Build the execution-plan notice message.
-        self._insert_log(0, "WORKFLOW", "09_PLAN_SUMMARY", "INFO", "BUILD_NOTICE", "START", "before build_notice", 0, "")
+        logging.getLogger("smartmigrate.workflow").info(
+            "before build_notice",
+            extra={
+                "workflow_log": {
+                    "map_id": 0,
+                    "mig_kind": "WORKFLOW",
+                    "log_type": "09_PLAN_SUMMARY",
+                    "log_level": "INFO",
+                    "step_name": "BUILD_NOTICE",
+                    "status": "START",
+                    "message": "before build_notice",
+                    "retry_count": 0,
+                }
+            },
+        )
         try:
             payload = self._build()
             notice = Message(text=str(payload.get("execution_plan_message") or ""))
@@ -43,10 +53,38 @@ class NewType09ExecutionPlanSummary(Component):
                 "pre_execution_notice": True,
             }
             __log_result = notice
-            self._insert_log(0, "WORKFLOW", "09_PLAN_SUMMARY", "INFO", "BUILD_NOTICE", "END", "after build_notice", 0, "")
+            logging.getLogger("smartmigrate.workflow").info(
+                "after build_notice",
+                extra={
+                    "workflow_log": {
+                        "map_id": 0,
+                        "mig_kind": "WORKFLOW",
+                        "log_type": "09_PLAN_SUMMARY",
+                        "log_level": "INFO",
+                        "step_name": "BUILD_NOTICE",
+                        "status": "END",
+                        "message": "after build_notice",
+                        "retry_count": 0,
+                    }
+                },
+            )
             return __log_result
         except Exception as exc:
-            self._insert_log(0, "WORKFLOW", "09_PLAN_SUMMARY", "ERROR", "BUILD_NOTICE", "ERROR", f"error build_notice: {exc}", 0, "")
+            logging.getLogger("smartmigrate.workflow").error(
+                f"error build_notice: {exc}",
+                extra={
+                    "workflow_log": {
+                        "map_id": 0,
+                        "mig_kind": "WORKFLOW",
+                        "log_type": "09_PLAN_SUMMARY",
+                        "log_level": "ERROR",
+                        "step_name": "BUILD_NOTICE",
+                        "status": "ERROR",
+                        "message": f"error build_notice: {exc}",
+                        "retry_count": 0,
+                    }
+                },
+            )
             raise
 
     def _build(self) -> dict[str, Any]:
@@ -254,48 +292,3 @@ class NewType09ExecutionPlanSummary(Component):
             return int(value)
         except (TypeError, ValueError):
             return None
-
-    def _insert_log(
-        self,
-        map_id,
-        mig_kind,
-        log_type,
-        log_level,
-        step_name,
-        status,
-        message,
-        retry_count,
-        generated_sql="",
-    ):
-        conn = None
-        try:
-            import oracledb
-
-            dsn = oracledb.makedsn(self.DB_HOST, int(self.DB_PORT or 1521), service_name=self.DB_SERVICE_NAME)
-            conn = oracledb.connect(user=self.DB_USERNAME, password=self.DB_PASSWORD, dsn=dsn)
-            cur = conn.cursor()
-            cur.execute(
-                """
-                INSERT INTO SFAADM.NEXT_MIG_LOG (
-                    LOG_ID, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, RETRY_COUNT, CREATED_AT
-                ) VALUES (
-                    SFAADM.MIGRATION_LOG_SEQ.NEXTVAL, :1, :2, :3, :4, :5, :6, :7, :8, CURRENT_TIMESTAMP
-                )
-                """,
-                [
-                    map_id,
-                    str(mig_kind or "")[:100],
-                    str(log_type or "")[:20],
-                    str(log_level or "")[:20],
-                    str(step_name or "")[:50],
-                    str(status or "")[:20],
-                    str(message or "")[:4000],
-                    retry_count,
-                ],
-            )
-            conn.commit()
-        except Exception as exc:
-            self.status = f"NEXT_MIG_LOG insert failed: {exc}"
-        finally:
-            if conn is not None:
-                conn.close()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import json
 import re
 from typing import Any
@@ -16,11 +17,6 @@ except Exception:
 
 
 class NewType04CorrectSqlInput(Component):
-    DB_HOST = ""
-    DB_PORT = 1521
-    DB_SERVICE_NAME = ""
-    DB_USERNAME = ""
-    DB_PASSWORD = ""
 
     display_name = "04 Correct SQL Input"
     description = "POC corrected SQL input branch. Production should set USER_EDITED='Y' and store SQL."
@@ -32,7 +28,21 @@ class NewType04CorrectSqlInput(Component):
 
     def run(self) -> Message:
         # Execute the component and return a Langflow message.
-        self._insert_log(0, "WORKFLOW", "04_CORRECT_SQL", "INFO", "RUN", "START", "before run", 0, "")
+        logging.getLogger("smartmigrate.workflow").info(
+            "before run",
+            extra={
+                "workflow_log": {
+                    "map_id": 0,
+                    "mig_kind": "WORKFLOW",
+                    "log_type": "04_CORRECT_SQL",
+                    "log_level": "INFO",
+                    "step_name": "RUN",
+                    "status": "START",
+                    "message": "before run",
+                    "retry_count": 0,
+                }
+            },
+        )
         try:
             payload = self._parse_payload(getattr(self, "payload_json", ""))
             correct_sql = payload.get("correct_sql") or ""
@@ -44,10 +54,38 @@ class NewType04CorrectSqlInput(Component):
             result = {**payload, "component": "04_correctSqlInput", "answer_text": answer, "final": True}
             self.status = result
             __log_result = Message(text=answer)
-            self._insert_log(0, "WORKFLOW", "04_CORRECT_SQL", "INFO", "RUN", "END", "after run", 0, "")
+            logging.getLogger("smartmigrate.workflow").info(
+                "after run",
+                extra={
+                    "workflow_log": {
+                        "map_id": 0,
+                        "mig_kind": "WORKFLOW",
+                        "log_type": "04_CORRECT_SQL",
+                        "log_level": "INFO",
+                        "step_name": "RUN",
+                        "status": "END",
+                        "message": "after run",
+                        "retry_count": 0,
+                    }
+                },
+            )
             return __log_result
         except Exception as exc:
-            self._insert_log(0, "WORKFLOW", "04_CORRECT_SQL", "ERROR", "RUN", "ERROR", f"error run: {exc}", 0, "")
+            logging.getLogger("smartmigrate.workflow").error(
+                f"error run: {exc}",
+                extra={
+                    "workflow_log": {
+                        "map_id": 0,
+                        "mig_kind": "WORKFLOW",
+                        "log_type": "04_CORRECT_SQL",
+                        "log_level": "ERROR",
+                        "step_name": "RUN",
+                        "status": "ERROR",
+                        "message": f"error run: {exc}",
+                        "retry_count": 0,
+                    }
+                },
+            )
             raise
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
@@ -64,48 +102,3 @@ class NewType04CorrectSqlInput(Component):
         if not isinstance(parsed, dict):
             raise ValueError("payload_json must be a JSON object")
         return parsed
-
-    def _insert_log(
-        self,
-        map_id,
-        mig_kind,
-        log_type,
-        log_level,
-        step_name,
-        status,
-        message,
-        retry_count,
-        generated_sql="",
-    ):
-        conn = None
-        try:
-            import oracledb
-
-            dsn = oracledb.makedsn(self.DB_HOST, int(self.DB_PORT or 1521), service_name=self.DB_SERVICE_NAME)
-            conn = oracledb.connect(user=self.DB_USERNAME, password=self.DB_PASSWORD, dsn=dsn)
-            cur = conn.cursor()
-            cur.execute(
-                """
-                INSERT INTO SFAADM.NEXT_MIG_LOG (
-                    LOG_ID, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, RETRY_COUNT, CREATED_AT
-                ) VALUES (
-                    SFAADM.MIGRATION_LOG_SEQ.NEXTVAL, :1, :2, :3, :4, :5, :6, :7, :8, CURRENT_TIMESTAMP
-                )
-                """,
-                [
-                    map_id,
-                    str(mig_kind or "")[:100],
-                    str(log_type or "")[:20],
-                    str(log_level or "")[:20],
-                    str(step_name or "")[:50],
-                    str(status or "")[:20],
-                    str(message or "")[:4000],
-                    retry_count,
-                ],
-            )
-            conn.commit()
-        except Exception as exc:
-            self.status = f"NEXT_MIG_LOG insert failed: {exc}"
-        finally:
-            if conn is not None:
-                conn.close()

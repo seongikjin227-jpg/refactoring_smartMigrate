@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
@@ -15,6 +16,25 @@ except Exception:
 
 GENERIC_MESSAGE = "\ucd9c\ub825 \uc785\ub2c8\ub2e4."
 
+
+
+def _workflow_log(step_name: str, status: str, message: str, log_level: str = "INFO") -> None:
+    logging.getLogger("smartmigrate.workflow").log(
+        logging.ERROR if str(log_level).upper() == "ERROR" else logging.INFO,
+        str(message or ""),
+        extra={
+            "workflow_log": {
+                "map_id": 0,
+                "mig_kind": "WORKFLOW",
+                "log_type": "LOOP_TEST_04D_HARD_SLEEP_OUTPUT_PROBE",
+                "log_level": str(log_level or "INFO").upper(),
+                "step_name": str(step_name or "")[:50],
+                "status": str(status or "")[:20],
+                "message": str(message or "")[:4000],
+                "retry_count": 0,
+            }
+        },
+    )
 
 class LoopOutputTest04DHardSleepOutputProbe(Component):
     display_name = "Loop Output Test 04D Hard Sleep Output Probe"
@@ -32,6 +52,7 @@ class LoopOutputTest04DHardSleepOutputProbe(Component):
     ]
 
     def build_loop_result(self) -> Data:
+        _workflow_log("BUILD_LOOP_RESULT", "START", "before build_loop_result")
         sleep_seconds = self._sleep_seconds()
         input_payload = self._data_dict(getattr(self, "input_data", None))
         started = time.perf_counter()
@@ -49,6 +70,7 @@ class LoopOutputTest04DHardSleepOutputProbe(Component):
             "answer_text": input_payload.get("answer_text") or GENERIC_MESSAGE,
         }
         self.status = payload
+        _workflow_log("BUILD_LOOP_RESULT", "END", "after build_loop_result")
         return Data(data=payload)
 
     def _data_dict(self, raw: Any) -> dict[str, Any]:

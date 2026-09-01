@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from contextlib import contextmanager
 from typing import Any
@@ -125,8 +126,7 @@ class LoopOutputTest18BFullWorkflowLoopWithSleep(Component):
                 self.update_ctx({f"{self._id}_aggregated": [], f"{self._id}_iterated": True})
                 return []
             first_payload = self._data_dict(data_list[0])
-            workflow_db_config = dict(first_payload.get("db_config") or {})
-            self._insert_log(workflow_db_config, 0, "WORKFLOW", "WORKFLOW_LOOP", "INFO", "LOOP_START", "START", f"start workflow loop total={len(data_list)}", 0, "")
+            self._log_workflow("WORKFLOW_LOOP", "INFO", "LOOP_START", "START", f"start workflow loop total={len(data_list)}")
             aggregated_results = []
             migration_failed = False
             abort_reason = ""
@@ -148,21 +148,20 @@ class LoopOutputTest18BFullWorkflowLoopWithSleep(Component):
                     self.log(abort_reason, name="Phase Gate")
                     break
 
-                db_config = dict(item_payload.get("db_config") or {})
-                self._insert_log(db_config, 0, "WORKFLOW", "WORKFLOW_ITEM", "INFO", "ITEM_START", "START", f"start one item {index + 1}/{len(data_list)}", 0, "")
+                self._log_workflow("WORKFLOW_ITEM", "INFO", "ITEM_START", "START", f"start one item {index + 1}/{len(data_list)}")
                 item_results = await self.execute_loop_body([item], event_manager=self._event_manager)
                 aggregated_results.extend(item_results)
                 item_result_payload = self._data_dict(item_results[-1]) if item_results else {}
                 item_status = str(item_result_payload.get("status") or "END")
-                self._insert_log(db_config, 0, "WORKFLOW", "WORKFLOW_ITEM", "INFO", "ITEM_END", item_status, f"end one item {index + 1}/{len(data_list)}", 0, "")
+                self._log_workflow("WORKFLOW_ITEM", "INFO", "ITEM_END", item_status, f"end one item {index + 1}/{len(data_list)}")
                 for result in item_results:
                     result_payload = self._data_dict(result)
                     if self._migration_abort_signal(result_payload):
                         migration_failed = True
                 if sleep_seconds > 0 and index < len(data_list) - 1:
-                    self._insert_log(db_config, 0, "WORKFLOW", "SLEEP_PROBE", "INFO", "SLEEP_BEFORE", "SLEEP_BEFORE", "SLEEP_BEFORE", 0, "")
+                    self._log_workflow("SLEEP_PROBE", "INFO", "SLEEP_BEFORE", "SLEEP_BEFORE", "SLEEP_BEFORE")
                     time.sleep(sleep_seconds)
-                    self._insert_log(db_config, 0, "WORKFLOW", "SLEEP_PROBE", "INFO", "SLEEP_AFTER", "SLEEP_AFTER", "SLEEP_AFTER", 0, "")
+                    self._log_workflow("SLEEP_PROBE", "INFO", "SLEEP_AFTER", "SLEEP_AFTER", "SLEEP_AFTER")
 
             self.update_ctx(
                 {
@@ -202,18 +201,7 @@ class LoopOutputTest18BFullWorkflowLoopWithSleep(Component):
         first_payload = self._data_dict(data_list[0]) if data_list else {}
         results = [self._data_dict(item) for item in self.ctx.get(f"{self._id}_aggregated", [])]
         workflow_summary = self._summary(results, data_list, self.ctx.get(f"{self._id}_skipped_plan_counts", {}))
-        self._insert_log(
-            dict(first_payload.get("db_config") or {}),
-            0,
-            "WORKFLOW",
-            "WORKFLOW_LOOP",
-            "INFO",
-            "LOOP_DONE",
-            "DONE",
-            f"done workflow loop completed={len(results)}/{len(data_list)}",
-            0,
-            "",
-        )
+        self._log_workflow("WORKFLOW_LOOP", "INFO", "LOOP_DONE", "DONE", f"done workflow loop completed={len(results)}/{len(data_list)}")
         payload = {
             "component": "LoopOutputTest18BFullWorkflowLoopWithSleep",
             "job_route": "FULL_WORKFLOW",
@@ -368,75 +356,23 @@ class LoopOutputTest18BFullWorkflowLoopWithSleep(Component):
     def _has_db_config(self, db_config: dict[str, Any]) -> bool:
         return all(str(db_config.get(key) or "").strip() for key in ("db_host", "db_service_name", "db_username"))
 
-    def _insert_log(
-        self,
-        db_config: dict[str, Any],
-        map_id: int,
-        mig_kind: str,
-        log_type: str,
-        log_level: str,
-        step_name: str,
-        status: str,
-        message: str,
-        retry_count: int,
-        generated_sql: str = "",
-    ) -> None:
-        """Insert one migration execution log row into NEXT_MIG_LOG."""
-        table = self._qualify("NEXT_MIG_LOG", db_config.get("system_schema"))
-        sequence = self._qualify("MIGRATION_LOG_SEQ", db_config.get("system_schema"))
-        column_types = self._table_column_types(db_config, table)
-        columns = set(column_types)
-        ts_columns = [column for column in ("CREATED_AT",) if column in columns]
-        generate_sql_column = ", GENERATE_SQL" if "GENERATE_SQL" in columns else ""
-        generate_sql_value = ", :9" if "GENERATE_SQL" in columns else ""
-        ts_column_sql = "".join(f", {column}" for column in ts_columns)
-        ts_value_sql = "".join(", CURRENT_TIMESTAMP" for _ in ts_columns)
-        params = [
-            map_id,
-            str(mig_kind or "")[:100],
-            str(log_type or "")[:20],
-            str(log_level or "")[:20],
-            str(step_name or "")[:50],
-            str(status or "")[:20],
-            str(message or "")[:4000],
-            retry_count,
-        ]
-        if "GENERATE_SQL" in columns:
-            sql_text = str(generated_sql or "")
-            if column_types.get("GENERATE_SQL") not in {"CLOB", "NCLOB"}:
-                sql_text = sql_text[:4000]
-            params.append(sql_text)
-        with self._connect(db_config) as conn:
-            cur = conn.cursor()
-            cur.execute(
-                f"""
-                INSERT INTO {table} (
-                    LOG_ID, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, RETRY_COUNT{generate_sql_column}{ts_column_sql}
-                ) VALUES ({sequence}.NEXTVAL, :1, :2, :3, :4, :5, :6, :7, :8{generate_sql_value}{ts_value_sql})
-                """,
-                params,
-            )
-            conn.commit()
-
-    def _table_column_types(self, db_config: dict[str, Any], table: str) -> dict[str, str]:
-        owner, table_name = self._split_table_owner_and_name(table)
-        if owner:
-            sql = "SELECT COLUMN_NAME, DATA_TYPE FROM ALL_TAB_COLUMNS WHERE OWNER = :1 AND TABLE_NAME = :2"
-            params = [owner, table_name]
-        else:
-            sql = "SELECT COLUMN_NAME, DATA_TYPE FROM USER_TAB_COLUMNS WHERE TABLE_NAME = :1"
-            params = [table_name]
-        with self._connect(db_config) as conn:
-            cur = conn.cursor()
-            cur.execute(sql, params)
-            return {str(row[0]).upper(): str(row[1]).upper() for row in cur.fetchall()}
-
-    def _split_table_owner_and_name(self, table: str) -> tuple[str | None, str]:
-        value = str(table or "").strip().upper()
-        if "." in value:
-            owner, table_name = value.split(".", 1)
-            return owner.strip('"'), table_name.strip('"')
-        return None, value.strip('"')
+    def _log_workflow(self, log_type: str, log_level: str, step_name: str, status: str, message: str) -> None:
+        logging.getLogger("smartmigrate.workflow").log(
+            logging.ERROR if str(log_level).upper() == "ERROR" else logging.INFO,
+            str(message or ""),
+            extra={
+                "workflow_log": {
+                    "map_id": 0,
+                    "mig_kind": "WORKFLOW",
+                    "log_type": str(log_type or "")[:20],
+                    "log_level": str(log_level or "")[:20],
+                    "step_name": str(step_name or "")[:50],
+                    "status": str(status or "")[:20],
+                    "message": str(message or "")[:4000],
+                    "retry_count": 0,
+                }
+            },
+        )
 
     @contextmanager
     def _connect(self, db_config: dict[str, Any]):

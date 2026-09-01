@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import json
 import re
 from contextlib import contextmanager
@@ -17,11 +18,6 @@ except Exception:
 
 
 class NewType15ASqlTuningJobsToLoopTable(Component):
-    DB_HOST = ""
-    DB_PORT = 1521
-    DB_SERVICE_NAME = ""
-    DB_USERNAME = ""
-    DB_PASSWORD = ""
 
     display_name = "15A SQL Tuning Jobs To Loop Table"
     description = "Converts selected SQL Tuning jobs into Loop rows."
@@ -41,7 +37,21 @@ class NewType15ASqlTuningJobsToLoopTable(Component):
     outputs = [Output(display_name="Jobs Table", name="jobs_table", method="build_jobs_table")]
 
     def build_jobs_table(self) -> DataFrame:
-        self._insert_log(0, "WORKFLOW", "15A_SQL_JOBS", "INFO", "BUILD_JOBS_TABLE", "START", "before build_jobs_table", 0, "")
+        logging.getLogger("smartmigrate.workflow").info(
+            "before build_jobs_table",
+            extra={
+                "workflow_log": {
+                    "map_id": 0,
+                    "mig_kind": "WORKFLOW",
+                    "log_type": "15A_SQL_JOBS",
+                    "log_level": "INFO",
+                    "step_name": "BUILD_JOBS_TABLE",
+                    "status": "START",
+                    "message": "before build_jobs_table",
+                    "retry_count": 0,
+                }
+            },
+        )
         try:
             """Build one Loop row per SQL tuning job."""
             payload = self._parse_payload(getattr(self, "payload_json", ""))
@@ -68,10 +78,38 @@ class NewType15ASqlTuningJobsToLoopTable(Component):
                 )
             self.status = {**payload, "component": "15A_sqlTuningJobsToLoopTable", "loop_job_count": total, "next_node": "15B_sqlTuningLoop"}
             __log_result = DataFrame(rows)
-            self._insert_log(0, "WORKFLOW", "15A_SQL_JOBS", "INFO", "BUILD_JOBS_TABLE", "END", "after build_jobs_table", 0, "")
+            logging.getLogger("smartmigrate.workflow").info(
+                "after build_jobs_table",
+                extra={
+                    "workflow_log": {
+                        "map_id": 0,
+                        "mig_kind": "WORKFLOW",
+                        "log_type": "15A_SQL_JOBS",
+                        "log_level": "INFO",
+                        "step_name": "BUILD_JOBS_TABLE",
+                        "status": "END",
+                        "message": "after build_jobs_table",
+                        "retry_count": 0,
+                    }
+                },
+            )
             return __log_result
         except Exception as exc:
-            self._insert_log(0, "WORKFLOW", "15A_SQL_JOBS", "ERROR", "BUILD_JOBS_TABLE", "ERROR", f"error build_jobs_table: {exc}", 0, "")
+            logging.getLogger("smartmigrate.workflow").error(
+                f"error build_jobs_table: {exc}",
+                extra={
+                    "workflow_log": {
+                        "map_id": 0,
+                        "mig_kind": "WORKFLOW",
+                        "log_type": "15A_SQL_JOBS",
+                        "log_level": "ERROR",
+                        "step_name": "BUILD_JOBS_TABLE",
+                        "status": "ERROR",
+                        "message": f"error build_jobs_table: {exc}",
+                        "retry_count": 0,
+                    }
+                },
+            )
             raise
 
     def _sql_jobs(self, payload: dict[str, Any], db_config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -205,48 +243,3 @@ class NewType15ASqlTuningJobsToLoopTable(Component):
         if isinstance(value, bytes):
             return value.decode("utf-8", errors="ignore")
         return value if isinstance(value, (str, int, float, bool)) else str(value)
-
-    def _insert_log(
-        self,
-        map_id,
-        mig_kind,
-        log_type,
-        log_level,
-        step_name,
-        status,
-        message,
-        retry_count,
-        generated_sql="",
-    ):
-        conn = None
-        try:
-            import oracledb
-
-            dsn = oracledb.makedsn(self.DB_HOST, int(self.DB_PORT or 1521), service_name=self.DB_SERVICE_NAME)
-            conn = oracledb.connect(user=self.DB_USERNAME, password=self.DB_PASSWORD, dsn=dsn)
-            cur = conn.cursor()
-            cur.execute(
-                """
-                INSERT INTO SFAADM.NEXT_MIG_LOG (
-                    LOG_ID, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, RETRY_COUNT, CREATED_AT
-                ) VALUES (
-                    SFAADM.MIGRATION_LOG_SEQ.NEXTVAL, :1, :2, :3, :4, :5, :6, :7, :8, CURRENT_TIMESTAMP
-                )
-                """,
-                [
-                    map_id,
-                    str(mig_kind or "")[:100],
-                    str(log_type or "")[:20],
-                    str(log_level or "")[:20],
-                    str(step_name or "")[:50],
-                    str(status or "")[:20],
-                    str(message or "")[:4000],
-                    retry_count,
-                ],
-            )
-            conn.commit()
-        except Exception as exc:
-            self.status = f"NEXT_MIG_LOG insert failed: {exc}"
-        finally:
-            if conn is not None:
-                conn.close()

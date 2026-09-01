@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import json
 import re
 from typing import Any
@@ -36,6 +37,25 @@ ROUTE_ACTIONS = {
 }
 
 
+
+def _workflow_log(step_name: str, status: str, message: str, log_level: str = "INFO") -> None:
+    logging.getLogger("smartmigrate.workflow").log(
+        logging.ERROR if str(log_level).upper() == "ERROR" else logging.INFO,
+        str(message or ""),
+        extra={
+            "workflow_log": {
+                "map_id": 0,
+                "mig_kind": "WORKFLOW",
+                "log_type": "MULTI_TOOL_01_FULL_WORKFLOW_JOBS_TO_AGENT_MESSAGE",
+                "log_level": str(log_level or "INFO").upper(),
+                "step_name": str(step_name or "")[:50],
+                "status": str(status or "")[:20],
+                "message": str(message or "")[:4000],
+                "retry_count": 0,
+            }
+        },
+    )
+
 class MultiToolPoc01FullWorkflowJobsToAgentMessage(Component):
     display_name = "01 Full Workflow Jobs To Agent Message"
     description = "Builds an ordered Full Workflow task queue for a tool-calling Agent POC."
@@ -58,6 +78,7 @@ class MultiToolPoc01FullWorkflowJobsToAgentMessage(Component):
     ]
 
     def build_agent_input(self) -> Message:
+        _workflow_log("BUILD_AGENT_INPUT", "START", "before build_agent_input")
         payload = self._parse_payload(getattr(self, "payload_json", ""))
         db_config = self._db_config(payload)
         max_retry = max(0, int(getattr(self, "max_retry", None) or 2))
@@ -111,6 +132,7 @@ class MultiToolPoc01FullWorkflowJobsToAgentMessage(Component):
             "next_node": "Agent",
         }
         self.status = agent_payload
+        _workflow_log("BUILD_AGENT_INPUT", "END", "after build_agent_input")
         return Message(text=json.dumps(agent_payload, ensure_ascii=False, default=str, indent=2))
 
     def _group_jobs(self, payload: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:

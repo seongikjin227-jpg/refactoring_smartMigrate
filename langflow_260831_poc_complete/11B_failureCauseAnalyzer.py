@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import json
 import os
 import re
@@ -20,11 +21,6 @@ except Exception:
 
 
 class NewType11BFailureCauseAnalyzer(Component):
-    DB_HOST = ""
-    DB_PORT = 1521
-    DB_SERVICE_NAME = ""
-    DB_USERNAME = ""
-    DB_PASSWORD = ""
 
     display_name = "11B Failure Cause Analyzer"
     description = "Collects current failed jobs after final INFO-state reconciliation and asks an LLM for root-cause analysis."
@@ -53,7 +49,21 @@ class NewType11BFailureCauseAnalyzer(Component):
     SKIP_STATUSES = {"PASS-THROUGH", "SKIP", "SKIPPED", "PREREQUISITE_REQUIRED"}
 
     def build_analysis(self) -> Message:
-        self._insert_log(0, "WORKFLOW", "11B_FAIL_CAUSE", "INFO", "BUILD_ANALYSIS", "START", "before build_analysis", 0, "")
+        logging.getLogger("smartmigrate.workflow").info(
+            "before build_analysis",
+            extra={
+                "workflow_log": {
+                    "map_id": 0,
+                    "mig_kind": "WORKFLOW",
+                    "log_type": "11B_FAIL_CAUSE",
+                    "log_level": "INFO",
+                    "step_name": "BUILD_ANALYSIS",
+                    "status": "START",
+                    "message": "before build_analysis",
+                    "retry_count": 0,
+                }
+            },
+        )
         try:
             try:
                 payload = self._parse_payload(getattr(self, "loop_done", ""))
@@ -74,17 +84,73 @@ class NewType11BFailureCauseAnalyzer(Component):
                     "final": True,
                 }
                 __log_result = Message(text=answer)
-                self._insert_log(0, "WORKFLOW", "11B_FAIL_CAUSE", "INFO", "BUILD_ANALYSIS", "END", "after build_analysis", 0, "")
+                logging.getLogger("smartmigrate.workflow").info(
+                    "after build_analysis",
+                    extra={
+                        "workflow_log": {
+                            "map_id": 0,
+                            "mig_kind": "WORKFLOW",
+                            "log_type": "11B_FAIL_CAUSE",
+                            "log_level": "INFO",
+                            "step_name": "BUILD_ANALYSIS",
+                            "status": "END",
+                            "message": "after build_analysis",
+                            "retry_count": 0,
+                        }
+                    },
+                )
                 return __log_result
             except Exception as exc:
                 answer = f"## Fail 원인 분석\n\nFail 원인 분석 생성에 실패했습니다.\n\nError: {exc}"
                 self.status = {"ok": False, "component": "11B_failureCauseAnalyzer", "error": str(exc), "answer_text": answer}
                 __log_result = Message(text=answer)
-                self._insert_log(0, "WORKFLOW", "11B_FAIL_CAUSE", "ERROR", "BUILD_ANALYSIS", "ERROR", "error build_analysis", 0, "")
+                logging.getLogger("smartmigrate.workflow").error(
+                    "error build_analysis",
+                    extra={
+                        "workflow_log": {
+                            "map_id": 0,
+                            "mig_kind": "WORKFLOW",
+                            "log_type": "11B_FAIL_CAUSE",
+                            "log_level": "ERROR",
+                            "step_name": "BUILD_ANALYSIS",
+                            "status": "ERROR",
+                            "message": "error build_analysis",
+                            "retry_count": 0,
+                        }
+                    },
+                )
                 return __log_result
-            self._insert_log(0, "WORKFLOW", "11B_FAIL_CAUSE", "INFO", "BUILD_ANALYSIS", "END", "after build_analysis", 0, "")
+            logging.getLogger("smartmigrate.workflow").info(
+                "after build_analysis",
+                extra={
+                    "workflow_log": {
+                        "map_id": 0,
+                        "mig_kind": "WORKFLOW",
+                        "log_type": "11B_FAIL_CAUSE",
+                        "log_level": "INFO",
+                        "step_name": "BUILD_ANALYSIS",
+                        "status": "END",
+                        "message": "after build_analysis",
+                        "retry_count": 0,
+                    }
+                },
+            )
         except Exception as exc:
-            self._insert_log(0, "WORKFLOW", "11B_FAIL_CAUSE", "ERROR", "BUILD_ANALYSIS", "ERROR", f"error build_analysis: {exc}", 0, "")
+            logging.getLogger("smartmigrate.workflow").error(
+                f"error build_analysis: {exc}",
+                extra={
+                    "workflow_log": {
+                        "map_id": 0,
+                        "mig_kind": "WORKFLOW",
+                        "log_type": "11B_FAIL_CAUSE",
+                        "log_level": "ERROR",
+                        "step_name": "BUILD_ANALYSIS",
+                        "status": "ERROR",
+                        "message": f"error build_analysis: {exc}",
+                        "retry_count": 0,
+                    }
+                },
+            )
             raise
 
     def _collect_failure_evidence(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -653,51 +719,6 @@ class NewType11BFailureCauseAnalyzer(Component):
             return text
         return f"{text[:limit]}\n...[truncated]"
 
-
-    def _insert_log(
-        self,
-        map_id,
-        mig_kind,
-        log_type,
-        log_level,
-        step_name,
-        status,
-        message,
-        retry_count,
-        generated_sql="",
-    ):
-        conn = None
-        try:
-            import oracledb
-
-            dsn = oracledb.makedsn(self.DB_HOST, int(self.DB_PORT or 1521), service_name=self.DB_SERVICE_NAME)
-            conn = oracledb.connect(user=self.DB_USERNAME, password=self.DB_PASSWORD, dsn=dsn)
-            cur = conn.cursor()
-            cur.execute(
-                """
-                INSERT INTO SFAADM.NEXT_MIG_LOG (
-                    LOG_ID, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, RETRY_COUNT, CREATED_AT
-                ) VALUES (
-                    SFAADM.MIGRATION_LOG_SEQ.NEXTVAL, :1, :2, :3, :4, :5, :6, :7, :8, CURRENT_TIMESTAMP
-                )
-                """,
-                [
-                    map_id,
-                    str(mig_kind or "")[:100],
-                    str(log_type or "")[:20],
-                    str(log_level or "")[:20],
-                    str(step_name or "")[:50],
-                    str(status or "")[:20],
-                    str(message or "")[:4000],
-                    retry_count,
-                ],
-            )
-            conn.commit()
-        except Exception as exc:
-            self.status = f"NEXT_MIG_LOG insert failed: {exc}"
-        finally:
-            if conn is not None:
-                conn.close()
 
 
 FAILURE_ANALYSIS_PROMPT = """

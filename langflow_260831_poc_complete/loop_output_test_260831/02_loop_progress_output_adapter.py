@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import json
 import re
 import time
@@ -15,6 +16,25 @@ try:
 except Exception:
     DataInput = MessageTextInput
 
+
+
+def _workflow_log(step_name: str, status: str, message: str, log_level: str = "INFO") -> None:
+    logging.getLogger("smartmigrate.workflow").log(
+        logging.ERROR if str(log_level).upper() == "ERROR" else logging.INFO,
+        str(message or ""),
+        extra={
+            "workflow_log": {
+                "map_id": 0,
+                "mig_kind": "WORKFLOW",
+                "log_type": "LOOP_TEST_02_PROGRESS_OUTPUT_ADAPTER",
+                "log_level": str(log_level or "INFO").upper(),
+                "step_name": str(step_name or "")[:50],
+                "status": str(status or "")[:20],
+                "message": str(message or "")[:4000],
+                "retry_count": 0,
+            }
+        },
+    )
 
 class LoopOutputTest02ProgressOutputAdapter(Component):
     display_name = "Loop Output Test 02 Progress Output Adapter"
@@ -53,6 +73,7 @@ class LoopOutputTest02ProgressOutputAdapter(Component):
         return Data(data=result["loop_result"])
 
     def _build(self) -> dict[str, Any]:
+        _workflow_log("_BUILD", "START", "before _build")
         cached = getattr(self, "_cached_payload", None)
         if cached is not None:
             return cached
@@ -107,6 +128,7 @@ class LoopOutputTest02ProgressOutputAdapter(Component):
         if final and (bool(getattr(self, "reset_on_final", True)) or emit_mode == "ACCUMULATED_WITH_FINAL_RESET"):
             self.update_ctx({history_key: []})
         self._cached_payload = out
+        _workflow_log("_BUILD", "END", "after _build")
         return out
 
     def _render_history(self, history: list[dict[str, Any]]) -> str:
