@@ -19,7 +19,7 @@ except Exception:
 
 
 def _workflow_log(step_name: str, status: str, message: str, log_level: str = "INFO") -> None:
-    logging.getLogger("smartmigrate.workflow").log(logging.ERROR if str(log_level).upper() == "ERROR" else logging.INFO, str(message or ""), extra={"workflow_log": [0, "WORKFLOW", "LOOP_TEST_04A_SLEEP_INTERVAL_OUTPUT_PROBE", str(log_level or "INFO").upper(), str(step_name or "")[:50], str(status or "")[:20], str(message or "")[:4000], 0]})
+    logging.getLogger("smartmigrate.workflow").log(logging.ERROR if str(log_level).upper() == "ERROR" else logging.INFO, str(message or ""), extra={"workflow_log": [0, "WORKFLOW", "LOOP_TEST_04A_SLEEP_INTERVAL_OUTPUT_PROBE", str(log_level or "INFO").upper(), str(step_name or "")[:50], str(status or "")[:20], 0]})
 
 class LoopOutputTest04ASleepIntervalOutputProbe(Component):
     display_name = "Loop Output Test 04A Sleep Interval Output Probe"

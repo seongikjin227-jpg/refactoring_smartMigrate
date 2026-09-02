@@ -12,7 +12,7 @@ from lfx.schema.data import Data
 
 
 def _workflow_log(step_name: str, status: str, message: str, log_level: str = "INFO") -> None:
-    logging.getLogger("smartmigrate.workflow").log(logging.ERROR if str(log_level).upper() == "ERROR" else logging.INFO, str(message or ""), extra={"workflow_log": [0, "WORKFLOW", "MULTI_TOOL_04_DB_MIGRATION_COMMAND_TOOL", str(log_level or "INFO").upper(), str(step_name or "")[:50], str(status or "")[:20], str(message or "")[:4000], 0]})
+    logging.getLogger("smartmigrate.workflow").log(logging.ERROR if str(log_level).upper() == "ERROR" else logging.INFO, str(message or ""), extra={"workflow_log": [0, "WORKFLOW", "MULTI_TOOL_04_DB_MIGRATION_COMMAND_TOOL", str(log_level or "INFO").upper(), str(step_name or "")[:50], str(status or "")[:20], 0]})
 
 class PocDbMigrationCommandTool(Component):
     display_name = "POC DB Migration Command Tool"

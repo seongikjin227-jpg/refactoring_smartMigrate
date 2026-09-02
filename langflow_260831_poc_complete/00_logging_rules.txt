@@ -1,144 +1,152 @@
 # Langflow Workflow Logging Rules
 
-## 0. Langflow 로깅 테스트 결과 요약
+## 0. 현재 결론
 
-첨부 PDF는 Langflow 환경에서 로깅 방식을 테스트한 결과를 정리한 참고 자료다. 해당 문서는 현재 SmartMigrate 워크플로우 구조를 모른다는 전제에서 작성된 환경 테스트 문서이므로, 최종 적용 규칙은 현재 `langflow_260831_poc_complete` 코드 구조를 기준으로 한다.
+첨부 PDF는 Langflow 환경에서 `self.log()`, `lfx.log.logger`, Python `logging`, handler 방식을 테스트한 참고 자료다. 최종 적용은 현재 `langflow_260831_poc_complete` 코드 구조를 기준으로 한다.
 
-테스트 결과 기준 판단은 다음과 같다.
+현재 결론은 다음과 같다.
 
-| 방식 | 테스트 결과 | 최종 판단 |
-|---|---|---|
-| `self.log()` | Langflow IDE 디버깅 메시지 확인에는 사용할 수 있음 | 실행 순서 추적 원본으로 사용하지 않음 |
-| `lfx.log.logger` / 일반 서버 로그 | 서버 로그 확인에는 사용할 수 있음 | DB 저장과 Result Table 확인을 직접 보장하지 않음 |
-| 커스텀 memory handler | 같은 Langflow 프로세스 안에서 로그를 순서대로 모을 수 있음 | 현재 런타임 로그 수집 방식으로 사용 |
-| 각 컴포넌트의 Python `logging` 호출 | `00A`에서 등록한 handler가 이벤트를 받을 수 있음 | 중간 컴포넌트 표준 방식으로 채택 |
-| `00B` 최종 DB 저장 | handler에 쌓인 rows를 읽어 `NEXT_MIG_LOG`에 일괄 저장 가능 | DB 저장은 `00B` 한 곳에서만 처리 |
-| `00B` Result Table output | 저장 대상 로그 rows를 Langflow IDE Result에서 확인 가능 | 디버깅 확인용 output으로 사용 |
+- Root Logger는 사용하지 않는다.
+- SmartMigrate workflow 로그는 `logging.getLogger("smartmigrate.workflow")` 전용 logger만 사용한다.
+- `00A Log Runtime Start`에서 `SmartMigrateDBHandler`를 등록한다.
+- `SmartMigrateDBHandler`는 workflow 시작 시 DB connection을 한 번 만들고 보유한다.
+- 각 컴포넌트의 `logger.info/error(...)` 호출마다 handler가 같은 connection으로 `SFAADM.NEXT_MIG_LOG`에 즉시 insert한다.
+- 이전 방식이었던 batch read/save/Result Table 역할은 제거한다.
+- 별도 종료 logging 컴포넌트는 두지 않는다.
+- 다음 workflow 시작 시 `00A`가 기존 handler를 제거하고 `handler.close()`를 호출해 이전 DB connection을 닫는다.
 
-따라서 현재 로깅 구조는 다음 세 단계다.
+## 1. 목적
 
-```text
-Chat Input
-  -> 00A Log Runtime Start
-  -> 기존 워크플로우 컴포넌트들: Python logging 이벤트만 기록
-  -> 00B Log DB Update: handler 로그 read, NEXT_MIG_LOG 저장, Result Table 반환
-  -> Chat Output
-```
+목적은 Langflow에서 어떤 컴포넌트가 어떤 순서로 실행됐는지 DB에서 확인하는 것이다.
 
-중간 컴포넌트는 `self.log()`를 기준으로 삼지 않고, `NEXT_MIG_LOG`에 직접 insert하지도 않는다. DB 접속 정보와 insert SQL은 새 런타임 로그 기준으로는 `00B_logDbUpdate.py`에만 둔다.
+이 runtime logging은 기존 업무 감사 로그를 대체하지 않는다.
 
-SmartMigrate workflow 로그 수집은 Root Logger를 사용하지 않는다. `logging.getLogger()`에 handler를 붙이면 Langflow 내부 로그(`lfx.custom.validate` 등)까지 함께 수집될 수 있으므로, 전용 logger인 `logging.getLogger("smartmigrate.workflow")`만 사용한다.
+- 컴포넌트 이동, 함수 실행, loop item, sleep 전후 확인: `smartmigrate.workflow` logger -> `SmartMigrateDBHandler` -> `NEXT_MIG_LOG`
+- SQL 생성/실행/검증/재시도/실패 이력: 기존 `10C` 업무 로그 유지
+- SQL 변환/튜닝/포맷팅 상세 이력: 기존 `12C`/`15C`/`17C`의 `NEXT_SQL_LOG` 기록 유지
 
-## 1. 목적과 적용 범위
+## 2. Logger 기준
 
-목적은 Langflow에서 실제로 어떤 컴포넌트가 어떤 순서로 실행됐는지 나중에 확인할 수 있게 하는 것이다.
-
-- 워크플로우 실행 순서 추적: Python `logging` handler -> `SFAADM.NEXT_MIG_LOG`
-- Langflow IDE 확인: `00B Log DB Update`의 `Result Table` output
-- 기존 마이그레이션 실행 및 생성 SQL 이력: `10C`의 기존 업무 감사 로그 유지
-- 기존 SQL 변환/튜닝/포맷팅 상세 이력: `12C`/`15C`/`17C`의 기존 `NEXT_SQL_LOG` 기록 유지
-
-런타임 logging을 추가하더라도 기존 SQL 생성, DB 상태 업데이트, 재시도, 상세 SQL 로그 코드는 제거하거나 이동하지 않는다. 단, 워크플로우 실행 순서 확인용 로그를 위해 모든 컴포넌트에 DB 설정이나 SQL insert 코드를 복사하지 않는다.
-
-## 2. NEXT_MIG_LOG 기준
-
-현재 DDL 기준 `NEXT_MIG_LOG` 컬럼은 다음 형태로 맞춘다.
-
-```text
-LOG_ID        NUMBER, primary key, MIGRATION_LOG_SEQ 사용
-MAP_ID        NUMBER
-MIG_KIND      VARCHAR2(100)
-LOG_TYPE      VARCHAR2(20)
-LOG_LEVEL     VARCHAR2(20)
-STEP_NAME     VARCHAR2(50)
-STATUS        VARCHAR2(20)
-MESSAGE       VARCHAR2(4000)
-RETRY_COUNT   NUMBER
-GENERATE_SQL  CLOB
-CREATED_AT    TIMESTAMP
-```
-
-Langflow 테스트 DB 기준 `NEXT_MIG_LOG`에는 `CREATED_AT`은 있고 `UPD_TS`는 없다. 따라서 런타임 로그 insert와 조회는 `UPD_TS`에 의존하지 않는다.
-
-순수 워크플로우 실행 순서 로그는 `GENERATE_SQL`을 비워 둔다. 생성 SQL이나 실행 SQL은 기존 `10C` 업무 로그에서 기록하고, SQL 변환/튜닝/포맷팅 상세 내용은 기존 `NEXT_SQL_LOG` 기록을 유지한다.
-
-## 3. 필수 연결 규칙
-
-모든 테스트와 워크플로우 실행은 항상 아래 연결로 시작한다.
-
-```text
-Chat Input -> 00A Log Runtime Start -> 첫 번째 기존 컴포넌트
-```
-
-모든 Chat Output 직전에는 아래 연결을 둔다.
-
-```text
-마지막 결과 컴포넌트 -> 00B Log DB Update -> Chat Output
-```
-
-`00B Log DB Update`에는 `Message` output과 `Result Table` output이 있다. `Message` output은 기존 Chat Output으로 연결하고, `Result Table` output은 Langflow IDE에서 실행 로그 rows를 확인할 때 사용한다. Result Table은 사용자에게 채팅으로 출력하기 위한 것이 아니다.
-
-## 4. 컴포넌트별 기록 규칙
-
-모든 컴포넌트는 실제 output method 또는 실제 업무 처리가 시작되는 위치에서 `START` 로그를 남긴다. 정상 return 직전에는 `END` 로그를 남긴다. 예외를 다시 던지거나 실패 payload를 반환하는 위치에서는 가능하면 `ERROR` 로그를 남긴다.
-
-기본 호출 형태는 Python `logging`이다. `workflow_log`는 아래 순서의 list로 적는다.
-
-```text
-map_id, mig_kind, log_type, log_level, step_name, status, message, retry_count
-```
+SmartMigrate workflow logging은 전용 logger만 사용한다.
 
 ```python
-logging.getLogger("smartmigrate.workflow").info("before build_result", extra={"workflow_log": [0, "WORKFLOW", "18D_FULL_WORKFLOW_DASHBOARD", "INFO", "BUILD_RESULT", "START", "before build_result", 0]})
+LOGGER_NAME = "smartmigrate.workflow"
+logger = logging.getLogger(LOGGER_NAME)
+logger.propagate = False
 ```
 
-권장 값은 다음과 같다.
+아래 Root Logger 패턴은 SmartMigrate workflow logging 수집 용도로 사용하지 않는다.
 
-| 상황 | LOG_LEVEL | STATUS |
-|---|---|---|
-| 메서드 진입 | `INFO` | `START` |
-| 정상 반환 | `INFO` | `END` |
-| 예외 발생 | `ERROR` | `ERROR` |
-| 의도적 skip | `INFO` | `SKIP` |
-| 재시도 시작 | `WARN` | `RETRY` |
+```python
+logging.getLogger()
+root_logger = logging.getLogger()
+root_logger.addHandler(...)
+logging.getLogger().handlers
+```
 
-워크플로우 전체 단위 로그는 `MAP_ID = 0`을 사용한다. 특정 migration job에 묶인 기존 업무 감사 로그는 실제 `MAP_ID`를 사용한다.
+Root Logger에 handler를 붙이면 Langflow 내부 로그(`lfx.custom.validate` 등)까지 섞일 수 있으므로 금지한다.
 
-## 5. 00A Log Runtime Start
+## 3. 00A Log Runtime Start
 
-`00A_logRuntimeStart.py`는 워크플로우 시작 시 다음 일을 한다.
+`00A_logRuntimeStart.py`는 workflow 시작 시 다음 순서로 처리한다.
 
-- `logging.getLogger("smartmigrate.workflow")` 획득
-- 해당 logger에 등록된 기존 handler 전부 제거 및 `close()`
-- logger level을 `logging.DEBUG`로 설정
-- `logger.propagate = False` 설정
-- 새 `SmartMigrateMemoryHandler` 하나만 등록
-- handler marker는 `handler_marker = "SmartMigrateHandler"`로 설정
-- run id 생성
-- 첫 시작 로그 1건 기록
-- 입력 텍스트를 그대로 다음 컴포넌트로 전달
+1. `logging.getLogger("smartmigrate.workflow")` 획득
+2. 해당 logger에 등록된 기존 handler 제거
+3. 제거한 handler는 `close()`
+4. logger level을 `logging.DEBUG`로 설정
+5. `logger.propagate = False`
+6. 새 `SmartMigrateDBHandler` 생성
+7. DB config는 여기서만 전달
+8. logger에 handler 등록
+9. workflow start 로그를 즉시 DB insert
+10. 입력 payload를 그대로 다음 컴포넌트로 전달
 
-`00A`가 먼저 실행되지 않으면 중간 컴포넌트의 logging 이벤트를 모을 handler가 없으므로 runtime log가 수집되지 않는다.
+Handler marker는 아래 값으로 고정한다.
 
-Handler 검색은 `isinstance()`나 `id()`를 기준으로 하지 않는다. Langflow Custom Component reload/recompile 시 같은 클래스명이어도 Python class object가 달라질 수 있으므로, `00B`는 marker attribute 기준으로 handler를 찾는다.
+```python
+HANDLER_MARKER = "SmartMigrateHandler"
+```
 
-## 6. 00B Log DB Update
+Handler 검색은 `isinstance()`나 `id(handler)`가 아니라 marker attribute 기준으로 한다.
 
-`00B_logDbUpdate.py`는 Chat Output 직전에 실행한다.
+```python
+getattr(handler, "handler_marker", None) == "SmartMigrateHandler"
+```
 
-역할은 다음과 같다.
+Langflow Custom Component가 reload/recompile되면 같은 클래스명이어도 Python class object가 달라질 수 있으므로 `isinstance()`를 검색 기준으로 쓰지 않는다.
 
-- `smartmigrate.workflow` handler에서 rows 읽기
-- 최종 상태 로그 1건 추가
-- `SFAADM.NEXT_MIG_LOG`에 일괄 insert
-- 같은 rows를 `Result Table` output으로 반환
-- 기존 Chat Output message payload는 바꾸지 않고 그대로 전달
+## 4. SmartMigrateDBHandler
 
-`00B`는 한 번 저장한 handler에 대해 중복 insert하지 않도록 `persisted` 상태를 둔다. `Message` output과 `Result Table` output이 둘 다 실행되어도 같은 로그 묶음이 중복 저장되지 않게 하기 위한 처리다.
+`SmartMigrateDBHandler`는 생성 시점에 DB connection을 한 번 만든다.
 
-## 7. 기존 감사 로그 유지 대상
+```python
+class SmartMigrateDBHandler(logging.Handler):
+    def __init__(self, db_config):
+        super().__init__(logging.DEBUG)
+        self.handler_marker = "SmartMigrateHandler"
+        self.connection = create_db_connection(db_config)
+```
 
-아래 코드는 런타임 실행 순서 로그가 아니라 업무 감사 로그이므로 유지한다.
+`emit()`마다 새 connection을 만들지 않는다. `emit()`에서는 `workflow_log`와 `record.getMessage()`를 읽어 기존 로그 테이블에 insert한다. cursor는 insert 시점마다 생성하고 닫는다.
+
+## 5. Component Logging 형식
+
+각 컴포넌트는 handler를 만들지 않는다. DB connection/input/insert helper도 갖지 않는다.
+
+컴포넌트에서는 전용 logger만 호출한다.
+
+```python
+logging.getLogger("smartmigrate.workflow").info("before build_result", extra={"workflow_log": [0, "WORKFLOW", "18D_FULL_WORKFLOW_DASHBOARD", "INFO", "BUILD_RESULT", "START", 0]})
+```
+
+`workflow_log` list 순서는 다음과 같다.
+
+```text
+map_id, mig_kind, log_type, log_level, step_name, status, retry_count
+```
+
+`MESSAGE` 컬럼에는 `logger.info(...)` 또는 `logger.error(...)`의 첫 번째 메시지를 사용한다. 같은 메시지를 `workflow_log` list 안에 중복해서 쓰지 않는다.
+
+## 6. NEXT_MIG_LOG 기준
+
+Runtime workflow log insert 대상 컬럼은 다음이다.
+
+```text
+LOG_ID
+MAP_ID
+MIG_KIND
+LOG_TYPE
+LOG_LEVEL
+STEP_NAME
+STATUS
+MESSAGE
+RETRY_COUNT
+CREATED_AT
+```
+
+`LOG_ID`는 `MIGRATION_LOG_SEQ.NEXTVAL`을 사용한다.
+
+`UPD_TS`는 사용하지 않는다. Langflow 테스트 DB 기준 `NEXT_MIG_LOG`에는 `CREATED_AT`은 있고 `UPD_TS`는 없다.
+
+Runtime workflow log에서는 `GENERATE_SQL`을 비워 둔다. 생성 SQL이나 실행 SQL은 기존 `10C` 업무 로그에서 기록한다.
+
+## 7. Handler 정리
+
+별도 종료 컴포넌트는 두지 않는다. 다음 workflow 시작 시 `00A_logRuntimeStart.py`가 전용 logger의 기존 handler를 제거하고 `handler.close()`를 호출한다.
+
+```python
+logger = logging.getLogger("smartmigrate.workflow")
+for handler in list(logger.handlers):
+    if getattr(handler, "handler_marker", None) == "SmartMigrateHandler":
+        logger.removeHandler(handler)
+        handler.close()
+```
+
+`handler.close()` 안에서 보유 중인 DB connection도 닫는다. 단일 사용자 테스트 기준에서는 다음 실행 시작 시 이전 connection이 정리되는 방식으로 둔다.
+
+## 8. 기존 업무 로그 유지
+
+아래 코드는 runtime workflow 순서 로그가 아니라 업무 감사 로그이므로 유지한다.
 
 | 컴포넌트 | 기존 기록 대상 | 유지 이유 |
 |---|---|---|
@@ -147,11 +155,7 @@ Handler 검색은 `isinstance()`나 `id()`를 기준으로 하지 않는다. Lan
 | `15C_sqlTuningOneJobPocExecutor` | `NEXT_SQL_LOG` | SQL 튜닝 결과와 단계 메타데이터 |
 | `17C_sqlFormattingOneJobPocExecutor` | `NEXT_SQL_LOG` | SQL 포맷팅 결과와 단계 메타데이터 |
 
-`18S_workflowStartLogger`는 더 이상 DB 시작 마커를 직접 insert하지 않는다. 현재 기준에서는 workflow start metadata를 붙이고 Python logging 이벤트만 남긴다.
-
-## 8. 확인 쿼리
-
-테스트 실행 후 워크플로우 순서를 DB에서 확인할 때는 다음 쿼리를 사용한다.
+## 9. 확인 쿼리
 
 ```sql
 SELECT LOG_ID,
@@ -168,13 +172,3 @@ SELECT LOG_ID,
  WHERE MAP_ID = 0
  ORDER BY LOG_ID;
 ```
-
-`UPD_TS`는 조회하지 않는다.
-
-## 9. 현재 적용 상태
-
-`langflow_260831_poc_complete` 내부에서 `Component`를 상속하는 Python 파일에는 `smartmigrate.workflow` logging 경로를 추가했다.
-
-`loop_output_test_260831/18B_fullWorkflowLoop_with_sleep.py`에도 동일한 공통 logging을 넣었다.
-
-`multiToolVersion_forTest`와 `loop_output_test_260831`의 테스트 컴포넌트도 DB 직접 insert가 아니라 `00A` handler가 수집하는 Python logging 방식으로 맞춘다.

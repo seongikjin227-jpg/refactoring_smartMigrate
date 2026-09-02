@@ -37,7 +37,7 @@ class NewType12ASqlConversionJobsToLoopTable(Component):
     outputs = [Output(display_name="Jobs Table", name="jobs_table", method="build_jobs_table")]
 
     def build_jobs_table(self) -> DataFrame:
-        logging.getLogger("smartmigrate.workflow").info("before build_jobs_table", extra={"workflow_log": [0, "WORKFLOW", "12A_SQL_JOBS", "INFO", "BUILD_JOBS_TABLE", "START", "before build_jobs_table", 0]})
+        logging.getLogger("smartmigrate.workflow").info("before build_jobs_table", extra={"workflow_log": [0, "WORKFLOW", "12A_SQL_JOBS", "INFO", "BUILD_JOBS_TABLE", "START", 0]})
         try:
             """Build one Loop row per SQL conversion job."""
             payload = self._parse_payload(getattr(self, "payload_json", ""))
@@ -64,10 +64,10 @@ class NewType12ASqlConversionJobsToLoopTable(Component):
                 )
             self.status = {**payload, "component": "12A_sqlConversionJobsToLoopTable", "loop_job_count": total, "next_node": "12B_sqlConversionLoop"}
             __log_result = DataFrame(rows)
-            logging.getLogger("smartmigrate.workflow").info("after build_jobs_table", extra={"workflow_log": [0, "WORKFLOW", "12A_SQL_JOBS", "INFO", "BUILD_JOBS_TABLE", "END", "after build_jobs_table", 0]})
+            logging.getLogger("smartmigrate.workflow").info("after build_jobs_table", extra={"workflow_log": [0, "WORKFLOW", "12A_SQL_JOBS", "INFO", "BUILD_JOBS_TABLE", "END", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error build_jobs_table: {exc}", extra={"workflow_log": [0, "WORKFLOW", "12A_SQL_JOBS", "ERROR", "BUILD_JOBS_TABLE", "ERROR", f"error build_jobs_table: {exc}", 0]})
+            logging.getLogger("smartmigrate.workflow").error(f"error build_jobs_table: {exc}", extra={"workflow_log": [0, "WORKFLOW", "12A_SQL_JOBS", "ERROR", "BUILD_JOBS_TABLE", "ERROR", 0]})
             raise
 
     def _sql_jobs(self, payload: dict[str, Any], db_config: dict[str, Any]) -> list[dict[str, Any]]:

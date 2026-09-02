@@ -1,8 +1,8 @@
 ### Workflow logging helper
 ########################################################################################################
-# 00A_logRuntimeStart.py registers the in-memory logging handler.
+# 00A_logRuntimeStart.py registers the SmartMigrate DB logging handler.
 # Components only write Python logging events.
-# 00B_logDbUpdate.py reads the handler records and writes them to SFAADM.NEXT_MIG_LOG.
+# SmartMigrateDBHandler writes each event to SFAADM.NEXT_MIG_LOG.
 
 import logging
 
@@ -20,10 +20,10 @@ def _log_workflow(
     retry_count=0,
 ):
     logger = logging.getLogger(LOGGER_NAME)
-    logger.log(logging.ERROR if str(log_level).upper() == "ERROR" else logging.INFO, str(message or ""), extra={"workflow_log": [map_id, "WORKFLOW", str(log_type or "")[:20], str(log_level or "")[:20], str(step_name or "")[:50], str(status or "")[:20], str(message or "")[:4000], retry_count]})
+    logger.log(logging.ERROR if str(log_level).upper() == "ERROR" else logging.INFO, str(message or ""), extra={"workflow_log": [map_id, "WORKFLOW", str(log_type or "")[:20], str(log_level or "")[:20], str(step_name or "")[:50], str(status or "")[:20], retry_count]})
 
 
 # Example inside a Langflow component method:
 #
-# logging.getLogger("smartmigrate.workflow").info("before run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "START", "before run_job", 0]})
+# logging.getLogger("smartmigrate.workflow").info("before run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "START", 0]})
 ########################################################################################################

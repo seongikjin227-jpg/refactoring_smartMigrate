@@ -45,7 +45,7 @@ class NewType10CMigOneJobPocExecutor(Component):
     outputs = [Output(display_name="Job Result", name="job_result", method="run_job", types=["Data"])]
 
     def run_job(self) -> Data:
-        logging.getLogger("smartmigrate.workflow").info("before run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "START", "before run_job", 0]})
+        logging.getLogger("smartmigrate.workflow").info("before run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "START", 0]})
         try:
             """Run one migration job and return the final job result payload."""
             started = time.perf_counter()
@@ -54,7 +54,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                 result = self._pass_through(job, started, "10C skipped because job_name is not migration.")
                 self.status = result
                 __log_result = Data(data=result)
-                logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "END", "after run_job", 0]})
+                logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "END", 0]})
                 return __log_result
             map_id = self._to_int(job.get("map_id"))
             if map_id is None:
@@ -94,7 +94,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                     )
                     self.status = result
                     __log_result = Data(data=result)
-                    logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "END", "after run_job", 0]})
+                    logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "END", 0]})
                     return __log_result
 
                 self._mark_running(db_config, map_id)
@@ -164,7 +164,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                 )
                 self.status = result
                 __log_result = Data(data=result)
-                logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "END", "after run_job", 0]})
+                logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "END", 0]})
                 return __log_result
             except Exception as exc:
                 elapsed = int(time.perf_counter() - started)
@@ -177,11 +177,11 @@ class NewType10CMigOneJobPocExecutor(Component):
                 result.update({"error_type": "SYSTEM_ERROR", "error": str(exc), "message": f"migration executor error: {exc}"})
                 self.status = result
                 __log_result = Data(data=result)
-                logging.getLogger("smartmigrate.workflow").error("error run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "ERROR", "RUN_JOB", "ERROR", "error run_job", 0]})
+                logging.getLogger("smartmigrate.workflow").error("error run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "ERROR", "RUN_JOB", "ERROR", 0]})
                 return __log_result
-            logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "END", "after run_job", 0]})
+            logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "END", 0]})
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error run_job: {exc}", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "ERROR", "RUN_JOB", "ERROR", f"error run_job: {exc}", 0]})
+            logging.getLogger("smartmigrate.workflow").error(f"error run_job: {exc}", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "ERROR", "RUN_JOB", "ERROR", 0]})
             raise
 
     def _should_run_migration(self, job: dict[str, Any]) -> bool:

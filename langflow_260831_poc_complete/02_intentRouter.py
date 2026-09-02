@@ -28,35 +28,35 @@ class NewType02IntentRouter(Component):
 
     def general_chat_response(self) -> Data:
         # Return the general chat branch when the route matches.
-        logging.getLogger("smartmigrate.workflow").info("before general_chat_response", extra={"workflow_log": [0, "WORKFLOW", "02_INTENT_ROUTER", "INFO", "GENERAL_CHAT_RESPONSE", "START", "before general_chat_response", 0]})
+        logging.getLogger("smartmigrate.workflow").info("before general_chat_response", extra={"workflow_log": [0, "WORKFLOW", "02_INTENT_ROUTER", "INFO", "GENERAL_CHAT_RESPONSE", "START", 0]})
         try:
             __log_result = self._route_output("GENERAL_CHAT", "general_chat")
-            logging.getLogger("smartmigrate.workflow").info("after general_chat_response", extra={"workflow_log": [0, "WORKFLOW", "02_INTENT_ROUTER", "INFO", "GENERAL_CHAT_RESPONSE", "END", "after general_chat_response", 0]})
+            logging.getLogger("smartmigrate.workflow").info("after general_chat_response", extra={"workflow_log": [0, "WORKFLOW", "02_INTENT_ROUTER", "INFO", "GENERAL_CHAT_RESPONSE", "END", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error general_chat_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "02_INTENT_ROUTER", "ERROR", "GENERAL_CHAT_RESPONSE", "ERROR", f"error general_chat_response: {exc}", 0]})
+            logging.getLogger("smartmigrate.workflow").error(f"error general_chat_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "02_INTENT_ROUTER", "ERROR", "GENERAL_CHAT_RESPONSE", "ERROR", 0]})
             raise
 
     def management_response(self) -> Data:
         # Return the management branch when the route matches.
-        logging.getLogger("smartmigrate.workflow").info("before management_response", extra={"workflow_log": [0, "WORKFLOW", "02_INTENT_ROUTER", "INFO", "MANAGEMENT_RESPONSE", "START", "before management_response", 0]})
+        logging.getLogger("smartmigrate.workflow").info("before management_response", extra={"workflow_log": [0, "WORKFLOW", "02_INTENT_ROUTER", "INFO", "MANAGEMENT_RESPONSE", "START", 0]})
         try:
             __log_result = self._route_output("MANAGEMENT", "management")
-            logging.getLogger("smartmigrate.workflow").info("after management_response", extra={"workflow_log": [0, "WORKFLOW", "02_INTENT_ROUTER", "INFO", "MANAGEMENT_RESPONSE", "END", "after management_response", 0]})
+            logging.getLogger("smartmigrate.workflow").info("after management_response", extra={"workflow_log": [0, "WORKFLOW", "02_INTENT_ROUTER", "INFO", "MANAGEMENT_RESPONSE", "END", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error management_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "02_INTENT_ROUTER", "ERROR", "MANAGEMENT_RESPONSE", "ERROR", f"error management_response: {exc}", 0]})
+            logging.getLogger("smartmigrate.workflow").error(f"error management_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "02_INTENT_ROUTER", "ERROR", "MANAGEMENT_RESPONSE", "ERROR", 0]})
             raise
 
     def job_execution_response(self) -> Data:
         # Return the job execution branch when the route matches.
-        logging.getLogger("smartmigrate.workflow").info("before job_execution_response", extra={"workflow_log": [0, "WORKFLOW", "02_INTENT_ROUTER", "INFO", "JOB_EXECUTION_RESPONSE", "START", "before job_execution_response", 0]})
+        logging.getLogger("smartmigrate.workflow").info("before job_execution_response", extra={"workflow_log": [0, "WORKFLOW", "02_INTENT_ROUTER", "INFO", "JOB_EXECUTION_RESPONSE", "START", 0]})
         try:
             __log_result = self._route_output("JOB_EXECUTION", "job_execution")
-            logging.getLogger("smartmigrate.workflow").info("after job_execution_response", extra={"workflow_log": [0, "WORKFLOW", "02_INTENT_ROUTER", "INFO", "JOB_EXECUTION_RESPONSE", "END", "after job_execution_response", 0]})
+            logging.getLogger("smartmigrate.workflow").info("after job_execution_response", extra={"workflow_log": [0, "WORKFLOW", "02_INTENT_ROUTER", "INFO", "JOB_EXECUTION_RESPONSE", "END", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error job_execution_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "02_INTENT_ROUTER", "ERROR", "JOB_EXECUTION_RESPONSE", "ERROR", f"error job_execution_response: {exc}", 0]})
+            logging.getLogger("smartmigrate.workflow").error(f"error job_execution_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "02_INTENT_ROUTER", "ERROR", "JOB_EXECUTION_RESPONSE", "ERROR", 0]})
             raise
 
     def _route_output(self, expected_route: str, output_name: str) -> Data:

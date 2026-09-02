@@ -44,7 +44,7 @@ class NewType11FinalDashboard(Component):
     outputs = [Output(display_name="Result Message", name="result", method="build_result", types=["Message"])]
 
     def build_result(self) -> Message:
-        logging.getLogger("smartmigrate.workflow").info("before build_result", extra={"workflow_log": [0, "WORKFLOW", "11_FINAL_DASH", "INFO", "BUILD_RESULT", "START", "before build_result", 0]})
+        logging.getLogger("smartmigrate.workflow").info("before build_result", extra={"workflow_log": [0, "WORKFLOW", "11_FINAL_DASH", "INFO", "BUILD_RESULT", "START", 0]})
         try:
             try:
                 payload = self._parse_payload(getattr(self, "loop_done", ""))
@@ -59,17 +59,17 @@ class NewType11FinalDashboard(Component):
                     "final": True,
                 }
                 __log_result = Message(text=answer)
-                logging.getLogger("smartmigrate.workflow").info("after build_result", extra={"workflow_log": [0, "WORKFLOW", "11_FINAL_DASH", "INFO", "BUILD_RESULT", "END", "after build_result", 0]})
+                logging.getLogger("smartmigrate.workflow").info("after build_result", extra={"workflow_log": [0, "WORKFLOW", "11_FINAL_DASH", "INFO", "BUILD_RESULT", "END", 0]})
                 return __log_result
             except Exception as exc:
                 answer = f"## Final Dashboard\n\nDashboard refresh failed after loop completion.\n\nError: {exc}"
                 self.status = {"ok": False, "component": "11_finalDashboard", "error": str(exc), "answer_text": answer}
                 __log_result = Message(text=answer)
-                logging.getLogger("smartmigrate.workflow").error("error build_result", extra={"workflow_log": [0, "WORKFLOW", "11_FINAL_DASH", "ERROR", "BUILD_RESULT", "ERROR", "error build_result", 0]})
+                logging.getLogger("smartmigrate.workflow").error("error build_result", extra={"workflow_log": [0, "WORKFLOW", "11_FINAL_DASH", "ERROR", "BUILD_RESULT", "ERROR", 0]})
                 return __log_result
-            logging.getLogger("smartmigrate.workflow").info("after build_result", extra={"workflow_log": [0, "WORKFLOW", "11_FINAL_DASH", "INFO", "BUILD_RESULT", "END", "after build_result", 0]})
+            logging.getLogger("smartmigrate.workflow").info("after build_result", extra={"workflow_log": [0, "WORKFLOW", "11_FINAL_DASH", "INFO", "BUILD_RESULT", "END", 0]})
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error build_result: {exc}", extra={"workflow_log": [0, "WORKFLOW", "11_FINAL_DASH", "ERROR", "BUILD_RESULT", "ERROR", f"error build_result: {exc}", 0]})
+            logging.getLogger("smartmigrate.workflow").error(f"error build_result: {exc}", extra={"workflow_log": [0, "WORKFLOW", "11_FINAL_DASH", "ERROR", "BUILD_RESULT", "ERROR", 0]})
             raise
 
     def _query_dashboard(self) -> dict[str, Any]:

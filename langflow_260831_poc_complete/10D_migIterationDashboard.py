@@ -30,27 +30,27 @@ class NewType10DMigIterationDashboard(Component):
     ]
 
     def build_message(self) -> Message:
-        logging.getLogger("smartmigrate.workflow").info("before build_message", extra={"workflow_log": [0, "WORKFLOW", "10D_MIG_DASH", "INFO", "BUILD_MESSAGE", "START", "before build_message", 0]})
+        logging.getLogger("smartmigrate.workflow").info("before build_message", extra={"workflow_log": [0, "WORKFLOW", "10D_MIG_DASH", "INFO", "BUILD_MESSAGE", "START", 0]})
         try:
             payload = self._build()
             self.status = payload
             __log_result = Message(text=str(payload.get("answer_text") or ""))
-            logging.getLogger("smartmigrate.workflow").info("after build_message", extra={"workflow_log": [0, "WORKFLOW", "10D_MIG_DASH", "INFO", "BUILD_MESSAGE", "END", "after build_message", 0]})
+            logging.getLogger("smartmigrate.workflow").info("after build_message", extra={"workflow_log": [0, "WORKFLOW", "10D_MIG_DASH", "INFO", "BUILD_MESSAGE", "END", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error build_message: {exc}", extra={"workflow_log": [0, "WORKFLOW", "10D_MIG_DASH", "ERROR", "BUILD_MESSAGE", "ERROR", f"error build_message: {exc}", 0]})
+            logging.getLogger("smartmigrate.workflow").error(f"error build_message: {exc}", extra={"workflow_log": [0, "WORKFLOW", "10D_MIG_DASH", "ERROR", "BUILD_MESSAGE", "ERROR", 0]})
             raise
 
     def build_loop_result(self) -> Data:
-        logging.getLogger("smartmigrate.workflow").info("before build_loop_result", extra={"workflow_log": [0, "WORKFLOW", "10D_MIG_DASH", "INFO", "BUILD_LOOP_RESULT", "START", "before build_loop_result", 0]})
+        logging.getLogger("smartmigrate.workflow").info("before build_loop_result", extra={"workflow_log": [0, "WORKFLOW", "10D_MIG_DASH", "INFO", "BUILD_LOOP_RESULT", "START", 0]})
         try:
             payload = self._build()
             self.status = payload
             __log_result = Data(data=payload.get("loop_result") or payload)
-            logging.getLogger("smartmigrate.workflow").info("after build_loop_result", extra={"workflow_log": [0, "WORKFLOW", "10D_MIG_DASH", "INFO", "BUILD_LOOP_RESULT", "END", "after build_loop_result", 0]})
+            logging.getLogger("smartmigrate.workflow").info("after build_loop_result", extra={"workflow_log": [0, "WORKFLOW", "10D_MIG_DASH", "INFO", "BUILD_LOOP_RESULT", "END", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error build_loop_result: {exc}", extra={"workflow_log": [0, "WORKFLOW", "10D_MIG_DASH", "ERROR", "BUILD_LOOP_RESULT", "ERROR", f"error build_loop_result: {exc}", 0]})
+            logging.getLogger("smartmigrate.workflow").error(f"error build_loop_result: {exc}", extra={"workflow_log": [0, "WORKFLOW", "10D_MIG_DASH", "ERROR", "BUILD_LOOP_RESULT", "ERROR", 0]})
             raise
 
     def _build(self) -> dict[str, Any]:

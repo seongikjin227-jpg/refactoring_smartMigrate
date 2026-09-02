@@ -21,7 +21,7 @@ except Exception:
 
 
 def _workflow_log(step_name: str, status: str, message: str, log_level: str = "INFO") -> None:
-    logging.getLogger("smartmigrate.workflow").log(logging.ERROR if str(log_level).upper() == "ERROR" else logging.INFO, str(message or ""), extra={"workflow_log": [0, "WORKFLOW", "LOOP_TEST_04C_PROGRESS_SIDE_CHANNEL_SINK", str(log_level or "INFO").upper(), str(step_name or "")[:50], str(status or "")[:20], str(message or "")[:4000], 0]})
+    logging.getLogger("smartmigrate.workflow").log(logging.ERROR if str(log_level).upper() == "ERROR" else logging.INFO, str(message or ""), extra={"workflow_log": [0, "WORKFLOW", "LOOP_TEST_04C_PROGRESS_SIDE_CHANNEL_SINK", str(log_level or "INFO").upper(), str(step_name or "")[:50], str(status or "")[:20], 0]})
 
 class LoopOutputTest04CProgressSideChannelSink(Component):
     display_name = "Loop Output Test 04C Progress Side Channel Sink"

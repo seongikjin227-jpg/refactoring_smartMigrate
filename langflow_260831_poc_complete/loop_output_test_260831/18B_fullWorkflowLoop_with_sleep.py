@@ -351,7 +351,7 @@ class LoopOutputTest18BFullWorkflowLoopWithSleep(Component):
         return all(str(db_config.get(key) or "").strip() for key in ("db_host", "db_service_name", "db_username"))
 
     def _log_workflow(self, log_type: str, log_level: str, step_name: str, status: str, message: str) -> None:
-        logging.getLogger("smartmigrate.workflow").log(logging.ERROR if str(log_level).upper() == "ERROR" else logging.INFO, str(message or ""), extra={"workflow_log": [0, "WORKFLOW", str(log_type or "")[:20], str(log_level or "")[:20], str(step_name or "")[:50], str(status or "")[:20], str(message or "")[:4000], 0]})
+        logging.getLogger("smartmigrate.workflow").log(logging.ERROR if str(log_level).upper() == "ERROR" else logging.INFO, str(message or ""), extra={"workflow_log": [0, "WORKFLOW", str(log_type or "")[:20], str(log_level or "")[:20], str(step_name or "")[:50], str(status or "")[:20], 0]})
 
     @contextmanager
     def _connect(self, db_config: dict[str, Any]):

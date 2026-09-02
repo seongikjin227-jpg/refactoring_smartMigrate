@@ -37,7 +37,7 @@ class NewType18SWorkflowStartLogger(Component):
     outputs = [Output(display_name="Jobs Table", name="jobs_table", method="build_jobs_table")]
 
     def build_jobs_table(self) -> DataFrame:
-        logging.getLogger("smartmigrate.workflow").info("before build_jobs_table", extra={"workflow_log": [0, "WORKFLOW", "18S_START_LOG", "INFO", "BUILD_JOBS_TABLE", "START", "before build_jobs_table", 0]})
+        logging.getLogger("smartmigrate.workflow").info("before build_jobs_table", extra={"workflow_log": [0, "WORKFLOW", "18S_START_LOG", "INFO", "BUILD_JOBS_TABLE", "START", 0]})
         try:
             data_list = self._validate_data(getattr(self, "data", None))
             rows = [self._data_dict(item) for item in data_list]
@@ -67,14 +67,14 @@ class NewType18SWorkflowStartLogger(Component):
                 "next_node": "18B_fullWorkflowLoop",
             }
             __log_result = DataFrame(out_rows)
-            logging.getLogger("smartmigrate.workflow").info("after build_jobs_table", extra={"workflow_log": [0, "WORKFLOW", "18S_START_LOG", "INFO", "BUILD_JOBS_TABLE", "END", "after build_jobs_table", 0]})
+            logging.getLogger("smartmigrate.workflow").info("after build_jobs_table", extra={"workflow_log": [0, "WORKFLOW", "18S_START_LOG", "INFO", "BUILD_JOBS_TABLE", "END", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error build_jobs_table: {exc}", extra={"workflow_log": [0, "WORKFLOW", "18S_START_LOG", "ERROR", "BUILD_JOBS_TABLE", "ERROR", f"error build_jobs_table: {exc}", 0]})
+            logging.getLogger("smartmigrate.workflow").error(f"error build_jobs_table: {exc}", extra={"workflow_log": [0, "WORKFLOW", "18S_START_LOG", "ERROR", "BUILD_JOBS_TABLE", "ERROR", 0]})
             raise
 
     def _insert_start_markers(self, message: str, plan_counts: dict[str, int]) -> list[str]:
-        logging.getLogger("smartmigrate.workflow").info(message, extra={"workflow_log": [0, "WORKFLOW", "18S_START_LOG", "INFO", "WORKFLOW_START", "RUNNING", self._fit_text(message, 4000), 0]})
+        logging.getLogger("smartmigrate.workflow").info(message, extra={"workflow_log": [0, "WORKFLOW", "18S_START_LOG", "INFO", "WORKFLOW_START", "RUNNING", 0]})
         return []
 
     def _start_message(self, started_at: str, total_jobs: int, plan_counts: dict[str, int]) -> str:

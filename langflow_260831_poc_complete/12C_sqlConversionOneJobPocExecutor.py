@@ -44,7 +44,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
     ]
 
     def run_job(self) -> Data:
-        logging.getLogger("smartmigrate.workflow").info("before run_job", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "INFO", "RUN_JOB", "START", "before run_job", 0]})
+        logging.getLogger("smartmigrate.workflow").info("before run_job", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "INFO", "RUN_JOB", "START", 0]})
         try:
             """Run one SQL conversion job and return a payload for 15C."""
             started = time.perf_counter()
@@ -54,7 +54,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 result = self._pass_through(payload, started, "12C skipped because job_name is not conversion.")
                 self.status = result
                 __log_result = Data(data=result)
-                logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "INFO", "RUN_JOB", "END", "after run_job", 0]})
+                logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "INFO", "RUN_JOB", "END", 0]})
                 return __log_result
             db_config = self._db_config(payload)
             self._require_db_config(db_config)
@@ -65,7 +65,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                     result = self._prerequisite_blocked(payload, started, prereq)
                     self.status = result
                     __log_result = Data(data=result)
-                    logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "INFO", "RUN_JOB", "END", "after run_job", 0]})
+                    logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "INFO", "RUN_JOB", "END", 0]})
                     return __log_result
                 job = self._load_sql_job(db_config, payload)
                 self._increment_batch_count(db_config, str(job["row_id"]))
@@ -74,10 +74,10 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 result = self._finish_failure(payload, job, db_config, started, FAIL_TOBE, str(exc))
             self.status = result
             __log_result = Data(data=result)
-            logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "INFO", "RUN_JOB", "END", "after run_job", 0]})
+            logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "INFO", "RUN_JOB", "END", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error run_job: {exc}", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "ERROR", "RUN_JOB", "ERROR", f"error run_job: {exc}", 0]})
+            logging.getLogger("smartmigrate.workflow").error(f"error run_job: {exc}", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "ERROR", "RUN_JOB", "ERROR", 0]})
             raise
 
     def _prerequisite_blocked(self, payload: dict[str, Any], started: float, prereq: dict[str, Any]) -> dict[str, Any]:

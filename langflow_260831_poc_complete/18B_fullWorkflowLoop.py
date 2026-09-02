@@ -163,7 +163,7 @@ class NewType18BFullWorkflowLoop(Component):
         return aggregated_results
 
     async def item_output(self) -> Data:
-        logging.getLogger("smartmigrate.workflow").info("before item_output", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "ITEM_OUTPUT", "START", "before item_output", 0]})
+        logging.getLogger("smartmigrate.workflow").info("before item_output", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "ITEM_OUTPUT", "START", 0]})
         try:
             self.stop("item")
             try:
@@ -173,14 +173,14 @@ class NewType18BFullWorkflowLoop(Component):
                 self.stop("item")
             data_list = self.ctx.get(f"{self._id}_data", [])
             __log_result = Data(data={"count": len(data_list), "items": [self._data_dict(item) for item in data_list]})
-            logging.getLogger("smartmigrate.workflow").info("after item_output", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "ITEM_OUTPUT", "END", "after item_output", 0]})
+            logging.getLogger("smartmigrate.workflow").info("after item_output", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "ITEM_OUTPUT", "END", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error item_output: {exc}", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "ERROR", "ITEM_OUTPUT", "ERROR", f"error item_output: {exc}", 0]})
+            logging.getLogger("smartmigrate.workflow").error(f"error item_output: {exc}", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "ERROR", "ITEM_OUTPUT", "ERROR", 0]})
             raise
 
     async def done_output(self) -> Data:
-        logging.getLogger("smartmigrate.workflow").info("before done_output", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "DONE_OUTPUT", "START", "before done_output", 0]})
+        logging.getLogger("smartmigrate.workflow").info("before done_output", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "DONE_OUTPUT", "START", 0]})
         try:
             if self._vertex is not None:
                 await self._iterate()
@@ -203,10 +203,10 @@ class NewType18BFullWorkflowLoop(Component):
             }
             self.status = payload
             __log_result = Data(data=payload)
-            logging.getLogger("smartmigrate.workflow").info("after done_output", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "DONE_OUTPUT", "END", "after done_output", 0]})
+            logging.getLogger("smartmigrate.workflow").info("after done_output", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "DONE_OUTPUT", "END", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error done_output: {exc}", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "ERROR", "DONE_OUTPUT", "ERROR", f"error done_output: {exc}", 0]})
+            logging.getLogger("smartmigrate.workflow").error(f"error done_output: {exc}", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "ERROR", "DONE_OUTPUT", "ERROR", 0]})
             raise
 
     def _validate_job(self, payload: dict[str, Any], index: int) -> None:

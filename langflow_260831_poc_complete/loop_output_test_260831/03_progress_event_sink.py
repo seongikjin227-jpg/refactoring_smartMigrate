@@ -20,7 +20,7 @@ except Exception:
 
 
 def _workflow_log(step_name: str, status: str, message: str, log_level: str = "INFO") -> None:
-    logging.getLogger("smartmigrate.workflow").log(logging.ERROR if str(log_level).upper() == "ERROR" else logging.INFO, str(message or ""), extra={"workflow_log": [0, "WORKFLOW", "LOOP_TEST_03_PROGRESS_EVENT_SINK", str(log_level or "INFO").upper(), str(step_name or "")[:50], str(status or "")[:20], str(message or "")[:4000], 0]})
+    logging.getLogger("smartmigrate.workflow").log(logging.ERROR if str(log_level).upper() == "ERROR" else logging.INFO, str(message or ""), extra={"workflow_log": [0, "WORKFLOW", "LOOP_TEST_03_PROGRESS_EVENT_SINK", str(log_level or "INFO").upper(), str(step_name or "")[:50], str(status or "")[:20], 0]})
 
 class LoopOutputTest03ProgressEventSink(Component):
     display_name = "Loop Output Test 03 Progress Event Sink"

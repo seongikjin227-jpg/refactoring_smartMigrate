@@ -28,7 +28,7 @@ class NewType04CorrectSqlInput(Component):
 
     def run(self) -> Message:
         # Execute the component and return a Langflow message.
-        logging.getLogger("smartmigrate.workflow").info("before run", extra={"workflow_log": [0, "WORKFLOW", "04_CORRECT_SQL", "INFO", "RUN", "START", "before run", 0]})
+        logging.getLogger("smartmigrate.workflow").info("before run", extra={"workflow_log": [0, "WORKFLOW", "04_CORRECT_SQL", "INFO", "RUN", "START", 0]})
         try:
             payload = self._parse_payload(getattr(self, "payload_json", ""))
             correct_sql = payload.get("correct_sql") or ""
@@ -40,10 +40,10 @@ class NewType04CorrectSqlInput(Component):
             result = {**payload, "component": "04_correctSqlInput", "answer_text": answer, "final": True}
             self.status = result
             __log_result = Message(text=answer)
-            logging.getLogger("smartmigrate.workflow").info("after run", extra={"workflow_log": [0, "WORKFLOW", "04_CORRECT_SQL", "INFO", "RUN", "END", "after run", 0]})
+            logging.getLogger("smartmigrate.workflow").info("after run", extra={"workflow_log": [0, "WORKFLOW", "04_CORRECT_SQL", "INFO", "RUN", "END", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error run: {exc}", extra={"workflow_log": [0, "WORKFLOW", "04_CORRECT_SQL", "ERROR", "RUN", "ERROR", f"error run: {exc}", 0]})
+            logging.getLogger("smartmigrate.workflow").error(f"error run: {exc}", extra={"workflow_log": [0, "WORKFLOW", "04_CORRECT_SQL", "ERROR", "RUN", "ERROR", 0]})
             raise
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:

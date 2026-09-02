@@ -28,7 +28,7 @@ class NewType09ExecutionPlanSummary(Component):
 
     def build_notice(self) -> Message:
         # Build the execution-plan notice message.
-        logging.getLogger("smartmigrate.workflow").info("before build_notice", extra={"workflow_log": [0, "WORKFLOW", "09_PLAN_SUMMARY", "INFO", "BUILD_NOTICE", "START", "before build_notice", 0]})
+        logging.getLogger("smartmigrate.workflow").info("before build_notice", extra={"workflow_log": [0, "WORKFLOW", "09_PLAN_SUMMARY", "INFO", "BUILD_NOTICE", "START", 0]})
         try:
             payload = self._build()
             notice = Message(text=str(payload.get("execution_plan_message") or ""))
@@ -39,10 +39,10 @@ class NewType09ExecutionPlanSummary(Component):
                 "pre_execution_notice": True,
             }
             __log_result = notice
-            logging.getLogger("smartmigrate.workflow").info("after build_notice", extra={"workflow_log": [0, "WORKFLOW", "09_PLAN_SUMMARY", "INFO", "BUILD_NOTICE", "END", "after build_notice", 0]})
+            logging.getLogger("smartmigrate.workflow").info("after build_notice", extra={"workflow_log": [0, "WORKFLOW", "09_PLAN_SUMMARY", "INFO", "BUILD_NOTICE", "END", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error build_notice: {exc}", extra={"workflow_log": [0, "WORKFLOW", "09_PLAN_SUMMARY", "ERROR", "BUILD_NOTICE", "ERROR", f"error build_notice: {exc}", 0]})
+            logging.getLogger("smartmigrate.workflow").error(f"error build_notice: {exc}", extra={"workflow_log": [0, "WORKFLOW", "09_PLAN_SUMMARY", "ERROR", "BUILD_NOTICE", "ERROR", 0]})
             raise
 
     def _build(self) -> dict[str, Any]:
