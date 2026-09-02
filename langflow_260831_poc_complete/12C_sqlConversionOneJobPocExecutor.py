@@ -6,7 +6,6 @@ import os
 import re
 import time
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any
 import urllib.request
 
@@ -31,8 +30,133 @@ RAG_GENERAL = "GENERAL"
 
 
 class _PromptValues(dict):
+    # Keep unknown prompt placeholders visible instead of raising KeyError.
     def __missing__(self, key: str) -> str:
         return "{" + key + "}"
+
+
+SQL_PROMPT_TEMPLATES: dict[str, str] = {
+    "BIND_TUNED_SQL": """
+You are an Oracle/MyBatis SQL pre-tuning specialist.
+
+[Goal]
+Rewrite the AS-IS SQL only when it is too long or hard to use for bind/test generation.
+Keep the same result set and keep all MyBatis bind names and dynamic tags.
+
+[Current FROM SQL]
+{current_from_sql}
+
+[SQL_TUNING GENERAL RAG]
+{universal_tuning_rules}
+
+[SQL_TUNING SEARCH RAG EXAMPLES]
+{tuning_examples_text}
+
+[Last Error]
+{last_error}
+
+[Rules]
+- Return only one executable Oracle/MyBatis SQL template.
+- Do not include explanations, markdown, structured wrapper objects, PL/SQL blocks, or a trailing semicolon.
+- Do not change business meaning, filters, joins, aliases, or bind parameter names unless needed to make validation possible.
+""".strip(),
+    "TOBE_SQL": """
+You are an Oracle/MyBatis SQL migration generator.
+
+[Goal]
+Convert FROM SQL into one Oracle 19c TO-BE SQL template using the mapping rules and SQL_CONVERSION RAG.
+
+[FROM SQL]
+{from_sql}
+
+[Mapping And RAG Context]
+{mapping_schema_text}
+
+[Target Schema]
+{target_schema}
+
+[Correct SQL Hints]
+{correct_sql_hint_text}
+
+[Last Error]
+{last_error}
+
+[Rules]
+- Generate or fix every SQL statement for Oracle 19c syntax.
+- Mapping rules are the primary source of table and column mapping truth.
+- If no mapping rule exists for a source table or column, keep that original name unchanged.
+- Every physical TO-BE table must use target_schema.TABLE_NAME format.
+- Do not add target_schema to DUAL, CTE names, inline view aliases, table aliases, or subquery aliases.
+- Preserve MyBatis bind markers and dynamic tags whenever possible.
+- Return only one executable Oracle/MyBatis SQL template.
+- Do not include explanations, markdown, structured wrapper objects, PL/SQL blocks, multiple SQL statements, or a trailing semicolon.
+""".strip(),
+    "BIND_SQL": """
+You are an Oracle bind candidate SQL generator.
+
+[Goal]
+Generate one executable Oracle SELECT statement that returns candidate values for MyBatis bind parameters.
+
+[FROM SQL]
+{from_sql}
+
+[FROM Schema]
+{from_schema}
+
+[AS-IS Source Filter Conditions]
+{asis_source_filter_conditions}
+
+[Correct SQL Hints]
+{correct_sql_hint_text}
+
+[Last Error]
+{last_error}
+
+[Rules]
+- Return only one executable Oracle SELECT statement.
+- Physical AS-IS tables must use from_schema.TABLE_NAME format.
+- Do not add schema to DUAL, CTE names, inline view aliases, table aliases, or subquery aliases.
+- The final Bind SQL must not contain MyBatis XML tags or unresolved bind markers.
+- Output column aliases must exactly match bind parameter names and should be double quoted.
+- If no bind parameter is needed, return SELECT 1 AS "NO_BIND" FROM DUAL.
+- Do not include explanations, markdown, structured wrapper objects, PL/SQL blocks, multiple SQL statements, or a trailing semicolon.
+""".strip(),
+    "TEST_SQL": """
+You are an Oracle SQL conversion validation query generator.
+
+[Goal]
+Generate one executable Oracle SELECT statement that compares FROM SQL and TO-BE SQL row counts for each bind case.
+
+[FROM SQL]
+{from_sql}
+
+[TO-BE SQL]
+{tobe_sql}
+
+[FROM Schema]
+{from_schema}
+
+[TO-BE Schema]
+{tobe_schema}
+
+[Bind Set]
+{bind_set_text}
+
+[Correct SQL Hints]
+{correct_sql_hint_text}
+
+[Last Error]
+{last_error}
+
+[Rules]
+- Return only one executable Oracle SELECT statement.
+- Final columns must be CASE_NO, FROM_COUNT, TO_COUNT.
+- Use UNION ALL when multiple bind cases exist.
+- Replace MyBatis bind markers and dynamic tags using the provided bind cases.
+- Remove ORDER BY when it is not needed for row count validation.
+- Do not include explanations, markdown, structured wrapper objects, PL/SQL blocks, multiple SQL statements, or a trailing semicolon.
+""".strip(),
+}
 
 
 class NewType12CSqlConversionOneJobPocExecutor(Component):
@@ -68,12 +192,19 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
     # Entry point
     # ##############################
 
+    # Langflow output method: validate inputs, load one SQL job, and start the conversion graph.
     def run_job(self) -> Data:
         logger = logging.getLogger("smartmigrate.workflow")
         logger.info("before run_job", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "INFO", "RUN_JOB", "START", 0]})
         try:
-            self._load_env_files()
             started = time.perf_counter()
+
+            # ##############################
+            # Preflight checks
+            # ##############################
+            # This section only validates route, DB settings, prerequisites, and target row state.
+            # It does not generate SQL and only prepares the one NEXT_SQL_INFO row that will be processed.
+            # The actual SQL conversion work starts at _run_conversion().
             payload = self._parse_payload(getattr(self, "job_item", ""))
             self._payload_max_retry = payload.get("max_retry") if isinstance(payload, dict) else None
             if self._job_name(payload) != "conversion":
@@ -95,6 +226,13 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                     return __log_result
                 job = self._load_sql_job(db_config, payload)
                 self._increment_batch_count(db_config, str(job["row_id"]))
+
+                # ##############################
+                # Actual conversion execution
+                # ##############################
+                # From here, the component runs the implemented SQL conversion flow:
+                # source SQL preparation, RAG retrieval, prompt assembly, LLM calls, bind/test SQL, and DB status update.
+                # _run_conversion() builds the LangGraph state and invokes the graph.
                 result = self._run_conversion(payload, job, db_config, started)
             except Exception as exc:
                 result = self._finish_failure(payload, job, db_config, started, FAIL_TOBE, str(exc))
@@ -106,6 +244,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             logger.error(f"error run_job: {exc}", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "ERROR", "RUN_JOB", "ERROR", 0]})
             raise
 
+    # Build the output payload when DB Migration is not complete enough to run SQL Conversion.
     def _prerequisite_blocked(self, payload: dict[str, Any], started: float, prereq: dict[str, Any]) -> dict[str, Any]:
         elapsed = time.perf_counter() - started
         total = int(payload.get("total_jobs") or 1)
@@ -136,6 +275,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "next_node": "12D_sqlConversionIterationDashboard",
         }
 
+    # Resolve the current loop item route into the local job name used by 12C.
     def _job_name(self, payload: dict[str, Any]) -> str:
         value = str(payload.get("job_name") or "").strip().lower()
         if value:
@@ -148,6 +288,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "SQL_FORMATTING": "formatting",
         }.get(route, "")
 
+    # Return the payload unchanged when this component is not responsible for the current job.
     def _pass_through(self, payload: dict[str, Any], started: float, message: str) -> dict[str, Any]:
         elapsed = time.perf_counter() - started
         total = int(payload.get("total_jobs") or 1)
@@ -175,6 +316,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         result["history"] = history
         return result
 
+    # Prepare conversion state and invoke the LangGraph workflow.
     def _run_conversion(
         self,
         payload: dict[str, Any],
@@ -183,6 +325,11 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         started: float,
     ) -> dict[str, Any]:
         """Run TO-BE generation, bind extraction, and SELECT validation for one SQL job."""
+        # ##############################
+        # Conversion input setup
+        # ##############################
+        # Source SQL priority follows the existing flow: EDIT_FR_SQL first, then FR_SQL.
+        # TARGET_TABLE scopes both migration mapping rules and SQL_CONVERSION/SQL_TUNING RAG rules.
         source_sql = self._source_sql(job)
         if not source_sql.strip():
             return self._finish_failure(payload, job, db_config, started, FAIL_TOBE, "FR_SQL/EDIT_FR_SQL is empty")
@@ -205,141 +352,214 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         mapping_rules = self._load_mapping_rules(db_config, target_table)
         logger = logging.getLogger("smartmigrate.workflow")
 
-        source_for_conversion, tuned_fr_sql, sql_length = self._prepare_conversion_source(
-            job, db_config, llm_config, rag_config, source_sql, target_table, map_id
-        )
-        max_retry = self._max_retry()
-        last_status = FAIL_TOBE
-        last_message = "SQL conversion failed."
-        to_sql = str(job.get("to_sql") or "").strip()
-        bind_sql = str(job.get("bind_sql") or "").strip()
-        bind_set = str(job.get("bind_set") or "") or None
-        test_sql = str(job.get("test_sql") or "").strip()
-        resume_stage = self._initial_resume_stage(job, tag_kind, to_sql, bind_sql)
+        # ##############################
+        # LangGraph execution
+        # ##############################
+        # The graph owns retry routing. Each node updates state, and route callbacks decide
+        # whether the next node should continue, retry, or finalize.
+        initial_state = {
+            "payload": payload, "job": job, "db_config": db_config, "started": started,
+            "source_sql": source_sql, "source_for_conversion": source_sql, "target_table": target_table,
+            "map_id": map_id, "tag_kind": tag_kind, "attempts": attempts,
+            "llm_config": llm_config, "rag_config": rag_config, "mapping_rules": mapping_rules,
+            "max_retry": self._max_retry(), "attempt_no": 1, "retry_count": 0,
+            "last_status": FAIL_TOBE, "last_message": "SQL conversion failed.",
+            "to_sql": str(job.get("to_sql") or "").strip(),
+            "bind_sql": str(job.get("bind_sql") or "").strip(),
+            "bind_set": str(job.get("bind_set") or "") or None,
+            "test_sql": str(job.get("test_sql") or "").strip(),
+            "tuned_fr_sql": str(job.get("tuned_fr_sql") or "").strip() or None,
+            "sql_length": self._sql_length_kind(source_sql),
+            "resume_stage": self._initial_resume_stage(job, tag_kind, str(job.get("to_sql") or "").strip(), str(job.get("bind_sql") or "").strip()),
+            "status": "RUNNING",
+        }
+        final_state = self._run_conversion_graph(initial_state)
+        result = final_state.get("result")
+        if isinstance(result, dict):
+            return result
+        return self._finish_failure(payload, job, db_config, started, final_state.get("last_status") or FAIL_TOBE, final_state.get("last_message") or "SQL conversion failed", final_state.get("attempts") or [], partial_values=final_state, mark_user_edited=True)
 
-        for attempt_no in range(1, max_retry + 1):
-            retry_count = attempt_no - 1
-            retry_context = "" if attempt_no == 1 else f"RETRY_CONTEXT: attempt={attempt_no}/{max_retry}; last_error={last_message}"
-            if resume_stage == "GENERATE_TOBE_SQL":
-                try:
-                    to_sql = self._generate_tobe_sql(
-                        job, db_config, llm_config, rag_config, source_for_conversion, mapping_rules, target_table, retry_context, retry_count
-                    )
-                except Exception as exc:
-                    last_status, last_message, resume_stage = FAIL_TOBE, str(exc), "GENERATE_TOBE_SQL"
-                    attempts.append({"attempt": attempt_no, "stage": resume_stage, "status": last_status, "reason": last_message})
-                    logger.error(last_message, extra={"workflow_log": [map_id, "SQL_CONVERSION", "TOBE_SQL", "ERROR", resume_stage, last_status, retry_count]})
-                    continue
-                attempts.append({"attempt": attempt_no, "stage": "GENERATE_TOBE_SQL", "status": CONVERSION_PASS, "sql_length": len(to_sql)})
-                logger.info("TOBE_SQL generated", extra={"workflow_log": [map_id, "SQL_CONVERSION", "TOBE_SQL", "INFO", "GENERATE_TOBE_SQL", "SUCCESS", retry_count, to_sql]})
-                generated_values = {"TO_SQL": to_sql}
-                if tuned_fr_sql is not None:
-                    generated_values["TUNED_FR_SQL"] = tuned_fr_sql
-                self._update_row(db_config, job["row_id"], generated_values)
-                resume_stage = "GENERATE_BIND_SQL" if tag_kind == "SELECT" else "SKIP_TEST_FOR_NON_SELECT"
-            elif to_sql:
-                attempts.append({"attempt": attempt_no, "stage": "REUSE_TOBE_SQL", "status": CONVERSION_PASS, "reason": f"resume_from={resume_stage}"})
+    # ##############################
+    # LangGraph retry callbacks
+    # ##############################
 
-            if tag_kind == "SELECT":
-                if resume_stage == "GENERATE_BIND_SQL":
-                    try:
-                        bind_sql, bind_set = self._generate_bind_payload(
-                            job, db_config, llm_config, source_for_conversion, mapping_rules, retry_context, retry_count
-                        )
-                    except Exception as exc:
-                        last_status, last_message, resume_stage = FAIL_BIND, str(exc), "GENERATE_BIND_SQL"
-                        attempts.append({"attempt": attempt_no, "stage": resume_stage, "status": last_status, "reason": last_message})
-                        logger.error(last_message, extra={"workflow_log": [map_id, "SQL_CONVERSION", "BIND_SQL", "ERROR", resume_stage, last_status, retry_count, bind_sql or ""]})
-                        continue
-                    attempts.append({"attempt": attempt_no, "stage": "GENERATE_BIND_SQL", "status": CONVERSION_PASS})
-                    logger.info("BIND_SQL generated", extra={"workflow_log": [map_id, "SQL_CONVERSION", "BIND_SQL", "INFO", "GENERATE_BIND_SQL", "SUCCESS", retry_count, bind_sql]})
-                    self._update_row(db_config, job["row_id"], {"BIND_SQL": bind_sql, "BIND_SET": bind_set})
-                    resume_stage = "GENERATE_TEST_SQL"
-                elif resume_stage == "GENERATE_TEST_SQL":
-                    attempts.append({"attempt": attempt_no, "stage": "REUSE_BIND_SQL", "status": CONVERSION_PASS, "reason": "resume_from=GENERATE_TEST_SQL"})
+    # Build LangGraph nodes and route retry/finalize decisions from state.
+    def _run_conversion_graph(self, context: dict[str, Any]) -> dict[str, Any]:
+        """Build and execute the SQL conversion graph for one NEXT_SQL_INFO row."""
+        from langgraph.graph import END, StateGraph
 
-                try:
-                    test_sql = self._generate_test_sql(
-                        job, db_config, llm_config, source_for_conversion, to_sql, bind_set, retry_context, retry_count
-                    )
-                    self._update_row(db_config, job["row_id"], {"TEST_SQL": test_sql})
-                    test_rows = self._execute_test_query(db_config, test_sql)
-                    self._evaluate_test_rows(test_rows)
-                except Exception as exc:
-                    last_status, last_message, resume_stage = FAIL_TEST, str(exc), "GENERATE_TEST_SQL"
-                    attempts.append({"attempt": attempt_no, "stage": "VALIDATE_TEST_SQL", "status": last_status, "reason": last_message})
-                    logger.error(last_message, extra={"workflow_log": [map_id, "SQL_CONVERSION", "TEST_SQL", "ERROR", "VALIDATE_TEST_SQL", last_status, retry_count, test_sql or ""]})
-                    continue
-                attempts.append({"attempt": attempt_no, "stage": "GENERATE_TEST_SQL", "status": CONVERSION_PASS})
-                attempts.append({"attempt": attempt_no, "stage": "VALIDATE_TEST_SQL", "status": CONVERSION_PASS, "rows": len(test_rows)})
-                logger.info("TEST_SQL validated", extra={"workflow_log": [map_id, "SQL_CONVERSION", "TEST_SQL", "INFO", "VALIDATE_TEST_SQL", "PASS", retry_count, test_sql]})
-            else:
-                bind_sql = ""
-                bind_set = None
-                test_sql = ""
-                attempts.append({"attempt": attempt_no, "stage": "SKIP_TEST_FOR_NON_SELECT", "status": CONVERSION_PASS, "tag_kind": tag_kind or "UNKNOWN"})
+        logger = logging.getLogger("smartmigrate.workflow")
 
-            final_log = (
-                f"FINAL SUCCESS stage=SQL_CONVERSION status={CONVERSION_PASS} "
-                f"job={job.get('space_nm')}.{job.get('sql_id')} reason=TAG_KIND:{tag_kind or 'UNKNOWN'}"
-            )
-            success_values = {
-                "TO_SQL": to_sql,
-                "BIND_SQL": bind_sql,
-                "BIND_SET": bind_set,
-                "TEST_SQL": test_sql,
-                "STATUS_CONVERSION": CONVERSION_PASS,
-                "LOG": final_log,
-                "RETRY_COUNT": attempt_no - 1,
+        # Node 1: choose original SQL or final-attempt pre-tuned FROM SQL.
+        def prepare_source_node(state: dict[str, Any]) -> dict[str, Any]:
+            # Pre-tuning is intentionally delayed until the final attempt.
+            # Earlier attempts use the original source SQL so normal conversion gets a chance first.
+            allow_pre_tuning = int(state["attempt_no"]) >= int(state["max_retry"])
+            before_tuned = state.get("tuned_fr_sql")
+            try:
+                source_for_conversion, tuned_fr_sql, sql_length = self._prepare_conversion_source(
+                    state["job"], state["db_config"], state["llm_config"], state["rag_config"],
+                    state["source_sql"], state["target_table"], state["map_id"], allow_generate=allow_pre_tuning,
+                )
+                next_state = {**state, "source_for_conversion": source_for_conversion, "tuned_fr_sql": tuned_fr_sql, "sql_length": sql_length, "node_failed": False}
+                if allow_pre_tuning and tuned_fr_sql and not before_tuned:
+                    next_state["resume_stage"] = "GENERATE_TOBE_SQL"
+                return next_state
+            except Exception as exc:
+                state["last_status"], state["last_message"], state["resume_stage"] = FAIL_TOBE, str(exc), "TUNE_FR_SQL"
+                state["node_failed"] = True
+                state["attempts"].append({"attempt": state["attempt_no"], "stage": "TUNE_FR_SQL", "status": FAIL_TOBE, "reason": str(exc)})
+                logger.error(str(exc), extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "TUNED_FR_SQL", "ERROR", "TUNE_FR_SQL", FAIL_TOBE, state["retry_count"]]})
+                return state
+
+        # Node 2: generate or reuse TO_SQL and persist it to NEXT_SQL_INFO.
+        def generate_tobe_node(state: dict[str, Any]) -> dict[str, Any]:
+            if state.get("resume_stage") != "GENERATE_TOBE_SQL" and state.get("to_sql"):
+                state["attempts"].append({"attempt": state["attempt_no"], "stage": "REUSE_TOBE_SQL", "status": CONVERSION_PASS, "reason": f"resume_from={state.get('resume_stage')}"})
+                state["node_failed"] = False
+                return state
+            try:
+                to_sql = self._generate_tobe_sql(
+                    state["job"], state["db_config"], state["llm_config"], state["rag_config"],
+                    state["source_for_conversion"], state["mapping_rules"], state["target_table"], state.get("retry_context") or "", state["retry_count"],
+                )
+                state["to_sql"] = to_sql
+                state["node_failed"] = False
+                state["last_status"] = ""
+                state["last_message"] = ""
+                state["attempts"].append({"attempt": state["attempt_no"], "stage": "GENERATE_TOBE_SQL", "status": CONVERSION_PASS, "sql_length": len(to_sql)})
+                logger.info("TOBE_SQL generated", extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "TOBE_SQL", "INFO", "GENERATE_TOBE_SQL", "SUCCESS", state["retry_count"], to_sql]})
+                update_values = {"TO_SQL": to_sql}
+                if state.get("tuned_fr_sql"):
+                    update_values["TUNED_FR_SQL"] = state["tuned_fr_sql"]
+                self._update_row(state["db_config"], state["job"]["row_id"], update_values)
+                state["resume_stage"] = "GENERATE_BIND_SQL" if state["tag_kind"] == "SELECT" else "SKIP_TEST_FOR_NON_SELECT"
+                return state
+            except Exception as exc:
+                state["last_status"], state["last_message"], state["resume_stage"] = FAIL_TOBE, str(exc), "GENERATE_TOBE_SQL"
+                state["to_sql"] = ""
+                state["node_failed"] = True
+                state["attempts"].append({"attempt": state["attempt_no"], "stage": "GENERATE_TOBE_SQL", "status": FAIL_TOBE, "reason": str(exc)})
+                logger.error(str(exc), extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "TOBE_SQL", "ERROR", "GENERATE_TOBE_SQL", FAIL_TOBE, state["retry_count"]]})
+                return state
+
+        # Node 3: for SELECT jobs, build bind candidate SQL and BIND_SET.
+        def generate_bind_node(state: dict[str, Any]) -> dict[str, Any]:
+            if state["tag_kind"] != "SELECT":
+                state["node_failed"] = False
+                state.update({"bind_sql": "", "bind_set": None, "test_sql": "", "status": CONVERSION_PASS})
+                state["attempts"].append({"attempt": state["attempt_no"], "stage": "SKIP_TEST_FOR_NON_SELECT", "status": CONVERSION_PASS, "tag_kind": state["tag_kind"] or "UNKNOWN"})
+                return state
+            if state.get("resume_stage") == "GENERATE_TEST_SQL":
+                state["attempts"].append({"attempt": state["attempt_no"], "stage": "REUSE_BIND_SQL", "status": CONVERSION_PASS, "reason": "resume_from=GENERATE_TEST_SQL"})
+                state["node_failed"] = False
+                return state
+            try:
+                bind_sql, bind_set = self._generate_bind_payload(
+                    state["job"], state["db_config"], state["llm_config"], state["source_for_conversion"],
+                    state["to_sql"], state["mapping_rules"], state.get("retry_context") or "", state["retry_count"],
+                )
+                state.update({"bind_sql": bind_sql, "bind_set": bind_set, "resume_stage": "GENERATE_TEST_SQL", "last_status": "", "last_message": "", "node_failed": False})
+                state["attempts"].append({"attempt": state["attempt_no"], "stage": "GENERATE_BIND_SQL", "status": CONVERSION_PASS})
+                logger.info("BIND_SQL generated", extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "BIND_SQL", "INFO", "GENERATE_BIND_SQL", "SUCCESS", state["retry_count"], bind_sql]})
+                self._update_row(state["db_config"], state["job"]["row_id"], {"BIND_SQL": bind_sql, "BIND_SET": bind_set})
+                return state
+            except Exception as exc:
+                state["last_status"], state["last_message"], state["resume_stage"] = FAIL_BIND, str(exc), "GENERATE_BIND_SQL"
+                state["node_failed"] = True
+                state["attempts"].append({"attempt": state["attempt_no"], "stage": "GENERATE_BIND_SQL", "status": FAIL_BIND, "reason": str(exc)})
+                logger.error(str(exc), extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "BIND_SQL", "ERROR", "GENERATE_BIND_SQL", FAIL_BIND, state["retry_count"], state.get("bind_sql") or ""]})
+                return state
+
+        # Node 4: for SELECT jobs, generate and execute row-count validation SQL.
+        def generate_test_node(state: dict[str, Any]) -> dict[str, Any]:
+            if state["tag_kind"] != "SELECT":
+                state["node_failed"] = False
+                return state
+            try:
+                test_sql = self._generate_test_sql(
+                    state["job"], state["db_config"], state["llm_config"], state["source_sql"],
+                    state["to_sql"], state.get("bind_set"), state.get("retry_context") or "", state["retry_count"],
+                )
+                state["test_sql"] = test_sql
+                self._update_row(state["db_config"], state["job"]["row_id"], {"TEST_SQL": test_sql})
+                test_rows = self._execute_test_query(state["db_config"], test_sql)
+                self._evaluate_test_rows(test_rows)
+                state.update({"test_sql": test_sql, "status": CONVERSION_PASS, "node_failed": False})
+                state["attempts"].append({"attempt": state["attempt_no"], "stage": "GENERATE_TEST_SQL", "status": CONVERSION_PASS})
+                state["attempts"].append({"attempt": state["attempt_no"], "stage": "VALIDATE_TEST_SQL", "status": CONVERSION_PASS, "rows": len(test_rows)})
+                logger.info("TEST_SQL validated", extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "TEST_SQL", "INFO", "VALIDATE_TEST_SQL", "PASS", state["retry_count"], test_sql]})
+                return state
+            except Exception as exc:
+                state["last_status"], state["last_message"], state["resume_stage"] = FAIL_TEST, str(exc), "GENERATE_TEST_SQL"
+                state["node_failed"] = True
+                state["attempts"].append({"attempt": state["attempt_no"], "stage": "VALIDATE_TEST_SQL", "status": FAIL_TEST, "reason": str(exc)})
+                logger.error(str(exc), extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "TEST_SQL", "ERROR", "VALIDATE_TEST_SQL", FAIL_TEST, state["retry_count"], state.get("test_sql") or ""]})
+                return state
+
+        # Retry node: advance attempt counters and carry the previous error into the next prompt.
+        def retry_prepare_node(state: dict[str, Any]) -> dict[str, Any]:
+            next_attempt = int(state["attempt_no"]) + 1
+            final_retry_mode = "ON" if next_attempt >= int(state["max_retry"]) else "OFF"
+            return {
+                **state,
+                "attempt_no": next_attempt,
+                "retry_count": next_attempt - 1,
+                "retry_context": f"RETRY_CONTEXT: attempt={next_attempt}/{state['max_retry']}; FINAL_RETRY_MODE={final_retry_mode}; last_error={state.get('last_message') or ''}",
+                "status": "RUNNING",
+                "node_failed": False,
             }
-            if tuned_fr_sql is not None:
-                success_values["TUNED_FR_SQL"] = tuned_fr_sql
-            self._update_row(
-                db_config,
-                job["row_id"],
-                success_values,
-            )
-            return self._result(
-                payload=payload,
-                job=job,
-                ok=True,
-                status=CONVERSION_PASS,
-                elapsed=time.perf_counter() - started,
-                attempts=attempts,
-                message="SQL conversion completed. Continuing to tuning.",
-                extra={
-                    "status_conversion": CONVERSION_PASS,
-                    "conversion_status": CONVERSION_PASS,
-                    "to_sql": to_sql,
-                    "bind_sql": bind_sql,
-                    "bind_set": bind_set,
-                    "test_sql": test_sql,
-                    "tuned_fr_sql": tuned_fr_sql,
-                    "sql_length": sql_length,
-                    "tag_kind": tag_kind,
-                    "next_node": "15C_sqlTuningOneJobPocExecutor",
-                },
-            )
 
-        return self._finish_failure(
-            payload,
-            job,
-            db_config,
-            started,
-            last_status,
-            last_message,
-            attempts,
-            partial_values={
-                "TO_SQL": to_sql,
-                "BIND_SQL": bind_sql,
-                "BIND_SET": bind_set,
-                "TEST_SQL": test_sql,
-                "TUNED_FR_SQL": tuned_fr_sql,
-            },
-            mark_user_edited=True,
-        )
+        # Final node: persist the final NEXT_SQL_INFO status and build the Langflow result payload.
+        def finalize_node(state: dict[str, Any]) -> dict[str, Any]:
+            if state.get("status") == CONVERSION_PASS:
+                final_log = f"FINAL SUCCESS stage=SQL_CONVERSION status={CONVERSION_PASS} job={state['job'].get('space_nm')}.{state['job'].get('sql_id')} reason=TAG_KIND:{state['tag_kind'] or 'UNKNOWN'}"
+                values = {"TO_SQL": state.get("to_sql"), "BIND_SQL": state.get("bind_sql"), "BIND_SET": state.get("bind_set"), "TEST_SQL": state.get("test_sql"), "STATUS_CONVERSION": CONVERSION_PASS, "LOG": final_log, "RETRY_COUNT": state["retry_count"]}
+                if state.get("tuned_fr_sql"):
+                    values["TUNED_FR_SQL"] = state["tuned_fr_sql"]
+                self._update_row(state["db_config"], state["job"]["row_id"], values)
+                state["result"] = self._result(
+                    payload=state["payload"], job=state["job"], ok=True, status=CONVERSION_PASS,
+                    elapsed=time.perf_counter() - state["started"], attempts=state["attempts"],
+                    message="SQL conversion completed. Continuing to tuning.",
+                    extra={"status_conversion": CONVERSION_PASS, "conversion_status": CONVERSION_PASS, "to_sql": state.get("to_sql"), "bind_sql": state.get("bind_sql"), "bind_set": state.get("bind_set"), "test_sql": state.get("test_sql"), "tuned_fr_sql": state.get("tuned_fr_sql"), "sql_length": state.get("sql_length"), "tag_kind": state["tag_kind"], "next_node": "15C_sqlTuningOneJobPocExecutor"},
+                )
+                return state
+            state["result"] = self._finish_failure(
+                state["payload"], state["job"], state["db_config"], state["started"],
+                state.get("last_status") or FAIL_TOBE, state.get("last_message") or "SQL conversion failed.",
+                state.get("attempts") or [],
+                partial_values={"TO_SQL": state.get("to_sql"), "BIND_SQL": state.get("bind_sql"), "BIND_SET": state.get("bind_set"), "TEST_SQL": state.get("test_sql"), "TUNED_FR_SQL": state.get("tuned_fr_sql")},
+                mark_user_edited=True,
+            )
+            return state
 
-    def _prepare_conversion_source(self, job: dict[str, Any], db_config: dict[str, Any], llm_config: dict[str, Any], rag_config: dict[str, Any], source_sql: str, target_table: str, map_id: str) -> tuple[str, str | None, str]:
+        # Router: continue retries only while a node failed and retry budget remains.
+        def route_after_stage(state: dict[str, Any]) -> str:
+            if state.get("status") == CONVERSION_PASS:
+                return "finalize"
+            if state.get("node_failed") and int(state.get("attempt_no") or 1) < int(state.get("max_retry") or 1):
+                return "retry_prepare"
+            return "finalize"
+
+        workflow = StateGraph(dict)
+        workflow.add_node("prepare_source", prepare_source_node)
+        workflow.add_node("generate_tobe", generate_tobe_node)
+        workflow.add_node("generate_bind", generate_bind_node)
+        workflow.add_node("generate_test", generate_test_node)
+        workflow.add_node("retry_prepare", retry_prepare_node)
+        workflow.add_node("finalize", finalize_node)
+        workflow.set_entry_point("prepare_source")
+        workflow.add_conditional_edges("prepare_source", lambda state: route_after_stage(state) if state.get("node_failed") else "generate_tobe", {"generate_tobe": "generate_tobe", "retry_prepare": "retry_prepare", "finalize": "finalize"})
+        workflow.add_conditional_edges("generate_tobe", lambda state: route_after_stage(state) if state.get("node_failed") else "generate_bind", {"generate_bind": "generate_bind", "retry_prepare": "retry_prepare", "finalize": "finalize"})
+        workflow.add_conditional_edges("generate_bind", lambda state: route_after_stage(state) if state.get("node_failed") or state.get("tag_kind") != "SELECT" else "generate_test", {"generate_test": "generate_test", "retry_prepare": "retry_prepare", "finalize": "finalize"})
+        workflow.add_conditional_edges("generate_test", route_after_stage, {"retry_prepare": "retry_prepare", "finalize": "finalize"})
+        workflow.add_edge("retry_prepare", "prepare_source")
+        workflow.add_edge("finalize", END)
+        return workflow.compile().invoke(context)
+
+    # Choose the source SQL used by TO_SQL generation and optionally create TUNED_FR_SQL.
+    def _prepare_conversion_source(self, job: dict[str, Any], db_config: dict[str, Any], llm_config: dict[str, Any], rag_config: dict[str, Any], source_sql: str, target_table: str, map_id: str, allow_generate: bool = True) -> tuple[str, str | None, str]:
         """Use saved TUNED_FR_SQL or generate it for long source SQL before conversion."""
         saved_tuned_fr_sql = str(job.get("tuned_fr_sql") or "").strip()
         if saved_tuned_fr_sql:
@@ -348,17 +568,20 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         sql_length = self._sql_length_kind(source_sql)
         pretuning_enabled = str(os.getenv("BIND_SQL_PRETUNING_ENABLED", "false")).strip().lower() == "true"
         pretuning_min_length = self._positive_int(os.getenv("BIND_SQL_PRETUNING_MIN_LENGTH"), 8000)
-        if not pretuning_enabled or (sql_length != "LONG" and len(source_sql) < pretuning_min_length):
+        if not allow_generate or not pretuning_enabled or (sql_length != "LONG" and len(source_sql) < pretuning_min_length):
             return source_sql, None, sql_length
 
+        # Long SQL pre-tuning uses SQL_TUNING RAG only on the final graph attempt.
+        # GENERAL rules are loaded as direct guidance. SEARCH rules are ranked by FAISS vector search
+        # inside _retrieve_rag_examples(), then serialized into the embedded BIND_TUNED_SQL prompt.
         source_tables = self._source_tables(target_table)
         tuning_rules = self._load_rag_general_rules(db_config, "SQL_TUNING", source_tables)
         tuning_examples = self._retrieve_rag_examples(db_config, rag_config, "SQL_TUNING", source_sql, source_tables)
         prompt = self._build_prompt(
-            "bind_tuned_sql_prompt.json",
+            "BIND_TUNED_SQL",
             current_from_sql=source_sql,
-            universal_tuning_rules=json.dumps(tuning_rules, ensure_ascii=False, indent=2),
-            tuning_examples_json=self._serialize_tuning_examples(tuning_examples),
+            universal_tuning_rules=self._serialize_general_rules(tuning_rules),
+            tuning_examples_text=self._serialize_tuning_examples(tuning_examples),
             last_error="None",
         )
         self._log_prompt(map_id, "TUNE_FR_SQL_PROMPT", prompt, 0)
@@ -374,18 +597,23 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         )
         return tuned_fr_sql, tuned_fr_sql, sql_length
 
+    # Generate TO_SQL from mapping rules, SQL_CONVERSION RAG, and retry context.
     def _generate_tobe_sql(self, job: dict[str, Any], db_config: dict[str, Any], llm_config: dict[str, Any], rag_config: dict[str, Any], source_sql: str, mapping_rules: list[dict[str, str]], target_table: str, last_error: str, retry_count: int) -> str:
         if str(job.get("user_edited") or "").strip().upper() == "Y" and str(job.get("to_sql") or "").strip():
             return str(job["to_sql"])
+
+        # TO_SQL prompt context is assembled in this order:
+        # migration table/column mapping rules, SQL_CONVERSION GENERAL RAG guidance,
+        # and SQL_CONVERSION SEARCH examples ranked by vector similarity per SQL block.
         source_tables = self._source_tables(target_table)
         general_rules = self._load_rag_general_rules(db_config, "SQL_CONVERSION", source_tables)
         examples = self._retrieve_rag_examples(db_config, rag_config, "SQL_CONVERSION", source_sql, source_tables)
         prompt = self._build_prompt(
-            "tobe_sql_prompt.json",
+            "TOBE_SQL",
             from_sql=source_sql,
             mapping_schema_text=self._mapping_prompt_text(mapping_rules, general_rules, examples, db_config),
             target_schema=db_config["target_schema"],
-            correct_sql_hint_json="[]",
+            correct_sql_hint_text="- (empty)",
             last_error=last_error or "None",
         )
         self._log_prompt(f"{job.get('sql_id')} / {job.get('space_nm')}"[:100], "TOBE_SQL_PROMPT", prompt, retry_count)
@@ -396,20 +624,31 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         self._increment_rag_hits(db_config, examples)
         return sql
 
-    def _generate_bind_payload(self, job: dict[str, Any], db_config: dict[str, Any], llm_config: dict[str, Any], source_sql: str, mapping_rules: list[dict[str, str]], last_error: str, retry_count: int) -> tuple[str, str | None]:
+    # Generate executable BIND_SQL and convert its result rows into BIND_SET JSON.
+    def _generate_bind_payload(self, job: dict[str, Any], db_config: dict[str, Any], llm_config: dict[str, Any], source_sql: str, to_sql: str, mapping_rules: list[dict[str, str]], last_error: str, retry_count: int) -> tuple[str, str | None]:
         if str(job.get("user_edited") or "").strip().upper() == "Y" and str(job.get("bind_sql") or "").strip():
             bind_sql = str(job["bind_sql"])
         else:
-            if not self._bind_names(source_sql):
+            # Existing logic checks both source SQL and generated TO_SQL. If neither contains MyBatis
+            # parameters or dynamic tags, bind execution is skipped and TEST_SQL receives [{}].
+            if not (self._bind_names(source_sql) or self._bind_names(to_sql)):
                 return "", None
             prompt = self._build_prompt(
-                "bind_sql_prompt.json",
+                "BIND_SQL",
                 from_sql=source_sql,
                 from_schema=db_config["source_schema"],
                 asis_source_filter_conditions=self._source_filter_prompt_text(mapping_rules),
-                correct_sql_hint_json="[]",
+                correct_sql_hint_text="- (empty)",
                 last_error=last_error or "None",
             )
+            if "FINAL_RETRY_MODE=ON" in str(last_error or "").upper():
+                # Final retry keeps the normal bind prompt and appends stronger recovery rules.
+                prompt += (
+                    "\n\n[Final retry mode]\n"
+                    "- Prioritize fixing the previous bind SQL execution error.\n"
+                    "- Simplify joins and row sources if needed.\n"
+                    "- Return a conservative bind candidate query that can execute in Oracle.\n"
+                )
             self._log_prompt(f"{job.get('sql_id')} / {job.get('space_nm')}"[:100], "BIND_SQL_PROMPT", prompt, retry_count)
             bind_sql, _ = self._call_llm_text(prompt, llm_config)
             bind_sql = self._clean_generated_sql(bind_sql)
@@ -418,20 +657,29 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         bind_sets = self._build_bind_sets(self._execute_binding_query(db_config, bind_sql))
         return bind_sql, json.dumps(bind_sets, ensure_ascii=False, default=str)
 
+    # Generate validation TEST_SQL that compares FROM SQL and TO_SQL row counts.
     def _generate_test_sql(self, job: dict[str, Any], db_config: dict[str, Any], llm_config: dict[str, Any], source_sql: str, to_sql: str, bind_set: str | None, last_error: str, retry_count: int) -> str:
         if str(job.get("user_edited") or "").strip().upper() == "Y" and str(job.get("test_sql") or "").strip():
             return str(job["test_sql"])
-        prompt_name = "test_sql_final_retry_prompt.json" if retry_count >= self._configured_retry_limit() else "test_sql_prompt.json"
+        # TEST_SQL compares the original AS-IS SQL with TO_SQL using bind cases from BIND_SET.
         prompt = self._build_prompt(
-            prompt_name,
+            "TEST_SQL",
             from_sql=source_sql,
             tobe_sql=to_sql,
             from_schema=db_config["source_schema"],
             tobe_schema=db_config["target_schema"],
-            bind_set_json=bind_set or "[{}]",
-            correct_sql_hint_json="[]",
+            bind_set_text=bind_set or "- no bind case",
+            correct_sql_hint_text="- (empty)",
             last_error=last_error or "None",
         )
+        if retry_count >= self._configured_retry_limit():
+            # Final retry keeps the normal test prompt and appends stricter validation recovery rules.
+            prompt += (
+                "\n\n[Final retry mode]\n"
+                "- Prioritize fixing the previous TEST_SQL execution or count mismatch error.\n"
+                "- Keep the comparison shape: CASE_NO, FROM_COUNT, TO_COUNT.\n"
+                "- If a dynamic MyBatis branch is ambiguous, choose the safest branch for the provided bind case.\n"
+            )
         self._log_prompt(f"{job.get('sql_id')} / {job.get('space_nm')}"[:100], "TEST_SQL_PROMPT", prompt, retry_count)
         test_sql, _ = self._call_llm_text(prompt, llm_config)
         test_sql = self._clean_generated_sql(test_sql)
@@ -439,6 +687,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             raise ValueError("TEST_SQL generation returned empty SQL")
         return test_sql
 
+    # Persist failure state to NEXT_SQL_INFO and return the standard failure payload.
     def _finish_failure(
         self,
         payload: dict[str, Any],
@@ -508,6 +757,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             },
         )
 
+    # Build the standard Langflow result payload passed to the next component.
     def _result(
         self,
         *,
@@ -550,6 +800,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "db_status_updated": bool(job.get("row_id")),
         }
 
+    # Map final failure status to the stage name that should be shown in logs.
     def _failure_stage(self, status: str) -> str:
         """Return the conversion stage represented by a failure status."""
         if status == FAIL_BIND:
@@ -558,6 +809,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             return "VALIDATE_TEST_SQL"
         return "GENERATE_TOBE_SQL"
 
+    # Decide where to resume when a user-edited failed row already has partial SQL.
     def _initial_resume_stage(self, job: dict[str, Any], tag_kind: str, to_sql: str, bind_sql: str) -> str:
         """Resume user-corrected failed SQL rows from the next useful stage."""
         if str(job.get("user_edited") or "").strip().upper() != "Y":
@@ -574,6 +826,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             return "GENERATE_BIND_SQL"
         return "GENERATE_TOBE_SQL"
 
+    # Derive retry count from recorded attempt history.
     def _retry_count(self, attempts: list[dict[str, Any]]) -> int:
         """Return retries from attempt history."""
         max_attempt = 1
@@ -584,6 +837,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 continue
         return max(max_attempt - 1, 0)
 
+    # Load one NEXT_SQL_INFO row by ROWID or by SPACE_NM and SQL_ID.
     def _load_sql_job(self, db_config: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         """Load one NEXT_SQL_INFO row by ROWID or by SPACE_NM + SQL_ID."""
         table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
@@ -638,6 +892,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             loaded = {key: self._lob_to_str(row[index]) for index, key in enumerate(keys)}
         return {**payload, **loaded}
 
+    # Update generated SQL/status columns that exist in NEXT_SQL_INFO.
     def _update_row(self, db_config: dict[str, Any], row_id: str, values: dict[str, Any]) -> None:
         """Update only columns that exist in NEXT_SQL_INFO."""
         table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
@@ -664,6 +919,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             cur.execute(query, params)
             conn.commit()
 
+    # Increment BATCH_CNT when this SQL conversion row starts execution.
     def _increment_batch_count(self, db_config: dict[str, Any], row_id: str) -> None:
         """Increment NEXT_SQL_INFO.BATCH_CNT when a SQL conversion job starts."""
         table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
@@ -685,20 +941,24 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             )
             conn.commit()
 
+    # Pick EDIT_FR_SQL first and fall back to original FR_SQL.
     def _source_sql(self, job: dict[str, Any]) -> str:
         """Return EDIT_FR_SQL first, otherwise FR_SQL."""
         edited = str(job.get("edit_fr_sql") or "").strip()
         return edited if edited else str(job.get("fr_sql") or "")
 
+    # Classify SQL length for final-attempt pre-tuning decisions.
     def _sql_length_kind(self, sql_text: str) -> str:
         """Classify runtime SQL length using the as-is 5000 character threshold."""
         return "LONG" if len(str(sql_text or "")) > SQL_LENGTH_SHORT_MAX else "SHORT"
 
+    # Extract MyBatis bind parameter names and dynamic tag variables.
     def _bind_names(self, sql_text: str) -> list[str]:
         """Extract MyBatis bind names, including foreach collections and dynamic conditions."""
         names: list[str] = []
         seen: set[str] = set()
 
+        # Append one normalized bind name while preserving first-seen order.
         def add(token: str) -> None:
             name = re.split(r"[,\s?:=!><+\-*/()\[]", str(token or "").strip(), maxsplit=1)[0].split(".")[-1]
             if name and name not in seen:
@@ -724,6 +984,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
     # Mapping rules and RAG retrieval
     # ##############################
 
+    # Load PASS migration mapping rules scoped to the current SQL target table.
     def _load_mapping_rules(self, db_config: dict[str, Any], target_table: str) -> list[dict[str, str]]:
         map_table = self._qualify(os.getenv("MAPPING_RULE_TABLE", "NEXT_MIG_INFO"), db_config.get("system_schema"))
         detail_table = self._qualify(os.getenv("MAPPING_RULE_DETAIL_TABLE", "NEXT_MIG_INFO_DTL"), db_config.get("system_schema"))
@@ -755,19 +1016,33 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             return rules
         return [rule for rule in rules if self._table_matches(rule["fr_table"], target_tables)]
 
+    # Load GENERAL RAG guidance and skip it if the RAG table is not ready.
     def _load_rag_general_rules(self, db_config: dict[str, Any], category: str, source_tables: set[str]) -> list[dict[str, Any]]:
-        return self._load_rag_rules(db_config, category, RAG_GENERAL, source_tables)
+        try:
+            return self._load_rag_rules(db_config, category, RAG_GENERAL, source_tables)
+        except Exception as exc:
+            logging.getLogger("smartmigrate.workflow").warning(
+                f"RAG GENERAL rule load skipped: {type(exc).__name__}: {exc}",
+                extra={"workflow_log": [0, "SQL_CONVERSION", "RAG_RETRIEVE", "WARN", "RAG_GENERAL", "SKIP", 0]},
+            )
+            return []
 
+    # Retrieve SEARCH RAG examples using FAISS vector search with token fallback.
     def _retrieve_rag_examples(self, db_config: dict[str, Any], rag_config: dict[str, Any], category: str, sql_text: str, source_tables: set[str]) -> list[dict[str, Any]]:
+        # This is the vector search entry point for RAG SEARCH rules.
+        # It loads NEXT_MIG_RAG_INFO rows, splits the current SQL into blocks,
+        # embeds rule SQL and job SQL together, then ranks candidate rules per block with FAISS.
+        # If FAISS, numpy, or the embedding API is unavailable, the same candidates are ranked by token overlap.
         rules = self._load_rag_rules(db_config, category, RAG_SEARCH, source_tables)
         blocks = self._split_sql_blocks(sql_text)
         if not rules or not blocks:
             return []
+        blocks = [block for block in blocks if block["block_type"] == "SUBQUERY"] + [block for block in blocks if block["block_type"] != "SUBQUERY"]
         try:
             import faiss
             import numpy as np
 
-            vectors = self._embed_texts([rule["normalized_source_sql"] for rule in rules] + [block["normalized_sql"] for block in blocks], rag_config)
+            vectors = self._embed_texts([self._rule_embedding_text(rule) for rule in rules] + [block["normalized_sql"] for block in blocks], rag_config)
             rule_vectors = np.asarray(vectors[: len(rules)], dtype="float32")
             block_vectors = np.asarray(vectors[len(rules) :], dtype="float32")
             faiss.normalize_L2(rule_vectors)
@@ -799,7 +1074,10 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             for block, matches in zip(blocks, matches_by_block)
         ]
 
+    # Load raw RAG rows from NEXT_MIG_RAG_INFO for GENERAL or SEARCH use.
     def _load_rag_rules(self, db_config: dict[str, Any], category: str, rule_type: str, source_tables: set[str]) -> list[dict[str, Any]]:
+        # GENERAL rows become direct prompt guidance. SEARCH rows become vector-search candidates.
+        # SOURCE_TABLES scopes rules to the current SQL target table, so unrelated domains stay out of the prompt.
         table = self._qualify(os.getenv("RAG_INFO_TABLE", "NEXT_MIG_RAG_INFO"), db_config.get("system_schema"))
         columns = self._table_columns(db_config, table)
         if not {"RAG_ID", "CATEGORY", "RULE_TYPE", "USE_YN"}.issubset(columns):
@@ -835,7 +1113,10 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 })
         return result
 
+    # Serialize mapping rules and RAG examples into the TO_SQL prompt context.
     def _mapping_prompt_text(self, mapping_rules: list[dict[str, str]], general_rules: list[dict[str, Any]], examples: list[dict[str, Any]], db_config: dict[str, Any]) -> str:
+        # This text is inserted into the embedded TOBE_SQL prompt as mapping_schema_text.
+        # Keeping each section explicit makes the final prompt readable in NEXT_MIG_LOG.GENERATE_SQL.
         source_schema, target_schema = db_config["source_schema"], db_config["target_schema"]
         simple = sorted({(rule["fr_table"], rule["fr_col"], rule["to_table"], rule["to_col"]) for rule in mapping_rules if rule["map_type"] != "COMPLEX"})
         complex_rules = sorted({(rule["fr_table"], rule["to_table"]) for rule in mapping_rules if rule["map_type"] == "COMPLEX"})
@@ -850,12 +1131,14 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         lines.extend(["", "[SQL_CONVERSION_SEARCH_RAG_TOP_K_BY_SQL_BLOCK]", self._serialize_conversion_examples(examples)])
         return "\n".join(lines)
 
+    # Serialize AS-IS source filter conditions for BIND_SQL generation.
     def _source_filter_prompt_text(self, mapping_rules: list[dict[str, str]]) -> str:
         lines = ["[ASIS_SOURCE_FILTER_CONDITIONS]"]
         conditions = sorted({(rule["fr_table"], rule["condition"]) for rule in mapping_rules if rule["condition"]})
         lines.extend(f"- FR_TABLE={table} | CONDITION={condition}" for table, condition in conditions)
         return "\n".join(lines) if conditions else "[ASIS_SOURCE_FILTER_CONDITIONS]\n- (empty)"
 
+    # Normalize comma, whitespace, or list-like table values into uppercase table names.
     def _source_tables(self, value: str) -> set[str]:
         text = str(value or "").strip()
         if text.startswith("["):
@@ -867,16 +1150,19 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 pass
         return {token.split(".")[-1].strip().strip('"').upper() for token in re.split(r"[,;|\s]+", text) if token.strip()}
 
+    # Check whether a mapping table token belongs to the current target table set.
     def _table_matches(self, table_name: str, candidates: set[str]) -> bool:
         normalized = str(table_name or "").upper()
         return any(re.search(rf"(?<![A-Z0-9_$#]){re.escape(table)}(?![A-Z0-9_$#])", normalized) for table in candidates)
 
+    # Add schema to a physical mapping table name when it is not already qualified.
     def _qualify_mapping_table(self, table_name: str, schema: str) -> str:
         table = str(table_name or "").strip()
         if not table or "." in table:
             return table
         return f"{schema}.{table}"
 
+    # Split SQL into MAIN_SQL and SUBQUERY blocks so RAG can search each block separately.
     def _split_sql_blocks(self, sql_text: str) -> list[dict[str, str]]:
         source = str(sql_text or "").strip().rstrip(";").strip()
         if not source:
@@ -902,12 +1188,15 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             *[{"block_id": placeholder, "block_type": "SUBQUERY", "sql": inner, "normalized_sql": self._normalize_sql_shape(inner)} for _, _, placeholder, inner in replacements],
         ]
 
+    # Normalize SQL text before embedding or lexical similarity scoring.
     def _normalize_sql_shape(self, sql_text: str) -> str:
         text = re.sub(r"/\*.*?\*/|--[^\n]*", " ", str(sql_text or ""), flags=re.S)
         text = re.sub(r"'(?:''|[^'])*'", " STR ", text)
         text = re.sub(r"\b\d+(?:\.\d+)?\b", " NUM ", text)
+        text = re.sub(r"\bSUBQUERY_\d+\b", "SUBQUERY", text, flags=re.I)
         return re.sub(r"\s+", " ", text).strip().upper()
 
+    # Call the embedding endpoint used by FAISS vector search.
     def _embed_texts(self, texts: list[str], rag_config: dict[str, Any]) -> list[list[float]]:
         endpoint = str(rag_config["rag_embed_base_url"]).strip().rstrip("/")
         if not endpoint:
@@ -926,77 +1215,95 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         )
         with urllib.request.urlopen(request, timeout=rag_config["rag_embed_timeout_seconds"]) as response:
             body = json.loads(response.read().decode("utf-8"))
-        vectors = [item.get("embedding") for item in body.get("data", []) if isinstance(item, dict) and isinstance(item.get("embedding"), list)]
+        vectors: list[list[float]] = []
+        if isinstance(body.get("data"), list):
+            vectors = [[float(value) for value in item["embedding"]] for item in body["data"] if isinstance(item, dict) and isinstance(item.get("embedding"), list)]
+        elif isinstance(body.get("embeddings"), list):
+            vectors = [[float(value) for value in item] for item in body["embeddings"] if isinstance(item, list)]
+        elif isinstance(body.get("embedding"), list):
+            vectors = [[float(value) for value in body["embedding"]]]
         if len(vectors) != len(texts):
             raise ValueError("embedding response count does not match request count")
         return vectors
 
+    # Build the text embedded for each RAG rule.
+    def _rule_embedding_text(self, rule: dict[str, Any]) -> str:
+        return "\n".join([str(rule.get("normalized_source_sql") or ""), str(rule.get("source_sql") or "")]).strip()
+
+    # Score two normalized SQL strings when vector search cannot run.
     def _lexical_similarity(self, left: str, right: str) -> float:
         left_tokens = set(re.findall(r"[A-Z_]+|\d+", left.upper()))
         right_tokens = set(re.findall(r"[A-Z_]+|\d+", right.upper()))
         return len(left_tokens & right_tokens) / len(left_tokens | right_tokens) if left_tokens and right_tokens else 0.0
 
+    # Render SQL_CONVERSION SEARCH matches for the TO_SQL prompt.
     def _serialize_conversion_examples(self, examples: list[dict[str, Any]]) -> str:
-        return json.dumps([
-            {"matched_block_sql": block["source_sql"], "guidance": match["guidance"], "source_sql": match["source_sql"], "target_sql": match["target_sql"]}
-            for block in examples for match in block["top_rule_matches"]
-        ], ensure_ascii=False, indent=2)
+        lines = []
+        for block in examples:
+            for match in block["top_rule_matches"]:
+                lines.append(f"- BLOCK={block['block_id']} SCORE={match.get('score')} RULE_ID={match.get('rule_id')}")
+                if match.get("guidance"):
+                    lines.extend(f"  GUIDANCE: {guide}" for guide in match["guidance"])
+                lines.append(f"  SOURCE_SQL: {match.get('source_sql') or ''}")
+                lines.append(f"  TARGET_SQL: {match.get('target_sql') or ''}")
+        return "\n".join(lines) if lines else "- (empty)"
 
+    # Render SQL_TUNING SEARCH matches for the final-attempt pre-tuning prompt.
     def _serialize_tuning_examples(self, examples: list[dict[str, Any]]) -> str:
-        return json.dumps([
-            {"source_sql": block["source_sql"], "guidance": match["guidance"], "example_bad_sql": match["source_sql"], "example_tuned_sql": match["target_sql"]}
-            for block in examples for match in block["top_rule_matches"]
-        ], ensure_ascii=False, indent=2)
+        lines = []
+        for block in examples:
+            for match in block["top_rule_matches"]:
+                lines.append(f"- BLOCK={block['block_id']} SCORE={match.get('score')} RULE_ID={match.get('rule_id')}")
+                if match.get("guidance"):
+                    lines.extend(f"  GUIDANCE: {guide}" for guide in match["guidance"])
+                lines.append(f"  BAD_SQL: {match.get('source_sql') or ''}")
+                lines.append(f"  TUNED_SQL: {match.get('target_sql') or ''}")
+        return "\n".join(lines) if lines else "- (empty)"
 
+    # Render GENERAL RAG guidance lines for embedded prompts.
+    def _serialize_general_rules(self, rules: list[dict[str, Any]]) -> str:
+        lines = []
+        for rule in rules:
+            lines.append(f"- RAG_ID={rule.get('rule_id')} SOURCE_TABLES={','.join(rule.get('source_tables') or []) or 'ALL'}")
+            lines.extend(f"  GUIDANCE: {guide}" for guide in rule.get("guidance") or [])
+        return "\n".join(lines) if lines else "- (empty)"
+
+    # Increment SEARCH RAG HIT_CNT after a prompt uses retrieved examples.
     def _increment_rag_hits(self, db_config: dict[str, Any], examples: list[dict[str, Any]]) -> None:
         rule_ids = sorted({match["rule_id"] for block in examples for match in block["top_rule_matches"] if match.get("rule_id")})
         if not rule_ids:
             return
         table = self._qualify(os.getenv("RAG_INFO_TABLE", "NEXT_MIG_RAG_INFO"), db_config.get("system_schema"))
-        with self._connect(db_config) as conn:
-            cur = conn.cursor()
-            cur.executemany(
-                f"UPDATE {table} SET HIT_CNT = NVL(HIT_CNT, 0) + 1, UPDATED_AT = SYSTIMESTAMP WHERE TO_CHAR(RAG_ID) = :rule_id AND UPPER(TRIM(RULE_TYPE)) = 'SEARCH'",
-                [{"rule_id": rule_id} for rule_id in rule_ids],
+        try:
+            with self._connect(db_config) as conn:
+                cur = conn.cursor()
+                cur.executemany(
+                    f"UPDATE {table} SET HIT_CNT = NVL(HIT_CNT, 0) + 1, UPDATED_AT = SYSTIMESTAMP WHERE TO_CHAR(RAG_ID) = :rule_id AND UPPER(TRIM(RULE_TYPE)) = 'SEARCH'",
+                    [{"rule_id": rule_id} for rule_id in rule_ids],
+                )
+                conn.commit()
+        except Exception as exc:
+            logging.getLogger("smartmigrate.workflow").warning(
+                f"RAG HIT_CNT update skipped: {type(exc).__name__}: {exc}",
+                extra={"workflow_log": [0, "SQL_CONVERSION", "RAG_HIT", "WARN", "HIT_CNT", "SKIP", 0]},
             )
-            conn.commit()
 
     # ##############################
     # Prompt generation and LLM client
     # ##############################
 
+    # Render an embedded prompt template without reading external prompt files.
     def _build_prompt(self, template_name: str, **values: str) -> str:
-        prompt_path = Path.cwd() / "src" / "smart_migrate" / "config" / "prompts" / template_name
-        if not prompt_path.exists():
-            prompt_path = Path(__file__).resolve().parent.parent / "src" / "smart_migrate" / "config" / "prompts" / template_name
-        template = json.loads(prompt_path.read_text(encoding="utf-8-sig"))
-        rendered = self._render_prompt_value(template, values)
-        user_instruction = str(rendered.pop("user_instruction", "Return one executable Oracle SQL statement only."))
-        system_lines = []
-        for key in ("name", "role", "objective"):
-            if rendered.get(key):
-                system_lines.append(f"{key}: {rendered[key]}")
-        for key, value in rendered.get("inputs", {}).items():
-            system_lines.append(f"\n{key}:\n```text\n{value}\n```")
-        system_lines.extend(["\nrules:", *[f"- {rule}" for rule in rendered.get("rules", [])]])
-        return "\n".join(system_lines).strip() + "\n\n[USER]\n" + user_instruction
+        return SQL_PROMPT_TEMPLATES[template_name].format_map(_PromptValues(values))
 
-    def _render_prompt_value(self, value: Any, values: dict[str, str]) -> Any:
-        if isinstance(value, dict):
-            return {key: self._render_prompt_value(item, values) for key, item in value.items()}
-        if isinstance(value, list):
-            return [self._render_prompt_value(item, values) for item in value]
-        if isinstance(value, str):
-            return value.format_map(_PromptValues(values))
-        return value
-
+    # Store the final LLM prompt text through the SmartMigrate workflow logger.
     def _log_prompt(self, map_id: str, step_name: str, prompt: str, retry_count: int) -> None:
         logging.getLogger("smartmigrate.workflow").info(
             f"{step_name} assembled", extra={"workflow_log": [map_id, "SQL_CONVERSION", "PROMPT_BUILD", "INFO", step_name, "PASS", retry_count, prompt]}
         )
 
+    # Call the configured LLM with fallback models and return raw text.
     def _call_llm_text(self, prompt: str, config: dict[str, Any]) -> tuple[str, str]:
-        self._load_env_files()
         api_key = str(config.get("llm_api_key") or os.getenv("LLM_API_KEY") or os.getenv("OPEN_API_KEY") or "").strip()
         base_url = str(config.get("llm_base_url") or os.getenv("LLM_BASE_URL") or "").strip()
         model = str(config.get("llm_model") or os.getenv("LLM_MODEL") or "GLM-5.1").strip()
@@ -1046,14 +1353,36 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                     raise
         raise ValueError("LLM call failed")
 
+    # Remove markdown, wrappers, and trailing terminators from generated SQL.
     def _clean_generated_sql(self, value: str) -> str:
-        sql = re.sub(r"^```(?:sql)?\s*|\s*```$", "", str(value or "").strip(), flags=re.I)
+        # LLM responses sometimes include markdown fences, short explanations, or <script>/<select> wrappers.
+        # Runtime execution and DB storage should keep only the executable Oracle/MyBatis SQL body.
+        sql = str(value or "").strip()
+        code_block = re.search(r"```(?:sql)?\s*(.*?)```", sql, flags=re.I | re.S)
+        if code_block:
+            sql = code_block.group(1).strip()
+        starts = [
+            match for pattern in (
+                r"\b(?:SELECT|INSERT|UPDATE|DELETE|MERGE|CREATE|ALTER|WITH)\b",
+                r"<\s*(?:script|select|insert|update|delete|if|choose|when|otherwise|where|trim|foreach)\b",
+            )
+            if (match := re.search(pattern, sql, flags=re.I))
+        ]
+        if starts:
+            sql = sql[min(starts, key=lambda item: item.start()).start():].strip()
+        while True:
+            wrapper = re.match(r"^<\s*(script|select|insert|update|delete)\b[^>]*>", sql, flags=re.I | re.S)
+            if not wrapper:
+                break
+            tag = wrapper.group(1)
+            sql = re.sub(rf"</\s*{re.escape(tag)}\s*>\s*$", "", sql[wrapper.end():].strip(), flags=re.I).strip()
         return sql.rstrip(";").strip()
 
     # ##############################
     # Bind and test SQL execution
     # ##############################
 
+    # Execute BIND_SQL and return raw candidate rows.
     def _execute_binding_query(self, db_config: dict[str, Any], sql: str) -> list[dict[str, Any]]:
         clean_sql = self._runtime_sql(sql, "EXECUTE_BIND_SQL")
         with self._connect(db_config) as conn:
@@ -1062,6 +1391,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             columns = [item[0] for item in cur.description] if cur.description else []
             return [{column: self._lob_to_str(value) for column, value in zip(columns, row)} for row in cur.fetchmany(50)]
 
+    # Execute TEST_SQL and return validation rows.
     def _execute_test_query(self, db_config: dict[str, Any], sql: str) -> list[dict[str, Any]]:
         clean_sql = self._runtime_sql(sql, "EXECUTE_TEST_SQL")
         with self._connect(db_config) as conn:
@@ -1070,14 +1400,27 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             columns = [item[0] for item in cur.description] if cur.description else []
             return [{column: self._lob_to_str(value) for column, value in zip(columns, row)} for row in cur.fetchall()]
 
+    # Prepare generated SQL for direct Oracle execution.
     def _runtime_sql(self, sql: str, stage: str) -> str:
         clean_sql = str(sql or "").strip().rstrip(";").strip()
         if not clean_sql:
             raise ValueError(f"{stage} SQL is empty")
+        if stage in {"EXECUTE_BIND_SQL", "EXECUTE_TEST_SQL"}:
+            limit_match = re.search(r"\s+LIMIT\s+(\d+)\s*$", clean_sql, flags=re.I)
+            fetch_match = re.search(r"\s+FETCH\s+FIRST\s+(\d+)\s+ROWS\s+ONLY\s*$", clean_sql, flags=re.I)
+            if limit_match:
+                limit = int(limit_match.group(1))
+                inner = re.sub(r"\s+LIMIT\s+\d+\s*$", "", clean_sql, flags=re.I).strip()
+                clean_sql = f"SELECT * FROM ({inner}) WHERE ROWNUM <= {limit}"
+            elif fetch_match:
+                limit = int(fetch_match.group(1))
+                inner = re.sub(r"\s+FETCH\s+FIRST\s+\d+\s+ROWS\s+ONLY\s*$", "", clean_sql, flags=re.I).strip()
+                clean_sql = f"SELECT * FROM ({inner}) WHERE ROWNUM <= {limit}"
         if any(token in clean_sql.lower() for token in ("<if", "<choose", "<when", "<otherwise", "<where", "<trim", "#{", "${")):
             raise ValueError(f"{stage} SQL contains unresolved MyBatis tags or bind markers")
         return clean_sql
 
+    # Convert BIND_SQL result rows into up to three unique bind cases.
     def _build_bind_sets(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         selected: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -1093,6 +1436,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 break
         return selected or [{}]
 
+    # Validate TEST_SQL output columns and row-count equality.
     def _evaluate_test_rows(self, rows: list[dict[str, Any]]) -> str:
         if not rows:
             raise ValueError("TEST_SQL returned no rows")
@@ -1108,29 +1452,21 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 raise ValueError(f"TEST_SQL row count mismatch: {row}")
         return "PASS"
 
-    def _load_env_files(self) -> None:
-        for path in (Path.cwd() / ".env", Path.cwd() / "src" / ".env"):
-            if not path.exists():
-                continue
-            for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-                text = line.strip()
-                if text and not text.startswith("#") and "=" in text:
-                    key, value = text.split("=", 1)
-                    if key.strip() and key.strip() not in os.environ:
-                        os.environ[key.strip()] = value.strip().strip('"').strip("'")
-
+    # Convert configured retry count into total graph attempts.
     def _max_retry(self) -> int:
         """Return bounded total attempts for the conversion loop."""
         if getattr(self, "_payload_max_retry", None) is not None:
             return max(1, min(11, int(getattr(self, "_payload_max_retry") or 0) + 1))
         return max(1, min(11, int(getattr(self, "max_retry", None) or 2) + 1))
 
+    # Return the retry count configured by Langflow or the loop payload.
     def _configured_retry_limit(self) -> int:
         """Return the configured retry limit, not including the first attempt."""
         if getattr(self, "_payload_max_retry", None) is not None:
             return max(0, min(10, int(getattr(self, "_payload_max_retry") or 0)))
         return max(0, min(10, int(getattr(self, "max_retry", None) or 2)))
 
+    # Build a SELECT expression that tolerates optional NEXT_SQL_INFO columns.
     def _select_expr(self, columns: set[str], column: str, alias: str, data_type: str) -> str:
         """Return a safe SELECT expression for optional NEXT_SQL_INFO columns."""
         if column in columns:
@@ -1139,6 +1475,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             return f"TO_CLOB(NULL) AS {alias}"
         return f"CAST(NULL AS {data_type}) AS {alias}"
 
+    # Read table metadata from Oracle for optional-column handling.
     def _table_columns(self, db_config: dict[str, Any], table: str) -> set[str]:
         """Return available upper-case column names for a table."""
         owner, table_name = self._split_table_owner_and_name(table)
@@ -1153,6 +1490,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             cur.execute(sql, params)
             return {str(row[0]).upper() for row in cur.fetchall()}
 
+    # Check DB Migration completion before SQL Conversion starts.
     def _migration_prerequisite_status(self, db_config: dict[str, Any]) -> dict[str, Any]:
         """Block SQL Conversion while any active DB Migration row is pending or failed."""
         table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
@@ -1190,6 +1528,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         }
 
     @contextmanager
+    # Open one short-lived Oracle connection for NEXT_SQL_INFO operations.
     def _connect(self, db_config: dict[str, Any]):
         """Open and close an Oracle database connection."""
         import oracledb
@@ -1205,6 +1544,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         finally:
             conn.close()
 
+    # Extract Oracle connection and schema settings from the loop payload and inputs.
     def _db_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Extract Oracle connection settings from the Loop item."""
         item_config = dict(payload.get("db_config") or {})
@@ -1219,6 +1559,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "target_schema": str(getattr(self, "target_schema", "") or item_config.get("target_schema") or os.getenv("ORACLE_SCHEMA_TGT") or "SFAADM").strip().upper(),
         }
 
+    # Extract LLM settings from Langflow inputs and payload fallback values.
     def _llm_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         item_config = dict(payload.get("llm_config") or {})
         return {
@@ -1231,6 +1572,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "llm_timeout_seconds": self._positive_int(getattr(self, "llm_timeout_seconds", None) or item_config.get("llm_timeout_seconds"), 900),
         }
 
+    # Extract RAG embedding settings from Langflow inputs or environment variables.
     def _rag_config(self) -> dict[str, Any]:
         return {
             "rag_embed_base_url": str(getattr(self, "rag_embed_base_url", "") or os.getenv("RAG_EMBED_BASE_URL") or "").strip(),
@@ -1239,27 +1581,32 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "rag_embed_timeout_seconds": self._positive_int(getattr(self, "rag_embed_timeout_seconds", None) or os.getenv("RAG_EMBED_TIMEOUT_SEC"), 30),
         }
 
+    # Normalize Langflow secret inputs to plain strings for client libraries.
     def _secret_to_str(self, value: Any) -> str:
         return str(value.get_secret_value()) if hasattr(value, "get_secret_value") else str(value or "")
 
+    # Parse a positive integer while keeping a simple default fallback.
     def _positive_int(self, value: Any, default: int) -> int:
         try:
             return int(value) if int(value) > 0 else default
         except (TypeError, ValueError):
             return default
 
+    # Fail fast when mandatory Oracle connection fields are missing.
     def _require_db_config(self, db_config: dict[str, Any]) -> None:
         """Fail early when the Loop item does not include database settings."""
         missing = [key for key in ("db_host", "db_service_name", "db_username") if not str(db_config.get(key) or "").strip()]
         if missing:
             raise ValueError(f"12C SQL Conversion is not connected to database settings: missing {', '.join(missing)}")
 
+    # Qualify a database table name with the configured system schema.
     def _qualify(self, table_name: str, schema: Any) -> str:
         """Return a validated schema-qualified table name."""
         clean_table = self._clean_identifier(table_name)
         clean_schema = str(schema or "").strip().upper()
         return f"{self._clean_identifier(clean_schema)}.{clean_table}" if clean_schema else clean_table
 
+    # Keep only safe Oracle identifier characters for dynamic table names.
     def _clean_identifier(self, value: str) -> str:
         """Validate and normalize an Oracle identifier."""
         clean = str(value or "").strip().upper()
@@ -1267,6 +1614,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             raise ValueError(f"Invalid identifier: {clean}")
         return clean
 
+    # Split OWNER.TABLE into metadata lookup parts.
     def _split_table_owner_and_name(self, table: str) -> tuple[str | None, str]:
         """Split an optional owner-qualified table identifier."""
         value = str(table or "").strip().upper()
@@ -1275,12 +1623,14 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             return owner, name
         return None, value
 
+    # Read Oracle LOB values before storing them in payload dictionaries.
     def _lob_to_str(self, value: Any) -> str:
         """Convert Oracle LOB and nullable values to strings."""
         if value is not None and hasattr(value, "read"):
             return str(value.read())
         return "" if value is None else str(value)
 
+    # Convert Oracle aggregate values to integers.
     def _num(self, value: Any) -> int:
         """Convert nullable DB aggregate values to int."""
         try:
@@ -1288,6 +1638,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         except (TypeError, ValueError):
             return 0
 
+    # Parse the incoming Langflow job item into a dictionary.
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         """Parse a Langflow Data, Message, dict, or JSON string payload."""
         if isinstance(raw, Data):
