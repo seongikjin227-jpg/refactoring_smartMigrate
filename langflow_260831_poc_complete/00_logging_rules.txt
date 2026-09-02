@@ -137,6 +137,8 @@ CREATED_AT
 
 `12C`/`15C`/`17C`의 SQL pipeline 로그도 `NEXT_SQL_LOG`를 사용하지 않고 `NEXT_MIG_LOG`에 기록한다. 이때 `MIG_KIND`는 각각 `SQL_CONVERSION`, `SQL_TUNING`, `SQL_FORMATTING`을 사용하고, 기존 `SPACE_NM`과 `SQL_ID`는 `MAP_ID`에 `sql_id / space_nm` 형식으로 합쳐서 저장한다. SQL 본문은 `GENERATE_SQL` 컬럼에 저장한다.
 
+`11B_failureCauseAnalyzer`는 `NEXT_MIG_LOG` 조회 시 `MIG_KIND`로 도메인을 분리한다. DB Migration 실패 로그는 `MIG_KIND = DB_MIGRATION`만 조회하고, SQL 계열 실패 로그는 `MIG_KIND IN (SQL_CONVERSION, SQL_TUNING, SQL_FORMATTING)`만 조회한다. DB Migration 쪽 조회 결과에 SQL Conversion/Tuning/Formatting 로그가 섞이면 안 된다.
+
 ## 7. Handler 정리
 
 별도 종료 컴포넌트는 두지 않는다. 다음 workflow 시작 시 `00A_logRuntimeStart.py`가 전용 logger의 기존 handler를 제거하고 `handler.close()`를 호출한다.

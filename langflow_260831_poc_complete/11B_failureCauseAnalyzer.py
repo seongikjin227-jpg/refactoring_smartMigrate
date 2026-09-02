@@ -135,11 +135,11 @@ class NewType11BFailureCauseAnalyzer(Component):
             return []
         column_types = self._available_column_types("NEXT_MIG_LOG")
         columns = set(column_types)
-        required = {"CREATED_AT", "STATUS"}
+        required = {"CREATED_AT", "STATUS", "MIG_KIND"}
         if not required.issubset(columns):
             return []
         table = self._qualify("NEXT_MIG_LOG")
-        conditions = ["1 = 1"]
+        conditions = ["UPPER(TRIM(NVL(MIG_KIND, ''))) = 'DB_MIGRATION'"]
         params: dict[str, Any] = {}
         if started_at is not None:
             conditions.append("CREATED_AT >= :started_at")

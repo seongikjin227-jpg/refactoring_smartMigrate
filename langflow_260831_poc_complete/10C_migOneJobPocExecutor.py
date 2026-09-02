@@ -44,17 +44,22 @@ class NewType10CMigOneJobPocExecutor(Component):
 
     outputs = [Output(display_name="Job Result", name="job_result", method="run_job", types=["Data"])]
 
+    # ##############################
+    # Entry point
+    # ##############################
+
     def run_job(self) -> Data:
-        logging.getLogger("smartmigrate.workflow").info("before run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "START", 0]})
+        """Run one migration job and return the final job result payload."""
+        logger = logging.getLogger("smartmigrate.workflow")
+        logger.info("before run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "START", 0]})
         try:
-            """Run one migration job and return the final job result payload."""
             started = time.perf_counter()
             job = self._parse_payload(getattr(self, "job_item", ""))
-            if not self._should_run_migration(job):
+            if self._job_name(job) != "migration":
                 result = self._pass_through(job, started, "10C skipped because job_name is not migration.")
                 self.status = result
                 __log_result = Data(data=result)
-                logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "END", 0]})
+                logger.info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "END", 0]})
                 return __log_result
             map_id = self._to_int(job.get("map_id"))
             if map_id is None:
@@ -64,22 +69,16 @@ class NewType10CMigOneJobPocExecutor(Component):
             attempts: list[dict[str, Any]] = []
 
             try:
+                # 1. Check prior migration dependency before this job touches DDL or target data.
                 dep_status = self._dependency_status(db_config, map_id, job.get("prior_map_id"))
                 if dep_status != "READY":
                     elapsed = int(time.perf_counter() - started)
                     if self._is_dependency_failure_status(dep_status):
                         status = "SKIP-PRIOR-FAIL"
                         self._update_job(db_config, map_id, status, elapsed, 0)
-                        self._insert_mig_log(
-                            db_config,
-                            map_id,
-                            "JOB_SKIP",
-                            "WARN",
-                            "DEP_CHECK",
-                            status,
+                        logger.warning(
                             f"prior_map_id={job.get('prior_map_id')} status={dep_status}",
-                            0,
-                            "",
+                            extra={"workflow_log": [map_id, "DB_MIGRATION", "JOB_SKIP", "WARN", "DEP_CHECK", status, 0]},
                         )
                         result = self._result(job, ok=False, status=status, elapsed=elapsed, attempts=attempts)
                         result.update({"skipped": True, "db_status_updated": True})
@@ -94,25 +93,21 @@ class NewType10CMigOneJobPocExecutor(Component):
                     )
                     self.status = result
                     __log_result = Data(data=result)
-                    logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "END", 0]})
+                    logger.info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "END", 0]})
                     return __log_result
 
+                # 2. Mark the job running and load DDL/mapping metadata for prompt generation.
                 self._mark_running(db_config, map_id)
                 base_context = {"job": job, "map_id": map_id, "attempt": 1, "llm_config": self._llm_config(job)}
                 fetch_step = self._node_fetch_ddl(base_context)
                 if fetch_step.get("status") != "PASS":
                     raise ValueError(fetch_step.get("message") or "FETCH_DDL failed")
-                self._insert_mig_log(
-                    db_config,
-                    map_id,
-                    "FETCH_DDL",
-                    "INFO",
-                    "FETCH_DDL",
-                    "PASS",
+                logger.info(
                     fetch_step.get("message") or "FETCH_DDL completed",
-                    0,
-                    "",
+                    extra={"workflow_log": [map_id, "DB_MIGRATION", "FETCH_DDL", "INFO", "FETCH_DDL", "PASS", 0]},
                 )
+
+                # 3. Retry graph starts here: GENERATE_SQL -> EXECUTE_SQL -> VERIFY.
                 pipeline_context = {**base_context, **(fetch_step.get("outputs") or {})}
                 graph_result = self._run_migration_graph(pipeline_context, db_config, max_retry)
                 attempts = list(graph_result.get("attempts") or [])
@@ -123,30 +118,18 @@ class NewType10CMigOneJobPocExecutor(Component):
 
                 elapsed = int(time.perf_counter() - started)
                 if final_ok:
+                    # 4. Persist final PASS and log the verification SQL that proved the migration.
                     self._update_job(db_config, map_id, "PASS", elapsed, retry_count)
-                    self._insert_mig_log(
-                        db_config,
-                        map_id,
-                        "VERIFY_SQL",
-                        "INFO",
-                        "VERIFY",
-                        "PASS",
+                    logger.info(
                         message,
-                        retry_count,
-                        graph_result.get("verification_sql", ""),
+                        extra={"workflow_log": [map_id, "DB_MIGRATION", "VERIFY_SQL", "INFO", "VERIFY", "PASS", retry_count, graph_result.get("verification_sql", "")]},
                     )
                 else:
+                    # 4. Persist final failure after retry exhaustion and keep the SQL that failed.
                     self._update_job(db_config, map_id, final_status, elapsed, retry_count)
-                    self._insert_mig_log(
-                        db_config,
-                        map_id,
-                        "JOB_FAIL",
-                        "ERROR",
-                        "FINAL",
-                        final_status,
+                    logger.error(
                         message,
-                        retry_count,
-                        graph_result.get("stage_sql", ""),
+                        extra={"workflow_log": [map_id, "DB_MIGRATION", "JOB_FAIL", "ERROR", "FINAL", final_status, retry_count, graph_result.get("stage_sql", "")]},
                     )
 
                 elapsed = int(time.perf_counter() - started)
@@ -164,28 +147,28 @@ class NewType10CMigOneJobPocExecutor(Component):
                 )
                 self.status = result
                 __log_result = Data(data=result)
-                logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "END", 0]})
+                logger.info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "END", 0]})
                 return __log_result
             except Exception as exc:
                 elapsed = int(time.perf_counter() - started)
                 try:
                     self._update_job(db_config, map_id, "FAIL-INSERT", elapsed, max(0, len(attempts) - 1))
-                    self._insert_mig_log(db_config, map_id, "JOB_FAIL", "ERROR", "FINAL", "FAIL-INSERT", f"System error: {exc}", max(0, len(attempts) - 1), "")
+                    logger.error(f"System error: {exc}", extra={"workflow_log": [map_id, "DB_MIGRATION", "JOB_FAIL", "ERROR", "FINAL", "FAIL-INSERT", max(0, len(attempts) - 1)]})
                 except Exception:
                     pass
                 result = self._result(job, ok=False, status="FAIL-INSERT", elapsed=elapsed, attempts=attempts)
                 result.update({"error_type": "SYSTEM_ERROR", "error": str(exc), "message": f"migration executor error: {exc}"})
                 self.status = result
                 __log_result = Data(data=result)
-                logging.getLogger("smartmigrate.workflow").error("error run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "ERROR", "RUN_JOB", "ERROR", 0]})
+                logger.error("error run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "ERROR", "RUN_JOB", "ERROR", 0]})
                 return __log_result
-            logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "END", 0]})
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error run_job: {exc}", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "ERROR", "RUN_JOB", "ERROR", 0]})
+            logger.error(f"error run_job: {exc}", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "ERROR", "RUN_JOB", "ERROR", 0]})
             raise
 
-    def _should_run_migration(self, job: dict[str, Any]) -> bool:
-        return self._job_name(job) == "migration"
+    # ##############################
+    # Runtime flow
+    # ##############################
 
     def _job_name(self, payload: dict[str, Any]) -> str:
         value = str(payload.get("job_name") or "").strip().lower()
@@ -225,297 +208,9 @@ class NewType10CMigOneJobPocExecutor(Component):
         result["history"] = history
         return result
 
-    def _run_migration_graph(self, context: dict[str, Any], db_config: dict[str, Any], max_retry: int) -> dict[str, Any]:
-        """Build and execute the internal retry graph for one migration job."""
-        from langgraph.graph import END, StateGraph
-
-        def generate_node(state: dict[str, Any]) -> dict[str, Any]:
-            """Run the migration SQL generation node."""
-            step = self._node_generate_sql(state)
-            return self._apply_step(state, step)
-
-        def execute_node(state: dict[str, Any]) -> dict[str, Any]:
-            """Run truncate and migration SQL execution for the current attempt."""
-            step = self._node_execute_sql(state)
-            next_state = self._apply_step(state, step)
-            if step.get("status") == "PASS":
-                next_state.update({"status": "EXECUTED", "error_type": "", "failure_status": ""})
-            return next_state
-
-        def verify_node(state: dict[str, Any]) -> dict[str, Any]:
-            """Run verification SQL for the current attempt."""
-            step = self._node_verify(state)
-            return self._apply_step(state, step)
-
-        def retry_prepare_node(state: dict[str, Any]) -> dict[str, Any]:
-            """Persist the failed attempt and prepare the next retry state."""
-            attempt = self._attempt_result_from_state(state, ok=False)
-            retry_count = int(state.get("db_attempts") or 1)
-            self._update_job(db_config, int(state["map_id"]), attempt["status"], 0, retry_count)
-            self._insert_mig_log(
-                db_config,
-                int(state["map_id"]),
-                "ROW_ERROR",
-                "WARN",
-                attempt["failed_stage"],
-                attempt["status"],
-                attempt["message"],
-                retry_count,
-                attempt.get("migration_sql", ""),
-            )
-            next_status = "EXECUTED" if attempt["status"] == "FAIL-TEST" else ""
-            return {
-                **state,
-                "attempts": [*(state.get("attempts") or []), attempt],
-                "current_steps": [],
-                "db_attempts": retry_count + 1,
-                "attempt": retry_count + 1,
-                "error_type": "",
-                "status": next_status,
-                "failure_status": attempt["status"],
-            }
-
-        def finalize_node(state: dict[str, Any]) -> dict[str, Any]:
-            """Build the graph terminal state after success or retry exhaustion."""
-            attempts = list(state.get("attempts") or [])
-            if state.get("current_steps"):
-                attempts.append(self._attempt_result_from_state(state, ok=state.get("status") == "PASS"))
-            final_status = "PASS" if state.get("status") == "PASS" else self._failure_status_from_state(state)
-            return {
-                **state,
-                "attempts": attempts,
-                "final_status": final_status,
-                "message": "Migration Success" if final_status == "PASS" else f"Max Attempts Reached after {final_status}: {state.get('last_error') or ''}",
-                "stage_sql": self._stage_sql_from_state(state, final_status),
-            }
-
-        def should_continue(state: dict[str, Any]) -> str:
-            """Route the graph based on the current status and retry budget."""
-            if state.get("status") == "PASS":
-                return "finalize"
-            if state.get("error_type") == "BIZ_RETRY":
-                return "retry_prepare" if int(state.get("db_attempts") or 1) < int(state.get("max_attempts") or 1) else "finalize"
-            if state.get("status") == "EXECUTED":
-                return "verify"
-            if not state.get("current_migration_sql"):
-                return "generate"
-            return "execute"
-
-        def after_retry_prepare(state: dict[str, Any]) -> str:
-            """Choose the next node after a retry is scheduled."""
-            return "execute" if state.get("failure_status") == "FAIL-TRUNCATE" else "generate"
-
-        workflow = StateGraph(dict)
-        workflow.add_node("generate", generate_node)
-        workflow.add_node("execute", execute_node)
-        workflow.add_node("verify", verify_node)
-        workflow.add_node("retry_prepare", retry_prepare_node)
-        workflow.add_node("finalize", finalize_node)
-        workflow.set_entry_point("generate")
-        workflow.add_conditional_edges("generate", should_continue, {"execute": "execute", "verify": "verify", "retry_prepare": "retry_prepare", "finalize": "finalize", "generate": "generate"})
-        workflow.add_conditional_edges("execute", should_continue, {"verify": "verify", "retry_prepare": "retry_prepare", "finalize": "finalize", "generate": "generate", "execute": "execute"})
-        workflow.add_conditional_edges("verify", should_continue, {"finalize": "finalize", "retry_prepare": "retry_prepare", "generate": "generate"})
-        workflow.add_conditional_edges("retry_prepare", after_retry_prepare, {"generate": "generate", "execute": "execute"})
-        workflow.add_edge("finalize", END)
-        graph = workflow.compile()
-        initial_state = {
-            **context,
-            "db_attempts": 1,
-            "db_config": db_config,
-            # max_retry means retries after the first attempt, so total attempts are max_retry + 1.
-            "max_attempts": max_retry + 1,
-            "current_steps": [],
-            "attempts": [],
-            "current_migration_sql": context.get("migration_sql", ""),
-            "current_v_sql": context.get("verification_sql", ""),
-            "last_error": "",
-            "last_sql": "",
-            "error_type": "",
-            "failure_status": "",
-            "status": "",
-        }
-        return dict(graph.invoke(initial_state))
-
-    def _apply_step(self, state: dict[str, Any], step: dict[str, Any]) -> dict[str, Any]:
-        """Merge one node result into graph state and persist its step log."""
-        outputs = dict(step.get("outputs") or {})
-        next_state = {
-            **state,
-            **outputs,
-            "current_steps": [*(state.get("current_steps") or []), step],
-            "attempt": state.get("db_attempts", state.get("attempt", 1)),
-        }
-        if step.get("status") == "PASS":
-            next_state.update(
-                {
-                    "error_type": "",
-                    "failure_status": "",
-                    "last_error": "",
-                    "last_sql": outputs.get("migration_sql") or state.get("current_migration_sql") or state.get("last_sql") or "",
-                    "current_migration_sql": outputs.get("migration_sql") or state.get("current_migration_sql") or "",
-                    "current_v_sql": outputs.get("verification_sql") or state.get("current_v_sql") or "",
-                }
-            )
-            if step.get("stage") == "GENERATE_SQL":
-                self._save_generated_sql(
-                    self._db_config(state.get("job") or {}),
-                    int(state["map_id"]),
-                    next_state.get("current_migration_sql", ""),
-                    next_state.get("current_v_sql", ""),
-                )
-                next_state["generated_sql_saved"] = True
-            if step.get("stage") == "VERIFY":
-                next_state["status"] = "PASS"
-            elif step.get("stage") == "GENERATE_SQL" and state.get("failure_status") == "FAIL-TEST":
-                next_state["status"] = "EXECUTED"
-            self._insert_step_log(next_state, step)
-            return next_state
-
-        status = str(step.get("status") or "FAIL-INSERT")
-        next_state.update(
-            {
-                "status": "",
-                "error_type": "BIZ_RETRY",
-                "failure_status": status,
-                "last_error": str(step.get("message") or ""),
-                "last_sql": self._step_sql_for_status(next_state, status),
-                "current_migration_sql": outputs.get("migration_sql") or state.get("current_migration_sql") or "",
-                "current_v_sql": outputs.get("verification_sql") or state.get("current_v_sql") or "",
-            }
-        )
-        self._insert_step_log(next_state, step)
-        return next_state
-
-    def _attempt_result_from_state(self, state: dict[str, Any], *, ok: bool) -> dict[str, Any]:
-        """Create the public attempt record from the current graph state."""
-        steps = list(state.get("current_steps") or [])
-        failed_step = next((step for step in reversed(steps) if step.get("status") != "PASS"), None)
-        status = "PASS" if ok else self._failure_status_from_state(state)
-        failed_stage = "" if ok else str((failed_step or {}).get("stage") or "FINAL")
-        message = (
-            f"[MIG] map_id={state.get('map_id')} attempt={state.get('db_attempts')} migration pipeline passed"
-            if ok
-            else str(state.get("last_error") or (failed_step or {}).get("message") or "")
-        )
-        return {
-            "attempt": int(state.get("db_attempts") or 1),
-            "ok": ok,
-            "failed_stage": failed_stage,
-            "failed_stage_status": "" if ok else status,
-            "status": status,
-            "message": message,
-            "migration_sql": state.get("current_migration_sql", ""),
-            "verification_sql": state.get("current_v_sql", ""),
-            "outputs": self._attempt_outputs(state),
-            "steps": steps,
-        }
-
-    def _failure_status_from_state(self, state: dict[str, Any]) -> str:
-        """Resolve the final business failure status for a graph state."""
-        explicit = str(state.get("failure_status") or "").strip()
-        if explicit:
-            return explicit
-        if state.get("status") == "EXECUTED":
-            return "FAIL-TEST"
-        steps = list(state.get("current_steps") or [])
-        failed_step = next((step for step in reversed(steps) if step.get("status") != "PASS"), None)
-        return str((failed_step or {}).get("status") or "FAIL-INSERT")
-
-    def _stage_sql_from_state(self, state: dict[str, Any], failure_status: str | None = None) -> str:
-        """Return the SQL text most relevant to the given failure status."""
-        status = failure_status or self._failure_status_from_state(state)
-        if status == "FAIL-TEST":
-            return str(state.get("current_v_sql") or "")
-        return str(state.get("current_migration_sql") or state.get("last_sql") or "")
-
-    def _step_sql_for_status(self, state: dict[str, Any], status: str) -> str:
-        """Return the SQL text that should be logged for one failed step."""
-        if status == "FAIL-TEST":
-            return str(state.get("current_v_sql") or "")
-        return str(state.get("current_migration_sql") or state.get("migration_sql") or "")
-
-    def _insert_step_log(self, state: dict[str, Any], step: dict[str, Any]) -> None:
-        """Insert a migration step log for the current graph node result."""
-        db_config = dict(state.get("db_config") or {})
-        map_id = self._to_int(state.get("map_id"))
-        if map_id is None:
-            return
-        status = str(step.get("status") or "")
-        stage = str(step.get("stage") or "UNKNOWN")
-        retry_count = max(0, int(state.get("db_attempts") or 1) - 1)
-        log_level = "INFO" if status == "PASS" else "WARN"
-        stage_sql = self._log_sql_for_step(state, step)
-        route_note = self._route_note(state, step)
-        message = f"attempt={state.get('db_attempts')} stage={stage} status={status}; {step.get('message') or ''}{route_note}"
-        log_type = self._mig_log_type_for_step(stage, status)
-        self._insert_mig_log(db_config, map_id, log_type, log_level, stage, status, message, retry_count, stage_sql)
-
-    def _mig_log_type_for_step(self, stage: str, status: str) -> str:
-        """Return a log type that matches the current migration stage."""
-        if status.startswith("FAIL-"):
-            return "ROW_ERROR"
-        stage_upper = str(stage or "").upper()
-        if stage_upper == "VERIFY":
-            return "VERIFY_SQL"
-        if stage_upper in {"FETCH_DDL", "EXECUTE_SQL", "TRUNCATE", "PROMPT_BUILD"}:
-            return stage_upper
-        return "GENERATE_SQL"
-
-    def _insert_prompt_log(self, context: dict[str, Any], prompt: str, *, verify_only: bool, is_append: bool) -> None:
-        """Persist the final prompt sent to the LLM for DB migration SQL generation."""
-        map_id = self._to_int(context.get("map_id"))
-        if map_id is None:
-            return
-        try:
-            attempt = int(context.get("db_attempts") or context.get("attempt") or 1)
-            retry_count = max(0, attempt - 1)
-            mode = "VERIFY_RETRY" if verify_only else ("APPEND" if is_append else "REGULAR")
-            logging.getLogger("smartmigrate.workflow").info(
-                f"attempt={attempt} stage=PROMPT_BUILD status=PASS mode={mode}; final LLM prompt assembled",
-                extra={"workflow_log": [map_id, "DB_MIGRATION", "PROMPT_BUILD", "INFO", "PROMPT_BUILD", "PASS", retry_count, prompt]},
-            )
-        except Exception:
-            pass
-
-    def _log_sql_for_step(self, state: dict[str, Any], step: dict[str, Any]) -> str:
-        """Choose the SQL snippet that matches the step being logged."""
-        stage = str(step.get("stage") or "")
-        if stage == "VERIFY":
-            return str(state.get("current_v_sql") or "")
-        if stage == "GENERATE_SQL" and state.get("status") == "EXECUTED":
-            return str(state.get("current_v_sql") or "")
-        return self._stage_sql_from_state(state, str(step.get("status") or ""))
-
-    def _route_note(self, state: dict[str, Any], step: dict[str, Any]) -> str:
-        """Describe the graph route selected after a step result."""
-        if step.get("stage") == "GENERATE_SQL" and state.get("status") == "EXECUTED":
-            return "; route=verify_retry_generate_only,next=VERIFY"
-        if step.get("stage") == "GENERATE_SQL" and step.get("status") == "PASS":
-            return "; route=normal,next=EXECUTE_SQL"
-        if step.get("stage") == "EXECUTE_SQL" and step.get("status") == "PASS":
-            return "; route=normal,next=VERIFY"
-        if step.get("status") == "FAIL-TEST":
-            return "; route=retry,next=GENERATE_SQL_VERIFY_ONLY"
-        if step.get("status") == "FAIL-TRUNCATE":
-            return "; route=retry,next=EXECUTE_SQL"
-        if str(step.get("status") or "").startswith("FAIL-"):
-            return "; route=retry,next=GENERATE_SQL"
-        if step.get("status") == "PASS":
-            return "; route=finalize"
-        return ""
-
-    # ------------------------------------------------------------------
-    # ------------------------------------------------------------------
-    # Future development area: replace these nodes as the migration workflow evolves.
-    # - _node_generate_sql: connect to the LLM and generate MIG_SQL / VERIFY_SQL.
-    # - _node_execute_sql: run TRUNCATE and INSERT against the target database.
-    # - _node_verify: run verification SQL and classify validation failures.
-    # Keep the returned business statuses limited to:
-    # PASS, FAIL-TRUNCATE, FAIL-INSERT, FAIL-TEST.
-    # ------------------------------------------------------------------
-    # Keep the returned business statuses limited to:
-    # PASS, FAIL-TRUNCATE, FAIL-INSERT, FAIL-TEST.
-    # ------------------------------------------------------------------
+    # ##############################
+    # Graph nodes
+    # ##############################
 
     def _node_fetch_ddl(self, context: dict[str, Any]) -> dict[str, Any]:
         """Load mapping metadata and source/target DDL for SQL generation."""
@@ -646,17 +341,177 @@ class NewType10CMigOneJobPocExecutor(Component):
                 "outputs": {"diff_count": -1},
             }
 
-    def _build_deterministic_migration_sql(self, context: dict[str, Any], source_table: str, target_table: str, map_id: Any) -> str:
-        """Build a simple deterministic INSERT SQL."""
-        mapped_columns = self._mapped_columns(context.get("mapping_details") or [])
-        if mapped_columns:
-            to_cols = ", ".join(item["to_col"] for item in mapped_columns)
-            fr_cols = ", ".join(item["fr_col"] for item in mapped_columns)
-            return f"INSERT INTO {target_table} ({to_cols}) SELECT {fr_cols} FROM {source_table} /* map_id={map_id} */"
-        return f"INSERT INTO {target_table} SELECT * FROM {source_table} /* map_id={map_id} */"
+    # ##############################
+    # LangGraph retry callbacks
+    # ##############################
+
+    def _run_migration_graph(self, context: dict[str, Any], db_config: dict[str, Any], max_retry: int) -> dict[str, Any]:
+        """Build and execute the retry graph for one migration job."""
+        from langgraph.graph import END, StateGraph
+
+        # These callbacks are registered with LangGraph. The real work lives in the _node_* methods above.
+        def generate_node(state: dict[str, Any]) -> dict[str, Any]:
+            step = self._node_generate_sql(state)
+            return self._apply_step(state, step)
+
+        def execute_node(state: dict[str, Any]) -> dict[str, Any]:
+            step = self._node_execute_sql(state)
+            next_state = self._apply_step(state, step)
+            if step.get("status") == "PASS":
+                next_state.update({"status": "EXECUTED", "error_type": "", "failure_status": ""})
+            return next_state
+
+        def verify_node(state: dict[str, Any]) -> dict[str, Any]:
+            step = self._node_verify(state)
+            return self._apply_step(state, step)
+
+        # Save the failed attempt and prepare the next retry attempt state.
+        def retry_prepare_node(state: dict[str, Any]) -> dict[str, Any]:
+            attempt = self._attempt_result_from_state(state, ok=False)
+            retry_count = int(state.get("db_attempts") or 1)
+            self._update_job(db_config, int(state["map_id"]), attempt["status"], 0, retry_count)
+            logging.getLogger("smartmigrate.workflow").warning(
+                attempt["message"],
+                extra={
+                    "workflow_log": [
+                        int(state["map_id"]),
+                        "DB_MIGRATION",
+                        "ROW_ERROR",
+                        "WARN",
+                        attempt["failed_stage"],
+                        attempt["status"],
+                        retry_count,
+                        attempt.get("migration_sql", ""),
+                    ]
+                },
+            )
+            next_status = "EXECUTED" if attempt["status"] == "FAIL-TEST" else ""
+            return {
+                **state,
+                "attempts": [*(state.get("attempts") or []), attempt],
+                "current_steps": [],
+                "db_attempts": retry_count + 1,
+                "attempt": retry_count + 1,
+                "error_type": "",
+                "status": next_status,
+                "failure_status": attempt["status"],
+            }
+
+        def finalize_node(state: dict[str, Any]) -> dict[str, Any]:
+            attempts = list(state.get("attempts") or [])
+            if state.get("current_steps"):
+                attempts.append(self._attempt_result_from_state(state, ok=state.get("status") == "PASS"))
+            final_status = "PASS" if state.get("status") == "PASS" else self._failure_status_from_state(state)
+            return {
+                **state,
+                "attempts": attempts,
+                "final_status": final_status,
+                "message": "Migration Success" if final_status == "PASS" else f"Max Attempts Reached after {final_status}: {state.get('last_error') or ''}",
+                "stage_sql": self._stage_sql_from_state(state, final_status),
+            }
+
+        # Route to the next LangGraph node based on current state and retry budget.
+        def should_continue(state: dict[str, Any]) -> str:
+            if state.get("status") == "PASS":
+                return "finalize"
+            if state.get("error_type") == "BIZ_RETRY":
+                return "retry_prepare" if int(state.get("db_attempts") or 1) < int(state.get("max_attempts") or 1) else "finalize"
+            if state.get("status") == "EXECUTED":
+                return "verify"
+            if not state.get("current_migration_sql"):
+                return "generate"
+            return "execute"
+
+        def after_retry_prepare(state: dict[str, Any]) -> str:
+            return "execute" if state.get("failure_status") == "FAIL-TRUNCATE" else "generate"
+
+        workflow = StateGraph(dict)
+        workflow.add_node("generate", generate_node)
+        workflow.add_node("execute", execute_node)
+        workflow.add_node("verify", verify_node)
+        workflow.add_node("retry_prepare", retry_prepare_node)
+        workflow.add_node("finalize", finalize_node)
+        workflow.set_entry_point("generate")
+        workflow.add_conditional_edges("generate", should_continue, {"execute": "execute", "verify": "verify", "retry_prepare": "retry_prepare", "finalize": "finalize", "generate": "generate"})
+        workflow.add_conditional_edges("execute", should_continue, {"verify": "verify", "retry_prepare": "retry_prepare", "finalize": "finalize", "generate": "generate", "execute": "execute"})
+        workflow.add_conditional_edges("verify", should_continue, {"finalize": "finalize", "retry_prepare": "retry_prepare", "generate": "generate"})
+        workflow.add_conditional_edges("retry_prepare", after_retry_prepare, {"generate": "generate", "execute": "execute"})
+        workflow.add_edge("finalize", END)
+        graph = workflow.compile()
+        initial_state = {
+            **context,
+            "db_attempts": 1,
+            "db_config": db_config,
+            # max_retry counts retries after the first run, so max attempts is max_retry + 1.
+            "max_attempts": max_retry + 1,
+            "current_steps": [],
+            "attempts": [],
+            "current_migration_sql": context.get("migration_sql", ""),
+            "current_v_sql": context.get("verification_sql", ""),
+            "last_error": "",
+            "last_sql": "",
+            "error_type": "",
+            "failure_status": "",
+            "status": "",
+        }
+        return dict(graph.invoke(initial_state))
+
+    def _apply_step(self, state: dict[str, Any], step: dict[str, Any]) -> dict[str, Any]:
+        """Merge one LangGraph node result into state and write its workflow log."""
+        outputs = dict(step.get("outputs") or {})
+        next_state = {
+            **state,
+            **outputs,
+            "current_steps": [*(state.get("current_steps") or []), step],
+            "attempt": state.get("db_attempts", state.get("attempt", 1)),
+        }
+        if step.get("status") == "PASS":
+            next_state.update(
+                {
+                    "error_type": "",
+                    "failure_status": "",
+                    "last_error": "",
+                    "last_sql": outputs.get("migration_sql") or state.get("current_migration_sql") or state.get("last_sql") or "",
+                    "current_migration_sql": outputs.get("migration_sql") or state.get("current_migration_sql") or "",
+                    "current_v_sql": outputs.get("verification_sql") or state.get("current_v_sql") or "",
+                }
+            )
+            if step.get("stage") == "GENERATE_SQL":
+                self._save_generated_sql(
+                    self._db_config(state.get("job") or {}),
+                    int(state["map_id"]),
+                    next_state.get("current_migration_sql", ""),
+                    next_state.get("current_v_sql", ""),
+                )
+                next_state["generated_sql_saved"] = True
+            if step.get("stage") == "VERIFY":
+                next_state["status"] = "PASS"
+            elif step.get("stage") == "GENERATE_SQL" and state.get("failure_status") == "FAIL-TEST":
+                next_state["status"] = "EXECUTED"
+            self._log_step(next_state, step)
+            return next_state
+
+        status = str(step.get("status") or "FAIL-INSERT")
+        next_state.update(
+            {
+                "status": "",
+                "error_type": "BIZ_RETRY",
+                "failure_status": status,
+                "last_error": str(step.get("message") or ""),
+                "last_sql": str(next_state.get("current_v_sql") or "") if status == "FAIL-TEST" else str(next_state.get("current_migration_sql") or next_state.get("migration_sql") or ""),
+                "current_migration_sql": outputs.get("migration_sql") or state.get("current_migration_sql") or "",
+                "current_v_sql": outputs.get("verification_sql") or state.get("current_v_sql") or "",
+            }
+        )
+        self._log_step(next_state, step)
+        return next_state
+
+    # ##############################
+    # SQL prompt generation
+    # ##############################
 
     def _generate_migration_sqls(self, context: dict[str, Any], *, verify_only: bool) -> tuple[str, str, str, str]:
-        prompt_template = self._load_migration_prompt_template()
+        prompt_template = MIGRATION_PROMPT_TEMPLATE
         from_table = self._source_table_prompt_value(context)
         to_table = self._qualify_to_table(str(context.get("to_table") or "").strip(), dict(context.get("db_config") or {}))
         mapping_info = self._mapping_info(context.get("mapping_details") or [])
@@ -674,9 +529,13 @@ class NewType10CMigOneJobPocExecutor(Component):
         )
         last_error = str(context.get("last_error") or "").strip()
         last_sql = str(context.get("last_sql") or "").strip()
+        is_verify_retry = context.get("failure_status") == "FAIL-TEST"
         if verify_only:
+            # For verification retry, keep migration_sql and regenerate only verification_sql.
+            # The same preservation rule is used when user-edited MIG_SQL only needs verification_sql.
+            mode_title = "Verification retry mode" if is_verify_retry else "Verification-only mode"
             prompt += (
-                "\n\n[Verification retry mode]\n"
+                f"\n\n[{mode_title}]\n"
                 "- Keep the existing migration_sql unchanged.\n"
                 "- Regenerate verification_sql so it correctly validates the migration result.\n"
                 f"- Existing migration_sql:\n{str(context.get('current_migration_sql') or context.get('migration_sql') or '')}\n"
@@ -687,8 +546,12 @@ class NewType10CMigOneJobPocExecutor(Component):
                 prompt += prompt_template["dup_key_suffix"].format(to_table=to_table, from_table=from_table)
         if is_append:
             prompt += prompt_template["append_mode_suffix"].format(to_table=to_table)
-        prompt += "\n\n[Output constraint]\n- Do not end migration_sql or verification_sql with a semicolon (;).\n"
-        self._insert_prompt_log(context, prompt, verify_only=verify_only, is_append=is_append)
+        attempt = int(context.get("db_attempts") or context.get("attempt") or 1)
+        mode = "VERIFY_RETRY" if is_verify_retry else ("VERIFY_ONLY" if verify_only else ("APPEND" if is_append else "REGULAR"))
+        logging.getLogger("smartmigrate.workflow").info(
+            f"attempt={attempt} stage=PROMPT_BUILD status=PASS mode={mode}; final LLM prompt assembled",
+            extra={"workflow_log": [context.get("map_id") or 0, "DB_MIGRATION", "PROMPT_BUILD", "INFO", "PROMPT_BUILD", "PASS", max(0, attempt - 1), prompt]},
+        )
 
         content, used_model = self._call_llm_json(
             system_anthropic=str(prompt_template.get("system_anthropic") or prompt_template.get("system_openai") or ""),
@@ -703,9 +566,6 @@ class NewType10CMigOneJobPocExecutor(Component):
             self._merge_sql_value(result.get("verification_sql", "")),
             used_model,
         )
-
-    def _load_migration_prompt_template(self) -> dict[str, Any]:
-        return dict(MIGRATION_PROMPT_TEMPLATE)
 
     def _source_table_prompt_value(self, context: dict[str, Any]) -> str:
         raw_from = str(context.get("fr_table") or "").strip()
@@ -804,6 +664,465 @@ class NewType10CMigOneJobPocExecutor(Component):
             )
             row = cur.fetchone()
         return int(row[0] if row else 0) == 0
+
+    # ##############################
+    # Workflow logging
+    # ##############################
+
+    def _log_step(self, state: dict[str, Any], step: dict[str, Any]) -> None:
+        """Write one graph step to NEXT_MIG_LOG through the workflow logger."""
+        map_id = self._to_int(state.get("map_id"))
+        if map_id is None:
+            return
+        status = str(step.get("status") or "")
+        stage = str(step.get("stage") or "UNKNOWN")
+        retry_count = max(0, int(state.get("db_attempts") or 1) - 1)
+        log_level = "INFO" if status == "PASS" else "WARN"
+        stage_sql = self._log_sql_for_step(state, step)
+        route_note = self._route_note(state, step)
+        message = f"attempt={state.get('db_attempts')} stage={stage} status={status}; {step.get('message') or ''}{route_note}"
+        if status.startswith("FAIL-"):
+            log_type = "ROW_ERROR"
+        elif stage == "VERIFY":
+            log_type = "VERIFY_SQL"
+        elif stage in {"FETCH_DDL", "EXECUTE_SQL", "TRUNCATE", "PROMPT_BUILD"}:
+            log_type = stage
+        else:
+            log_type = "GENERATE_SQL"
+        logging.getLogger("smartmigrate.workflow").log(
+            logging.WARNING if log_level == "WARN" else logging.INFO,
+            message,
+            extra={"workflow_log": [map_id, "DB_MIGRATION", log_type, log_level, stage, status, retry_count, stage_sql]},
+        )
+
+    def _log_sql_for_step(self, state: dict[str, Any], step: dict[str, Any]) -> str:
+        """Choose the SQL snippet that matches the step being logged."""
+        stage = str(step.get("stage") or "")
+        if stage == "VERIFY":
+            return str(state.get("current_v_sql") or "")
+        if stage == "GENERATE_SQL" and state.get("status") == "EXECUTED":
+            return str(state.get("current_v_sql") or "")
+        return self._stage_sql_from_state(state, str(step.get("status") or ""))
+
+    def _route_note(self, state: dict[str, Any], step: dict[str, Any]) -> str:
+        """Describe the graph route selected after a step result."""
+        if step.get("stage") == "GENERATE_SQL" and state.get("status") == "EXECUTED":
+            return "; route=verify_retry_generate_only,next=VERIFY"
+        if step.get("stage") == "GENERATE_SQL" and step.get("status") == "PASS":
+            return "; route=normal,next=EXECUTE_SQL"
+        if step.get("stage") == "EXECUTE_SQL" and step.get("status") == "PASS":
+            return "; route=normal,next=VERIFY"
+        if step.get("status") == "FAIL-TEST":
+            return "; route=retry,next=GENERATE_SQL_VERIFY_ONLY"
+        if step.get("status") == "FAIL-TRUNCATE":
+            return "; route=retry,next=EXECUTE_SQL"
+        if str(step.get("status") or "").startswith("FAIL-"):
+            return "; route=retry,next=GENERATE_SQL"
+        if step.get("status") == "PASS":
+            return "; route=finalize"
+        return ""
+
+    def _attempt_result_from_state(self, state: dict[str, Any], *, ok: bool) -> dict[str, Any]:
+        """Create the public attempt record from the current graph state."""
+        steps = list(state.get("current_steps") or [])
+        failed_step = next((step for step in reversed(steps) if step.get("status") != "PASS"), None)
+        status = "PASS" if ok else self._failure_status_from_state(state)
+        failed_stage = "" if ok else str((failed_step or {}).get("stage") or "FINAL")
+        message = (
+            f"[MIG] map_id={state.get('map_id')} attempt={state.get('db_attempts')} migration pipeline passed"
+            if ok
+            else str(state.get("last_error") or (failed_step or {}).get("message") or "")
+        )
+        return {
+            "attempt": int(state.get("db_attempts") or 1),
+            "ok": ok,
+            "failed_stage": failed_stage,
+            "failed_stage_status": "" if ok else status,
+            "status": status,
+            "message": message,
+            "migration_sql": state.get("current_migration_sql", ""),
+            "verification_sql": state.get("current_v_sql", ""),
+            "outputs": self._attempt_outputs(state),
+            "steps": steps,
+        }
+
+    def _failure_status_from_state(self, state: dict[str, Any]) -> str:
+        """Resolve the final business failure status for a graph state."""
+        explicit = str(state.get("failure_status") or "").strip()
+        if explicit:
+            return explicit
+        if state.get("status") == "EXECUTED":
+            return "FAIL-TEST"
+        steps = list(state.get("current_steps") or [])
+        failed_step = next((step for step in reversed(steps) if step.get("status") != "PASS"), None)
+        return str((failed_step or {}).get("status") or "FAIL-INSERT")
+
+    def _stage_sql_from_state(self, state: dict[str, Any], failure_status: str | None = None) -> str:
+        """Return the SQL text most relevant to the given failure status."""
+        status = failure_status or self._failure_status_from_state(state)
+        if status == "FAIL-TEST":
+            return str(state.get("current_v_sql") or "")
+        return str(state.get("current_migration_sql") or state.get("last_sql") or "")
+
+    # ##############################
+    # Migration DB state
+    # ##############################
+
+    def _dependency_status(self, db_config: dict[str, Any], map_id: int, prior_map_id: Any) -> str:
+        """Return READY only when the prior migration job has passed."""
+        prior = self._to_int(prior_map_id)
+        if prior is None or prior <= 0:
+            return "READY"
+        table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(f"SELECT STATUS FROM {table} WHERE MAP_ID = :1", [prior])
+            row = cur.fetchone()
+        if not row:
+            return "PENDING"
+        status = str(row[0] or "").strip().upper()
+        return "READY" if status == "PASS" else (status or "PENDING")
+
+    def _is_dependency_failure_status(self, status: str) -> bool:
+        """Return True when a prior job has reached a terminal failure/skip status."""
+        value = str(status or "").strip().upper()
+        return value.startswith("FAIL-") or value.startswith("SKIP-")
+
+    def _mark_running(self, db_config: dict[str, Any], map_id: int) -> None:
+        """Mark a migration job as running in NEXT_MIG_INFO."""
+        table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                UPDATE {table}
+                   SET STATUS = :1,
+                       BATCH_CNT = NVL(BATCH_CNT, 0) + 1,
+                       UPD_TS = CURRENT_TIMESTAMP
+                 WHERE MAP_ID = :2
+                """,
+                ["RUNNING", map_id],
+            )
+            conn.commit()
+
+    def _update_job(self, db_config: dict[str, Any], map_id: int, status: str, elapsed: int, retry_count: int) -> None:
+        """Persist the current job status, elapsed time, and retry count."""
+        table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                UPDATE {table}
+                   SET STATUS = :1,
+                       ELAPSED_SECONDS = :2,
+                       RETRY_COUNT = :3,
+                       UPD_TS = CURRENT_TIMESTAMP
+                 WHERE MAP_ID = :4
+                """,
+                [status, elapsed, retry_count, map_id],
+            )
+            conn.commit()
+
+    def _save_generated_sql(self, db_config: dict[str, Any], map_id: int, migration_sql: str, verification_sql: str) -> None:
+        """Persist generated MIG_SQL and VERIFY_SQL immediately after generation."""
+        table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
+        columns = self._table_columns(db_config, table)
+        set_clauses: list[str] = []
+        params: dict[str, Any] = {"map_id": map_id}
+        if "MIG_SQL" in columns and str(migration_sql or "").strip():
+            params["mig_sql"] = migration_sql
+            set_clauses.append("MIG_SQL = :mig_sql")
+        if "VERIFY_SQL" in columns and str(verification_sql or "").strip():
+            params["verify_sql"] = verification_sql
+            set_clauses.append("VERIFY_SQL = :verify_sql")
+        if "UPD_TS" in columns and set_clauses:
+            set_clauses.append("UPD_TS = CURRENT_TIMESTAMP")
+        if not set_clauses:
+            return
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                UPDATE {table}
+                   SET {", ".join(set_clauses)}
+                 WHERE MAP_ID = :map_id
+                """,
+                params,
+            )
+            conn.commit()
+
+    def _load_mig_metadata(self, db_config: dict[str, Any], map_id: int | None) -> dict[str, Any]:
+        """Load NEXT_MIG_INFO and NEXT_MIG_INFO_DTL metadata for one map id."""
+        if map_id is None:
+            raise ValueError("FETCH_DDL requires map_id")
+        info_table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
+        detail_table = self._qualify("NEXT_MIG_INFO_DTL", db_config.get("system_schema"))
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                SELECT MAP_TYPE,
+                       FR_TABLE,
+                       TO_TABLE,
+                       TRUNC_YN,
+                       CONDITION,
+                       MIG_SQL,
+                       VERIFY_SQL,
+                       USER_EDITED
+                  FROM {info_table}
+                 WHERE MAP_ID = :1
+                """,
+                [map_id],
+            )
+            row = cur.fetchone()
+            if not row:
+                raise ValueError(f"NEXT_MIG_INFO row not found: map_id={map_id}")
+            map_type = self._lob_to_str(row[0]) or "TABLE"
+            fr_table = self._lob_to_str(row[1])
+            to_table = self._lob_to_str(row[2])
+            trunc_yn = self._lob_to_str(row[3])
+            condition = self._lob_to_str(row[4])
+            saved_migration_sql = self._lob_to_str(row[5])
+            saved_verification_sql = self._lob_to_str(row[6])
+            user_edited = self._lob_to_str(row[7])
+            cur.execute(
+                f"""
+                SELECT MAP_DTL,
+                       FR_COL,
+                       TO_COL
+                  FROM {detail_table}
+                 WHERE MAP_ID = :1
+                 ORDER BY MAP_DTL
+                """,
+                [map_id],
+            )
+            details = [
+                {
+                    "map_dtl": item[0],
+                    "fr_col": self._lob_to_str(item[1]),
+                    "to_col": self._lob_to_str(item[2]),
+                }
+                for item in cur.fetchall()
+            ]
+        return {
+            "map_type": map_type,
+            "fr_table": fr_table,
+            "raw_to_table": to_table,
+            "to_table": self._qualify_to_table(to_table, db_config),
+            "trunc_yn": trunc_yn,
+            "condition": condition,
+            "saved_migration_sql": saved_migration_sql,
+            "saved_verification_sql": saved_verification_sql,
+            "user_edited": user_edited,
+            "mapping_details": details,
+            "source_ddl": self._source_ddl_for_prompt(db_config, map_type, fr_table),
+            "target_ddl": self._fetch_table_columns(db_config, self._qualify_to_table(to_table, db_config)) if self._looks_like_table(to_table) else [],
+        }
+
+    def _source_ddl_for_prompt(self, db_config: dict[str, Any], map_type: str, fr_table: str) -> dict[str, list[dict[str, Any]]] | list[dict[str, Any]]:
+        """Return source DDL in the same shape as src for simple and COMPLEX mappings."""
+        source_tables = self._source_tables_for_ddl(map_type, fr_table)
+        if not source_tables:
+            return []
+        if str(map_type or "").strip().upper() != "COMPLEX":
+            source_table = self._qualify_fr_table(source_tables[0], db_config)
+            return self._fetch_table_columns(db_config, source_table) if self._looks_like_table(source_table) else []
+
+        source_ddl: dict[str, list[dict[str, Any]]] = {}
+        for table_name in source_tables:
+            source_table = self._qualify_fr_table(table_name, db_config)
+            rows = self._fetch_table_columns(db_config, source_table) if self._looks_like_table(source_table) else []
+            if rows:
+                source_ddl[source_table] = rows
+        return source_ddl
+
+    def _source_tables_for_ddl(self, map_type: str, fr_table: str) -> list[str]:
+        """Return source physical tables used for DDL lookup."""
+        text = str(fr_table or "").strip()
+        if not text:
+            return []
+        if str(map_type or "").strip().upper() == "COMPLEX":
+            return self._extract_query_table_names(text)
+        return [text]
+
+    def _extract_query_table_names(self, sql_text: str) -> list[str]:
+        """Extract physical table names from a COMPLEX FR_TABLE SQL expression."""
+        text = re.sub(r"/\*.*?\*/", " ", sql_text or "", flags=re.DOTALL)
+        text = re.sub(r"--[^\n]*", " ", text)
+        tables: list[str] = []
+        seen: set[str] = set()
+        for match in re.finditer(
+            r"\b(?:FROM|JOIN)\s+([A-Z_][A-Z0-9_$#]*(?:\.[A-Z_][A-Z0-9_$#]*)?)",
+            text,
+            flags=re.IGNORECASE,
+        ):
+            table_name = match.group(1).strip()
+            if table_name.upper() in {"SELECT", "WITH"}:
+                continue
+            key = table_name.upper()
+            if key not in seen:
+                seen.add(key)
+                tables.append(table_name)
+        return tables
+
+    def _fetch_table_columns(self, db_config: dict[str, Any], table: str) -> list[dict[str, Any]]:
+        """Read Oracle column metadata for a source or target table."""
+        owner, table_name = self._split_table_owner_and_name(table)
+        if owner:
+            sql = """
+                SELECT COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION, DATA_SCALE, NULLABLE
+                  FROM ALL_TAB_COLUMNS
+                 WHERE OWNER = :1
+                   AND TABLE_NAME = :2
+                 ORDER BY COLUMN_ID
+            """
+            params = [owner, table_name]
+        else:
+            sql = """
+                SELECT COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION, DATA_SCALE, NULLABLE
+                  FROM USER_TAB_COLUMNS
+                 WHERE TABLE_NAME = :1
+                 ORDER BY COLUMN_ID
+            """
+            params = [table_name]
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(sql, params)
+            return [
+                {
+                    "column_name": self._lob_to_str(row[0]),
+                    "data_type": self._lob_to_str(row[1]),
+                    "data_length": row[2],
+                    "data_precision": row[3],
+                    "data_scale": row[4],
+                    "nullable": self._lob_to_str(row[5]),
+                }
+                for row in cur.fetchall()
+            ]
+
+    # ##############################
+    # SQL execution
+    # ##############################
+
+    def _truncate_table(self, db_config: dict[str, Any], table_name: str) -> None:
+        if not self._looks_like_table(table_name):
+            raise ValueError(f"TRUNCATE target is not a safe table identifier: {table_name}")
+        try:
+            with self._connect(db_config) as conn:
+                cur = conn.cursor()
+                cur.execute(f"TRUNCATE TABLE {table_name}")
+                conn.commit()
+        except Exception as exc:
+            raise ValueError(f"TRUNCATE failed: {exc}") from exc
+
+    def _execute_sql_script(self, db_config: dict[str, Any], sql_script: str) -> int:
+        statements = self._split_sql_script(sql_script)
+        if not statements:
+            raise ValueError("migration SQL is empty")
+        total_rowcount = 0
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            for statement in statements:
+                clean = self._clean_sql_statement(statement)
+                if not clean:
+                    continue
+                is_plsql = clean.upper().startswith(("BEGIN", "DECLARE"))
+                try:
+                    cur.execute(clean + ("\n" if is_plsql else ""))
+                except Exception as exc:
+                    raise ValueError(f"Migration SQL execution failed: {exc}; SQL={clean[:1000]}") from exc
+                if cur.rowcount and cur.rowcount > 0:
+                    total_rowcount += int(cur.rowcount)
+            conn.commit()
+        return total_rowcount
+
+    def _execute_verification(self, db_config: dict[str, Any], sql_script: str) -> tuple[bool, str, list[list[Any]]]:
+        statements = self._split_sql_script(sql_script)
+        if not statements:
+            return False, "No verification SQL provided", []
+        rows: list[Any] = []
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            for statement in statements:
+                clean = self._clean_sql_statement(statement)
+                if not clean:
+                    continue
+                cur.execute(clean)
+                if cur.description:
+                    rows = cur.fetchall()
+        json_rows = [[self._json_safe_value(value) for value in row] for row in rows]
+        if not rows:
+            return False, "Verification SQL returned no rows", json_rows
+        for row in rows:
+            for value in row:
+                if not self._is_zero(value):
+                    return False, f"Mismatch found: {self._json_safe_value(row)}", json_rows
+        return True, "All Verification Passed", json_rows
+
+    def _split_sql_script(self, script: str) -> list[str]:
+        if not script:
+            return []
+        return [part.strip() for part in re.split(r"^\s*/\s*$", script, flags=re.M) if part.strip()]
+
+    def _clean_sql_statement(self, statement: str) -> str:
+        cleaned = self._strip_sql_comments(str(statement or "").strip())
+        return re.sub(r"[;/]\s*$", "", cleaned).strip()
+
+    def _strip_sql_comments(self, sql: str) -> str:
+        """Remove SQL comments before sending statements to Oracle.
+
+        Oracle raises ORA-01742 when a generated block comment is truncated.
+        Comments are not required for execution, so strip
+        both complete and dangling comments defensively.
+        """
+        text = str(sql or "")
+        out: list[str] = []
+        index = 0
+        length = len(text)
+        in_single = False
+        in_double = False
+        while index < length:
+            char = text[index]
+            next_char = text[index + 1] if index + 1 < length else ""
+            if char == "'" and not in_double:
+                out.append(char)
+                in_single = not in_single
+                index += 1
+                continue
+            if char == '"' and not in_single:
+                out.append(char)
+                in_double = not in_double
+                index += 1
+                continue
+            if not in_single and not in_double and char == "/" and next_char == "*":
+                end = text.find("*/", index + 2)
+                if end < 0:
+                    break
+                index = end + 2
+                continue
+            if not in_single and not in_double and char == "-" and next_char == "-":
+                end = text.find("\n", index + 2)
+                if end < 0:
+                    break
+                index = end + 1
+                out.append("\n")
+                continue
+            out.append(char)
+            index += 1
+        return "\n".join(line.rstrip() for line in "".join(out).splitlines()).strip()
+
+    def _is_zero(self, value: Any) -> bool:
+        value = self._lob_to_str(value)
+        if value == "":
+            return False
+        try:
+            return Decimal(str(value).strip()) == Decimal("0")
+        except (InvalidOperation, ValueError):
+            return str(value).strip() == "0"
+
+    # ##############################
+    # LLM client
+    # ##############################
 
     def _call_llm_json(self, *, system_anthropic: str, system_openai: str, prompt: str, config: dict[str, Any] | None = None) -> tuple[str, str]:
         self._load_env_files()
@@ -1028,121 +1347,9 @@ class NewType10CMigOneJobPocExecutor(Component):
             return "\n/\n".join(str(item.get("sql") if isinstance(item, dict) else item) for item in value)
         return str(value or "").strip()
 
-    def _truncate_table(self, db_config: dict[str, Any], table_name: str) -> None:
-        if not self._looks_like_table(table_name):
-            raise ValueError(f"TRUNCATE target is not a safe table identifier: {table_name}")
-        try:
-            with self._connect(db_config) as conn:
-                cur = conn.cursor()
-                cur.execute(f"TRUNCATE TABLE {table_name}")
-                conn.commit()
-        except Exception as exc:
-            raise ValueError(f"TRUNCATE failed: {exc}") from exc
-
-    def _execute_sql_script(self, db_config: dict[str, Any], sql_script: str) -> int:
-        statements = self._split_sql_script(sql_script)
-        if not statements:
-            raise ValueError("migration SQL is empty")
-        total_rowcount = 0
-        with self._connect(db_config) as conn:
-            cur = conn.cursor()
-            for statement in statements:
-                clean = self._clean_sql_statement(statement)
-                if not clean:
-                    continue
-                is_plsql = clean.upper().startswith(("BEGIN", "DECLARE"))
-                try:
-                    cur.execute(clean + ("\n" if is_plsql else ""))
-                except Exception as exc:
-                    raise ValueError(f"Migration SQL execution failed: {exc}; SQL={clean[:1000]}") from exc
-                if cur.rowcount and cur.rowcount > 0:
-                    total_rowcount += int(cur.rowcount)
-            conn.commit()
-        return total_rowcount
-
-    def _execute_verification(self, db_config: dict[str, Any], sql_script: str) -> tuple[bool, str, list[list[Any]]]:
-        statements = self._split_sql_script(sql_script)
-        if not statements:
-            return False, "No verification SQL provided", []
-        rows: list[Any] = []
-        with self._connect(db_config) as conn:
-            cur = conn.cursor()
-            for statement in statements:
-                clean = self._clean_sql_statement(statement)
-                if not clean:
-                    continue
-                cur.execute(clean)
-                if cur.description:
-                    rows = cur.fetchall()
-        json_rows = [[self._json_safe_value(value) for value in row] for row in rows]
-        if not rows:
-            return False, "Verification SQL returned no rows", json_rows
-        for row in rows:
-            for value in row:
-                if not self._is_zero(value):
-                    return False, f"Mismatch found: {self._json_safe_value(row)}", json_rows
-        return True, "All Verification Passed", json_rows
-
-    def _split_sql_script(self, script: str) -> list[str]:
-        if not script:
-            return []
-        return [part.strip() for part in re.split(r"^\s*/\s*$", script, flags=re.M) if part.strip()]
-
-    def _clean_sql_statement(self, statement: str) -> str:
-        cleaned = self._strip_sql_comments(str(statement or "").strip())
-        return re.sub(r"[;/]\s*$", "", cleaned).strip()
-
-    def _strip_sql_comments(self, sql: str) -> str:
-        """Remove SQL comments before sending statements to Oracle.
-
-        Oracle raises ORA-01742 when a generated block comment is truncated.
-        Comments are not required for execution, so strip
-        both complete and dangling comments defensively.
-        """
-        text = str(sql or "")
-        out: list[str] = []
-        index = 0
-        length = len(text)
-        in_single = False
-        in_double = False
-        while index < length:
-            char = text[index]
-            next_char = text[index + 1] if index + 1 < length else ""
-            if char == "'" and not in_double:
-                out.append(char)
-                in_single = not in_single
-                index += 1
-                continue
-            if char == '"' and not in_single:
-                out.append(char)
-                in_double = not in_double
-                index += 1
-                continue
-            if not in_single and not in_double and char == "/" and next_char == "*":
-                end = text.find("*/", index + 2)
-                if end < 0:
-                    break
-                index = end + 2
-                continue
-            if not in_single and not in_double and char == "-" and next_char == "-":
-                end = text.find("\n", index + 2)
-                if end < 0:
-                    break
-                index = end + 1
-                out.append("\n")
-                continue
-            out.append(char)
-            index += 1
-        return "\n".join(line.rstrip() for line in "".join(out).splitlines()).strip()
-
-    def _is_zero(self, value: Any) -> bool:
-        value = self._lob_to_str(value)
-        if value == "":
-            return False
-        try:
-            return Decimal(str(value).strip()) == Decimal("0")
-        except (InvalidOperation, ValueError):
-            return str(value).strip() == "0"
+    # ##############################
+    # Result payloads
+    # ##############################
 
     def _json_safe_value(self, value: Any) -> Any:
         if isinstance(value, tuple):
@@ -1189,274 +1396,80 @@ class NewType10CMigOneJobPocExecutor(Component):
             "full_workflow_abort_reason": "DB Migration failed; SQL phases must not start." if should_abort_full_workflow else "",
         }
 
-    def _dependency_status(self, db_config: dict[str, Any], map_id: int, prior_map_id: Any) -> str:
-        """Return READY only when the prior migration job has passed."""
-        prior = self._to_int(prior_map_id)
-        if prior is None or prior <= 0:
-            return "READY"
-        table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
-        with self._connect(db_config) as conn:
-            cur = conn.cursor()
-            cur.execute(f"SELECT STATUS FROM {table} WHERE MAP_ID = :1", [prior])
-            row = cur.fetchone()
-        if not row:
-            return "PENDING"
-        status = str(row[0] or "").strip().upper()
-        return "READY" if status == "PASS" else (status or "PENDING")
+    # ##############################
+    # Configuration and parsing
+    # ##############################
 
-    def _is_dependency_failure_status(self, status: str) -> bool:
-        """Return True when a prior job has reached a terminal failure/skip status."""
-        value = str(status or "").strip().upper()
-        return value.startswith("FAIL-") or value.startswith("SKIP-")
+    def _parse_payload(self, raw: Any) -> dict[str, Any]:
+        """Parse a Langflow Data, Message, dict, or JSON string payload."""
+        if isinstance(raw, Data):
+            return dict(raw.data or {})
+        if isinstance(raw, Message):
+            raw = raw.text
+        if isinstance(raw, dict):
+            return dict(raw)
+        text = str(raw or "").strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
+            text = re.sub(r"\s*```$", "", text)
+        parsed = json.loads(text) if text else {}
+        if not isinstance(parsed, dict):
+            raise ValueError("job_item must be a JSON object")
+        return parsed
 
-    def _mark_running(self, db_config: dict[str, Any], map_id: int) -> None:
-        """Mark a migration job as running in NEXT_MIG_INFO."""
-        table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
-        with self._connect(db_config) as conn:
-            cur = conn.cursor()
-            cur.execute(
-                f"""
-                UPDATE {table}
-                   SET STATUS = :1,
-                       BATCH_CNT = NVL(BATCH_CNT, 0) + 1,
-                       UPD_TS = CURRENT_TIMESTAMP
-                 WHERE MAP_ID = :2
-                """,
-                ["RUNNING", map_id],
-            )
-            conn.commit()
+    def _positive_int(self, value: Any, default: int) -> int:
+        """Convert a value to a positive int, or return default."""
+        try:
+            parsed = int(value)
+            return parsed if parsed > 0 else default
+        except (TypeError, ValueError):
+            return default
 
-    def _update_job(self, db_config: dict[str, Any], map_id: int, status: str, elapsed: int, retry_count: int) -> None:
-        """Persist the current job status, elapsed time, and retry count."""
-        table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
-        with self._connect(db_config) as conn:
-            cur = conn.cursor()
-            cur.execute(
-                f"""
-                UPDATE {table}
-                   SET STATUS = :1,
-                       ELAPSED_SECONDS = :2,
-                       RETRY_COUNT = :3,
-                       UPD_TS = CURRENT_TIMESTAMP
-                 WHERE MAP_ID = :4
-                """,
-                [status, elapsed, retry_count, map_id],
-            )
-            conn.commit()
+    def _secret_to_str(self, value: Any) -> str:
+        """Convert a Langflow secret value into plain text."""
+        if value is None:
+            return ""
+        if hasattr(value, "get_secret_value"):
+            return str(value.get_secret_value())
+        return str(value)
 
-    def _save_generated_sql(self, db_config: dict[str, Any], map_id: int, migration_sql: str, verification_sql: str) -> None:
-        """Persist generated MIG_SQL and VERIFY_SQL immediately after generation."""
-        table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
-        columns = self._table_columns(db_config, table)
-        set_clauses: list[str] = []
-        params: dict[str, Any] = {"map_id": map_id}
-        if "MIG_SQL" in columns and str(migration_sql or "").strip():
-            params["mig_sql"] = migration_sql
-            set_clauses.append("MIG_SQL = :mig_sql")
-        if "VERIFY_SQL" in columns and str(verification_sql or "").strip():
-            params["verify_sql"] = verification_sql
-            set_clauses.append("VERIFY_SQL = :verify_sql")
-        if "UPD_TS" in columns and set_clauses:
-            set_clauses.append("UPD_TS = CURRENT_TIMESTAMP")
-        if not set_clauses:
-            return
-        with self._connect(db_config) as conn:
-            cur = conn.cursor()
-            cur.execute(
-                f"""
-                UPDATE {table}
-                   SET {", ".join(set_clauses)}
-                 WHERE MAP_ID = :map_id
-                """,
-                params,
-            )
-            conn.commit()
+    def _to_int(self, value: Any) -> int | None:
+        """Convert a value to int, returning None for invalid input."""
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
-    def _insert_mig_log(
-        self,
-        db_config: dict[str, Any],
-        map_id: int,
-        log_type: str,
-        log_level: str,
-        step_name: str,
-        status: str,
-        message: str,
-        retry_count: int,
-        generated_sql: str = "",
-    ) -> None:
-        """Write one migration execution log through the SmartMigrate workflow logger."""
-        event = [
-            map_id,
-            "DB_MIGRATION",
-            str(log_type or "")[:20],
-            str(log_level or "")[:20],
-            str(step_name or "")[:50],
-            str(status or "")[:20],
-            retry_count,
-        ]
-        if generated_sql is not None:
-            event.append(str(generated_sql or ""))
-        level = logging.ERROR if str(log_level or "").upper() == "ERROR" else logging.INFO
-        logging.getLogger("smartmigrate.workflow").log(level, str(message or ""), extra={"workflow_log": event})
-
-    def _load_mig_metadata(self, db_config: dict[str, Any], map_id: int | None) -> dict[str, Any]:
-        """Load NEXT_MIG_INFO and NEXT_MIG_INFO_DTL metadata for one map id."""
-        if map_id is None:
-            raise ValueError("FETCH_DDL requires map_id")
-        info_table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
-        detail_table = self._qualify("NEXT_MIG_INFO_DTL", db_config.get("system_schema"))
-        with self._connect(db_config) as conn:
-            cur = conn.cursor()
-            cur.execute(
-                f"""
-                SELECT MAP_TYPE,
-                       FR_TABLE,
-                       TO_TABLE,
-                       TRUNC_YN,
-                       CONDITION,
-                       MIG_SQL,
-                       VERIFY_SQL,
-                       USER_EDITED
-                  FROM {info_table}
-                 WHERE MAP_ID = :1
-                """,
-                [map_id],
-            )
-            row = cur.fetchone()
-            if not row:
-                raise ValueError(f"NEXT_MIG_INFO row not found: map_id={map_id}")
-            map_type = self._lob_to_str(row[0]) or "TABLE"
-            fr_table = self._lob_to_str(row[1])
-            to_table = self._lob_to_str(row[2])
-            trunc_yn = self._lob_to_str(row[3])
-            condition = self._lob_to_str(row[4])
-            saved_migration_sql = self._lob_to_str(row[5])
-            saved_verification_sql = self._lob_to_str(row[6])
-            user_edited = self._lob_to_str(row[7])
-            cur.execute(
-                f"""
-                SELECT MAP_DTL,
-                       FR_COL,
-                       TO_COL
-                  FROM {detail_table}
-                 WHERE MAP_ID = :1
-                 ORDER BY MAP_DTL
-                """,
-                [map_id],
-            )
-            details = [
-                {
-                    "map_dtl": item[0],
-                    "fr_col": self._lob_to_str(item[1]),
-                    "to_col": self._lob_to_str(item[2]),
-                }
-                for item in cur.fetchall()
-            ]
+    def _db_config(self, job: dict[str, Any]) -> dict[str, Any]:
+        """Extract the Oracle connection settings from the job payload."""
+        item_config = dict(job.get("db_config") or {})
         return {
-            "map_type": map_type,
-            "fr_table": fr_table,
-            "raw_to_table": to_table,
-            "to_table": self._qualify_to_table(to_table, db_config),
-            "trunc_yn": trunc_yn,
-            "condition": condition,
-            "saved_migration_sql": saved_migration_sql,
-            "saved_verification_sql": saved_verification_sql,
-            "user_edited": user_edited,
-            "mapping_details": details,
-            "source_ddl": self._source_ddl_for_prompt(db_config, map_type, fr_table),
-            "target_ddl": self._fetch_table_columns(db_config, self._qualify_to_table(to_table, db_config)) if self._looks_like_table(to_table) else [],
+            "db_host": str(item_config.get("db_host") or "").strip(),
+            "db_port": int(item_config.get("db_port") or 1521),
+            "db_service_name": str(item_config.get("db_service_name") or "").strip(),
+            "db_username": str(item_config.get("db_username") or "").strip(),
+            "db_password": str(item_config.get("db_password") or ""),
+            "system_schema": str(item_config.get("system_schema") or "").strip(),
+            "source_schema": str(getattr(self, "source_schema", "") or item_config.get("source_schema") or os.getenv("ORACLE_SCHEMA_SRC") or "SFAMIG").strip(),
+            "target_schema": str(getattr(self, "target_schema", "") or item_config.get("target_schema") or os.getenv("ORACLE_SCHEMA_TGT") or "SFAADM").strip(),
         }
 
-    def _source_ddl_for_prompt(self, db_config: dict[str, Any], map_type: str, fr_table: str) -> dict[str, list[dict[str, Any]]] | list[dict[str, Any]]:
-        """Return source DDL in the same shape as src for simple and COMPLEX mappings."""
-        source_tables = self._source_tables_for_ddl(map_type, fr_table)
-        if not source_tables:
-            return []
-        if str(map_type or "").strip().upper() != "COMPLEX":
-            source_table = self._qualify_fr_table(source_tables[0], db_config)
-            return self._fetch_table_columns(db_config, source_table) if self._looks_like_table(source_table) else []
+    def _llm_config(self, job: dict[str, Any]) -> dict[str, Any]:
+        """Extract LLM settings from Langflow inputs, falling back to the job payload."""
+        item_config = dict(job.get("llm_config") or {})
+        return {
+            "llm_base_url": str(getattr(self, "llm_base_url", "") or item_config.get("llm_base_url") or "").strip(),
+            "llm_api_key": self._secret_to_str(getattr(self, "llm_api_key", None)) or str(item_config.get("llm_api_key") or "").strip(),
+            "llm_provider": str(getattr(self, "llm_provider", "") or item_config.get("llm_provider") or "").strip(),
+            "llm_model": str(getattr(self, "llm_model", "") or item_config.get("llm_model") or "").strip(),
+            "llm_fallback_models": str(getattr(self, "llm_fallback_models", "") or item_config.get("llm_fallback_models") or "").strip(),
+            "llm_max_tokens": self._positive_int(getattr(self, "llm_max_tokens", None) or item_config.get("llm_max_tokens"), 4096),
+            "llm_timeout_seconds": self._positive_int(getattr(self, "llm_timeout_seconds", None) or item_config.get("llm_timeout_seconds"), 900),
+        }
 
-        source_ddl: dict[str, list[dict[str, Any]]] = {}
-        for table_name in source_tables:
-            source_table = self._qualify_fr_table(table_name, db_config)
-            rows = self._fetch_table_columns(db_config, source_table) if self._looks_like_table(source_table) else []
-            if rows:
-                source_ddl[source_table] = rows
-        return source_ddl
-
-    def _source_tables_for_ddl(self, map_type: str, fr_table: str) -> list[str]:
-        """Return source physical tables used for DDL lookup."""
-        text = str(fr_table or "").strip()
-        if not text:
-            return []
-        if str(map_type or "").strip().upper() == "COMPLEX":
-            return self._extract_query_table_names(text)
-        return [text]
-
-    def _extract_query_table_names(self, sql_text: str) -> list[str]:
-        """Extract physical table names from a COMPLEX FR_TABLE SQL expression."""
-        text = re.sub(r"/\*.*?\*/", " ", sql_text or "", flags=re.DOTALL)
-        text = re.sub(r"--[^\n]*", " ", text)
-        tables: list[str] = []
-        seen: set[str] = set()
-        for match in re.finditer(
-            r"\b(?:FROM|JOIN)\s+([A-Z_][A-Z0-9_$#]*(?:\.[A-Z_][A-Z0-9_$#]*)?)",
-            text,
-            flags=re.IGNORECASE,
-        ):
-            table_name = match.group(1).strip()
-            if table_name.upper() in {"SELECT", "WITH"}:
-                continue
-            key = table_name.upper()
-            if key not in seen:
-                seen.add(key)
-                tables.append(table_name)
-        return tables
-
-    def _fetch_table_columns(self, db_config: dict[str, Any], table: str) -> list[dict[str, Any]]:
-        """Read Oracle column metadata for a source or target table."""
-        owner, table_name = self._split_table_owner_and_name(table)
-        if owner:
-            sql = """
-                SELECT COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION, DATA_SCALE, NULLABLE
-                  FROM ALL_TAB_COLUMNS
-                 WHERE OWNER = :1
-                   AND TABLE_NAME = :2
-                 ORDER BY COLUMN_ID
-            """
-            params = [owner, table_name]
-        else:
-            sql = """
-                SELECT COLUMN_NAME, DATA_TYPE, DATA_LENGTH, DATA_PRECISION, DATA_SCALE, NULLABLE
-                  FROM USER_TAB_COLUMNS
-                 WHERE TABLE_NAME = :1
-                 ORDER BY COLUMN_ID
-            """
-            params = [table_name]
-        with self._connect(db_config) as conn:
-            cur = conn.cursor()
-            cur.execute(sql, params)
-            return [
-                {
-                    "column_name": self._lob_to_str(row[0]),
-                    "data_type": self._lob_to_str(row[1]),
-                    "data_length": row[2],
-                    "data_precision": row[3],
-                    "data_scale": row[4],
-                    "nullable": self._lob_to_str(row[5]),
-                }
-                for row in cur.fetchall()
-            ]
-
-    def _mapped_columns(self, details: list[dict[str, Any]]) -> list[dict[str, str]]:
-        """Return only complete source-to-target column mappings."""
-        columns: list[dict[str, str]] = []
-        for item in details:
-            fr_col = str(item.get("fr_col") or "").strip()
-            to_col = str(item.get("to_col") or "").strip()
-            if fr_col and to_col:
-                columns.append({"fr_col": fr_col, "to_col": to_col})
-        return columns
+    # ##############################
+    # DB and identifier helpers
+    # ##############################
 
     def _looks_like_table(self, value: Any) -> bool:
         """Return True when a value is a plain Oracle table identifier."""
@@ -1528,33 +1541,6 @@ class NewType10CMigOneJobPocExecutor(Component):
         finally:
             conn.close()
 
-    def _db_config(self, job: dict[str, Any]) -> dict[str, Any]:
-        """Extract the Oracle connection settings from the job payload."""
-        item_config = dict(job.get("db_config") or {})
-        return {
-            "db_host": str(item_config.get("db_host") or "").strip(),
-            "db_port": int(item_config.get("db_port") or 1521),
-            "db_service_name": str(item_config.get("db_service_name") or "").strip(),
-            "db_username": str(item_config.get("db_username") or "").strip(),
-            "db_password": str(item_config.get("db_password") or ""),
-            "system_schema": str(item_config.get("system_schema") or "").strip(),
-            "source_schema": str(getattr(self, "source_schema", "") or item_config.get("source_schema") or os.getenv("ORACLE_SCHEMA_SRC") or "SFAMIG").strip(),
-            "target_schema": str(getattr(self, "target_schema", "") or item_config.get("target_schema") or os.getenv("ORACLE_SCHEMA_TGT") or "SFAADM").strip(),
-        }
-
-    def _llm_config(self, job: dict[str, Any]) -> dict[str, Any]:
-        """Extract LLM settings from Langflow inputs, falling back to the job payload."""
-        item_config = dict(job.get("llm_config") or {})
-        return {
-            "llm_base_url": str(getattr(self, "llm_base_url", "") or item_config.get("llm_base_url") or "").strip(),
-            "llm_api_key": self._secret_to_str(getattr(self, "llm_api_key", None)) or str(item_config.get("llm_api_key") or "").strip(),
-            "llm_provider": str(getattr(self, "llm_provider", "") or item_config.get("llm_provider") or "").strip(),
-            "llm_model": str(getattr(self, "llm_model", "") or item_config.get("llm_model") or "").strip(),
-            "llm_fallback_models": str(getattr(self, "llm_fallback_models", "") or item_config.get("llm_fallback_models") or "").strip(),
-            "llm_max_tokens": self._positive_int(getattr(self, "llm_max_tokens", None) or item_config.get("llm_max_tokens"), 4096),
-            "llm_timeout_seconds": self._positive_int(getattr(self, "llm_timeout_seconds", None) or item_config.get("llm_timeout_seconds"), 900),
-        }
-
     def _qualify(self, table_name: str, schema: Any) -> str:
         """Return a validated schema-qualified Oracle table name."""
         value = str(table_name or "").strip().upper()
@@ -1616,47 +1602,6 @@ class NewType10CMigOneJobPocExecutor(Component):
             return owner, name
         return None, value
 
-    def _parse_payload(self, raw: Any) -> dict[str, Any]:
-        """Parse a Langflow Data, Message, dict, or JSON string payload."""
-        if isinstance(raw, Data):
-            return dict(raw.data or {})
-        if isinstance(raw, Message):
-            raw = raw.text
-        if isinstance(raw, dict):
-            return dict(raw)
-        text = str(raw or "").strip()
-        if text.startswith("```"):
-            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
-            text = re.sub(r"\s*```$", "", text)
-        parsed = json.loads(text) if text else {}
-        if not isinstance(parsed, dict):
-            raise ValueError("job_item must be a JSON object")
-        return parsed
-
-    def _positive_int(self, value: Any, default: int) -> int:
-        """Convert a value to a positive int, or return default."""
-        try:
-            parsed = int(value)
-            return parsed if parsed > 0 else default
-        except (TypeError, ValueError):
-            return default
-
-    def _secret_to_str(self, value: Any) -> str:
-        """Convert a Langflow secret value into plain text."""
-        if value is None:
-            return ""
-        if hasattr(value, "get_secret_value"):
-            return str(value.get_secret_value())
-        return str(value)
-
-    def _to_int(self, value: Any) -> int | None:
-        """Convert a value to int, returning None for invalid input."""
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return None
-
-
 
 MIGRATION_PROMPT_TEMPLATE: dict[str, str] = {
     "system_anthropic": "Generate SQL using Oracle 19c syntax. Return only one valid JSON object with ddl_sql, migration_sql, and verification_sql keys. Do not end SQL values with semicolons.",
@@ -1705,6 +1650,9 @@ The target table already exists, so ddl_sql may be an empty string unless a safe
 - Target columns and expressions must follow the target DDL and mapping rules.
 
 {verification_instruction}
+
+[Output constraint]
+- Do not end migration_sql or verification_sql with a semicolon (;).
 
 [JSON shape]
 {{
