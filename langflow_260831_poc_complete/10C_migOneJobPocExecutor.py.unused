@@ -79,7 +79,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                 retry_count = attempt_no - 1
                 elapsed = int(time.perf_counter() - started)
                 final_message = "[POC] DB Migration random simulation passed"
-                self._update_job(db_config, map_id, MIGRATION_PASS, elapsed, retry_count, mark_user_edited=False)
+                self._update_job(db_config, map_id, MIGRATION_PASS, elapsed, retry_count)
                 self._insert_log(db_config, map_id, "POC_FINAL", "INFO", "VERIFY", MIGRATION_PASS, final_message, retry_count, verification_sql)
                 result = self._result(payload, ok=True, status=MIGRATION_PASS, elapsed=elapsed, attempts=attempts)
                 result.update(
@@ -98,7 +98,7 @@ class NewType10CMigOneJobPocExecutor(Component):
 
         retry_count = max(0, max_attempts - 1)
         elapsed = int(time.perf_counter() - started)
-        self._update_job(db_config, map_id, final_status, elapsed, retry_count, mark_user_edited=True)
+        self._update_job(db_config, map_id, final_status, elapsed, retry_count)
         self._insert_log(db_config, map_id, "POC_FINAL", "ERROR", "FINAL", final_status, final_message, retry_count, migration_sql)
         result = self._result(payload, ok=False, status=final_status, elapsed=elapsed, attempts=attempts)
         result.update(
@@ -199,9 +199,9 @@ class NewType10CMigOneJobPocExecutor(Component):
         return f"/* POC DB_MIGRATION verification_sql map_id={map_id} */ SELECT 0 AS DIFF_COUNT FROM DUAL"
 
     def _mark_running(self, db_config: dict[str, Any], map_id: int) -> None:
-        self._update_job(db_config, map_id, "RUNNING", 0, 0, mark_user_edited=False)
+        self._update_job(db_config, map_id, "RUNNING", 0, 0)
 
-    def _update_job(self, db_config: dict[str, Any], map_id: int, status: str, elapsed: int, retry_count: int, *, mark_user_edited: bool) -> None:
+    def _update_job(self, db_config: dict[str, Any], map_id: int, status: str, elapsed: int, retry_count: int) -> None:
         table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
         columns = self._table_columns(db_config, table)
         set_clauses: list[str] = []
@@ -214,9 +214,6 @@ class NewType10CMigOneJobPocExecutor(Component):
         if "RETRY_COUNT" in columns:
             params["retry_count"] = retry_count
             set_clauses.append("RETRY_COUNT = :retry_count")
-        if mark_user_edited and "USER_EDITED" in columns:
-            params["user_edited"] = "Y"
-            set_clauses.append("USER_EDITED = :user_edited")
         if "UPD_TS" in columns:
             set_clauses.append("UPD_TS = CURRENT_TIMESTAMP")
         if not set_clauses:

@@ -19,7 +19,7 @@ except Exception:
 class NewType04CorrectSqlInput(Component):
 
     display_name = "04 Correct SQL Input"
-    description = "POC corrected SQL input branch. Production should set USER_EDITED='Y' and store SQL."
+    description = "Corrected SQL input branch. This component does not update USER_EDITED automatically."
     name = "NewType04CorrectSqlInput"
     icon = "FilePenLine"
 
@@ -33,8 +33,8 @@ class NewType04CorrectSqlInput(Component):
             payload = self._parse_payload(getattr(self, "payload_json", ""))
             correct_sql = payload.get("correct_sql") or ""
             answer = (
-                "Correct SQL 입력 플로우로 분기되었습니다. "
-                "운영 구현에서는 USER_EDITED='Y'로 변경하고 입력 SQL을 대상 컬럼에 저장해야 합니다. "
+                "Correct SQL input branch selected. "
+                "This component only returns the payload and does not update USER_EDITED automatically. "
                 f"sql_length={len(correct_sql)}"
             )
             result = {**payload, "component": "04_correctSqlInput", "answer_text": answer, "final": True}

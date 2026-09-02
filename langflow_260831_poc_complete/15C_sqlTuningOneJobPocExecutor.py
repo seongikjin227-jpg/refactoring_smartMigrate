@@ -251,7 +251,6 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             attempts=attempts,
             partial_values={"TUNED_TO_SQL": tuned_sql, "TUNED_RESULT": tuned_result},
             tuning_guides=tuning_guides,
-            mark_user_edited=True,
         )
 
     def _finish_failure(
@@ -265,7 +264,6 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         attempts: list[dict[str, Any]] | None = None,
         partial_values: dict[str, Any] | None = None,
         tuning_guides: list[dict[str, Any]] | None = None,
-        mark_user_edited: bool = False,
     ) -> dict[str, Any]:
         """Persist a SQL tuning failure using the source status values."""
         failure_attempts = attempts or [{"attempt": 1, "stage": self._failure_stage(status), "status": status, "reason": message}]
@@ -284,8 +282,6 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                     "RETRY_COUNT": self._configured_retry_limit(),
                 }
             )
-            if mark_user_edited:
-                update_values["USER_EDITED"] = "Y"
             self._update_row(
                 db_config,
                 str(job["row_id"]),

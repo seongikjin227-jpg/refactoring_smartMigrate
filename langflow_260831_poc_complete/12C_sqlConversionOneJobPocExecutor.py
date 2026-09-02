@@ -377,7 +377,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         result = final_state.get("result")
         if isinstance(result, dict):
             return result
-        return self._finish_failure(payload, job, db_config, started, final_state.get("last_status") or FAIL_TOBE, final_state.get("last_message") or "SQL conversion failed", final_state.get("attempts") or [], partial_values=final_state, mark_user_edited=True)
+        return self._finish_failure(payload, job, db_config, started, final_state.get("last_status") or FAIL_TOBE, final_state.get("last_message") or "SQL conversion failed", final_state.get("attempts") or [], partial_values=final_state)
 
     # ##############################
     # LangGraph retry callbacks
@@ -536,7 +536,6 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 state.get("last_status") or FAIL_TOBE, state.get("last_message") or "SQL conversion failed.",
                 state.get("attempts") or [],
                 partial_values={"TO_SQL": state.get("to_sql"), "BIND_SQL": state.get("bind_sql"), "BIND_SET": state.get("bind_set"), "TEST_SQL": state.get("test_sql"), "TUNED_FR_SQL": state.get("tuned_fr_sql")},
-                mark_user_edited=True,
             )
             return state
 
@@ -743,7 +742,6 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         message: str,
         attempts: list[dict[str, Any]] | None = None,
         partial_values: dict[str, Any] | None = None,
-        mark_user_edited: bool = False,
     ) -> dict[str, Any]:
         """Persist a SQL conversion failure using the source status values."""
         failure_attempts = attempts or [{"attempt": 1, "stage": self._failure_stage(status), "status": status, "reason": message}]
@@ -760,8 +758,6 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                     "RETRY_COUNT": self._configured_retry_limit(),
                 }
             )
-            if mark_user_edited:
-                update_values["USER_EDITED"] = "Y"
             self._update_row(
                 db_config,
                 str(job["row_id"]),
