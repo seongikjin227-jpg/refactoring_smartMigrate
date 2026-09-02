@@ -1538,8 +1538,8 @@ class NewType10CMigOneJobPocExecutor(Component):
             "db_username": str(item_config.get("db_username") or "").strip(),
             "db_password": str(item_config.get("db_password") or ""),
             "system_schema": str(item_config.get("system_schema") or "").strip(),
-            "source_schema": str(getattr(self, "source_schema", "") or item_config.get("source_schema") or os.getenv("ORACLE_SCHEMA_SRC") or "").strip(),
-            "target_schema": str(getattr(self, "target_schema", "") or item_config.get("target_schema") or os.getenv("ORACLE_SCHEMA_TGT") or "").strip(),
+            "source_schema": str(getattr(self, "source_schema", "") or item_config.get("source_schema") or os.getenv("ORACLE_SCHEMA_SRC") or "SFAMIG").strip(),
+            "target_schema": str(getattr(self, "target_schema", "") or item_config.get("target_schema") or os.getenv("ORACLE_SCHEMA_TGT") or "SFAADM").strip(),
         }
 
     def _llm_config(self, job: dict[str, Any]) -> dict[str, Any]:
@@ -1569,11 +1569,11 @@ class NewType10CMigOneJobPocExecutor(Component):
 
     def _qualify_fr_table(self, table_name: str, db_config: dict[str, Any]) -> str:
         """Return source schema-qualified physical table name."""
-        return self._qualify_domain_table(table_name, db_config.get("source_schema"))
+        return self._qualify_domain_table(table_name, db_config.get("source_schema") or "SFAMIG")
 
     def _qualify_to_table(self, table_name: str, db_config: dict[str, Any]) -> str:
         """Return target schema-qualified physical table name."""
-        return self._qualify_domain_table(table_name, db_config.get("target_schema"))
+        return self._qualify_domain_table(table_name, db_config.get("target_schema") or "SFAADM")
 
     def _qualify_domain_table(self, table_name: str, schema: Any) -> str:
         value = str(table_name or "").strip()
@@ -1582,7 +1582,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         return self._qualify(value, schema)
 
     def _qualify_source_tables_in_sql(self, sql_text: str, db_config: dict[str, Any]) -> str:
-        schema = str(db_config.get("source_schema") or "").strip().upper()
+        schema = str(db_config.get("source_schema") or "SFAMIG").strip().upper()
         if not schema:
             return sql_text
         clean_schema = self._clean_identifier(schema)
@@ -1677,6 +1677,8 @@ The target table already exists, so ddl_sql may be an empty string unless a safe
    - Do not use non-Oracle syntax such as LIMIT.
 4. Schema qualification:
    - Use the exact schema-qualified Source table and Target table values provided below.
+   - Source/from physical tables must be qualified with the SFAMIG schema.
+   - Target/to physical tables must be qualified with the SFAADM schema.
    - Do not remove schema prefixes from physical AS-IS or TO-BE tables.
    - Do not add schema prefixes to DUAL, CTE names, inline view aliases, table aliases, or subquery aliases.
 5. Output:
