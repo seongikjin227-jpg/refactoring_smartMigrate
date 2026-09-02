@@ -146,7 +146,21 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         if not existing_tuned_sql and source_sql:
             update_values["TUNED_TO_SQL"] = source_sql
         self._update_row(db_config, job["row_id"], update_values)
-        self._insert_sql_log(db_config, job, "FORMATTED_SQL", formatted_sql, "SUCCESS", 1, "GENERATE_FORMATTED_SQL")
+        logging.getLogger("smartmigrate.workflow").info(
+            "FORMATTED_SQL generated",
+            extra={
+                "workflow_log": [
+                    f"{job.get('sql_id') or ''} / {job.get('space_nm') or ''}"[:100],
+                    "SQL_FORMATTING",
+                    "FORMATTED_SQL",
+                    "INFO",
+                    "GENERATE_FORMATTED_SQL",
+                    "SUCCESS",
+                    0,
+                    formatted_sql,
+                ]
+            },
+        )
         return self._result(
             payload=payload,
             job=job,
@@ -360,28 +374,6 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                 [row_id],
             )
             conn.commit()
-
-    def _insert_sql_log(
-        self,
-        db_config: dict[str, Any],
-        job: dict[str, Any],
-        sql_kind: str,
-        sql_content: Any,
-        status: str,
-        attempt_no: int | None,
-        stage_name: str,
-        error_message: str | None = None,
-    ) -> None:
-        """Write one SQL formatting log through the SmartMigrate workflow logger."""
-        del db_config
-        map_id = f"{job.get('sql_id') or ''} / {job.get('space_nm') or ''}"[:100]
-        retry_count = max(0, int(attempt_no or 1) - 1)
-        log_level = "ERROR" if str(status or "").upper().startswith("FAIL") else "INFO"
-        detail = str(error_message or f"stage={stage_name} status={status} sql_kind={sql_kind}")
-        event = [map_id, "SQL_FORMATTING", str(sql_kind or "")[:20], log_level, str(stage_name or "")[:50], str(status or "")[:20], retry_count]
-        if sql_content is not None:
-            event.append(str(sql_content))
-        logging.getLogger("smartmigrate.workflow").log(logging.ERROR if log_level == "ERROR" else logging.INFO, detail, extra={"workflow_log": event})
 
     def _status(self, value: Any) -> str:
         """Normalize a status string for comparisons."""

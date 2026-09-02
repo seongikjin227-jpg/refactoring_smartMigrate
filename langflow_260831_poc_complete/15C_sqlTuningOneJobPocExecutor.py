@@ -142,6 +142,8 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
 
         tag_kind = str(payload.get("tag_kind") or job.get("tag_kind") or "").strip().upper()
         attempts: list[dict[str, Any]] = []
+        map_id = f"{job.get('sql_id') or ''} / {job.get('space_nm') or ''}"[:100]
+        logger = logging.getLogger("smartmigrate.workflow")
 
         tuned_sql = str(payload.get("tuned_to_sql") or job.get("tuned_to_sql") or "").strip()
         tuned_result = str(payload.get("tuned_result") or job.get("tuned_result") or "").strip()
@@ -160,13 +162,13 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                     last_status = FAIL_TUNED
                     last_message = "[POC] tuning rule application failed"
                     attempts.append({"attempt": attempt_no, "stage": "APPLY_TUNING_RULES", "status": last_status, "reason": last_message})
-                    self._insert_sql_log(db_config, job, "TUNED_TO_SQL", None, last_status, attempt_no, "APPLY_TUNING_RULES", last_message)
+                    logger.error(last_message, extra={"workflow_log": [map_id, "SQL_TUNING", "TUNED_TO_SQL", "ERROR", "APPLY_TUNING_RULES", last_status, attempt_no - 1]})
                     resume_stage = "APPLY_TUNING_RULES"
                     continue
 
                 tuned_sql, tuned_result = self._build_poc_tuned_sql(to_sql)
                 tuning_guides = self._poc_tuning_guides(tag_kind, tuned_result)
-                self._insert_sql_log(db_config, job, "TUNED_TO_SQL", tuned_sql, "SUCCESS", attempt_no, "APPLY_TUNING_RULES")
+                logger.info("TUNED_TO_SQL generated", extra={"workflow_log": [map_id, "SQL_TUNING", "TUNED_TO_SQL", "INFO", "APPLY_TUNING_RULES", "SUCCESS", attempt_no - 1, tuned_sql]})
                 self._update_row(
                     db_config,
                     job["row_id"],
@@ -198,11 +200,11 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                     last_status = FAIL_TEST
                     last_message = "[POC] tuned SQL validation failed"
                     attempts.append({"attempt": attempt_no, "stage": "VALIDATE_TUNED_SQL", "status": last_status, "reason": last_message})
-                    self._insert_sql_log(db_config, job, "TUNED_TEST_SQL", tuned_sql, last_status, attempt_no, "VALIDATE_TUNED_SQL", last_message)
+                    logger.error(last_message, extra={"workflow_log": [map_id, "SQL_TUNING", "TUNED_TEST_SQL", "ERROR", "VALIDATE_TUNED_SQL", last_status, attempt_no - 1, tuned_sql]})
                     resume_stage = "VALIDATE_TUNED_SQL"
                     continue
                 attempts.append({"attempt": attempt_no, "stage": "VALIDATE_TUNED_SQL", "status": TUNING_PASS})
-                self._insert_sql_log(db_config, job, "TUNED_TEST_SQL", tuned_sql, "PASS", attempt_no, "VALIDATE_TUNED_SQL")
+                logger.info("TUNED_TEST_SQL validated", extra={"workflow_log": [map_id, "SQL_TUNING", "TUNED_TEST_SQL", "INFO", "VALIDATE_TUNED_SQL", "PASS", attempt_no - 1, tuned_sql]})
             else:
                 reason = "NO_TUNING" if tuned_sql.strip() == to_sql.strip() else f"TAG_KIND:{tag_kind or 'UNKNOWN'}"
                 attempts.append({"attempt": attempt_no, "stage": "SKIP_TUNED_VALIDATION", "status": TUNING_PASS, "reason": reason})
@@ -289,15 +291,20 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                 str(job["row_id"]),
                 update_values,
             )
-            self._insert_sql_log(
-                db_config,
-                job,
-                "SQL_TUNING",
-                (partial_values or {}).get("TUNED_TO_SQL"),
-                status,
-                len(failure_attempts) or 1,
-                self._failure_stage(status),
+            logging.getLogger("smartmigrate.workflow").error(
                 message,
+                extra={
+                    "workflow_log": [
+                        f"{job.get('sql_id') or ''} / {job.get('space_nm') or ''}"[:100],
+                        "SQL_TUNING",
+                        "SQL_TUNING",
+                        "ERROR",
+                        self._failure_stage(status),
+                        status,
+                        max(0, (len(failure_attempts) or 1) - 1),
+                        (partial_values or {}).get("TUNED_TO_SQL") or "",
+                    ]
+                },
             )
         return self._result(
             payload=payload,
@@ -531,28 +538,6 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                 [row_id],
             )
             conn.commit()
-
-    def _insert_sql_log(
-        self,
-        db_config: dict[str, Any],
-        job: dict[str, Any],
-        sql_kind: str,
-        sql_content: Any,
-        status: str,
-        attempt_no: int | None,
-        stage_name: str,
-        error_message: str | None = None,
-    ) -> None:
-        """Write one SQL tuning log through the SmartMigrate workflow logger."""
-        del db_config
-        map_id = f"{job.get('sql_id') or ''} / {job.get('space_nm') or ''}"[:100]
-        retry_count = max(0, int(attempt_no or 1) - 1)
-        log_level = "ERROR" if str(status or "").upper().startswith("FAIL") else "INFO"
-        detail = str(error_message or f"stage={stage_name} status={status} sql_kind={sql_kind}")
-        event = [map_id, "SQL_TUNING", str(sql_kind or "")[:20], log_level, str(stage_name or "")[:50], str(status or "")[:20], retry_count]
-        if sql_content is not None:
-            event.append(str(sql_content))
-        logging.getLogger("smartmigrate.workflow").log(logging.ERROR if log_level == "ERROR" else logging.INFO, detail, extra={"workflow_log": event})
 
     def _status(self, value: Any) -> str:
         """Normalize a status string for comparisons."""

@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import logging
 import json
-import random
+import os
 import re
 import time
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
+import urllib.request
 
 from lfx.custom.custom_component.component import Component
-from lfx.io import IntInput, MessageTextInput, Output
+from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
 from lfx.schema.data import Data
 from lfx.schema.message import Message
 
@@ -24,37 +26,61 @@ FAIL_TOBE = "FAIL-TOBE"
 FAIL_BIND = "FAIL-BIND"
 FAIL_TEST = "FAIL-TEST"
 SQL_LENGTH_SHORT_MAX = 5000
-POC_FAIL_PERCENT = 50
+RAG_SEARCH = "SEARCH"
+RAG_GENERAL = "GENERAL"
+
+
+class _PromptValues(dict):
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
 
 
 class NewType12CSqlConversionOneJobPocExecutor(Component):
 
-    display_name = "12C SQL Conversion One Job POC Executor"
-    description = "Runs one SQL Conversion POC job with DB status updates and downstream tuning eligibility."
+    display_name = "12C SQL Conversion One Job Executor"
+    description = "Runs one SQL Conversion job with mapping rules, RAG retrieval, bind validation, and DB status updates."
     name = "NewType12CSqlConversionOneJobPocExecutor"
     icon = "FileCode"
 
     inputs = [
         DataInput(name="job_item", display_name="Job Item", required=True),
         IntInput(name="max_retry", display_name="Max Retry", value=2, required=False),
+        StrInput(name="source_schema", display_name="Source Schema", required=False),
+        StrInput(name="target_schema", display_name="Target Schema", required=False),
+        StrInput(name="llm_base_url", display_name="LLM Base URL", required=False),
+        SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=False),
+        StrInput(name="llm_provider", display_name="LLM Provider", required=False),
+        StrInput(name="llm_model", display_name="LLM Model", value="GLM-5.1", required=False),
+        StrInput(name="llm_fallback_models", display_name="LLM Fallback Models", value="GLM-5.1,Qwen3.6-35B-A3B,Kimi-K2.5", required=False),
+        IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=4096, required=False),
+        IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=900, required=False),
+        StrInput(name="rag_embed_base_url", display_name="RAG Embedding Base URL", required=False),
+        SecretStrInput(name="rag_embed_api_key", display_name="RAG Embedding API Key", required=False),
+        StrInput(name="rag_embed_model", display_name="RAG Embedding Model", value="BAAI/bge-m3", required=False),
+        IntInput(name="rag_embed_timeout_seconds", display_name="RAG Embedding Timeout Seconds", value=30, required=False),
     ]
 
     outputs = [
         Output(display_name="Job Result", name="job_result", method="run_job", types=["Data"]),
     ]
 
+    # ##############################
+    # Entry point
+    # ##############################
+
     def run_job(self) -> Data:
-        logging.getLogger("smartmigrate.workflow").info("before run_job", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "INFO", "RUN_JOB", "START", 0]})
+        logger = logging.getLogger("smartmigrate.workflow")
+        logger.info("before run_job", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "INFO", "RUN_JOB", "START", 0]})
         try:
-            """Run one SQL conversion job and return a payload for 15C."""
+            self._load_env_files()
             started = time.perf_counter()
             payload = self._parse_payload(getattr(self, "job_item", ""))
             self._payload_max_retry = payload.get("max_retry") if isinstance(payload, dict) else None
-            if not self._should_run_conversion(payload):
+            if self._job_name(payload) != "conversion":
                 result = self._pass_through(payload, started, "12C skipped because job_name is not conversion.")
                 self.status = result
                 __log_result = Data(data=result)
-                logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "INFO", "RUN_JOB", "END", 0]})
+                logger.info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "INFO", "RUN_JOB", "END", 0]})
                 return __log_result
             db_config = self._db_config(payload)
             self._require_db_config(db_config)
@@ -65,7 +91,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                     result = self._prerequisite_blocked(payload, started, prereq)
                     self.status = result
                     __log_result = Data(data=result)
-                    logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "INFO", "RUN_JOB", "END", 0]})
+                    logger.info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "INFO", "RUN_JOB", "END", 0]})
                     return __log_result
                 job = self._load_sql_job(db_config, payload)
                 self._increment_batch_count(db_config, str(job["row_id"]))
@@ -74,10 +100,10 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 result = self._finish_failure(payload, job, db_config, started, FAIL_TOBE, str(exc))
             self.status = result
             __log_result = Data(data=result)
-            logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "INFO", "RUN_JOB", "END", 0]})
+            logger.info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "INFO", "RUN_JOB", "END", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error run_job: {exc}", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "ERROR", "RUN_JOB", "ERROR", 0]})
+            logger.error(f"error run_job: {exc}", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "ERROR", "RUN_JOB", "ERROR", 0]})
             raise
 
     def _prerequisite_blocked(self, payload: dict[str, Any], started: float, prereq: dict[str, Any]) -> dict[str, Any]:
@@ -109,9 +135,6 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "db_status_updated": False,
             "next_node": "12D_sqlConversionIterationDashboard",
         }
-
-    def _should_run_conversion(self, payload: dict[str, Any]) -> bool:
-        return self._job_name(payload) == "conversion"
 
     def _job_name(self, payload: dict[str, Any]) -> str:
         value = str(payload.get("job_name") or "").strip().lower()
@@ -159,7 +182,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         db_config: dict[str, Any],
         started: float,
     ) -> dict[str, Any]:
-        """Apply DB-driven conversion branches for one NEXT_SQL_INFO row."""
+        """Run TO-BE generation, bind extraction, and SELECT validation for one SQL job."""
         source_sql = self._source_sql(job)
         if not source_sql.strip():
             return self._finish_failure(payload, job, db_config, started, FAIL_TOBE, "FR_SQL/EDIT_FR_SQL is empty")
@@ -174,9 +197,17 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 "TARGET_TABLE is empty. Cannot retrieve mapping rules for SQL conversion.",
             )
 
+        map_id = f"{job.get('sql_id') or ''} / {job.get('space_nm') or ''}"[:100]
         tag_kind = str(job.get("tag_kind") or "").strip().upper()
         attempts: list[dict[str, Any]] = []
-        source_for_conversion, tuned_fr_sql, sql_length = self._prepare_conversion_source(job, db_config, source_sql)
+        llm_config = self._llm_config(payload)
+        rag_config = self._rag_config()
+        mapping_rules = self._load_mapping_rules(db_config, target_table)
+        logger = logging.getLogger("smartmigrate.workflow")
+
+        source_for_conversion, tuned_fr_sql, sql_length = self._prepare_conversion_source(
+            job, db_config, llm_config, rag_config, source_sql, target_table, map_id
+        )
         max_retry = self._max_retry()
         last_status = FAIL_TOBE
         last_message = "SQL conversion failed."
@@ -187,18 +218,20 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         resume_stage = self._initial_resume_stage(job, tag_kind, to_sql, bind_sql)
 
         for attempt_no in range(1, max_retry + 1):
+            retry_count = attempt_no - 1
+            retry_context = "" if attempt_no == 1 else f"RETRY_CONTEXT: attempt={attempt_no}/{max_retry}; last_error={last_message}"
             if resume_stage == "GENERATE_TOBE_SQL":
-                if self._poc_stage_failed(job, attempt_no, "GENERATE_TOBE_SQL"):
-                    last_status = FAIL_TOBE
-                    last_message = "[POC] TO_SQL generation failed"
-                    attempts.append({"attempt": attempt_no, "stage": "GENERATE_TOBE_SQL", "status": last_status, "reason": last_message})
-                    self._insert_sql_log(db_config, job, "TOBE_SQL", None, last_status, attempt_no, "GENERATE_TOBE_SQL", last_message)
-                    resume_stage = "GENERATE_TOBE_SQL"
+                try:
+                    to_sql = self._generate_tobe_sql(
+                        job, db_config, llm_config, rag_config, source_for_conversion, mapping_rules, target_table, retry_context, retry_count
+                    )
+                except Exception as exc:
+                    last_status, last_message, resume_stage = FAIL_TOBE, str(exc), "GENERATE_TOBE_SQL"
+                    attempts.append({"attempt": attempt_no, "stage": resume_stage, "status": last_status, "reason": last_message})
+                    logger.error(last_message, extra={"workflow_log": [map_id, "SQL_CONVERSION", "TOBE_SQL", "ERROR", resume_stage, last_status, retry_count]})
                     continue
-
-                to_sql = self._build_poc_to_sql(job, source_for_conversion)
                 attempts.append({"attempt": attempt_no, "stage": "GENERATE_TOBE_SQL", "status": CONVERSION_PASS, "sql_length": len(to_sql)})
-                self._insert_sql_log(db_config, job, "TOBE_SQL", to_sql, "SUCCESS", attempt_no, "GENERATE_TOBE_SQL")
+                logger.info("TOBE_SQL generated", extra={"workflow_log": [map_id, "SQL_CONVERSION", "TOBE_SQL", "INFO", "GENERATE_TOBE_SQL", "SUCCESS", retry_count, to_sql]})
                 generated_values = {"TO_SQL": to_sql}
                 if tuned_fr_sql is not None:
                     generated_values["TUNED_FR_SQL"] = tuned_fr_sql
@@ -209,42 +242,37 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
 
             if tag_kind == "SELECT":
                 if resume_stage == "GENERATE_BIND_SQL":
-                    if self._poc_stage_failed(job, attempt_no, "GENERATE_BIND_SQL"):
-                        last_status = FAIL_BIND
-                        last_message = "[POC] bind SQL generation failed"
-                        attempts.append({"attempt": attempt_no, "stage": "GENERATE_BIND_SQL", "status": last_status, "reason": last_message})
-                        self._insert_sql_log(db_config, job, "BIND_SQL", None, last_status, attempt_no, "GENERATE_BIND_SQL", last_message)
-                        resume_stage = "GENERATE_BIND_SQL"
+                    try:
+                        bind_sql, bind_set = self._generate_bind_payload(
+                            job, db_config, llm_config, source_for_conversion, mapping_rules, retry_context, retry_count
+                        )
+                    except Exception as exc:
+                        last_status, last_message, resume_stage = FAIL_BIND, str(exc), "GENERATE_BIND_SQL"
+                        attempts.append({"attempt": attempt_no, "stage": resume_stage, "status": last_status, "reason": last_message})
+                        logger.error(last_message, extra={"workflow_log": [map_id, "SQL_CONVERSION", "BIND_SQL", "ERROR", resume_stage, last_status, retry_count, bind_sql or ""]})
                         continue
-
-                    bind_status, bind_sql, bind_set = self._build_poc_bind_payload(job, source_for_conversion, to_sql)
-                    attempts.append({"attempt": attempt_no, "stage": "GENERATE_BIND_SQL", "status": bind_status})
-                    if bind_status != CONVERSION_PASS:
-                        last_status = FAIL_BIND
-                        last_message = "Bind SQL generation failed"
-                        resume_stage = "GENERATE_BIND_SQL"
-                        self._insert_sql_log(db_config, job, "BIND_SQL", bind_sql, last_status, attempt_no, "GENERATE_BIND_SQL", last_message)
-                        continue
-                    self._insert_sql_log(db_config, job, "BIND_SQL", bind_sql, "SUCCESS", attempt_no, "GENERATE_BIND_SQL")
+                    attempts.append({"attempt": attempt_no, "stage": "GENERATE_BIND_SQL", "status": CONVERSION_PASS})
+                    logger.info("BIND_SQL generated", extra={"workflow_log": [map_id, "SQL_CONVERSION", "BIND_SQL", "INFO", "GENERATE_BIND_SQL", "SUCCESS", retry_count, bind_sql]})
                     self._update_row(db_config, job["row_id"], {"BIND_SQL": bind_sql, "BIND_SET": bind_set})
                     resume_stage = "GENERATE_TEST_SQL"
                 elif resume_stage == "GENERATE_TEST_SQL":
                     attempts.append({"attempt": attempt_no, "stage": "REUSE_BIND_SQL", "status": CONVERSION_PASS, "reason": "resume_from=GENERATE_TEST_SQL"})
 
-                test_sql = self._build_poc_test_sql(job)
-                attempts.append({"attempt": attempt_no, "stage": "GENERATE_TEST_SQL", "status": CONVERSION_PASS})
-                self._insert_sql_log(db_config, job, "TEST_SQL", test_sql, "SUCCESS", attempt_no, "GENERATE_TEST_SQL")
-                self._update_row(db_config, job["row_id"], {"TEST_SQL": test_sql})
-
-                if resume_stage == "GENERATE_TEST_SQL" and self._poc_stage_failed(job, attempt_no, "VALIDATE_TEST_SQL"):
-                    last_status = FAIL_TEST
-                    last_message = "[POC] test SQL validation failed"
+                try:
+                    test_sql = self._generate_test_sql(
+                        job, db_config, llm_config, source_for_conversion, to_sql, bind_set, retry_context, retry_count
+                    )
+                    self._update_row(db_config, job["row_id"], {"TEST_SQL": test_sql})
+                    test_rows = self._execute_test_query(db_config, test_sql)
+                    self._evaluate_test_rows(test_rows)
+                except Exception as exc:
+                    last_status, last_message, resume_stage = FAIL_TEST, str(exc), "GENERATE_TEST_SQL"
                     attempts.append({"attempt": attempt_no, "stage": "VALIDATE_TEST_SQL", "status": last_status, "reason": last_message})
-                    self._insert_sql_log(db_config, job, "TEST_SQL", test_sql, last_status, attempt_no, "VALIDATE_TEST_SQL", last_message)
-                    resume_stage = "GENERATE_TEST_SQL"
+                    logger.error(last_message, extra={"workflow_log": [map_id, "SQL_CONVERSION", "TEST_SQL", "ERROR", "VALIDATE_TEST_SQL", last_status, retry_count, test_sql or ""]})
                     continue
-                attempts.append({"attempt": attempt_no, "stage": "VALIDATE_TEST_SQL", "status": CONVERSION_PASS})
-                self._insert_sql_log(db_config, job, "TEST_SQL", test_sql, "PASS", attempt_no, "VALIDATE_TEST_SQL")
+                attempts.append({"attempt": attempt_no, "stage": "GENERATE_TEST_SQL", "status": CONVERSION_PASS})
+                attempts.append({"attempt": attempt_no, "stage": "VALIDATE_TEST_SQL", "status": CONVERSION_PASS, "rows": len(test_rows)})
+                logger.info("TEST_SQL validated", extra={"workflow_log": [map_id, "SQL_CONVERSION", "TEST_SQL", "INFO", "VALIDATE_TEST_SQL", "PASS", retry_count, test_sql]})
             else:
                 bind_sql = ""
                 bind_set = None
@@ -311,69 +339,105 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             mark_user_edited=True,
         )
 
-    def _prepare_conversion_source(
-        self,
-        job: dict[str, Any],
-        db_config: dict[str, Any],
-        source_sql: str,
-    ) -> tuple[str, str | None, str]:
-        """Choose the SQL that feeds TO_SQL generation and store LONG-SQL pretuning output."""
+    def _prepare_conversion_source(self, job: dict[str, Any], db_config: dict[str, Any], llm_config: dict[str, Any], rag_config: dict[str, Any], source_sql: str, target_table: str, map_id: str) -> tuple[str, str | None, str]:
+        """Use saved TUNED_FR_SQL or generate it for long source SQL before conversion."""
         saved_tuned_fr_sql = str(job.get("tuned_fr_sql") or "").strip()
         if saved_tuned_fr_sql:
             return saved_tuned_fr_sql, saved_tuned_fr_sql, self._sql_length_kind(source_sql)
 
         sql_length = self._sql_length_kind(source_sql)
-        if sql_length != "LONG":
+        pretuning_enabled = str(os.getenv("BIND_SQL_PRETUNING_ENABLED", "false")).strip().lower() == "true"
+        pretuning_min_length = self._positive_int(os.getenv("BIND_SQL_PRETUNING_MIN_LENGTH"), 8000)
+        if not pretuning_enabled or (sql_length != "LONG" and len(source_sql) < pretuning_min_length):
             return source_sql, None, sql_length
 
-        # Future LLM/RAG section:
-        # - Load SQL_TUNING GENERAL/SEARCH rules.
-        # - Generate bind-friendly AS-IS SQL through bind_tuned_sql_prompt.json.
-        # - Store the result in NEXT_SQL_INFO.TUNED_FR_SQL and use it for TO_SQL generation.
-        tuned_fr_sql = self._build_poc_tuned_fr_sql(source_sql)
+        source_tables = self._source_tables(target_table)
+        tuning_rules = self._load_rag_general_rules(db_config, "SQL_TUNING", source_tables)
+        tuning_examples = self._retrieve_rag_examples(db_config, rag_config, "SQL_TUNING", source_sql, source_tables)
+        prompt = self._build_prompt(
+            "bind_tuned_sql_prompt.json",
+            current_from_sql=source_sql,
+            universal_tuning_rules=json.dumps(tuning_rules, ensure_ascii=False, indent=2),
+            tuning_examples_json=self._serialize_tuning_examples(tuning_examples),
+            last_error="None",
+        )
+        self._log_prompt(map_id, "TUNE_FR_SQL_PROMPT", prompt, 0)
+        tuned_fr_sql, _ = self._call_llm_text(prompt, llm_config)
+        tuned_fr_sql = self._clean_generated_sql(tuned_fr_sql)
+        if not tuned_fr_sql:
+            raise ValueError("TUNED_FR_SQL generation returned empty SQL")
         self._update_row(db_config, job["row_id"], {"TUNED_FR_SQL": tuned_fr_sql})
+        self._increment_rag_hits(db_config, tuning_examples)
+        logging.getLogger("smartmigrate.workflow").info(
+            "TUNED_FR_SQL generated",
+            extra={"workflow_log": [map_id, "SQL_CONVERSION", "TUNED_FR_SQL", "INFO", "TUNE_FR_SQL", "SUCCESS", 0, tuned_fr_sql]},
+        )
         return tuned_fr_sql, tuned_fr_sql, sql_length
 
-    def _build_poc_to_sql(self, job: dict[str, Any], source_sql: str) -> str:
-        """Create a deterministic TO_SQL placeholder until the LLM node is connected."""
+    def _generate_tobe_sql(self, job: dict[str, Any], db_config: dict[str, Any], llm_config: dict[str, Any], rag_config: dict[str, Any], source_sql: str, mapping_rules: list[dict[str, str]], target_table: str, last_error: str, retry_count: int) -> str:
         if str(job.get("user_edited") or "").strip().upper() == "Y" and str(job.get("to_sql") or "").strip():
-            return str(job.get("to_sql") or "")
+            return str(job["to_sql"])
+        source_tables = self._source_tables(target_table)
+        general_rules = self._load_rag_general_rules(db_config, "SQL_CONVERSION", source_tables)
+        examples = self._retrieve_rag_examples(db_config, rag_config, "SQL_CONVERSION", source_sql, source_tables)
+        prompt = self._build_prompt(
+            "tobe_sql_prompt.json",
+            from_sql=source_sql,
+            mapping_schema_text=self._mapping_prompt_text(mapping_rules, general_rules, examples, db_config),
+            target_schema=db_config["target_schema"],
+            correct_sql_hint_json="[]",
+            last_error=last_error or "None",
+        )
+        self._log_prompt(f"{job.get('sql_id')} / {job.get('space_nm')}"[:100], "TOBE_SQL_PROMPT", prompt, retry_count)
+        sql, _ = self._call_llm_text(prompt, llm_config)
+        sql = self._clean_generated_sql(sql)
+        if not sql:
+            raise ValueError("TO_SQL generation returned empty SQL")
+        self._increment_rag_hits(db_config, examples)
+        return sql
 
-        # Future LLM/RAG section:
-        # - Load mapping rules and SQL_CONVERSION RAG examples.
-        # - Generate target-dialect SQL from source_sql.
-        # - On generation failure, persist FAIL-TOBE.
-        return f"/* POC SQL_CONVERSION: TO_SQL generation node pending */\n{source_sql.strip()}"
-
-    def _build_poc_bind_payload(self, job: dict[str, Any], source_sql: str, to_sql: str) -> tuple[str, str, str | None]:
-        """Build bind SQL metadata for SELECT validation."""
+    def _generate_bind_payload(self, job: dict[str, Any], db_config: dict[str, Any], llm_config: dict[str, Any], source_sql: str, mapping_rules: list[dict[str, str]], last_error: str, retry_count: int) -> tuple[str, str | None]:
         if str(job.get("user_edited") or "").strip().upper() == "Y" and str(job.get("bind_sql") or "").strip():
-            bind_sql = str(job.get("bind_sql") or "")
-            bind_set = str(job.get("bind_set") or "") or None
-            return CONVERSION_PASS, bind_sql, bind_set
+            bind_sql = str(job["bind_sql"])
+        else:
+            if not self._bind_names(source_sql):
+                return "", None
+            prompt = self._build_prompt(
+                "bind_sql_prompt.json",
+                from_sql=source_sql,
+                from_schema=db_config["source_schema"],
+                asis_source_filter_conditions=self._source_filter_prompt_text(mapping_rules),
+                correct_sql_hint_json="[]",
+                last_error=last_error or "None",
+            )
+            self._log_prompt(f"{job.get('sql_id')} / {job.get('space_nm')}"[:100], "BIND_SQL_PROMPT", prompt, retry_count)
+            bind_sql, _ = self._call_llm_text(prompt, llm_config)
+            bind_sql = self._clean_generated_sql(bind_sql)
+            if not bind_sql:
+                raise ValueError("BIND_SQL generation returned empty SQL")
+        bind_sets = self._build_bind_sets(self._execute_binding_query(db_config, bind_sql))
+        return bind_sql, json.dumps(bind_sets, ensure_ascii=False, default=str)
 
-        bind_names = self._bind_names(f"{source_sql}\n{to_sql}")
-        if not bind_names:
-            return CONVERSION_PASS, "", None
-
-        # Future LLM/RAG section:
-        # - Generate BIND_SQL.
-        # - Execute BIND_SQL and build up to three bind sets.
-        columns = ", ".join(f"NULL AS {name}" for name in bind_names)
-        bind_sql = f"SELECT {columns} FROM DUAL"
-        bind_set = json.dumps([{name: None for name in bind_names}], ensure_ascii=False)
-        return CONVERSION_PASS, bind_sql, bind_set
-
-    def _build_poc_test_sql(self, job: dict[str, Any]) -> str:
-        """Build a placeholder comparison SQL for SELECT validation."""
+    def _generate_test_sql(self, job: dict[str, Any], db_config: dict[str, Any], llm_config: dict[str, Any], source_sql: str, to_sql: str, bind_set: str | None, last_error: str, retry_count: int) -> str:
         if str(job.get("user_edited") or "").strip().upper() == "Y" and str(job.get("test_sql") or "").strip():
-            return str(job.get("test_sql") or "")
-
-        # Future LLM/RAG section:
-        # - Generate TEST_SQL.
-        # - Execute TEST_SQL and compare AS-IS/TO-BE row counts.
-        # - On validation failure, persist FAIL-TEST and retry.
-        return "SELECT 'POC' AS CHECK_NAME, 1 AS FROM_COUNT, 1 AS TO_COUNT FROM DUAL"
+            return str(job["test_sql"])
+        prompt_name = "test_sql_final_retry_prompt.json" if retry_count >= self._configured_retry_limit() else "test_sql_prompt.json"
+        prompt = self._build_prompt(
+            prompt_name,
+            from_sql=source_sql,
+            tobe_sql=to_sql,
+            from_schema=db_config["source_schema"],
+            tobe_schema=db_config["target_schema"],
+            bind_set_json=bind_set or "[{}]",
+            correct_sql_hint_json="[]",
+            last_error=last_error or "None",
+        )
+        self._log_prompt(f"{job.get('sql_id')} / {job.get('space_nm')}"[:100], "TEST_SQL_PROMPT", prompt, retry_count)
+        test_sql, _ = self._call_llm_text(prompt, llm_config)
+        test_sql = self._clean_generated_sql(test_sql)
+        if not test_sql:
+            raise ValueError("TEST_SQL generation returned empty SQL")
+        return test_sql
 
     def _finish_failure(
         self,
@@ -409,15 +473,21 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 str(job["row_id"]),
                 update_values,
             )
-            self._insert_sql_log(
-                db_config,
-                job,
-                "SQL_CONVERSION",
-                (partial_values or {}).get("TO_SQL"),
-                status,
-                self._retry_count(failure_attempts) + 1,
-                self._failure_stage(status),
+            retry_count = self._retry_count(failure_attempts)
+            logging.getLogger("smartmigrate.workflow").error(
                 message,
+                extra={
+                    "workflow_log": [
+                        f"{job.get('sql_id') or ''} / {job.get('space_nm') or ''}"[:100],
+                        "SQL_CONVERSION",
+                        "SQL_CONVERSION",
+                        "ERROR",
+                        self._failure_stage(status),
+                        status,
+                        retry_count,
+                        (partial_values or {}).get("TO_SQL") or "",
+                    ]
+                },
             )
         return self._result(
             payload=payload,
@@ -615,28 +685,6 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             )
             conn.commit()
 
-    def _insert_sql_log(
-        self,
-        db_config: dict[str, Any],
-        job: dict[str, Any],
-        sql_kind: str,
-        sql_content: Any,
-        status: str,
-        attempt_no: int | None,
-        stage_name: str,
-        error_message: str | None = None,
-    ) -> None:
-        """Write one SQL conversion log through the SmartMigrate workflow logger."""
-        del db_config
-        map_id = f"{job.get('sql_id') or ''} / {job.get('space_nm') or ''}"[:100]
-        retry_count = max(0, int(attempt_no or 1) - 1)
-        log_level = "ERROR" if str(status or "").upper().startswith("FAIL") else "INFO"
-        detail = str(error_message or f"stage={stage_name} status={status} sql_kind={sql_kind}")
-        event = [map_id, "SQL_CONVERSION", str(sql_kind or "")[:20], log_level, str(stage_name or "")[:50], str(status or "")[:20], retry_count]
-        if sql_content is not None:
-            event.append(str(sql_content))
-        logging.getLogger("smartmigrate.workflow").log(logging.ERROR if log_level == "ERROR" else logging.INFO, detail, extra={"workflow_log": event})
-
     def _source_sql(self, job: dict[str, Any]) -> str:
         """Return EDIT_FR_SQL first, otherwise FR_SQL."""
         edited = str(job.get("edit_fr_sql") or "").strip()
@@ -646,33 +694,433 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         """Classify runtime SQL length using the as-is 5000 character threshold."""
         return "LONG" if len(str(sql_text or "")) > SQL_LENGTH_SHORT_MAX else "SHORT"
 
-    def _build_poc_tuned_fr_sql(self, source_sql: str) -> str:
-        """Create a placeholder TUNED_FR_SQL for the LONG SQL branch."""
-        return f"/* POC SQL_TUNING pretune before conversion; RAG node pending */\n{source_sql.strip()}"
-
     def _bind_names(self, sql_text: str) -> list[str]:
-        """Extract Oracle bind parameter names."""
-        names = []
-        for match in re.findall(r":([A-Za-z][A-Za-z0-9_]*)", sql_text or ""):
-            if match not in names:
-                names.append(match)
+        """Extract MyBatis bind names, including foreach collections and dynamic conditions."""
+        names: list[str] = []
+        seen: set[str] = set()
+
+        def add(token: str) -> None:
+            name = re.split(r"[,\s?:=!><+\-*/()\[]", str(token or "").strip(), maxsplit=1)[0].split(".")[-1]
+            if name and name not in seen:
+                names.append(name)
+                seen.add(name)
+
+        sql_without_foreach = str(sql_text or "")
+        for match in re.finditer(r"<foreach\b([^>]*)>.*?</\s*foreach\s*>", sql_without_foreach, flags=re.I | re.S):
+            collection = re.search(r"\bcollection\s*=\s*['\"]([^'\"]+)['\"]", match.group(1) or "", flags=re.I)
+            if collection:
+                add(collection.group(1))
+            sql_without_foreach = sql_without_foreach.replace(match.group(0), " ")
+        for match in re.finditer(r"[#$]\{\s*([^}]+?)\s*\}", sql_without_foreach):
+            add(match.group(1))
+        for match in re.finditer(r"<(?:if|when)\b[^>]*\btest\s*=\s*['\"]([^'\"]+)['\"][^>]*>", sql_without_foreach, flags=re.I | re.S):
+            condition = re.sub(r"'[^']*'|\"[^\"]*\"", " ", match.group(1))
+            for name in re.findall(r"\b([A-Za-z_][A-Za-z0-9_.]*)\b", condition):
+                if name.lower() not in {"and", "or", "not", "null", "true", "false", "eq", "ne", "gt", "ge", "lt", "le", "empty", "instanceof", "new", "in"}:
+                    add(name)
         return names
 
-    def _poc_stage_failed(self, job: dict[str, Any], attempt: int, stage: str) -> bool:
-        """Return a deterministic POC failure decision for one conversion stage."""
-        probability = self._fail_probability(attempt, stage)
-        if probability <= 0:
-            return False
-        seed = f"SQL_CONVERSION:{job.get('space_nm')}:{job.get('sql_id')}:{attempt}:{stage}"
-        return random.Random(seed).random() < probability
+    # ##############################
+    # Mapping rules and RAG retrieval
+    # ##############################
 
-    def _fail_probability(self, attempt: int, stage: str) -> float:
-        """Return the fixed POC failure probability for each retry attempt."""
-        base = max(0, min(100, POC_FAIL_PERCENT)) / 100
-        return base if stage in {"GENERATE_TOBE_SQL", "GENERATE_BIND_SQL", "VALIDATE_TEST_SQL"} else 0.0
+    def _load_mapping_rules(self, db_config: dict[str, Any], target_table: str) -> list[dict[str, str]]:
+        map_table = self._qualify(os.getenv("MAPPING_RULE_TABLE", "NEXT_MIG_INFO"), db_config.get("system_schema"))
+        detail_table = self._qualify(os.getenv("MAPPING_RULE_DETAIL_TABLE", "NEXT_MIG_INFO_DTL"), db_config.get("system_schema"))
+        columns = self._table_columns(db_config, map_table)
+        description_expr = "M.DESCRIPTION" if "DESCRIPTION" in columns else "CAST(NULL AS VARCHAR2(4000))"
+        condition_expr = "M.CONDITION" if "CONDITION" in columns else "CAST(NULL AS VARCHAR2(4000))"
+        query = f"""
+            SELECT M.MAP_TYPE, M.FR_TABLE, D.FR_COL, M.TO_TABLE, D.TO_COL,
+                   {description_expr}, {condition_expr}
+              FROM {map_table} M
+              JOIN {detail_table} D ON M.MAP_ID = D.MAP_ID
+             WHERE UPPER(TRIM(M.STATUS)) = 'PASS'
+             ORDER BY M.MAP_ID, D.MAP_DTL
+        """
+        target_tables = self._source_tables(target_table)
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(query)
+            rules = [
+                {
+                    "map_type": self._lob_to_str(row[0]).strip().upper(), "fr_table": self._lob_to_str(row[1]).strip(),
+                    "fr_col": self._lob_to_str(row[2]).strip(), "to_table": self._lob_to_str(row[3]).strip(),
+                    "to_col": self._lob_to_str(row[4]).strip(), "description": self._lob_to_str(row[5]).strip(),
+                    "condition": self._lob_to_str(row[6]).strip(),
+                }
+                for row in cur.fetchall()
+            ]
+        if not target_tables:
+            return rules
+        return [rule for rule in rules if self._table_matches(rule["fr_table"], target_tables)]
+
+    def _load_rag_general_rules(self, db_config: dict[str, Any], category: str, source_tables: set[str]) -> list[dict[str, Any]]:
+        return self._load_rag_rules(db_config, category, RAG_GENERAL, source_tables)
+
+    def _retrieve_rag_examples(self, db_config: dict[str, Any], rag_config: dict[str, Any], category: str, sql_text: str, source_tables: set[str]) -> list[dict[str, Any]]:
+        rules = self._load_rag_rules(db_config, category, RAG_SEARCH, source_tables)
+        blocks = self._split_sql_blocks(sql_text)
+        if not rules or not blocks:
+            return []
+        try:
+            import faiss
+            import numpy as np
+
+            vectors = self._embed_texts([rule["normalized_source_sql"] for rule in rules] + [block["normalized_sql"] for block in blocks], rag_config)
+            rule_vectors = np.asarray(vectors[: len(rules)], dtype="float32")
+            block_vectors = np.asarray(vectors[len(rules) :], dtype="float32")
+            faiss.normalize_L2(rule_vectors)
+            faiss.normalize_L2(block_vectors)
+            index = faiss.IndexFlatIP(rule_vectors.shape[1])
+            index.add(rule_vectors)
+            top_k = self._positive_int(os.getenv("TOBE_SQL_TUNING_TOP_K"), 3)
+            scores, indexes = index.search(block_vectors, min(top_k, len(rules)))
+            method = "faiss_vector"
+            matches_by_block = [
+                [(rules[int(rule_index)], float(score)) for score, rule_index in zip(scores[i], indexes[i]) if rule_index >= 0]
+                for i in range(len(blocks))
+            ]
+        except Exception as exc:
+            logging.getLogger("smartmigrate.workflow").warning(
+                f"RAG vector search fallback to token search: {type(exc).__name__}: {exc}",
+                extra={"workflow_log": [0, "SQL_CONVERSION", "RAG_RETRIEVE", "WARN", "RAG_SEARCH", "FALLBACK", 0]},
+            )
+            method = "token_fallback"
+            matches_by_block = [
+                sorted(((rule, self._lexical_similarity(block["normalized_sql"], rule["normalized_source_sql"])) for rule in rules), key=lambda item: item[1], reverse=True)[: self._positive_int(os.getenv("TOBE_SQL_TUNING_TOP_K"), 3)]
+                for block in blocks
+            ]
+        return [
+            {
+                "block_id": block["block_id"], "block_type": block["block_type"], "source_sql": block["sql"], "search_method": method,
+                "top_rule_matches": [{key: value for key, value in rule.items() if key != "normalized_source_sql"} | {"score": round(score, 6)} for rule, score in matches],
+            }
+            for block, matches in zip(blocks, matches_by_block)
+        ]
+
+    def _load_rag_rules(self, db_config: dict[str, Any], category: str, rule_type: str, source_tables: set[str]) -> list[dict[str, Any]]:
+        table = self._qualify(os.getenv("RAG_INFO_TABLE", "NEXT_MIG_RAG_INFO"), db_config.get("system_schema"))
+        columns = self._table_columns(db_config, table)
+        if not {"RAG_ID", "CATEGORY", "RULE_TYPE", "USE_YN"}.issubset(columns):
+            raise ValueError("NEXT_MIG_RAG_INFO requires RAG_ID, CATEGORY, RULE_TYPE, and USE_YN columns")
+        guidance_expr = "GUIDANCE_TEXT" if "GUIDANCE_TEXT" in columns else "CAST(NULL AS VARCHAR2(4000))"
+        source_sql_expr = "SOURCE_SQL" if "SOURCE_SQL" in columns else "TO_CLOB(NULL)"
+        target_sql_expr = "TARGET_SQL" if "TARGET_SQL" in columns else "TO_CLOB(NULL)"
+        source_tables_expr = "SOURCE_TABLES" if "SOURCE_TABLES" in columns else "CAST(NULL AS VARCHAR2(4000))"
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""SELECT RAG_ID, {source_tables_expr}, {guidance_expr}, {source_sql_expr}, {target_sql_expr}
+                      FROM {table}
+                     WHERE UPPER(TRIM(CATEGORY)) = :category
+                       AND UPPER(TRIM(RULE_TYPE)) = :rule_type
+                       AND UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
+                     ORDER BY CREATED_AT ASC""",
+                {"category": category, "rule_type": rule_type},
+            )
+            result = []
+            for row in cur.fetchall():
+                rule_tables = self._source_tables(self._lob_to_str(row[1]))
+                if rule_tables and not (rule_tables & source_tables):
+                    continue
+                source_sql = self._lob_to_str(row[3]).strip()
+                if rule_type == RAG_SEARCH and not source_sql:
+                    continue
+                result.append({
+                    "rule_id": self._lob_to_str(row[0]).strip(), "source_tables": sorted(rule_tables),
+                    "guidance": [line.strip() for line in self._lob_to_str(row[2]).splitlines() if line.strip()],
+                    "source_sql": source_sql, "target_sql": self._lob_to_str(row[4]).strip(),
+                    "normalized_source_sql": self._normalize_sql_shape(source_sql),
+                })
+        return result
+
+    def _mapping_prompt_text(self, mapping_rules: list[dict[str, str]], general_rules: list[dict[str, Any]], examples: list[dict[str, Any]], db_config: dict[str, Any]) -> str:
+        source_schema, target_schema = db_config["source_schema"], db_config["target_schema"]
+        simple = sorted({(rule["fr_table"], rule["fr_col"], rule["to_table"], rule["to_col"]) for rule in mapping_rules if rule["map_type"] != "COMPLEX"})
+        complex_rules = sorted({(rule["fr_table"], rule["to_table"]) for rule in mapping_rules if rule["map_type"] == "COMPLEX"})
+        lines = ["[MIGRATION_MAPPING_RULES]"]
+        lines.extend(f"- FR_TABLE={self._qualify_mapping_table(fr_table, source_schema)} | FR_COL={fr_col} | TO_TABLE={self._qualify_mapping_table(to_table, target_schema)} | TO_COL={to_col}" for fr_table, fr_col, to_table, to_col in simple)
+        lines.extend(["", "[COMPLEX_TABLE_MAPPING_RULES]"])
+        lines.extend(f"- FR_TABLE={fr_table} | TO_TABLE={self._qualify_mapping_table(to_table, target_schema)}" for fr_table, to_table in complex_rules)
+        lines.extend(["", "[SQL_CONVERSION_GENERAL_RAG_GUIDANCE]"])
+        for rule in general_rules:
+            lines.append(f"- RAG_ID={rule['rule_id']} | SOURCE_TABLES={','.join(rule['source_tables']) or 'ALL'}")
+            lines.extend(f"  - {guide}" for guide in rule["guidance"])
+        lines.extend(["", "[SQL_CONVERSION_SEARCH_RAG_TOP_K_BY_SQL_BLOCK]", self._serialize_conversion_examples(examples)])
+        return "\n".join(lines)
+
+    def _source_filter_prompt_text(self, mapping_rules: list[dict[str, str]]) -> str:
+        lines = ["[ASIS_SOURCE_FILTER_CONDITIONS]"]
+        conditions = sorted({(rule["fr_table"], rule["condition"]) for rule in mapping_rules if rule["condition"]})
+        lines.extend(f"- FR_TABLE={table} | CONDITION={condition}" for table, condition in conditions)
+        return "\n".join(lines) if conditions else "[ASIS_SOURCE_FILTER_CONDITIONS]\n- (empty)"
+
+    def _source_tables(self, value: str) -> set[str]:
+        text = str(value or "").strip()
+        if text.startswith("["):
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, list):
+                    text = ",".join(str(item) for item in parsed)
+            except json.JSONDecodeError:
+                pass
+        return {token.split(".")[-1].strip().strip('"').upper() for token in re.split(r"[,;|\s]+", text) if token.strip()}
+
+    def _table_matches(self, table_name: str, candidates: set[str]) -> bool:
+        normalized = str(table_name or "").upper()
+        return any(re.search(rf"(?<![A-Z0-9_$#]){re.escape(table)}(?![A-Z0-9_$#])", normalized) for table in candidates)
+
+    def _qualify_mapping_table(self, table_name: str, schema: str) -> str:
+        table = str(table_name or "").strip()
+        if not table or "." in table:
+            return table
+        return f"{schema}.{table}"
+
+    def _split_sql_blocks(self, sql_text: str) -> list[dict[str, str]]:
+        source = str(sql_text or "").strip().rstrip(";").strip()
+        if not source:
+            return []
+        replacements: list[tuple[int, int, str, str]] = []
+        stack: list[int] = []
+        quoted = False
+        for index, char in enumerate(source):
+            if char == "'":
+                quoted = not quoted
+            elif not quoted and char == "(":
+                stack.append(index)
+            elif not quoted and char == ")" and stack:
+                start = stack.pop()
+                inner = source[start + 1:index].strip()
+                if re.match(r"^SELECT\b", inner, flags=re.I):
+                    replacements.append((start, index + 1, f"SUBQUERY_{len(replacements) + 1}", inner))
+        main_sql = source
+        for start, end, placeholder, _ in reversed(replacements):
+            main_sql = f"{main_sql[:start]}({placeholder}){main_sql[end:]}"
+        return [
+            {"block_id": "MAIN_SQL", "block_type": "MAIN", "sql": main_sql, "normalized_sql": self._normalize_sql_shape(main_sql)},
+            *[{"block_id": placeholder, "block_type": "SUBQUERY", "sql": inner, "normalized_sql": self._normalize_sql_shape(inner)} for _, _, placeholder, inner in replacements],
+        ]
+
+    def _normalize_sql_shape(self, sql_text: str) -> str:
+        text = re.sub(r"/\*.*?\*/|--[^\n]*", " ", str(sql_text or ""), flags=re.S)
+        text = re.sub(r"'(?:''|[^'])*'", " STR ", text)
+        text = re.sub(r"\b\d+(?:\.\d+)?\b", " NUM ", text)
+        return re.sub(r"\s+", " ", text).strip().upper()
+
+    def _embed_texts(self, texts: list[str], rag_config: dict[str, Any]) -> list[list[float]]:
+        endpoint = str(rag_config["rag_embed_base_url"]).strip().rstrip("/")
+        if not endpoint:
+            raise ValueError("RAG_EMBED_BASE_URL is required for FAISS retrieval")
+        if not endpoint.endswith("/embeddings"):
+            endpoint = f"{endpoint}/embeddings" if endpoint.endswith("/v1") else f"{endpoint}/v1/embeddings"
+        headers = {"Content-Type": "application/json"}
+        api_key = str(rag_config["rag_embed_api_key"]).strip()
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        request = urllib.request.Request(
+            endpoint,
+            data=json.dumps({"model": rag_config["rag_embed_model"], "input": texts}).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=rag_config["rag_embed_timeout_seconds"]) as response:
+            body = json.loads(response.read().decode("utf-8"))
+        vectors = [item.get("embedding") for item in body.get("data", []) if isinstance(item, dict) and isinstance(item.get("embedding"), list)]
+        if len(vectors) != len(texts):
+            raise ValueError("embedding response count does not match request count")
+        return vectors
+
+    def _lexical_similarity(self, left: str, right: str) -> float:
+        left_tokens = set(re.findall(r"[A-Z_]+|\d+", left.upper()))
+        right_tokens = set(re.findall(r"[A-Z_]+|\d+", right.upper()))
+        return len(left_tokens & right_tokens) / len(left_tokens | right_tokens) if left_tokens and right_tokens else 0.0
+
+    def _serialize_conversion_examples(self, examples: list[dict[str, Any]]) -> str:
+        return json.dumps([
+            {"matched_block_sql": block["source_sql"], "guidance": match["guidance"], "source_sql": match["source_sql"], "target_sql": match["target_sql"]}
+            for block in examples for match in block["top_rule_matches"]
+        ], ensure_ascii=False, indent=2)
+
+    def _serialize_tuning_examples(self, examples: list[dict[str, Any]]) -> str:
+        return json.dumps([
+            {"source_sql": block["source_sql"], "guidance": match["guidance"], "example_bad_sql": match["source_sql"], "example_tuned_sql": match["target_sql"]}
+            for block in examples for match in block["top_rule_matches"]
+        ], ensure_ascii=False, indent=2)
+
+    def _increment_rag_hits(self, db_config: dict[str, Any], examples: list[dict[str, Any]]) -> None:
+        rule_ids = sorted({match["rule_id"] for block in examples for match in block["top_rule_matches"] if match.get("rule_id")})
+        if not rule_ids:
+            return
+        table = self._qualify(os.getenv("RAG_INFO_TABLE", "NEXT_MIG_RAG_INFO"), db_config.get("system_schema"))
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.executemany(
+                f"UPDATE {table} SET HIT_CNT = NVL(HIT_CNT, 0) + 1, UPDATED_AT = SYSTIMESTAMP WHERE TO_CHAR(RAG_ID) = :rule_id AND UPPER(TRIM(RULE_TYPE)) = 'SEARCH'",
+                [{"rule_id": rule_id} for rule_id in rule_ids],
+            )
+            conn.commit()
+
+    # ##############################
+    # Prompt generation and LLM client
+    # ##############################
+
+    def _build_prompt(self, template_name: str, **values: str) -> str:
+        prompt_path = Path.cwd() / "src" / "smart_migrate" / "config" / "prompts" / template_name
+        if not prompt_path.exists():
+            prompt_path = Path(__file__).resolve().parent.parent / "src" / "smart_migrate" / "config" / "prompts" / template_name
+        template = json.loads(prompt_path.read_text(encoding="utf-8-sig"))
+        rendered = self._render_prompt_value(template, values)
+        user_instruction = str(rendered.pop("user_instruction", "Return one executable Oracle SQL statement only."))
+        system_lines = []
+        for key in ("name", "role", "objective"):
+            if rendered.get(key):
+                system_lines.append(f"{key}: {rendered[key]}")
+        for key, value in rendered.get("inputs", {}).items():
+            system_lines.append(f"\n{key}:\n```text\n{value}\n```")
+        system_lines.extend(["\nrules:", *[f"- {rule}" for rule in rendered.get("rules", [])]])
+        return "\n".join(system_lines).strip() + "\n\n[USER]\n" + user_instruction
+
+    def _render_prompt_value(self, value: Any, values: dict[str, str]) -> Any:
+        if isinstance(value, dict):
+            return {key: self._render_prompt_value(item, values) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._render_prompt_value(item, values) for item in value]
+        if isinstance(value, str):
+            return value.format_map(_PromptValues(values))
+        return value
+
+    def _log_prompt(self, map_id: str, step_name: str, prompt: str, retry_count: int) -> None:
+        logging.getLogger("smartmigrate.workflow").info(
+            f"{step_name} assembled", extra={"workflow_log": [map_id, "SQL_CONVERSION", "PROMPT_BUILD", "INFO", step_name, "PASS", retry_count, prompt]}
+        )
+
+    def _call_llm_text(self, prompt: str, config: dict[str, Any]) -> tuple[str, str]:
+        self._load_env_files()
+        api_key = str(config.get("llm_api_key") or os.getenv("LLM_API_KEY") or os.getenv("OPEN_API_KEY") or "").strip()
+        base_url = str(config.get("llm_base_url") or os.getenv("LLM_BASE_URL") or "").strip()
+        model = str(config.get("llm_model") or os.getenv("LLM_MODEL") or "GLM-5.1").strip()
+        if not api_key:
+            raise ValueError("LLM API key is required for SQL conversion")
+        provider = str(config.get("llm_provider") or os.getenv("LLM_PROVIDER") or "").strip().lower()
+        if not provider:
+            provider = "anthropic" if "anthropic" in base_url.lower() or model.lower().startswith("claude") else "openai"
+        if provider not in {"openai", "anthropic"}:
+            raise ValueError("LLM provider must be openai or anthropic")
+        candidates = [model, *[item.strip() for item in str(config.get("llm_fallback_models") or os.getenv("LLM_FALLBACK_MODELS") or "").split(",") if item.strip()]]
+        candidate_models = list(dict.fromkeys(candidates))
+        for index, candidate in enumerate(candidate_models):
+            try:
+                if provider == "anthropic":
+                    from anthropic import Anthropic
+
+                    response = Anthropic(api_key=api_key, base_url=(base_url or "https://api.anthropic.com").rstrip("/"), timeout=self._positive_int(config.get("llm_timeout_seconds"), 900)).messages.create(
+                        model=candidate, max_tokens=self._positive_int(config.get("llm_max_tokens"), 4096), temperature=0,
+                        system="You generate Oracle/MyBatis SQL.", messages=[{"role": "user", "content": prompt}],
+                    )
+                    content = "".join(str(getattr(item, "text", "")) for item in response.content).strip()
+                elif not base_url:
+                    from openai import OpenAI
+
+                    response = OpenAI(api_key=api_key, timeout=self._positive_int(config.get("llm_timeout_seconds"), 900)).chat.completions.create(
+                        model=candidate, temperature=0, max_tokens=self._positive_int(config.get("llm_max_tokens"), 4096),
+                        messages=[{"role": "system", "content": "You generate Oracle/MyBatis SQL."}, {"role": "user", "content": prompt}],
+                    )
+                    content = str(response.choices[0].message.content or "").strip()
+                else:
+                    root = base_url.rstrip("/")
+                    url = root if root.endswith("/chat/completions") else f"{root}/chat/completions"
+                    request = urllib.request.Request(
+                        url,
+                        data=json.dumps({"model": candidate, "messages": [{"role": "system", "content": "You generate Oracle/MyBatis SQL."}, {"role": "user", "content": prompt}], "temperature": 0, "max_tokens": self._positive_int(config.get("llm_max_tokens"), 4096)}).encode("utf-8"),
+                        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}, method="POST",
+                    )
+                    with urllib.request.urlopen(request, timeout=self._positive_int(config.get("llm_timeout_seconds"), 900)) as response:
+                        body = json.loads(response.read().decode("utf-8"))
+                    content = str((((body.get("choices") or [{}])[0].get("message") or {}).get("content") or "")).strip()
+                if content:
+                    return content, candidate
+                raise ValueError("LLM returned empty message content")
+            except Exception:
+                if index == len(candidate_models) - 1:
+                    raise
+        raise ValueError("LLM call failed")
+
+    def _clean_generated_sql(self, value: str) -> str:
+        sql = re.sub(r"^```(?:sql)?\s*|\s*```$", "", str(value or "").strip(), flags=re.I)
+        return sql.rstrip(";").strip()
+
+    # ##############################
+    # Bind and test SQL execution
+    # ##############################
+
+    def _execute_binding_query(self, db_config: dict[str, Any], sql: str) -> list[dict[str, Any]]:
+        clean_sql = self._runtime_sql(sql, "EXECUTE_BIND_SQL")
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(clean_sql)
+            columns = [item[0] for item in cur.description] if cur.description else []
+            return [{column: self._lob_to_str(value) for column, value in zip(columns, row)} for row in cur.fetchmany(50)]
+
+    def _execute_test_query(self, db_config: dict[str, Any], sql: str) -> list[dict[str, Any]]:
+        clean_sql = self._runtime_sql(sql, "EXECUTE_TEST_SQL")
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(clean_sql)
+            columns = [item[0] for item in cur.description] if cur.description else []
+            return [{column: self._lob_to_str(value) for column, value in zip(columns, row)} for row in cur.fetchall()]
+
+    def _runtime_sql(self, sql: str, stage: str) -> str:
+        clean_sql = str(sql or "").strip().rstrip(";").strip()
+        if not clean_sql:
+            raise ValueError(f"{stage} SQL is empty")
+        if any(token in clean_sql.lower() for token in ("<if", "<choose", "<when", "<otherwise", "<where", "<trim", "#{", "${")):
+            raise ValueError(f"{stage} SQL contains unresolved MyBatis tags or bind markers")
+        return clean_sql
+
+    def _build_bind_sets(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        selected: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in rows:
+            bind_case = {str(key).strip().strip('"'): value for key, value in row.items() if str(key).strip()}
+            if set(bind_case) == {"NO_BIND"}:
+                return [{}]
+            signature = json.dumps(bind_case, ensure_ascii=False, default=str, sort_keys=True)
+            if bind_case and signature not in seen:
+                selected.append(bind_case)
+                seen.add(signature)
+            if len(selected) == 3:
+                break
+        return selected or [{}]
+
+    def _evaluate_test_rows(self, rows: list[dict[str, Any]]) -> str:
+        if not rows:
+            raise ValueError("TEST_SQL returned no rows")
+        for row in rows:
+            values = {str(key).lower(): value for key, value in row.items()}
+            if not {"case_no", "from_count", "to_count"}.issubset(values):
+                raise ValueError("TEST_SQL must return CASE_NO, FROM_COUNT, TO_COUNT columns")
+            try:
+                from_count, to_count = int(values["from_count"]), int(values["to_count"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("TEST_SQL count columns must be numeric") from exc
+            if from_count == 0 and to_count == 0 or from_count != to_count:
+                raise ValueError(f"TEST_SQL row count mismatch: {row}")
+        return "PASS"
+
+    def _load_env_files(self) -> None:
+        for path in (Path.cwd() / ".env", Path.cwd() / "src" / ".env"):
+            if not path.exists():
+                continue
+            for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                text = line.strip()
+                if text and not text.startswith("#") and "=" in text:
+                    key, value = text.split("=", 1)
+                    if key.strip() and key.strip() not in os.environ:
+                        os.environ[key.strip()] = value.strip().strip('"').strip("'")
 
     def _max_retry(self) -> int:
-        """Return bounded total attempts for the POC conversion loop."""
+        """Return bounded total attempts for the conversion loop."""
         if getattr(self, "_payload_max_retry", None) is not None:
             return max(1, min(11, int(getattr(self, "_payload_max_retry") or 0) + 1))
         return max(1, min(11, int(getattr(self, "max_retry", None) or 2) + 1))
@@ -767,7 +1215,38 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "db_username": str(item_config.get("db_username") or "").strip(),
             "db_password": str(item_config.get("db_password") or ""),
             "system_schema": str(item_config.get("system_schema") or "").strip(),
+            "source_schema": str(getattr(self, "source_schema", "") or item_config.get("source_schema") or os.getenv("ORACLE_SCHEMA_SRC") or "SFAMIG").strip().upper(),
+            "target_schema": str(getattr(self, "target_schema", "") or item_config.get("target_schema") or os.getenv("ORACLE_SCHEMA_TGT") or "SFAADM").strip().upper(),
         }
+
+    def _llm_config(self, payload: dict[str, Any]) -> dict[str, Any]:
+        item_config = dict(payload.get("llm_config") or {})
+        return {
+            "llm_base_url": str(getattr(self, "llm_base_url", "") or item_config.get("llm_base_url") or "").strip(),
+            "llm_api_key": self._secret_to_str(getattr(self, "llm_api_key", None)) or str(item_config.get("llm_api_key") or "").strip(),
+            "llm_provider": str(getattr(self, "llm_provider", "") or item_config.get("llm_provider") or "").strip(),
+            "llm_model": str(getattr(self, "llm_model", "") or item_config.get("llm_model") or "").strip(),
+            "llm_fallback_models": str(getattr(self, "llm_fallback_models", "") or item_config.get("llm_fallback_models") or "").strip(),
+            "llm_max_tokens": self._positive_int(getattr(self, "llm_max_tokens", None) or item_config.get("llm_max_tokens"), 4096),
+            "llm_timeout_seconds": self._positive_int(getattr(self, "llm_timeout_seconds", None) or item_config.get("llm_timeout_seconds"), 900),
+        }
+
+    def _rag_config(self) -> dict[str, Any]:
+        return {
+            "rag_embed_base_url": str(getattr(self, "rag_embed_base_url", "") or os.getenv("RAG_EMBED_BASE_URL") or "").strip(),
+            "rag_embed_api_key": self._secret_to_str(getattr(self, "rag_embed_api_key", None)) or str(os.getenv("RAG_EMBED_API_KEY") or "").strip(),
+            "rag_embed_model": str(getattr(self, "rag_embed_model", "") or os.getenv("RAG_EMBED_MODEL") or "BAAI/bge-m3").strip(),
+            "rag_embed_timeout_seconds": self._positive_int(getattr(self, "rag_embed_timeout_seconds", None) or os.getenv("RAG_EMBED_TIMEOUT_SEC"), 30),
+        }
+
+    def _secret_to_str(self, value: Any) -> str:
+        return str(value.get_secret_value()) if hasattr(value, "get_secret_value") else str(value or "")
+
+    def _positive_int(self, value: Any, default: int) -> int:
+        try:
+            return int(value) if int(value) > 0 else default
+        except (TypeError, ValueError):
+            return default
 
     def _require_db_config(self, db_config: dict[str, Any]) -> None:
         """Fail early when the Loop item does not include database settings."""
@@ -801,16 +1280,6 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         if value is not None and hasattr(value, "read"):
             return str(value.read())
         return "" if value is None else str(value)
-
-    def _fit_text(self, value: Any, max_len: int) -> str | None:
-        """Trim log metadata by UTF-8 bytes; SQL payloads are not passed here."""
-        if value is None:
-            return None
-        text = str(value)
-        encoded = text.encode("utf-8", errors="ignore")
-        if len(encoded) <= max_len:
-            return text
-        return encoded[:max_len].decode("utf-8", errors="ignore")
 
     def _num(self, value: Any) -> int:
         """Convert nullable DB aggregate values to int."""
