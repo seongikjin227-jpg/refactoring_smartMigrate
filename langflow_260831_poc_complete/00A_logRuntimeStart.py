@@ -46,7 +46,7 @@ class SmartMigrateDBHandler(logging.Handler):
             "step_name": str(event.get("step_name") or "")[:50],
             "status": str(event.get("status") or "noStatus")[:20],
             "message": str(event.get("message") or "noMessage")[:4000],
-            "retry_count": int(event.get("retry_count") or 0),
+            "retry_count": self._to_int(event.get("retry_count"), 0),
             "generate_sql": event.get("generate_sql"),
         }
         self.records.append(row)
@@ -64,6 +64,13 @@ class SmartMigrateDBHandler(logging.Handler):
     def _event(self, record: logging.LogRecord) -> dict[str, Any]:
         event = getattr(record, "workflow_log", None)
         if isinstance(event, (list, tuple)):
+            message = record.getMessage() or "noMessage"
+            retry_count = event[6] if len(event) > 6 else 0
+            generate_sql = event[7] if len(event) > 7 else None
+            if len(event) > 7 and not self._is_int_like(event[6]) and self._is_int_like(event[7]):
+                message = event[6]
+                retry_count = event[7]
+                generate_sql = event[8] if len(event) > 8 else None
             return {
                 "map_id": event[0] if len(event) > 0 else 0,
                 "mig_kind": event[1] if len(event) > 1 else "WORKFLOW",
@@ -71,9 +78,9 @@ class SmartMigrateDBHandler(logging.Handler):
                 "log_level": event[3] if len(event) > 3 else "noLevelName",
                 "step_name": event[4] if len(event) > 4 else "LOGGING",
                 "status": event[5] if len(event) > 5 else "noStatus",
-                "message": record.getMessage() or "noMessage",
-                "retry_count": event[6] if len(event) > 6 else 0,
-                "generate_sql": event[7] if len(event) > 7 else None,
+                "message": message,
+                "retry_count": retry_count,
+                "generate_sql": generate_sql,
             }
         if isinstance(event, dict):
             event = dict(event)
@@ -129,6 +136,19 @@ class SmartMigrateDBHandler(logging.Handler):
 
     def _schema(self) -> str:
         return str(self.db_config.get("system_schema") or "SFAADM").strip().upper()
+
+    def _is_int_like(self, value: Any) -> bool:
+        try:
+            int(value)
+            return True
+        except Exception:
+            return False
+
+    def _to_int(self, value: Any, default: int = 0) -> int:
+        try:
+            return int(value)
+        except Exception:
+            return default
 
 
 class NewType00ALogRuntimeStart(Component):
