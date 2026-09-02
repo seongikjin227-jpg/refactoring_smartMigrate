@@ -39,7 +39,7 @@ class SmartMigrateDBHandler(logging.Handler):
         event = self._event(record)
         row = {
             "created_at": datetime.fromtimestamp(record.created).strftime("%Y-%m-%d %H:%M:%S.%f"),
-            "map_id": int(event.get("map_id") or 0),
+            "map_id": str(event.get("map_id") or 0)[:100],
             "mig_kind": str(event.get("mig_kind") or "WORKFLOW")[:100],
             "log_type": str(event.get("log_type") or "")[:20],
             "log_level": str(event.get("log_level") or "noLevelName")[:20],
@@ -47,6 +47,7 @@ class SmartMigrateDBHandler(logging.Handler):
             "status": str(event.get("status") or "noStatus")[:20],
             "message": str(event.get("message") or "noMessage")[:4000],
             "retry_count": int(event.get("retry_count") or 0),
+            "generate_sql": event.get("generate_sql"),
         }
         self.records.append(row)
         self._insert_row(row)
@@ -63,8 +64,6 @@ class SmartMigrateDBHandler(logging.Handler):
     def _event(self, record: logging.LogRecord) -> dict[str, Any]:
         event = getattr(record, "workflow_log", None)
         if isinstance(event, (list, tuple)):
-            message = event[6] if len(event) > 7 else record.getMessage()
-            retry_count = event[7] if len(event) > 7 else (event[6] if len(event) > 6 else 0)
             return {
                 "map_id": event[0] if len(event) > 0 else 0,
                 "mig_kind": event[1] if len(event) > 1 else "WORKFLOW",
@@ -72,12 +71,14 @@ class SmartMigrateDBHandler(logging.Handler):
                 "log_level": event[3] if len(event) > 3 else "noLevelName",
                 "step_name": event[4] if len(event) > 4 else "LOGGING",
                 "status": event[5] if len(event) > 5 else "noStatus",
-                "message": message,
-                "retry_count": retry_count,
+                "message": record.getMessage() or "noMessage",
+                "retry_count": event[6] if len(event) > 6 else 0,
+                "generate_sql": event[7] if len(event) > 7 else None,
             }
         if isinstance(event, dict):
             event = dict(event)
             event["message"] = event.get("message") or record.getMessage() or "noMessage"
+            event["generate_sql"] = event.get("generate_sql")
             return event
         return {
             "map_id": 0,
@@ -88,6 +89,7 @@ class SmartMigrateDBHandler(logging.Handler):
             "status": "noStatus",
             "message": record.getMessage() or "noMessage",
             "retry_count": 0,
+            "generate_sql": None,
         }
 
     def _insert_row(self, row: dict[str, Any]) -> None:
@@ -97,7 +99,7 @@ class SmartMigrateDBHandler(logging.Handler):
             cursor.execute(
                 f"""
                 INSERT INTO {self._schema()}.NEXT_MIG_LOG (
-                    LOG_ID, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, RETRY_COUNT, CREATED_AT
+                    LOG_ID, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, RETRY_COUNT, GENERATE_SQL, CREATED_AT
                 ) VALUES (
                     {self._schema()}.MIGRATION_LOG_SEQ.NEXTVAL,
                     :map_id,
@@ -108,6 +110,7 @@ class SmartMigrateDBHandler(logging.Handler):
                     :status,
                     :message,
                     :retry_count,
+                    :generate_sql,
                     TO_TIMESTAMP(:created_at, 'YYYY-MM-DD HH24:MI:SS.FF6')
                 )
                 """,

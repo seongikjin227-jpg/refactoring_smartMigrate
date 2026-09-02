@@ -298,7 +298,6 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                 len(failure_attempts) or 1,
                 self._failure_stage(status),
                 message,
-                elapsed_seconds=time.perf_counter() - started,
             )
         return self._result(
             payload=payload,
@@ -543,56 +542,17 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         attempt_no: int | None,
         stage_name: str,
         error_message: str | None = None,
-        elapsed_seconds: float | None = None,
     ) -> None:
-        """Insert a best-effort NEXT_SQL_LOG row without truncating SQL_CONTENT."""
-        try:
-            table = self._qualify("NEXT_SQL_LOG", db_config.get("system_schema"))
-            columns = self._table_columns(db_config, table)
-            values: dict[str, Any] = {
-                "CREATED_AT": "CURRENT_TIMESTAMP",
-                "SPACE_NM": self._fit_text(job.get("space_nm"), 200),
-                "SQL_ID": self._fit_text(job.get("sql_id"), 200),
-                "SQL_INFO_ROWID": self._fit_text(job.get("row_id"), 30),
-                "SQL_KIND": self._fit_text(sql_kind, 30),
-                "SQL_CONTENT": None if sql_content is None else str(sql_content),
-                "STATUS": self._fit_text(status, 20),
-                "PROMPT_NAME": None,
-                "MODEL_NAME": None,
-                "BATCH_NO": None,
-                "CYCLE_NO": None,
-                "ELAPSED_SECONDS": round(float(elapsed_seconds), 3) if elapsed_seconds is not None else None,
-                "ATTEMPT_NO": attempt_no,
-                "STAGE_NAME": self._fit_text(stage_name, 100),
-                "ERROR_MESSAGE": self._fit_text(error_message, 4000),
-            }
-            insert_columns: list[str] = []
-            value_exprs: list[str] = []
-            params: dict[str, Any] = {}
-            for column, value in values.items():
-                if column not in columns:
-                    continue
-                insert_columns.append(column)
-                if column == "CREATED_AT":
-                    value_exprs.append("CURRENT_TIMESTAMP")
-                    continue
-                bind_name = column.lower()
-                value_exprs.append(f":{bind_name}")
-                params[bind_name] = value
-            if not insert_columns:
-                return
-            with self._connect(db_config) as conn:
-                cur = conn.cursor()
-                cur.execute(
-                    f"""
-                    INSERT INTO {table} ({", ".join(insert_columns)})
-                    VALUES ({", ".join(value_exprs)})
-                    """,
-                    params,
-                )
-                conn.commit()
-        except Exception:
-            return
+        """Write one SQL tuning log through the SmartMigrate workflow logger."""
+        del db_config
+        map_id = f"{job.get('sql_id') or ''} / {job.get('space_nm') or ''}"[:100]
+        retry_count = max(0, int(attempt_no or 1) - 1)
+        log_level = "ERROR" if str(status or "").upper().startswith("FAIL") else "INFO"
+        detail = str(error_message or f"stage={stage_name} status={status} sql_kind={sql_kind}")
+        event = [map_id, "SQL_TUNING", str(sql_kind or "")[:20], log_level, str(stage_name or "")[:50], str(status or "")[:20], retry_count]
+        if sql_content is not None:
+            event.append(str(sql_content))
+        logging.getLogger("smartmigrate.workflow").log(logging.ERROR if log_level == "ERROR" else logging.INFO, detail, extra={"workflow_log": event})
 
     def _status(self, value: Any) -> str:
         """Normalize a status string for comparisons."""

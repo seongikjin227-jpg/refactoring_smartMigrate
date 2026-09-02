@@ -22,9 +22,10 @@
    - SQL payload는 자르지 않는다.
    - 짧은 log/status metadata만 필요한 곳에서 제한한다.
 
-4. `_insert_log()` 또는 `_insert_sql_log()`
+4. SmartMigrate workflow logging
    - `10C`는 `NEXT_MIG_LOG`에 migration history를 남긴다.
-   - `12C`, `15C`, `17C`는 `NEXT_SQL_LOG`에 SQL pipeline history를 남긴다.
+   - `12C`, `15C`, `17C`도 `NEXT_MIG_LOG`에 SQL pipeline history를 남긴다.
+   - DB insert는 `00A_logRuntimeStart.py`에서 등록한 `SmartMigrateDBHandler` 하나가 처리한다.
    - 로그 insert 실패는 작업 전체 실패로 보지 않는다.
 
 5. `_result()`
@@ -81,7 +82,11 @@
 
 ## SQL Log Policy
 
-SQL pipeline 로그는 `NEXT_SQL_LOG`에 저장한다.
+SQL pipeline 로그는 `NEXT_MIG_LOG`에 저장한다.
+
+- `MIG_KIND`: `SQL_CONVERSION`, `SQL_TUNING`, `SQL_FORMATTING`
+- `MAP_ID`: `sql_id / space_nm`
+- `GENERATE_SQL`: SQL 본문
 
 | Component | SQL_KIND examples |
 |---|---|
@@ -89,7 +94,7 @@ SQL pipeline 로그는 `NEXT_SQL_LOG`에 저장한다.
 | `15C` | `TUNED_TO_SQL`, `TUNED_TEST_SQL`, `SQL_TUNING` |
 | `17C` | `FORMATTED_SQL` |
 
-`SQL_CONTENT`는 실제 prompt/SQL 추적에 필요하므로 자르지 않는다. `STATUS`, `STAGE_NAME`, `ERROR_MESSAGE` 같은 metadata는 DB 컬럼 크기에 맞게 짧게 저장한다.
+`GENERATE_SQL`은 실제 prompt/SQL 추적에 필요하므로 자르지 않는다. `STATUS`, `STEP_NAME`, `MESSAGE` 같은 metadata는 DB 컬럼 크기에 맞게 짧게 저장한다.
 
 ## RAG Table Policy
 

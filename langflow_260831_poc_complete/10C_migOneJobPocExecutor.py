@@ -105,7 +105,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                 self._insert_mig_log(
                     db_config,
                     map_id,
-                    "GENERATE_SQL",
+                    "FETCH_DDL",
                     "INFO",
                     "FETCH_DDL",
                     "PASS",
@@ -127,7 +127,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                     self._insert_mig_log(
                         db_config,
                         map_id,
-                        "INFO",
+                        "VERIFY_SQL",
                         "INFO",
                         "VERIFY",
                         "PASS",
@@ -447,8 +447,35 @@ class NewType10CMigOneJobPocExecutor(Component):
         stage_sql = self._log_sql_for_step(state, step)
         route_note = self._route_note(state, step)
         message = f"attempt={state.get('db_attempts')} stage={stage} status={status}; {step.get('message') or ''}{route_note}"
-        log_type = "ROW_ERROR" if status.startswith("FAIL-") else ("VERIFY_SQL" if stage == "VERIFY" else "GENERATE_SQL")
+        log_type = self._mig_log_type_for_step(stage, status)
         self._insert_mig_log(db_config, map_id, log_type, log_level, stage, status, message, retry_count, stage_sql)
+
+    def _mig_log_type_for_step(self, stage: str, status: str) -> str:
+        """Return a log type that matches the current migration stage."""
+        if status.startswith("FAIL-"):
+            return "ROW_ERROR"
+        stage_upper = str(stage or "").upper()
+        if stage_upper == "VERIFY":
+            return "VERIFY_SQL"
+        if stage_upper in {"FETCH_DDL", "EXECUTE_SQL", "TRUNCATE", "PROMPT_BUILD"}:
+            return stage_upper
+        return "GENERATE_SQL"
+
+    def _insert_prompt_log(self, context: dict[str, Any], prompt: str, *, verify_only: bool, is_append: bool) -> None:
+        """Persist the final prompt sent to the LLM for DB migration SQL generation."""
+        map_id = self._to_int(context.get("map_id"))
+        if map_id is None:
+            return
+        try:
+            attempt = int(context.get("db_attempts") or context.get("attempt") or 1)
+            retry_count = max(0, attempt - 1)
+            mode = "VERIFY_RETRY" if verify_only else ("APPEND" if is_append else "REGULAR")
+            logging.getLogger("smartmigrate.workflow").info(
+                f"attempt={attempt} stage=PROMPT_BUILD status=PASS mode={mode}; final LLM prompt assembled",
+                extra={"workflow_log": [map_id, "DB_MIGRATION", "PROMPT_BUILD", "INFO", "PROMPT_BUILD", "PASS", retry_count, prompt]},
+            )
+        except Exception:
+            pass
 
     def _log_sql_for_step(self, state: dict[str, Any], step: dict[str, Any]) -> str:
         """Choose the SQL snippet that matches the step being logged."""
@@ -661,6 +688,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         if is_append:
             prompt += prompt_template["append_mode_suffix"].format(to_table=to_table)
         prompt += "\n\n[Output constraint]\n- Do not end migration_sql or verification_sql with a semicolon (;).\n"
+        self._insert_prompt_log(context, prompt, verify_only=verify_only, is_append=is_append)
 
         content, used_model = self._call_llm_json(
             system_anthropic=str(prompt_template.get("system_anthropic") or prompt_template.get("system_openai") or ""),
@@ -1256,42 +1284,20 @@ class NewType10CMigOneJobPocExecutor(Component):
         retry_count: int,
         generated_sql: str = "",
     ) -> None:
-        """Insert one migration execution log row into NEXT_MIG_LOG."""
-        table = self._qualify("NEXT_MIG_LOG", db_config.get("system_schema"))
-        sequence = self._qualify("MIGRATION_LOG_SEQ", db_config.get("system_schema"))
-        column_types = self._table_column_types(db_config, table)
-        columns = set(column_types)
-        ts_columns = [column for column in ("CREATED_AT",) if column in columns]
-        generate_sql_column = ", GENERATE_SQL" if "GENERATE_SQL" in columns else ""
-        generate_sql_value = ", :9" if "GENERATE_SQL" in columns else ""
-        ts_column_sql = "".join(f", {column}" for column in ts_columns)
-        ts_value_sql = "".join(", CURRENT_TIMESTAMP" for _ in ts_columns)
-        params = [
+        """Write one migration execution log through the SmartMigrate workflow logger."""
+        event = [
             map_id,
-            "DB_MIG",
+            "DB_MIGRATION",
             str(log_type or "")[:20],
             str(log_level or "")[:20],
             str(step_name or "")[:50],
             str(status or "")[:20],
-            str(message or "")[:4000],
             retry_count,
         ]
-        if "GENERATE_SQL" in columns:
-            sql_text = str(generated_sql or "")
-            if column_types.get("GENERATE_SQL") not in {"CLOB", "NCLOB"}:
-                sql_text = sql_text[:4000]
-            params.append(sql_text)
-        with self._connect(db_config) as conn:
-            cur = conn.cursor()
-            cur.execute(
-                f"""
-                INSERT INTO {table} (
-                    LOG_ID, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, RETRY_COUNT{generate_sql_column}{ts_column_sql}
-                ) VALUES ({sequence}.NEXTVAL, :1, :2, :3, :4, :5, :6, :7, :8{generate_sql_value}{ts_value_sql})
-                """,
-                params,
-            )
-            conn.commit()
+        if generated_sql is not None:
+            event.append(str(generated_sql or ""))
+        level = logging.ERROR if str(log_level or "").upper() == "ERROR" else logging.INFO
+        logging.getLogger("smartmigrate.workflow").log(level, str(message or ""), extra={"workflow_log": event})
 
     def _load_mig_metadata(self, db_config: dict[str, Any], map_id: int | None) -> dict[str, Any]:
         """Load NEXT_MIG_INFO and NEXT_MIG_INFO_DTL metadata for one map id."""

@@ -193,28 +193,34 @@ class LoopOutputTest01FinalStatusAudit(Component):
         ]
 
     def _query_sql_logs(self) -> list[dict[str, Any]]:
-        columns = self._available_columns("NEXT_SQL_LOG")
-        if not {"STATUS"}.issubset(columns):
+        columns = self._available_columns("NEXT_MIG_LOG")
+        if not {"STATUS", "MIG_KIND"}.issubset(columns):
             return []
-        table = self._qualify("NEXT_SQL_LOG")
+        table = self._qualify("NEXT_MIG_LOG")
         select_items = [
             self._select_expr(columns, "CREATED_AT"),
-            self._select_expr(columns, "SPACE_NM"),
-            self._select_expr(columns, "SQL_ID"),
-            self._select_expr(columns, "SQL_KIND"),
+            self._select_expr(columns, "MAP_ID"),
+            self._select_expr(columns, "MIG_KIND"),
+            self._select_expr(columns, "LOG_TYPE"),
             self._select_expr(columns, "STATUS"),
-            self._select_expr(columns, "STAGE_NAME"),
-            self._select_expr(columns, "ATTEMPT_NO"),
+            self._select_expr(columns, "STEP_NAME"),
+            self._select_expr(columns, "RETRY_COUNT"),
         ]
         with self._connect() as conn:
             cur = conn.cursor()
-            cur.execute(f"SELECT {', '.join(select_items)} FROM {table} ORDER BY 1 DESC FETCH FIRST {self._max_log_rows()} ROWS ONLY")
+            cur.execute(
+                f"""
+                SELECT {', '.join(select_items)}
+                  FROM {table}
+                 WHERE UPPER(TRIM(NVL(MIG_KIND, ''))) IN ('SQL_CONVERSION', 'SQL_TUNING', 'SQL_FORMATTING')
+                 ORDER BY 1 DESC FETCH FIRST {self._max_log_rows()} ROWS ONLY
+                """
+            )
             rows = cur.fetchall()
         out: list[dict[str, Any]] = []
         for row in rows:
-            domain = self._sql_domain(row[3], row[5])
-            space_nm = self._to_text(row[1])
-            sql_id = self._to_text(row[2])
+            domain = self._to_text(row[2]) or self._sql_domain(row[3], row[5])
+            sql_id, space_nm = self._split_sql_map_id(row[1])
             out.append(
                 {
                     "domain": domain,
@@ -228,6 +234,13 @@ class LoopOutputTest01FinalStatusAudit(Component):
                 }
             )
         return out
+
+    def _split_sql_map_id(self, value: Any) -> tuple[str, str]:
+        text = self._to_text(value)
+        if " / " not in text:
+            return text, ""
+        sql_id, space_nm = text.split(" / ", 1)
+        return sql_id.strip(), space_nm.strip()
 
     def _final_row(self, domain: str, job_key: str, identifier: str, status: Any) -> dict[str, Any]:
         normalized = self._normalize_status(status)

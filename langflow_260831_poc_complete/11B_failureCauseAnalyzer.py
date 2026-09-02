@@ -112,7 +112,7 @@ class NewType11BFailureCauseAnalyzer(Component):
         table = self._qualify("NEXT_MIG_LOG")
         column_types = self._available_column_types("NEXT_MIG_LOG")
         columns = set(column_types)
-        if not {"CREATED_AT", "STEP_NAME"}.issubset(columns):
+        if not {"CREATED_AT", "LOG_TYPE", "STEP_NAME"}.issubset(columns):
             return None
         with self._connect() as conn:
             cur = conn.cursor()
@@ -120,28 +120,15 @@ class NewType11BFailureCauseAnalyzer(Component):
                 f"""
                 SELECT MAX(CREATED_AT)
                   FROM {table}
-                 WHERE UPPER(TRIM(NVL(STEP_NAME, ''))) = 'WORKFLOW_START'
+                 WHERE UPPER(TRIM(NVL(LOG_TYPE, ''))) = 'LOG_RUNTIME_START'
+                   AND UPPER(TRIM(NVL(STEP_NAME, ''))) = 'RUN'
                 """
             )
             row = cur.fetchone()
         return row[0] if row else None
 
     def _latest_sql_start_at(self) -> Any:
-        table = self._qualify("NEXT_SQL_LOG")
-        columns = self._available_columns("NEXT_SQL_LOG")
-        if not {"CREATED_AT", "STAGE_NAME"}.issubset(columns):
-            return None
-        with self._connect() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                f"""
-                SELECT MAX(CREATED_AT)
-                  FROM {table}
-                 WHERE UPPER(TRIM(NVL(STAGE_NAME, ''))) = 'WORKFLOW_START'
-                """
-            )
-            row = cur.fetchone()
-        return row[0] if row else None
+        return self._latest_mig_start_at()
 
     def _query_mig_logs(self, started_at: Any, *, fail_only: bool = False, skip_only: bool = False) -> list[dict[str, Any]]:
         if started_at is None:
@@ -217,13 +204,13 @@ class NewType11BFailureCauseAnalyzer(Component):
     def _query_sql_logs(self, started_at: Any, *, fail_only: bool = False, skip_only: bool = False) -> list[dict[str, Any]]:
         if started_at is None:
             return []
-        column_types = self._available_column_types("NEXT_SQL_LOG")
+        column_types = self._available_column_types("NEXT_MIG_LOG")
         columns = set(column_types)
-        required = {"CREATED_AT", "STATUS"}
+        required = {"CREATED_AT", "STATUS", "MIG_KIND"}
         if not required.issubset(columns):
             return []
-        table = self._qualify("NEXT_SQL_LOG")
-        conditions = ["1 = 1"]
+        table = self._qualify("NEXT_MIG_LOG")
+        conditions = ["UPPER(TRIM(NVL(MIG_KIND, ''))) IN ('SQL_CONVERSION', 'SQL_TUNING', 'SQL_FORMATTING')"]
         params: dict[str, Any] = {}
         if started_at is not None:
             conditions.append("CREATED_AT >= :started_at")
@@ -235,16 +222,14 @@ class NewType11BFailureCauseAnalyzer(Component):
         select_sql = f"""
             SELECT
                 {self._select_expr(columns, "CREATED_AT")},
-                {self._select_expr(columns, "SPACE_NM")},
-                {self._select_expr(columns, "SQL_ID")},
-                {self._select_expr(columns, "SQL_INFO_ROWID")},
-                {self._select_expr(columns, "SQL_KIND")},
+                {self._select_expr(columns, "MAP_ID")},
+                {self._select_expr(columns, "MIG_KIND")},
+                {self._select_expr(columns, "LOG_TYPE")},
                 {self._select_expr(columns, "STATUS")},
-                {self._select_expr(columns, "MODEL_NAME")},
-                {self._select_expr(columns, "ELAPSED_SECONDS")},
-                {self._select_expr(columns, "ATTEMPT_NO")},
-                {self._select_expr(columns, "STAGE_NAME")},
-                {self._text_preview_expr(column_types, "ERROR_MESSAGE", 100)}
+                {self._select_expr(columns, "LOG_LEVEL")},
+                {self._select_expr(columns, "RETRY_COUNT")},
+                {self._select_expr(columns, "STEP_NAME")},
+                {self._text_preview_expr(column_types, "MESSAGE", 100)}
               FROM {table}
              WHERE {" AND ".join(conditions)}
              ORDER BY CREATED_AT DESC
@@ -254,9 +239,9 @@ class NewType11BFailureCauseAnalyzer(Component):
             cur.execute(select_sql, params)
             logs: list[dict[str, Any]] = []
             for row in cur.fetchall():
-                domain = self._sql_domain(row[4], row[9])
-                space_nm = self._to_text(row[1])
-                sql_id = self._to_text(row[2])
+                domain = self._to_text(row[2]) or self._sql_domain(row[3], row[7])
+                map_value = self._to_text(row[1])
+                sql_id, space_nm = self._split_sql_map_id(map_value)
                 logs.append(
                     {
                         "domain": domain,
@@ -264,18 +249,24 @@ class NewType11BFailureCauseAnalyzer(Component):
                         "created_at": self._to_text(row[0]),
                         "space_nm": space_nm,
                         "sql_id": sql_id,
-                        "row_id": self._to_text(row[3]),
-                        "sql_kind": self._to_text(row[4]),
-                        "status": self._to_text(row[5]),
-                        "model_name": self._to_text(row[6]),
-                        "elapsed_seconds": self._json_value(row[7]),
-                        "retry_no": self._num(row[8]),
-                        "stage_name": self._to_text(row[9]),
-                        "message": self._to_text(row[10]),
+                        "row_id": "",
+                        "sql_kind": self._to_text(row[3]),
+                        "status": self._to_text(row[4]),
+                        "model_name": "",
+                        "retry_no": self._num(row[6]),
+                        "stage_name": self._to_text(row[7]),
+                        "message": self._to_text(row[8]),
                         "sql_snippet": "",
                     }
                 )
         return logs
+
+    def _split_sql_map_id(self, value: Any) -> tuple[str, str]:
+        text = self._to_text(value)
+        if " / " not in text:
+            return text, ""
+        sql_id, space_nm = text.split(" / ", 1)
+        return sql_id.strip(), space_nm.strip()
 
     def _latest_per_job(self, logs: list[dict[str, Any]], retry_field: str) -> list[dict[str, Any]]:
         selected: dict[str, dict[str, Any]] = {}

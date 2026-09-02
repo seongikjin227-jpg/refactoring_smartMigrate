@@ -23,7 +23,7 @@
 
 - 컴포넌트 이동, 함수 실행, loop item, sleep 전후 확인: `smartmigrate.workflow` logger -> `SmartMigrateDBHandler` -> `NEXT_MIG_LOG`
 - SQL 생성/실행/검증/재시도/실패 이력: 기존 `10C` 업무 로그 유지
-- SQL 변환/튜닝/포맷팅 상세 이력: 기존 `12C`/`15C`/`17C`의 `NEXT_SQL_LOG` 기록 유지
+- SQL 변환/튜닝/포맷팅 상세 이력: `12C`/`15C`/`17C`도 `smartmigrate.workflow` logger -> `SmartMigrateDBHandler` -> `NEXT_MIG_LOG`로 기록
 
 ## 2. Logger 기준
 
@@ -102,10 +102,12 @@ logging.getLogger("smartmigrate.workflow").info("before build_result", extra={"w
 `workflow_log` list 순서는 다음과 같다.
 
 ```text
-map_id, mig_kind, log_type, log_level, step_name, status, retry_count
+map_id, mig_kind, log_type, log_level, step_name, status, retry_count, generate_sql
 ```
 
 `MESSAGE` 컬럼에는 `logger.info(...)` 또는 `logger.error(...)`의 첫 번째 메시지를 사용한다. 같은 메시지를 `workflow_log` list 안에 중복해서 쓰지 않는다.
+
+`generate_sql`은 선택값이다. 일반 workflow 이동 로그는 7개 값만 넣으면 `GENERATE_SQL` 컬럼에 `NULL`이 들어간다. 최종 LLM 프롬프트, 생성 SQL, 검증 SQL처럼 본문을 남겨야 하는 경우에만 8번째 값으로 넣는다.
 
 ## 6. NEXT_MIG_LOG 기준
 
@@ -121,6 +123,7 @@ STEP_NAME
 STATUS
 MESSAGE
 RETRY_COUNT
+GENERATE_SQL
 CREATED_AT
 ```
 
@@ -128,7 +131,11 @@ CREATED_AT
 
 `UPD_TS`는 사용하지 않는다. Langflow 테스트 DB 기준 `NEXT_MIG_LOG`에는 `CREATED_AT`은 있고 `UPD_TS`는 없다.
 
-Runtime workflow log에서는 `GENERATE_SQL`을 비워 둔다. 생성 SQL이나 실행 SQL은 기존 `10C` 업무 로그에서 기록한다.
+일반 runtime workflow log에서는 `GENERATE_SQL`을 비워 둔다. 생성 SQL, 검증 SQL, 변환 SQL, 튜닝 SQL, 포맷팅 SQL처럼 본문이 필요한 업무 로그는 logging 호출의 8번째 값으로 전달해서 `GENERATE_SQL`에 기록한다.
+
+`10C_migOneJobPocExecutor`의 업무 로그는 `MIG_KIND = DB_MIGRATION`으로 기록한다. LLM 호출 직전에 최종 프롬프트 조합 결과를 logging으로 남기며, `LOG_TYPE = PROMPT_BUILD`, `STEP_NAME = PROMPT_BUILD`를 사용한다. 프롬프트 전문은 `workflow_log`의 8번째 값으로 전달해서 `GENERATE_SQL` CLOB 컬럼에 저장한다.
+
+`12C`/`15C`/`17C`의 SQL pipeline 로그도 `NEXT_SQL_LOG`를 사용하지 않고 `NEXT_MIG_LOG`에 기록한다. 이때 `MIG_KIND`는 각각 `SQL_CONVERSION`, `SQL_TUNING`, `SQL_FORMATTING`을 사용하고, 기존 `SPACE_NM`과 `SQL_ID`는 `MAP_ID`에 `sql_id / space_nm` 형식으로 합쳐서 저장한다. SQL 본문은 `GENERATE_SQL` 컬럼에 저장한다.
 
 ## 7. Handler 정리
 
@@ -151,9 +158,9 @@ for handler in list(logger.handlers):
 | 컴포넌트 | 기존 기록 대상 | 유지 이유 |
 |---|---|---|
 | `10C_migOneJobPocExecutor` | `NEXT_MIG_LOG` | migration 단계, retry, 생성/실행 SQL, 실패 이력 |
-| `12C_sqlConversionOneJobPocExecutor` | `NEXT_SQL_LOG` | SQL 변환 결과와 단계 메타데이터 |
-| `15C_sqlTuningOneJobPocExecutor` | `NEXT_SQL_LOG` | SQL 튜닝 결과와 단계 메타데이터 |
-| `17C_sqlFormattingOneJobPocExecutor` | `NEXT_SQL_LOG` | SQL 포맷팅 결과와 단계 메타데이터 |
+| `12C_sqlConversionOneJobPocExecutor` | `NEXT_MIG_LOG` | SQL 변환 결과와 단계 메타데이터 |
+| `15C_sqlTuningOneJobPocExecutor` | `NEXT_MIG_LOG` | SQL 튜닝 결과와 단계 메타데이터 |
+| `17C_sqlFormattingOneJobPocExecutor` | `NEXT_MIG_LOG` | SQL 포맷팅 결과와 단계 메타데이터 |
 
 ## 9. 확인 쿼리
 
