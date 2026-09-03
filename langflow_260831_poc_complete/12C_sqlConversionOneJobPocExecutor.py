@@ -623,12 +623,13 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         source_tables = self._source_tables(target_table)
         general_rules = self._load_rag_general_rules(db_config, "SQL_CONVERSION", source_tables, map_id)
         examples = self._retrieve_rag_examples(db_config, rag_config, "SQL_CONVERSION", source_sql, source_tables, map_id)
+        correct_sql_hint_text = self._correct_sql_hint_text(db_config, source_sql, job.get("row_id"), map_id, retry_count, "TO_SQL")
         prompt = self._build_prompt(
             "TOBE_SQL",
             from_sql=source_sql,
             mapping_schema_text=self._mapping_prompt_text(mapping_rules, general_rules, examples, db_config),
             target_schema=db_config["target_schema"],
-            correct_sql_hint_text="- (empty)",
+            correct_sql_hint_text=correct_sql_hint_text,
             last_error=last_error or "None",
         )
         self._log_prompt(map_id, "TOBE_SQL_PROMPT", prompt, retry_count)
@@ -667,7 +668,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 from_sql=source_sql,
                 from_schema=db_config["source_schema"],
                 asis_source_filter_conditions=self._source_filter_prompt_text(mapping_rules),
-                correct_sql_hint_text="- (empty)",
+                correct_sql_hint_text=self._correct_sql_hint_text(db_config, source_sql, job.get("row_id"), map_id, retry_count, "BIND_SQL"),
                 last_error=last_error or "None",
             )
             if "FINAL_RETRY_MODE=ON" in str(last_error or "").upper():
@@ -713,7 +714,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             from_schema=db_config["source_schema"],
             tobe_schema=db_config["target_schema"],
             bind_set_text=bind_set or "- no bind case",
-            correct_sql_hint_text="- (empty)",
+            correct_sql_hint_text=self._correct_sql_hint_text(db_config, source_sql, job.get("row_id"), map_id, retry_count, "TEST_SQL"),
             last_error=last_error or "None",
         )
         if retry_count >= self._configured_retry_limit():
@@ -1089,16 +1090,22 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             import faiss
             import numpy as np
 
-            vectors = self._embed_texts([self._rule_embedding_text(rule) for rule in rules] + [block["normalized_sql"] for block in blocks], rag_config)
-            rule_vectors = np.asarray(vectors[: len(rules)], dtype="float32")
-            block_vectors = np.asarray(vectors[len(rules) :], dtype="float32")
+            cached_rule_vectors = [self._rule_blob_vector(rule, np) for rule in rules]
+            if cached_rule_vectors and all(vector is not None for vector in cached_rule_vectors):
+                rule_vectors = np.asarray(cached_rule_vectors, dtype="float32")
+                block_vectors = np.asarray(self._embed_texts([block["normalized_sql"] for block in blocks], rag_config), dtype="float32")
+                method = "faiss_blob_vector"
+            else:
+                vectors = self._embed_texts([self._rule_embedding_text(rule) for rule in rules] + [block["normalized_sql"] for block in blocks], rag_config)
+                rule_vectors = np.asarray(vectors[: len(rules)], dtype="float32")
+                block_vectors = np.asarray(vectors[len(rules) :], dtype="float32")
+                method = "faiss_vector"
             faiss.normalize_L2(rule_vectors)
             faiss.normalize_L2(block_vectors)
             index = faiss.IndexFlatIP(rule_vectors.shape[1])
             index.add(rule_vectors)
             top_k = self._positive_int(os.getenv("TOBE_SQL_TUNING_TOP_K"), 3) if category == "SQL_TUNING" else 3
             scores, indexes = index.search(block_vectors, min(top_k, len(rules)))
-            method = "faiss_vector"
             matches_by_block = [
                 [(rules[int(rule_index)], float(score)) for score, rule_index in zip(scores[i], indexes[i]) if rule_index >= 0]
                 for i in range(len(blocks))
@@ -1121,7 +1128,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         payloads = [
             {
                 "block_id": block["block_id"], "block_type": block["block_type"], "source_sql": block["sql"], "search_method": method,
-                "top_rule_matches": [{key: value for key, value in rule.items() if key != "normalized_source_sql"} | {"score": round(score, 6)} for rule, score in matches],
+                "top_rule_matches": [{key: value for key, value in rule.items() if key not in {"normalized_source_sql", "embedding_vector"}} | {"score": round(score, 6)} for rule, score in matches],
             }
             for block, matches in zip(blocks, matches_by_block)
         ]
@@ -1145,10 +1152,12 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         source_sql_expr = "SOURCE_SQL" if "SOURCE_SQL" in columns else "TO_CLOB(NULL)"
         target_sql_expr = "TARGET_SQL" if "TARGET_SQL" in columns else "TO_CLOB(NULL)"
         source_tables_expr = "SOURCE_TABLES" if "SOURCE_TABLES" in columns else "CAST(NULL AS VARCHAR2(4000))"
+        vector_column = self._clean_identifier(os.getenv("RAG_EMBED_VECTOR_COLUMN", "EMBEDDING_VECTOR"))
+        embedding_vector_expr = vector_column if rule_type == RAG_SEARCH and vector_column in columns else "NULL"
         with self._connect(db_config) as conn:
             cur = conn.cursor()
             cur.execute(
-                f"""SELECT RAG_ID, {source_tables_expr}, {guidance_expr}, {source_sql_expr}, {target_sql_expr}
+                f"""SELECT RAG_ID, {source_tables_expr}, {guidance_expr}, {source_sql_expr}, {target_sql_expr}, {embedding_vector_expr}
                       FROM {table}
                      WHERE UPPER(TRIM(CATEGORY)) = :category
                        AND UPPER(TRIM(RULE_TYPE)) = :rule_type
@@ -1171,6 +1180,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                     "guidance": [line.strip() for line in self._lob_to_str(row[2]).splitlines() if line.strip()],
                     "source_sql": source_sql, "target_sql": self._lob_to_str(row[4]).strip(),
                     "normalized_source_sql": self._normalize_sql_shape(source_sql),
+                    "embedding_vector": self._blob_to_bytes(row[5]) if rule_type == RAG_SEARCH else b"",
                 })
         logging.getLogger("smartmigrate.workflow").info(
             f"RAG {rule_type} loaded category={category}",
@@ -1316,6 +1326,31 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
     def _rule_embedding_text(self, rule: dict[str, Any]) -> str:
         return "\n".join([str(rule.get("normalized_source_sql") or ""), str(rule.get("source_sql") or "")]).strip()
 
+    # Restore a cached float32 vector saved in NEXT_MIG_RAG_INFO.EMBEDDING_VECTOR.
+    def _rule_blob_vector(self, rule: dict[str, Any], np: Any) -> Any:
+        blob = rule.get("embedding_vector")
+        if not blob:
+            return None
+        vector = np.frombuffer(blob, dtype="<f4")
+        if vector.ndim != 1 or vector.size == 0:
+            return None
+        return vector.astype("float32", copy=False)
+
+    # Convert Oracle BLOB values into bytes before leaving the cursor scope.
+    def _blob_to_bytes(self, value: Any) -> bytes:
+        if value is None:
+            return b""
+        if isinstance(value, bytes):
+            return value
+        if isinstance(value, bytearray):
+            return bytes(value)
+        if hasattr(value, "read"):
+            data = value.read()
+            if data is None:
+                return b""
+            return bytes(data) if isinstance(data, bytearray) else data
+        return bytes(value)
+
     # Score two normalized SQL strings when vector search cannot run.
     def _lexical_similarity(self, left: str, right: str) -> float:
         left_tokens = set(re.findall(r"[A-Z_]+|\d+", left.upper()))
@@ -1353,6 +1388,99 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             lines.append(f"- RAG_ID={rule.get('rule_id')} SOURCE_TABLES={','.join(rule.get('source_tables') or []) or 'ALL'}")
             lines.extend(f"  GUIDANCE: {guide}" for guide in rule.get("guidance") or [])
         return "\n".join(lines) if lines else "- (empty)"
+
+    # Retrieve one human-corrected conversion row similar to the current FROM SQL.
+    def _correct_sql_hint_text(self, db_config: dict[str, Any], source_sql: str, current_row_id: str | None, map_id: str, retry_count: int, hint_column: str) -> str:
+        # Candidates are successful user-edited conversion rows; current row is excluded.
+        table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
+        columns = self._table_columns(db_config, table)
+        hint_column = str(hint_column or "").strip().upper()
+        if hint_column not in {"TO_SQL", "BIND_SQL", "TEST_SQL"}:
+            return "- (empty)"
+        required = {"FR_SQL", hint_column, "STATUS_CONVERSION", "USER_EDITED"}
+        if not required.issubset(columns):
+            return "- (empty)"
+
+        edit_fr_expr = "EDIT_FR_SQL" if "EDIT_FR_SQL" in columns else "TO_CLOB(NULL)"
+        space_nm_expr = "SPACE_NM" if "SPACE_NM" in columns else "CAST(NULL AS VARCHAR2(4000))"
+        sql_id_expr = "SQL_ID" if "SQL_ID" in columns else "CAST(NULL AS VARCHAR2(4000))"
+        order_expr = "UPD_TS DESC NULLS LAST" if "UPD_TS" in columns else "ROWID"
+        limit = self._positive_int(os.getenv("CORRECT_SQL_HINT_CORPUS_LIMIT"), 2000)
+        query = f"""
+            SELECT ROWIDTOCHAR(ROWID), {space_nm_expr}, {sql_id_expr}, FR_SQL, {edit_fr_expr}, {hint_column}
+              FROM {table}
+             WHERE UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y'
+               AND UPPER(TRIM(NVL(STATUS_CONVERSION, ''))) = :status
+               AND {hint_column} IS NOT NULL
+             ORDER BY {order_expr}
+             FETCH FIRST {limit} ROWS ONLY
+        """
+        try:
+            with self._connect(db_config) as conn:
+                cur = conn.cursor()
+                cur.execute(query, {"status": CONVERSION_PASS})
+                rows = cur.fetchall()
+        except Exception as exc:
+            logging.getLogger("smartmigrate.workflow").warning(
+                f"Correct SQL hint skipped: {type(exc).__name__}: {exc}",
+                extra={"workflow_log": [map_id, "SQL_CONVERSION", "CORRECT_SQL_HINT", "WARN", f"LOAD_{hint_column}_HINT", "SKIP", retry_count]},
+            )
+            return "- (empty)"
+
+        query_sql = self._normalize_sql_shape(source_sql)
+        candidates: list[dict[str, str]] = []
+        for row in rows:
+            row_id = self._lob_to_str(row[0]).strip()
+            if current_row_id and row_id == str(current_row_id).strip():
+                continue
+            candidate_from_sql = self._lob_to_str(row[4]).strip() or self._lob_to_str(row[3]).strip()
+            candidate_hint_sql = self._lob_to_str(row[5]).strip()
+            if not candidate_from_sql or not candidate_hint_sql:
+                continue
+            candidates.append(
+                {
+                    "row_id": row_id,
+                    "space_nm": self._lob_to_str(row[1]).strip(),
+                    "sql_id": self._lob_to_str(row[2]).strip(),
+                    "from_sql": candidate_from_sql,
+                    "normalized_from_sql": self._normalize_sql_shape(candidate_from_sql),
+                    "hint_sql": candidate_hint_sql,
+                }
+            )
+
+        method = "token_fallback"
+        try:
+            rag_config = self._rag_config()
+            vectors = self._embed_texts([candidate["normalized_from_sql"] for candidate in candidates] + [query_sql], rag_config)
+            query_vector = vectors[-1]
+            scored = []
+            for candidate, vector in zip(candidates, vectors[:-1]):
+                left_norm = sum(float(value) * float(value) for value in vector) ** 0.5
+                right_norm = sum(float(value) * float(value) for value in query_vector) ** 0.5
+                score = sum(float(left) * float(right) for left, right in zip(vector, query_vector)) / (left_norm * right_norm) if left_norm and right_norm else 0.0
+                scored.append((score, candidate))
+            method = "embedding"
+        except Exception:
+            scored = [(self._lexical_similarity(query_sql, candidate["normalized_from_sql"]), candidate) for candidate in candidates]
+
+        if not scored:
+            logging.getLogger("smartmigrate.workflow").info(
+                "Correct SQL hint not found",
+                extra={"workflow_log": [map_id, "SQL_CONVERSION", "CORRECT_SQL_HINT", "INFO", f"LOAD_{hint_column}_HINT", "SKIP", retry_count, f"candidates={len(rows)}"]},
+            )
+            return "- (empty)"
+
+        score, hint = max(scored, key=lambda item: item[0])
+        lines = [
+            f"- SCORE={round(score, 6)} | METHOD={method} | SPACE_NM={hint['space_nm']} | SQL_ID={hint['sql_id']}",
+            f"  FROM_SQL: {hint['from_sql']}",
+            f"  {hint_column}: {hint['hint_sql']}",
+        ]
+        logging.getLogger("smartmigrate.workflow").info(
+            "Correct SQL hint loaded",
+            extra={"workflow_log": [map_id, "SQL_CONVERSION", "CORRECT_SQL_HINT", "INFO", f"LOAD_{hint_column}_HINT", "PASS", retry_count, f"method={method}, score={round(score, 6)}, space_nm={hint['space_nm']}, sql_id={hint['sql_id']}"]},
+        )
+        return "\n".join(lines)
 
     # Increment SEARCH RAG HIT_CNT after a prompt uses retrieved examples.
     def _increment_rag_hits(self, db_config: dict[str, Any], examples: list[dict[str, Any]]) -> None:
