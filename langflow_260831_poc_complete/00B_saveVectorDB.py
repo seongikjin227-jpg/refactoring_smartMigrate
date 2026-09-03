@@ -18,6 +18,8 @@ RAG_TABLE = "NEXT_MIG_RAG_INFO"
 SQL_TABLE = "NEXT_SQL_INFO"
 RAG_COLLECTION = "SM_RAG_RULES"
 CORRECT_SQL_COLLECTION = "SM_CORRECT_SQL"
+RAG_GENERAL = "GENERAL"
+RAG_SEARCH = "SEARCH"
 BATCH_SIZE = 32
 TEXT_MAX = 65535
 
@@ -237,6 +239,7 @@ class NewType00BSaveVectorDB(Component):
                 source_sql = self._lob_to_str(row[6]).strip()
                 target_sql = self._lob_to_str(row[7]).strip()
                 guidance = self._lob_to_str(row[5]).strip()
+                # dense_vector is generated from SOURCE_SQL only; guidance/target_sql stay as prompt metadata.
                 content = self._rag_content(category, rule_type, guidance, source_sql, target_sql)
                 is_supported = category in {"SQL_CONVERSION", "SQL_TUNING"} and rule_type in {RAG_GENERAL, RAG_SEARCH}
                 has_rule_body = bool(source_sql) if rule_type == RAG_SEARCH else bool(guidance or source_sql or target_sql)
@@ -317,6 +320,7 @@ class NewType00BSaveVectorDB(Component):
                         to_sql=to_sql,
                         bind_sql=bind_sql,
                         test_sql=test_sql,
+                        # dense_vector is generated from EDIT_FR_SQL first, otherwise FR_SQL, for correct SQL hint retrieval.
                         content=self._sql_content(source_sql),
                         is_active=is_active,
                         updated_at=self._lob_to_str(row[12]),
@@ -360,7 +364,11 @@ class NewType00BSaveVectorDB(Component):
 
     def _rag_content(self, category: str, rule_type: str, guidance: str, source_sql: str, target_sql: str) -> str:
         source = source_sql.strip()
-        return "\n".join([category, rule_type, self._normalize_sql_shape(source), guidance.strip(), source, target_sql.strip()]).strip()
+        if source:
+            return self._sql_content(source)
+        if rule_type == RAG_GENERAL:
+            return guidance.strip() or target_sql.strip() or category
+        return ""
 
     def _sql_content(self, source_sql: str) -> str:
         source = source_sql.strip()
@@ -409,7 +417,13 @@ class NewType00BSaveVectorDB(Component):
     def _milvus_client(self, config: dict[str, Any]) -> Any:
         from pymilvus import MilvusClient
 
-        return MilvusClient(uri=config["uri"], user=config["username"], password=config["password"], db_name=config["db_name"])
+        return MilvusClient(
+            uri=config["uri"],
+            user=config["username"],
+            password=config["password"],
+            db_name=config["db_name"],
+            timeout=10,
+        )
 
     def _db_config(self) -> dict[str, Any]:
         return {
@@ -486,6 +500,8 @@ class NewType00BSaveVectorDB(Component):
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", clean):
             raise ValueError(f"Invalid Milvus collection name: {clean}")
         return clean
+
+
 
     def _table_columns(self, db_config: dict[str, Any], table: str) -> set[str]:
         owner, table_name = self._split_owner_table(table)

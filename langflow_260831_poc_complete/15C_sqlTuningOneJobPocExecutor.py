@@ -410,6 +410,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         top_k = self._positive_int(os.getenv("TOBE_SQL_TUNING_TOP_K"), 3)
         fetch_k = max(top_k * 5, top_k)
         try:
+            # Embed each current TO_SQL block once, then search those query vectors against Milvus dense_vector.
             client = self._milvus_client()
             config = self._milvus_config()
             vectors = self._embed_texts([block["normalized_sql"] for block in ordered_blocks], rag_config)
@@ -1026,7 +1027,13 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         missing = [key for key in ("uri", "username", "password", "db_name") if not str(config.get(key) or "").strip()]
         if missing:
             raise ValueError(f"missing Milvus config: {', '.join(missing)}")
-        return MilvusClient(uri=config["uri"], user=config["username"], password=config["password"], db_name=config["db_name"])
+        return MilvusClient(
+            uri=config["uri"],
+            user=config["username"],
+            password=config["password"],
+            db_name=config["db_name"],
+            timeout=10,
+        )
 
     def _milvus_rag_entity(self, hit: Any) -> dict[str, Any]:
         entity = self._milvus_entity(hit)

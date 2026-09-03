@@ -24,7 +24,7 @@ CONVERSION_PASS = "PASS-CONVERSION"
 FAIL_TOBE = "FAIL-TOBE"
 FAIL_BIND = "FAIL-BIND"
 FAIL_TEST = "FAIL-TEST"
-SQL_LENGTH_SHORT_MAX = 5000
+TUNED_FR_SQL_PRETUNING_MIN_LENGTH_DEFAULT = 8000
 RAG_SEARCH = "SEARCH"
 RAG_GENERAL = "GENERAL"
 
@@ -47,11 +47,11 @@ class _PromptValues(dict):
 
 
 SQL_PROMPT_TEMPLATES: dict[str, str] = {
-    "BIND_TUNED_SQL": """
+    "TUNED_FR_SQL": """
 You are an Oracle/MyBatis SQL pre-tuning specialist.
 
 [Goal]
-Rewrite the AS-IS SQL only when it is too long or hard to use for bind/test generation.
+Rewrite the AS-IS FROM SQL only when it is too long or hard to use for TO_SQL/BIND_SQL/TEST_SQL generation.
 Keep the same result set and keep all MyBatis bind names and dynamic tags.
 
 [Current FROM SQL]
@@ -597,20 +597,20 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         if saved_tuned_fr_sql:
             return saved_tuned_fr_sql, saved_tuned_fr_sql, self._sql_length_kind(source_sql)
 
-        sql_length = self._sql_length_kind(source_sql)
-        pretuning_enabled = str(os.getenv("BIND_SQL_PRETUNING_ENABLED", "false")).strip().lower() == "true"
-        pretuning_min_length = self._positive_int(os.getenv("BIND_SQL_PRETUNING_MIN_LENGTH"), 8000)
-        if not allow_generate or not pretuning_enabled or (sql_length != "LONG" and len(source_sql) < pretuning_min_length):
+        pretuning_enabled = str(os.getenv("TUNED_FR_SQL_PRETUNING_ENABLED", "false")).strip().lower() == "true"
+        pretuning_min_length = self._tuned_fr_sql_pretuning_min_length()
+        sql_length = self._sql_length_kind(source_sql, pretuning_min_length)
+        if not allow_generate or not pretuning_enabled or len(source_sql) < pretuning_min_length:
             return source_sql, None, sql_length
 
         # Long SQL pre-tuning uses SQL_TUNING RAG only on the final graph attempt.
-        # GENERAL rules are loaded as direct guidance. SEARCH rules are ranked by FAISS vector search
-        # inside _retrieve_rag_examples(), then serialized into the embedded BIND_TUNED_SQL prompt.
+        # GENERAL rules are loaded as direct guidance. SEARCH rules are ranked by Milvus dense_vector
+        # inside _retrieve_rag_examples(), then serialized into the embedded TUNED_FR_SQL prompt.
         source_tables = self._source_tables(target_table)
         tuning_rules = self._load_rag_general_rules(db_config, "SQL_TUNING", source_tables, map_id)
         tuning_examples = self._retrieve_rag_examples(db_config, rag_config, "SQL_TUNING", source_sql, source_tables, map_id)
         prompt = self._build_prompt(
-            "BIND_TUNED_SQL",
+            "TUNED_FR_SQL",
             current_from_sql=source_sql,
             universal_tuning_rules=self._serialize_general_rules(tuning_rules),
             tuning_examples_text=self._serialize_tuning_examples(tuning_examples),
@@ -1065,10 +1065,14 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         edited = str(job.get("edit_fr_sql") or "").strip()
         return edited if edited else str(job.get("fr_sql") or "")
 
-    # Classify SQL length for final-attempt pre-tuning decisions.
-    def _sql_length_kind(self, sql_text: str) -> str:
-        """Classify runtime SQL length using the as-is 5000 character threshold."""
-        return "LONG" if len(str(sql_text or "")) > SQL_LENGTH_SHORT_MAX else "SHORT"
+    # Classify SQL length using the same threshold that gates TUNED_FR_SQL pre-tuning.
+    def _sql_length_kind(self, sql_text: str, threshold: int | None = None) -> str:
+        """Classify runtime SQL length using TUNED_FR_SQL_PRETUNING_MIN_LENGTH."""
+        limit = threshold if threshold is not None else self._tuned_fr_sql_pretuning_min_length()
+        return "LONG" if len(str(sql_text or "")) >= limit else "SHORT"
+
+    def _tuned_fr_sql_pretuning_min_length(self) -> int:
+        return self._positive_int(os.getenv("TUNED_FR_SQL_PRETUNING_MIN_LENGTH"), TUNED_FR_SQL_PRETUNING_MIN_LENGTH_DEFAULT)
 
     # Extract MyBatis bind parameter names and dynamic tag variables.
     def _bind_names(self, sql_text: str) -> list[str]:
@@ -1166,6 +1170,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         fetch_k = max(top_k * 5, top_k)
         matches_by_block: list[list[tuple[dict[str, Any], float]]] = []
         try:
+            # Embed the current SQL/block once, then search that query vector against Milvus dense_vector.
             vectors = self._embed_texts([block["normalized_sql"] for block in blocks], rag_config)
             method = "milvus_dense_vector"
             search_result = client.search(
@@ -1338,11 +1343,11 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         text = re.sub(r"\bSUBQUERY_\d+\b", "SUBQUERY", text, flags=re.I)
         return re.sub(r"\s+", " ", text).strip().upper()
 
-    # Call the embedding endpoint used by FAISS vector search.
+    # Call the embedding endpoint for Milvus dense_vector search queries.
     def _embed_texts(self, texts: list[str], rag_config: dict[str, Any]) -> list[list[float]]:
         endpoint = str(rag_config["rag_embed_base_url"]).strip().rstrip("/")
         if not endpoint:
-            raise ValueError("RAG_EMBED_BASE_URL is required for FAISS retrieval")
+            raise ValueError("RAG_EMBED_BASE_URL is required for Milvus retrieval")
         if not endpoint.endswith("/embeddings"):
             endpoint = f"{endpoint}/embeddings" if endpoint.endswith("/v1") else f"{endpoint}/v1/embeddings"
         headers = {"Content-Type": "application/json"}
@@ -1401,7 +1406,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 lines.append(f"  TARGET_SQL: {match.get('target_sql') or ''}")
         return "\n".join(lines) if lines else "- (empty)"
 
-    # Render SQL_TUNING SEARCH matches for the final-attempt pre-tuning prompt.
+    # Render SQL_TUNING SEARCH matches for the final-attempt TUNED_FR_SQL prompt.
     def _serialize_tuning_examples(self, examples: list[dict[str, Any]]) -> str:
         lines = []
         for block in examples:
@@ -1429,6 +1434,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         hint_field = {"TO_SQL": "to_sql", "BIND_SQL": "bind_sql", "TEST_SQL": "test_sql"}[hint_column]
         config = self._milvus_config()
         try:
+            # Correct SQL hint compares the current FROM SQL embedding with SM_CORRECT_SQL.dense_vector.
             query_vector = self._embed_texts([self._normalize_sql_shape(source_sql)], self._rag_config())[0]
             rows = self._milvus_client().search(
                 collection_name=config["correct_sql_collection"],
@@ -1803,7 +1809,13 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         missing = [key for key in ("uri", "username", "password", "db_name") if not str(config.get(key) or "").strip()]
         if missing:
             raise ValueError(f"missing Milvus config: {', '.join(missing)}")
-        return MilvusClient(uri=config["uri"], user=config["username"], password=config["password"], db_name=config["db_name"])
+        return MilvusClient(
+            uri=config["uri"],
+            user=config["username"],
+            password=config["password"],
+            db_name=config["db_name"],
+            timeout=10,
+        )
 
     def _milvus_rag_entity(self, hit: Any) -> dict[str, Any]:
         entity = self._milvus_entity(hit)
