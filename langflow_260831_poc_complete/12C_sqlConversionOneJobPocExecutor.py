@@ -1149,7 +1149,23 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             )
             return []
 
-    # Retrieve SEARCH RAG examples using the policy for each category.
+    # -------------------------------------------------------------------------
+    # Milvus RAG SEARCH retrieval
+    # -------------------------------------------------------------------------
+    # 12C no longer builds an in-memory FAISS index from all Oracle RAG rows.
+    # Runtime retrieval is:
+    # 1. take the current SQL text that 12C is processing,
+    # 2. normalize it to a stable SQL shape,
+    # 3. call the embedding API once per SQL/block,
+    # 4. send that query vector to Milvus,
+    # 5. search against SM_RAG_RULES.dense_vector with COSINE metric.
+    #
+    # The dense_vector values in SM_RAG_RULES are created by 00B from
+    # NEXT_MIG_RAG_INFO.SOURCE_SQL. Therefore this search means:
+    # "current FROM SQL/block" vs "stored RAG SOURCE_SQL examples".
+    #
+    # Returned guidance_text/source_sql/target_sql are prompt metadata. They are
+    # not used for distance math here; only dense_vector is used for similarity.
     def _retrieve_rag_examples(self, db_config: dict[str, Any], rag_config: dict[str, Any], category: str, sql_text: str, source_tables: set[str], map_id: str) -> list[dict[str, Any]]:
         if category == "SQL_TUNING":
             blocks = self._split_sql_blocks(sql_text)
@@ -1170,7 +1186,9 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         fetch_k = max(top_k * 5, top_k)
         matches_by_block: list[list[tuple[dict[str, Any], float]]] = []
         try:
-            # Embed the current SQL/block once, then search that query vector against Milvus dense_vector.
+            # Embed the current SQL/block once, then search that query vector
+            # against Milvus dense_vector. This is a remote Milvus vector search,
+            # not a local FAISS search or an Oracle full-table embedding pass.
             vectors = self._embed_texts([block["normalized_sql"] for block in blocks], rag_config)
             method = "milvus_dense_vector"
             search_result = client.search(
@@ -1180,6 +1198,9 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 filter=filter_expr,
                 limit=fetch_k,
                 output_fields=output_fields,
+                # Milvus calculates vector similarity with COSINE distance.
+                # This matches the dense embedding use case better than lexical
+                # equality and replaces the old local-vector-search approach.
                 search_params={"metric_type": "COSINE"},
             )
             for hits in search_result:
@@ -1219,7 +1240,9 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         )
         return payloads
 
-    # Load RAG metadata from Milvus for GENERAL guidance.
+    # Load GENERAL RAG guidance from Milvus with scalar filters only.
+    # GENERAL rules are not similarity-ranked; they are selected by category,
+    # rule_type, is_active, and source table applicability.
     def _load_rag_rules(self, db_config: dict[str, Any], category: str, rule_type: str, source_tables: set[str], map_id: str) -> list[dict[str, Any]]:
         config = self._milvus_config()
         rows = self._milvus_client().query(
@@ -1426,7 +1449,17 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             lines.extend(f"  GUIDANCE: {guide}" for guide in rule.get("guidance") or [])
         return "\n".join(lines) if lines else "- (empty)"
 
-    # Retrieve one human-corrected conversion row similar to the current FROM SQL.
+    # -------------------------------------------------------------------------
+    # Milvus Correct SQL hint retrieval
+    # -------------------------------------------------------------------------
+    # This searches SM_CORRECT_SQL, which 00B builds from NEXT_SQL_INFO.
+    # dense_vector is generated from EDIT_FR_SQL first, otherwise FR_SQL.
+    #
+    # Runtime meaning:
+    # "current FROM SQL" vs "previously corrected FROM SQL".
+    #
+    # If a similar user-edited PASS row exists, its TO_SQL/BIND_SQL/TEST_SQL is
+    # injected as a hint into the corresponding generation prompt.
     def _correct_sql_hint_text(self, db_config: dict[str, Any], source_sql: str, current_row_id: str | None, map_id: str, retry_count: int, hint_column: str) -> str:
         hint_column = str(hint_column or "").strip().upper()
         if hint_column not in {"TO_SQL", "BIND_SQL", "TEST_SQL"}:
@@ -1434,7 +1467,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         hint_field = {"TO_SQL": "to_sql", "BIND_SQL": "bind_sql", "TEST_SQL": "test_sql"}[hint_column]
         config = self._milvus_config()
         try:
-            # Correct SQL hint compares the current FROM SQL embedding with SM_CORRECT_SQL.dense_vector.
+            # Correct SQL hint compares the current FROM SQL embedding with
+            # SM_CORRECT_SQL.dense_vector using Milvus COSINE search.
             query_vector = self._embed_texts([self._normalize_sql_shape(source_sql)], self._rag_config())[0]
             rows = self._milvus_client().search(
                 collection_name=config["correct_sql_collection"],
@@ -1443,6 +1477,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 filter=f'user_edited == "Y" and is_active == true and {hint_field} != ""',
                 limit=10,
                 output_fields=["row_id", "space_nm", "sql_id", "source_sql", "to_sql", "bind_sql", "test_sql", "status_conversion", "user_edited"],
+                # COSINE metric is explicitly requested in Milvus search_params.
+                # No FAISS index is created in this path.
                 search_params={"metric_type": "COSINE"},
             )
             hits = rows[0] if rows else []
@@ -1803,6 +1839,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         }
 
     def _milvus_client(self) -> Any:
+        # Milvus 2.6.5 SDK connection. The URI is passed exactly as entered in
+        # Langflow/env; do not split host/port or rewrite it before calling SDK.
         from pymilvus import MilvusClient
 
         config = self._milvus_config()
