@@ -1407,46 +1407,47 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         order_expr = "UPD_TS DESC NULLS LAST" if "UPD_TS" in columns else "ROWID"
         limit = self._positive_int(os.getenv("CORRECT_SQL_HINT_CORPUS_LIMIT"), 2000)
         query = f"""
-            SELECT ROWIDTOCHAR(ROWID), {space_nm_expr}, {sql_id_expr}, FR_SQL, {edit_fr_expr}, {hint_column}
-              FROM {table}
-             WHERE UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y'
-               AND UPPER(TRIM(NVL(STATUS_CONVERSION, ''))) = :status
-               AND {hint_column} IS NOT NULL
-             ORDER BY {order_expr}
-             FETCH FIRST {limit} ROWS ONLY
+            SELECT *
+              FROM (
+                    SELECT ROWIDTOCHAR(ROWID), {space_nm_expr}, {sql_id_expr}, FR_SQL, {edit_fr_expr}, {hint_column}
+                      FROM {table}
+                     WHERE UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y'
+                       AND UPPER(TRIM(NVL(STATUS_CONVERSION, ''))) = :status
+                       AND {hint_column} IS NOT NULL
+                     ORDER BY {order_expr}
+                   )
+             WHERE ROWNUM <= {limit}
         """
+        query_sql = self._normalize_sql_shape(source_sql)
+        candidates: list[dict[str, str]] = []
         try:
             with self._connect(db_config) as conn:
                 cur = conn.cursor()
                 cur.execute(query, {"status": CONVERSION_PASS})
-                rows = cur.fetchall()
+                for row in cur.fetchall():
+                    row_id = self._lob_to_str(row[0]).strip()
+                    if current_row_id and row_id == str(current_row_id).strip():
+                        continue
+                    candidate_from_sql = self._lob_to_str(row[4]).strip() or self._lob_to_str(row[3]).strip()
+                    candidate_hint_sql = self._lob_to_str(row[5]).strip()
+                    if not candidate_from_sql or not candidate_hint_sql:
+                        continue
+                    candidates.append(
+                        {
+                            "row_id": row_id,
+                            "space_nm": self._lob_to_str(row[1]).strip(),
+                            "sql_id": self._lob_to_str(row[2]).strip(),
+                            "from_sql": candidate_from_sql,
+                            "normalized_from_sql": self._normalize_sql_shape(candidate_from_sql),
+                            "hint_sql": candidate_hint_sql,
+                        }
+                    )
         except Exception as exc:
             logging.getLogger("smartmigrate.workflow").warning(
                 f"Correct SQL hint skipped: {type(exc).__name__}: {exc}",
                 extra={"workflow_log": [map_id, "SQL_CONVERSION", "CORRECT_SQL_HINT", "WARN", f"LOAD_{hint_column}_HINT", "SKIP", retry_count]},
             )
             return "- (empty)"
-
-        query_sql = self._normalize_sql_shape(source_sql)
-        candidates: list[dict[str, str]] = []
-        for row in rows:
-            row_id = self._lob_to_str(row[0]).strip()
-            if current_row_id and row_id == str(current_row_id).strip():
-                continue
-            candidate_from_sql = self._lob_to_str(row[4]).strip() or self._lob_to_str(row[3]).strip()
-            candidate_hint_sql = self._lob_to_str(row[5]).strip()
-            if not candidate_from_sql or not candidate_hint_sql:
-                continue
-            candidates.append(
-                {
-                    "row_id": row_id,
-                    "space_nm": self._lob_to_str(row[1]).strip(),
-                    "sql_id": self._lob_to_str(row[2]).strip(),
-                    "from_sql": candidate_from_sql,
-                    "normalized_from_sql": self._normalize_sql_shape(candidate_from_sql),
-                    "hint_sql": candidate_hint_sql,
-                }
-            )
 
         method = "token_fallback"
         try:
@@ -1466,7 +1467,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         if not scored:
             logging.getLogger("smartmigrate.workflow").info(
                 "Correct SQL hint not found",
-                extra={"workflow_log": [map_id, "SQL_CONVERSION", "CORRECT_SQL_HINT", "INFO", f"LOAD_{hint_column}_HINT", "SKIP", retry_count, f"candidates={len(rows)}"]},
+                extra={"workflow_log": [map_id, "SQL_CONVERSION", "CORRECT_SQL_HINT", "INFO", f"LOAD_{hint_column}_HINT", "SKIP", retry_count, f"candidates={len(candidates)}"]},
             )
             return "- (empty)"
 
