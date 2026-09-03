@@ -28,6 +28,17 @@ SQL_LENGTH_SHORT_MAX = 5000
 RAG_SEARCH = "SEARCH"
 RAG_GENERAL = "GENERAL"
 
+SQL_OUTPUT_FORMATTING_GUIDE = """
+
+[SQL Formatting Guide]
+- Format the generated SQL before returning it.
+- Use line breaks for SELECT, FROM, JOIN, WHERE, GROUP BY, HAVING, ORDER BY, UNION ALL, INSERT INTO, VALUES, UPDATE, SET, and DELETE FROM clauses.
+- Use 4 spaces for indentation in nested subqueries, CASE expressions, MyBatis dynamic tags, and column lists.
+- Put each major SELECT expression or INSERT column on its own line when the list has more than three items.
+- Keep MyBatis tags and bind markers intact; only change whitespace and indentation.
+- Do not add comments, explanations, markdown fences, wrappers, or a trailing semicolon.
+""".rstrip()
+
 
 class _PromptValues(dict):
     # Keep unknown prompt placeholders visible instead of raising KeyError.
@@ -839,8 +850,45 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "completed_count": completed,
             "remaining_count": max(total - completed, 0),
             "stages": stages,
+            "generated_sql_list": self._generated_sql_list(payload, job, extra),
             "db_status_updated": bool(job.get("row_id")),
         }
+
+    def _generated_sql_list(self, payload: dict[str, Any], job: dict[str, Any], extra: dict[str, Any]) -> list[dict[str, Any]]:
+        result = [dict(item) for item in payload.get("generated_sql_list") or [] if isinstance(item, dict)]
+        row_id = job.get("row_id") or payload.get("row_id")
+        for key, column in (
+            ("tuned_fr_sql", "TUNED_FR_SQL"),
+            ("to_sql", "TO_SQL"),
+            ("bind_sql", "BIND_SQL"),
+            ("test_sql", "TEST_SQL"),
+        ):
+            if str(extra.get(key) or "").strip():
+                result.append(
+                    {
+                        "table": "NEXT_SQL_INFO",
+                        "row_id": row_id,
+                        "column": column,
+                        "source_component": "12C_sqlConversionOneJobPocExecutor",
+                    }
+                )
+        return self._dedupe_generated_sql_list(result)
+
+    def _dedupe_generated_sql_list(self, values: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str, str]] = set()
+        for item in values:
+            key = (
+                str(item.get("table") or "").upper(),
+                str(item.get("row_id") or ""),
+                str(item.get("key_value") or ""),
+                str(item.get("column") or "").upper(),
+            )
+            if key in seen or not key[-1]:
+                continue
+            seen.add(key)
+            result.append(item)
+        return result
 
     # Map final failure status to the stage name that should be shown in logs.
     def _failure_stage(self, status: str) -> str:
@@ -1125,6 +1173,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         else:
             top_matches = sorted([item for matches in matches_by_block for item in matches], key=lambda item: item[1], reverse=True)[:3]
             matches_by_block = [top_matches]
+        match_summary = self._rag_match_summary(blocks, matches_by_block)
         payloads = [
             {
                 "block_id": block["block_id"], "block_type": block["block_type"], "source_sql": block["sql"], "search_method": method,
@@ -1136,7 +1185,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         search_mode = "block_top3_score_0.7" if category == "SQL_TUNING" else "full_sql_top3"
         logging.getLogger("smartmigrate.workflow").info(
             f"RAG SEARCH completed category={category}",
-            extra={"workflow_log": [map_id, "SQL_CONVERSION", "RAG_RETRIEVE", "INFO", f"{category}_SEARCH", "PASS", 0, f"method={method}, mode={search_mode}, blocks={len(blocks)}, rules={len(rules)}, matches={match_count}, threshold={'0.7' if category == 'SQL_TUNING' else 'none'}"]},
+            extra={"workflow_log": [map_id, "SQL_CONVERSION", "RAG_RETRIEVE", "INFO", f"{category}_SEARCH", "PASS", 0, f"method={method}, mode={search_mode}, blocks={len(blocks)}, rules={len(rules)}, matches={match_count}, threshold={'0.7' if category == 'SQL_TUNING' else 'none'}, matched={match_summary}"]},
         )
         return payloads
 
@@ -1326,6 +1375,17 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
     def _rule_embedding_text(self, rule: dict[str, Any]) -> str:
         return "\n".join([str(rule.get("normalized_source_sql") or ""), str(rule.get("source_sql") or "")]).strip()
 
+    # Build a compact block -> RAG_ID(score) summary for DB logs.
+    def _rag_match_summary(self, blocks: list[dict[str, str]], matches_by_block: list[list[tuple[dict[str, Any], float]]]) -> str:
+        parts: list[str] = []
+        for block, matches in zip(blocks, matches_by_block):
+            if not matches:
+                parts.append(f"{block.get('block_id')}:none")
+                continue
+            matched = ",".join(f"{rule.get('rule_id')}:{round(float(score), 4)}" for rule, score in matches[:5])
+            parts.append(f"{block.get('block_id')}:{matched}")
+        return "; ".join(parts)[:3500]
+
     # Restore a cached float32 vector saved in NEXT_MIG_RAG_INFO.EMBEDDING_VECTOR.
     def _rule_blob_vector(self, rule: dict[str, Any], np: Any) -> Any:
         blob = rule.get("embedding_vector")
@@ -1509,7 +1569,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
 
     # Render an embedded prompt template without reading external prompt files.
     def _build_prompt(self, template_name: str, **values: str) -> str:
-        return SQL_PROMPT_TEMPLATES[template_name].format_map(_PromptValues(values))
+        return SQL_PROMPT_TEMPLATES[template_name].format_map(_PromptValues(values)) + SQL_OUTPUT_FORMATTING_GUIDE
 
     # Store the final LLM prompt text through the SmartMigrate workflow logger.
     def _log_prompt(self, map_id: str, step_name: str, prompt: str, retry_count: int) -> None:

@@ -387,8 +387,39 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             "completed_count": completed,
             "remaining_count": max(total - completed, 0),
             "stages": stages,
+            "generated_sql_list": self._generated_sql_list(payload, job, extra),
             "db_status_updated": bool(job.get("row_id")) and not extra.get("tuning_skipped"),
         }
+
+    def _generated_sql_list(self, payload: dict[str, Any], job: dict[str, Any], extra: dict[str, Any]) -> list[dict[str, Any]]:
+        result = [dict(item) for item in payload.get("generated_sql_list") or [] if isinstance(item, dict)]
+        row_id = job.get("row_id") or payload.get("row_id")
+        if str(extra.get("tuned_to_sql") or "").strip():
+            result.append(
+                {
+                    "table": "NEXT_SQL_INFO",
+                    "row_id": row_id,
+                    "column": "TUNED_TO_SQL",
+                    "source_component": "15C_sqlTuningOneJobPocExecutor",
+                }
+            )
+        return self._dedupe_generated_sql_list(result)
+
+    def _dedupe_generated_sql_list(self, values: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str, str]] = set()
+        for item in values:
+            key = (
+                str(item.get("table") or "").upper(),
+                str(item.get("row_id") or ""),
+                str(item.get("key_value") or ""),
+                str(item.get("column") or "").upper(),
+            )
+            if key in seen or not key[-1]:
+                continue
+            seen.add(key)
+            result.append(item)
+        return result
 
     def _poc_tuning_guides(self, tag_kind: str, tuned_result: str) -> list[dict[str, Any]]:
         """Return visible POC tuning guide metadata until RAG retrieval is connected."""

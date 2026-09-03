@@ -4,11 +4,13 @@ import logging
 import json
 import re
 import time
+import urllib.error
+import urllib.request
 from contextlib import contextmanager
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
-from lfx.io import IntInput, MessageTextInput, Output
+from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
 from lfx.schema.data import Data
 from lfx.schema.message import Message
 
@@ -21,6 +23,25 @@ except Exception:
 TUNING_SUCCESS_STATUSES = {"PASS", "PASS-TUNING"}
 FORMATTED = "FORMATTED"
 FAIL_FORMATTING = "FAIL-FORMATTING"
+SQL_INFO_FORMAT_COLUMNS = ("TUNED_TO_SQL", "TO_SQL", "BIND_SQL", "TEST_SQL", "TUNED_FR_SQL")
+MIG_INFO_FORMAT_COLUMNS = ("MIG_SQL", "VERIFY_SQL")
+
+
+SQL_FORMAT_PROMPT = """
+You are an Oracle/MyBatis SQL formatter.
+
+Goal:
+Format the input SQL using line breaks and 4-space indentation only.
+
+Hard rules:
+- Do not change table names, column names, aliases, JOIN/WHERE logic, MyBatis tags, #{param}, or ${param}.
+- Do not add explanations, markdown fences, comments, wrappers, or extra SQL.
+- Preserve Oracle/MyBatis semantics exactly.
+- Return only the formatted SQL text.
+
+Input SQL:
+{input_sql}
+""".strip()
 
 
 class NewType17CSqlFormattingOneJobPocExecutor(Component):
@@ -33,6 +54,13 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
     inputs = [
         DataInput(name="job_item", display_name="Job Item", required=True),
         IntInput(name="max_retry", display_name="Max Retry", value=2, required=False),
+        StrInput(name="llm_base_url", display_name="LLM Base URL", required=False),
+        SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=False),
+        StrInput(name="llm_provider", display_name="LLM Provider", required=False),
+        StrInput(name="llm_model", display_name="LLM Model", value="GLM-5.1", required=False),
+        StrInput(name="llm_fallback_models", display_name="LLM Fallback Models", value="GLM-5.1,Qwen3.6-35B-A3B,Kimi-K2.5", required=False),
+        IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=4096, required=False),
+        IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=900, required=False),
     ]
 
     outputs = [Output(display_name="Job Result", name="job_result", method="run_job", types=["Data"])]
@@ -53,11 +81,12 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             self._require_db_config(db_config)
             job: dict[str, Any] = {}
             try:
-                job = self._load_sql_job(db_config, payload)
+                if self._has_sql_job_identity(payload):
+                    job = self._load_sql_job(db_config, payload)
                 merged = {**job, **payload}
 
                 tuning_status = self._status(merged.get("tuning_status") or merged.get("status_tuning") or job.get("status_tuning"))
-                if not self._is_tuning_pass(tuning_status):
+                if not self._is_tuning_pass(tuning_status) and not self._has_generated_sql_targets(merged, job):
                     result = self._pass_through(
                         payload=merged,
                         job=job,
@@ -70,7 +99,8 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                     logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "17C_SQL_FORMAT", "INFO", "RUN_JOB", "END", 0]})
                     return __log_result
 
-                self._increment_batch_count(db_config, str(job["row_id"]))
+                if job.get("row_id"):
+                    self._increment_batch_count(db_config, str(job["row_id"]))
                 result = self._run_formatting(merged, job, db_config, started)
             except Exception as exc:
                 result = self._finish_failure(payload, job, started, str(exc))
@@ -131,23 +161,29 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         db_config: dict[str, Any],
         started: float,
     ) -> dict[str, Any]:
-        """Generate and store FORMATTED_SQL for one row."""
-        existing_tuned_sql = str(payload.get("tuned_to_sql") or job.get("tuned_to_sql") or "").strip()
-        base_to_sql = str(payload.get("to_sql") or job.get("to_sql") or "").strip()
-        source_sql = existing_tuned_sql or self._build_poc_tuned_sql(base_to_sql)
-        if not source_sql:
-            return self._finish_failure(payload, job, started, "TUNED_TO_SQL/TO_SQL is empty")
+        """Format generated SQL columns and write each formatted value back to its source column."""
+        llm_config = self._llm_config(payload)
+        targets = self._format_targets(payload, job, db_config)
+        if not targets:
+            return self._finish_failure(payload, job, started, "No generated SQL columns found for formatting")
 
-        # Future LLM section:
-        # - Call sql_indent_format_prompt.json through SqlLlmService.generate_formatted_sql().
-        # - Store only FORMATTED_SQL; do not update STATUS_CONVERSION or STATUS_TUNING.
-        formatted_sql = self._format_sql(source_sql)
-        update_values = {"FORMATTED_SQL": formatted_sql}
-        if not existing_tuned_sql and source_sql:
-            update_values["TUNED_TO_SQL"] = source_sql
-        self._update_row(db_config, job["row_id"], update_values)
+        formatted_targets: list[dict[str, Any]] = []
+        method_counts: dict[str, int] = {}
+        for target in targets:
+            formatted_sql, method = self._format_sql(str(target.get("sql") or ""), llm_config)
+            if not formatted_sql.strip():
+                continue
+            formatted_target = {**target, "formatted_sql": formatted_sql, "format_method": method}
+            formatted_targets.append(formatted_target)
+            method_counts[method] = method_counts.get(method, 0) + 1
+
+        if not formatted_targets:
+            return self._finish_failure(payload, job, started, "Generated SQL columns were present but formatting returned empty SQL")
+
+        self._write_formatted_targets(db_config, formatted_targets, job)
+        formatted_sql = self._final_formatted_sql(formatted_targets)
         logging.getLogger("smartmigrate.workflow").info(
-            "FORMATTED_SQL generated",
+            "SQL columns formatted",
             extra={
                 "workflow_log": [
                     f"{job.get('sql_id') or ''} / {job.get('space_nm') or ''}"[:100],
@@ -157,7 +193,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                     "GENERATE_FORMATTED_SQL",
                     "SUCCESS",
                     0,
-                    formatted_sql,
+                    self._format_log_summary(formatted_targets, method_counts),
                 ]
             },
         )
@@ -172,8 +208,18 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             extra={
                 "formatting_status": FORMATTED,
                 "formatted_sql": formatted_sql,
-                "tuned_to_sql": source_sql,
-                "poc_tuned_to_sql_updated": not bool(existing_tuned_sql),
+                "formatted_columns": [
+                    {
+                        "table": item.get("table"),
+                        "column": item.get("column"),
+                        "row_id": item.get("row_id"),
+                        "key_column": item.get("key_column"),
+                        "key_value": item.get("key_value"),
+                        "format_method": item.get("format_method"),
+                    }
+                    for item in formatted_targets
+                ],
+                "generated_sql_list": self._generated_sql_list_after_formatting(payload, formatted_targets),
                 "next_node": self._dashboard_node(payload),
             },
         )
@@ -254,8 +300,87 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             "db_status_updated": bool(job.get("row_id")) and ok,
         }
 
-    def _format_sql(self, sql_text: str) -> str:
-        """Apply a deterministic POC SQL layout until the LLM formatter is connected."""
+    def _format_sql(self, sql_text: str, llm_config: dict[str, Any]) -> tuple[str, str]:
+        """Format SQL with the configured LLM, falling back to a deterministic layout if unavailable."""
+        source = str(sql_text or "").strip()
+        if not source:
+            return "", "empty"
+        try:
+            formatted = self._call_formatter_llm(source, llm_config)
+            formatted = self._clean_formatted_sql(formatted)
+            if formatted:
+                return formatted, "llm"
+        except Exception as exc:
+            logging.getLogger("smartmigrate.workflow").warning(
+                f"LLM SQL formatting fallback: {type(exc).__name__}: {exc}",
+                extra={"workflow_log": [0, "SQL_FORMATTING", "FORMATTED_SQL", "WARN", "LLM_FORMAT_SQL", "FALLBACK", 0]},
+            )
+        return self._format_sql_deterministic(source), "deterministic_fallback"
+
+    def _call_formatter_llm(self, sql_text: str, config: dict[str, Any]) -> str:
+        api_key = str(config.get("llm_api_key") or "").strip()
+        model = str(config.get("llm_model") or "").strip()
+        base_url = str(config.get("llm_base_url") or "").strip().rstrip("/")
+        provider = str(config.get("llm_provider") or "").strip().lower()
+        if not api_key or not model or not base_url:
+            raise ValueError("llm_base_url, llm_api_key, and llm_model are required")
+        if not provider:
+            provider = "anthropic" if "anthropic" in base_url.lower() or model.lower().startswith("claude") else "openai"
+        candidates = [model, *[item.strip() for item in str(config.get("llm_fallback_models") or "").split(",") if item.strip()]]
+        candidate_models = list(dict.fromkeys(candidates))
+        prompt = SQL_FORMAT_PROMPT.format(input_sql=sql_text)
+        for index, candidate in enumerate(candidate_models):
+            try:
+                if provider == "anthropic":
+                    from anthropic import Anthropic
+
+                    response = Anthropic(api_key=api_key, base_url=base_url, timeout=self._positive_int(config.get("llm_timeout_seconds"), 900)).messages.create(
+                        model=candidate,
+                        max_tokens=self._positive_int(config.get("llm_max_tokens"), 4096),
+                        temperature=0,
+                        system="You format Oracle/MyBatis SQL without changing semantics.",
+                        messages=[{"role": "user", "content": prompt}],
+                    )
+                    return "".join(str(getattr(item, "text", "")) for item in response.content).strip()
+                url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
+                request = urllib.request.Request(
+                    url,
+                    data=json.dumps(
+                        {
+                            "model": candidate,
+                            "messages": [
+                                {"role": "system", "content": "You format Oracle/MyBatis SQL without changing semantics."},
+                                {"role": "user", "content": prompt},
+                            ],
+                            "temperature": 0,
+                            "max_tokens": self._positive_int(config.get("llm_max_tokens"), 4096),
+                        },
+                        ensure_ascii=False,
+                    ).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(request, timeout=self._positive_int(config.get("llm_timeout_seconds"), 900)) as response:
+                    body = json.loads(response.read().decode("utf-8", errors="ignore"))
+                return str((((body.get("choices") or [{}])[0].get("message") or {}).get("content") or "")).strip()
+            except urllib.error.HTTPError as exc:
+                if index == len(candidate_models) - 1:
+                    detail = exc.read().decode("utf-8", errors="ignore")
+                    raise ValueError(f"LLM HTTP {exc.code}: {detail[:500]}") from exc
+            except Exception:
+                if index == len(candidate_models) - 1:
+                    raise
+        raise ValueError("LLM formatter returned no content")
+
+    def _clean_formatted_sql(self, value: str) -> str:
+        sql = str(value or "").strip()
+        if sql.startswith("```"):
+            sql = re.sub(r"^```(?:sql|xml)?\s*", "", sql, flags=re.I)
+            sql = re.sub(r"\s*```$", "", sql)
+        return sql.strip().rstrip(";").strip()
+
+    def _format_sql_deterministic(self, sql_text: str) -> str:
+        """Apply a deterministic fallback SQL layout."""
         text = re.sub(r"\s+", " ", str(sql_text or "").strip())
         keywords = [
             "SELECT",
@@ -283,6 +408,165 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             return ""
         return text
 
+    def _format_targets(self, payload: dict[str, Any], job: dict[str, Any], db_config: dict[str, Any]) -> list[dict[str, Any]]:
+        targets: list[dict[str, Any]] = []
+        generated_items = self._parse_generated_sql_list(payload.get("generated_sql_list"))
+        for item in generated_items:
+            target = self._target_from_generated_item(item, payload, job, db_config)
+            if target:
+                targets.append(target)
+
+        if job.get("row_id"):
+            for column in SQL_INFO_FORMAT_COLUMNS:
+                alias = column.lower()
+                sql_text = str(job.get(alias) or payload.get(alias) or "").strip()
+                if sql_text:
+                    targets.append(
+                        {
+                            "table": "NEXT_SQL_INFO",
+                            "row_id": job["row_id"],
+                            "column": column,
+                            "sql": sql_text,
+                            "source_component": "17C_db_row_fallback",
+                        }
+                    )
+        return self._dedupe_targets(targets)
+
+    def _target_from_generated_item(
+        self,
+        item: dict[str, Any],
+        payload: dict[str, Any],
+        job: dict[str, Any],
+        db_config: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        table = str(item.get("table") or "NEXT_SQL_INFO").strip().upper()
+        column = self._normalize_sql_column(item.get("column"))
+        if not column:
+            return None
+        if table == "NEXT_SQL_INFO" and column in SQL_INFO_FORMAT_COLUMNS:
+            row_id = str(item.get("row_id") or job.get("row_id") or payload.get("row_id") or "").strip()
+            if not row_id:
+                return None
+            sql_text = self._load_sql_info_column(db_config, row_id, column)
+            if not sql_text.strip():
+                return None
+            return {**item, "table": table, "row_id": row_id, "column": column, "sql": sql_text}
+        if table == "NEXT_MIG_INFO" and column in MIG_INFO_FORMAT_COLUMNS:
+            key_column = str(item.get("key_column") or "MAP_ID").strip().upper()
+            key_value = item.get("key_value") or item.get("map_id") or payload.get("map_id")
+            if key_column != "MAP_ID" or key_value in (None, ""):
+                return None
+            sql_text = self._load_mig_info_column(db_config, int(key_value), column)
+            if not sql_text.strip():
+                return None
+            return {**item, "table": table, "key_column": key_column, "key_value": int(key_value), "column": column, "sql": sql_text}
+        return None
+
+    def _write_formatted_targets(self, db_config: dict[str, Any], targets: list[dict[str, Any]], job: dict[str, Any]) -> None:
+        sql_updates: dict[str, dict[str, Any]] = {}
+        mig_updates: dict[int, dict[str, Any]] = {}
+        current_row_id = str(job.get("row_id") or "").strip()
+        final_formatted_sql = self._final_formatted_sql(targets)
+        for target in targets:
+            table = str(target.get("table") or "").upper()
+            column = str(target.get("column") or "").upper()
+            formatted_sql = str(target.get("formatted_sql") or "")
+            if table == "NEXT_SQL_INFO":
+                row_id = str(target.get("row_id") or current_row_id).strip()
+                if not row_id:
+                    continue
+                sql_updates.setdefault(row_id, {})[column] = formatted_sql
+            elif table == "NEXT_MIG_INFO":
+                key_value = target.get("key_value")
+                if key_value not in (None, ""):
+                    mig_updates.setdefault(int(key_value), {})[column] = formatted_sql
+        if current_row_id and final_formatted_sql:
+            sql_updates.setdefault(current_row_id, {})["FORMATTED_SQL"] = final_formatted_sql
+        for row_id, values in sql_updates.items():
+            self._update_row(db_config, row_id, values)
+        for map_id, values in mig_updates.items():
+            self._update_mig_row(db_config, map_id, values)
+
+    def _final_formatted_sql(self, targets: list[dict[str, Any]]) -> str:
+        preference = ["TUNED_TO_SQL", "TO_SQL", "TEST_SQL", "BIND_SQL", "TUNED_FR_SQL"]
+        for column in preference:
+            for target in targets:
+                if str(target.get("table") or "").upper() == "NEXT_SQL_INFO" and str(target.get("column") or "").upper() == column:
+                    text = str(target.get("formatted_sql") or "").strip()
+                    if text:
+                        return text
+        return str((targets[0] if targets else {}).get("formatted_sql") or "").strip()
+
+    def _format_log_summary(self, targets: list[dict[str, Any]], method_counts: dict[str, int]) -> str:
+        columns = [
+            f"{item.get('table')}.{item.get('column')}:{item.get('format_method')}"
+            for item in targets
+        ]
+        return f"formatted={len(targets)}, methods={method_counts}, columns={', '.join(columns)}"[:3500]
+
+    def _generated_sql_list_after_formatting(self, payload: dict[str, Any], targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        result = self._parse_generated_sql_list(payload.get("generated_sql_list"))
+        for target in targets:
+            item = {key: target.get(key) for key in ("table", "row_id", "key_column", "key_value", "column", "source_component") if target.get(key) not in (None, "")}
+            item["formatted_by"] = "17C_sqlFormattingOneJobPocExecutor"
+            result.append(item)
+        return self._dedupe_generated_sql_list(result)
+
+    def _parse_generated_sql_list(self, raw: Any) -> list[dict[str, Any]]:
+        if isinstance(raw, list):
+            return [dict(item) for item in raw if isinstance(item, dict)]
+        if isinstance(raw, str) and raw.strip():
+            try:
+                parsed = json.loads(raw)
+            except Exception:
+                return []
+            if isinstance(parsed, list):
+                return [dict(item) for item in parsed if isinstance(item, dict)]
+        return []
+
+    def _dedupe_targets(self, values: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str, str]] = set()
+        for item in values:
+            key = (
+                str(item.get("table") or "").upper(),
+                str(item.get("row_id") or ""),
+                str(item.get("key_value") or ""),
+                str(item.get("column") or "").upper(),
+            )
+            if key in seen or not key[-1]:
+                continue
+            seen.add(key)
+            result.append(item)
+        return result
+
+    def _dedupe_generated_sql_list(self, values: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [{key: value for key, value in item.items() if key != "sql"} for item in self._dedupe_targets(values)]
+
+    def _normalize_sql_column(self, value: Any) -> str:
+        text = str(value or "").strip().upper()
+        aliases = {
+            "MIGRATION_SQL": "MIG_SQL",
+            "MIG_SQL": "MIG_SQL",
+            "VERIFY_SQL": "VERIFY_SQL",
+            "VERIFICATION_SQL": "VERIFY_SQL",
+            "TOBE_SQL": "TO_SQL",
+            "TO_SQL": "TO_SQL",
+            "BIND_SQL": "BIND_SQL",
+            "TEST_SQL": "TEST_SQL",
+            "TUNED_FR_SQL": "TUNED_FR_SQL",
+            "TUNED_TO_SQL": "TUNED_TO_SQL",
+        }
+        return aliases.get(text, "")
+
+    def _has_sql_job_identity(self, payload: dict[str, Any]) -> bool:
+        return bool(str(payload.get("row_id") or "").strip() or (str(payload.get("space_nm") or "").strip() and str(payload.get("sql_id") or "").strip()))
+
+    def _has_generated_sql_targets(self, payload: dict[str, Any], job: dict[str, Any]) -> bool:
+        if self._parse_generated_sql_list(payload.get("generated_sql_list")):
+            return True
+        return any(str(job.get(column.lower()) or payload.get(column.lower()) or "").strip() for column in SQL_INFO_FORMAT_COLUMNS)
+
     def _load_sql_job(self, db_config: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         """Load one NEXT_SQL_INFO row by ROWID or by SPACE_NM + SQL_ID."""
         table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
@@ -293,6 +577,9 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             ("SQL_ID", "sql_id", "VARCHAR2(4000)"),
             ("TO_SQL", "to_sql", "CLOB"),
             ("TUNED_TO_SQL", "tuned_to_sql", "CLOB"),
+            ("BIND_SQL", "bind_sql", "CLOB"),
+            ("TEST_SQL", "test_sql", "CLOB"),
+            ("TUNED_FR_SQL", "tuned_fr_sql", "CLOB"),
             ("STATUS_CONVERSION", "status_conversion", "VARCHAR2(100)"),
             ("STATUS_TUNING", "status_tuning", "VARCHAR2(100)"),
             ("FORMATTED_SQL", "formatted_sql", "CLOB"),
@@ -328,6 +615,30 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             loaded = {key: self._lob_to_str(row[index]) for index, key in enumerate(keys)}
         return {**payload, **loaded}
 
+    def _load_sql_info_column(self, db_config: dict[str, Any], row_id: str, column: str) -> str:
+        table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
+        columns = self._table_columns(db_config, table)
+        column = self._clean_identifier(column)
+        if column not in columns:
+            return ""
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(f"SELECT {column} FROM {table} WHERE ROWID = CHARTOROWID(:1)", [row_id])
+            row = cur.fetchone()
+            return self._lob_to_str(row[0]) if row else ""
+
+    def _load_mig_info_column(self, db_config: dict[str, Any], map_id: int, column: str) -> str:
+        table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
+        columns = self._table_columns(db_config, table)
+        column = self._clean_identifier(column)
+        if column not in columns:
+            return ""
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(f"SELECT {column} FROM {table} WHERE MAP_ID = :1", [map_id])
+            row = cur.fetchone()
+            return self._lob_to_str(row[0]) if row else ""
+
     def _update_row(self, db_config: dict[str, Any], row_id: str, values: dict[str, Any]) -> None:
         """Update only columns that exist in NEXT_SQL_INFO."""
         table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
@@ -352,6 +663,35 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         with self._connect(db_config) as conn:
             cur = conn.cursor()
             cur.execute(query, params)
+            conn.commit()
+
+    def _update_mig_row(self, db_config: dict[str, Any], map_id: int, values: dict[str, Any]) -> None:
+        """Update generated SQL columns in NEXT_MIG_INFO without touching status columns."""
+        table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
+        columns = self._table_columns(db_config, table)
+        set_clauses: list[str] = []
+        params: dict[str, Any] = {"map_id": map_id}
+        for index, (column, value) in enumerate(values.items(), start=1):
+            column = self._clean_identifier(column)
+            if column not in columns:
+                continue
+            name = f"p{index}"
+            set_clauses.append(f"{column} = :{name}")
+            params[name] = value
+        if "UPD_TS" in columns:
+            set_clauses.append("UPD_TS = CURRENT_TIMESTAMP")
+        if not set_clauses:
+            return
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                UPDATE {table}
+                   SET {", ".join(set_clauses)}
+                 WHERE MAP_ID = :map_id
+                """,
+                params,
+            )
             conn.commit()
 
     def _increment_batch_count(self, db_config: dict[str, Any], row_id: str) -> None:
@@ -432,6 +772,19 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         finally:
             conn.close()
 
+    def _llm_config(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Extract formatter LLM settings from component inputs or the Loop payload."""
+        item_config = dict(payload.get("llm_config") or {})
+        return {
+            "llm_base_url": str(getattr(self, "llm_base_url", "") or item_config.get("llm_base_url") or "").strip(),
+            "llm_api_key": self._secret_to_str(getattr(self, "llm_api_key", None)) or str(item_config.get("llm_api_key") or "").strip(),
+            "llm_provider": str(getattr(self, "llm_provider", "") or item_config.get("llm_provider") or "").strip(),
+            "llm_model": str(getattr(self, "llm_model", "") or item_config.get("llm_model") or "").strip(),
+            "llm_fallback_models": str(getattr(self, "llm_fallback_models", "") or item_config.get("llm_fallback_models") or "").strip(),
+            "llm_max_tokens": self._positive_int(getattr(self, "llm_max_tokens", None) or item_config.get("llm_max_tokens"), 4096),
+            "llm_timeout_seconds": self._positive_int(getattr(self, "llm_timeout_seconds", None) or item_config.get("llm_timeout_seconds"), 900),
+        }
+
     def _db_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Extract Oracle connection settings from the Loop item."""
         item_config = dict(payload.get("db_config") or {})
@@ -486,6 +839,20 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         if len(encoded) <= max_len:
             return text
         return encoded[:max_len].decode("utf-8", errors="ignore")
+
+    def _secret_to_str(self, value: Any) -> str:
+        if value is None:
+            return ""
+        if hasattr(value, "get_secret_value"):
+            return str(value.get_secret_value() or "")
+        return str(value or "")
+
+    def _positive_int(self, value: Any, default: int) -> int:
+        try:
+            parsed = int(value)
+            return parsed if parsed > 0 else default
+        except (TypeError, ValueError):
+            return default
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         """Parse a Langflow Data, Message, dict, or JSON string payload."""

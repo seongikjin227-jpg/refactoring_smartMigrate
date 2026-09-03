@@ -140,6 +140,12 @@ class NewType10CMigOneJobPocExecutor(Component):
                         "message": message,
                         "migration_sql": graph_result.get("current_migration_sql", ""),
                         "verification_sql": graph_result.get("current_v_sql", ""),
+                        "generated_sql_list": self._generated_sql_list(
+                            job.get("generated_sql_list"),
+                            map_id,
+                            graph_result.get("current_migration_sql", ""),
+                            graph_result.get("current_v_sql", ""),
+                        ),
                         "llm_model": graph_result.get("llm_model", ""),
                         "generated_sql_saved": bool(graph_result.get("generated_sql_saved")),
                         "next_node": "12C_sqlConversionOneJobPocExecutor" if job.get("full_workflow") else "10D_migIterationDashboard",
@@ -1372,6 +1378,37 @@ class NewType10CMigOneJobPocExecutor(Component):
             "diff_count": context.get("diff_count", 0),
         }
 
+    def _generated_sql_list(self, existing: Any, map_id: Any, migration_sql: Any, verification_sql: Any) -> list[dict[str, Any]]:
+        result = [dict(item) for item in existing or [] if isinstance(item, dict)]
+        for column, value in (("MIG_SQL", migration_sql), ("VERIFY_SQL", verification_sql)):
+            if str(value or "").strip():
+                result.append(
+                    {
+                        "table": "NEXT_MIG_INFO",
+                        "key_column": "MAP_ID",
+                        "key_value": int(map_id),
+                        "column": column,
+                        "source_component": "10C_migOneJobPocExecutor",
+                    }
+                )
+        return self._dedupe_generated_sql_list(result)
+
+    def _dedupe_generated_sql_list(self, values: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str, str]] = set()
+        for item in values:
+            key = (
+                str(item.get("table") or "").upper(),
+                str(item.get("row_id") or ""),
+                str(item.get("key_value") or ""),
+                str(item.get("column") or "").upper(),
+            )
+            if key in seen or not key[-1]:
+                continue
+            seen.add(key)
+            result.append(item)
+        return result
+
     def _result(self, job: dict[str, Any], *, ok: bool, status: str, elapsed: int, attempts: list[dict[str, Any]]) -> dict[str, Any]:
         """Build the Langflow output payload for the current job."""
         total = int(job.get("total_jobs") or 1)
@@ -1627,9 +1664,15 @@ The target table already exists, so ddl_sql may be an empty string unless a safe
    - Do not remove schema prefixes from physical AS-IS or TO-BE tables.
    - Do not add schema prefixes to DUAL, CTE names, inline view aliases, table aliases, or subquery aliases.
 5. Output:
-   - Return JSON only.
-   - Required keys: ddl_sql, migration_sql, verification_sql.
-   - Do not include markdown, comments, explanations, or trailing semicolons inside SQL values.
+    - Return JSON only.
+    - Required keys: ddl_sql, migration_sql, verification_sql.
+    - Do not include markdown, comments, explanations, or trailing semicolons inside SQL values.
+6. SQL formatting:
+   - Format migration_sql and verification_sql before returning them.
+   - Use line breaks for SELECT, FROM, JOIN, WHERE, GROUP BY, HAVING, ORDER BY, INSERT INTO, VALUES, UPDATE, SET, and DELETE FROM clauses.
+   - Use 4 spaces for indentation in nested subqueries, CASE expressions, and column lists.
+   - Put each major SELECT expression or INSERT column on its own line when the list has more than three items.
+   - Only change whitespace and indentation for formatting; do not add comments or explanations.
 
 {ddl_info_block}
 [Mapping rules]
