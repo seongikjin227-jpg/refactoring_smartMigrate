@@ -14,13 +14,14 @@ from lfx.schema.data import Data
 
 
 RAG_TABLE = "NEXT_MIG_RAG_INFO"
+SQL_TABLE = "NEXT_SQL_INFO"
 VECTOR_COLUMN = "EMBEDDING_VECTOR"
 BATCH_SIZE = 32
 
 
 class NewType00BSaveVectorDB(Component):
     display_name = "00B Save Vector DB"
-    description = "One-shot loader that regenerates all NEXT_MIG_RAG_INFO source SQL vectors into EMBEDDING_VECTOR."
+    description = "One-shot loader that regenerates NEXT_MIG_RAG_INFO and NEXT_SQL_INFO SQL vectors into EMBEDDING_VECTOR."
     name = "NewType00BSaveVectorDB"
     icon = "Database"
 
@@ -43,36 +44,57 @@ class NewType00BSaveVectorDB(Component):
         started = time.perf_counter()
         db_config = self._db_config()
         embed_config = self._embed_config()
-        table = self._qualify(RAG_TABLE, db_config.get("system_schema"))
+        rag_table = self._qualify(RAG_TABLE, db_config.get("system_schema"))
+        sql_table = self._qualify(SQL_TABLE, db_config.get("system_schema"))
 
         self._require_db_config(db_config)
         self._require_embed_config(embed_config)
-        rows = self._load_rows(db_config, table)
+        rag_rows = self._load_rag_rows(db_config, rag_table)
+        sql_rows = self._load_sql_rows(db_config, sql_table)
 
-        updated = 0
+        rag_updated = 0
+        sql_updated = 0
         failures: list[dict[str, Any]] = []
-        for batch in self._chunks(rows, BATCH_SIZE):
+        for batch in self._chunks(rag_rows, BATCH_SIZE):
             texts = [self._embedding_text(row) for row in batch]
             try:
                 vectors = self._embed_texts(texts, embed_config)
                 if len(vectors) != len(batch):
                     raise ValueError(f"embedding response count mismatch: expected={len(batch)}, actual={len(vectors)}")
-                self._save_vectors(db_config, table, batch, vectors)
-                updated += len(batch)
+                self._save_rag_vectors(db_config, rag_table, batch, vectors)
+                rag_updated += len(batch)
             except Exception as exc:
-                failures.append({"rag_ids": [row["rag_id"] for row in batch], "error": str(exc)})
+                failures.append({"table": RAG_TABLE, "ids": [row["rag_id"] for row in batch], "error": str(exc)})
+
+        for batch in self._chunks(sql_rows, BATCH_SIZE):
+            texts = [self._embedding_text(row) for row in batch]
+            try:
+                vectors = self._embed_texts(texts, embed_config)
+                if len(vectors) != len(batch):
+                    raise ValueError(f"embedding response count mismatch: expected={len(batch)}, actual={len(vectors)}")
+                self._save_sql_vectors(db_config, sql_table, batch, vectors)
+                sql_updated += len(batch)
+            except Exception as exc:
+                failures.append({"table": SQL_TABLE, "ids": [row["row_id"] for row in batch], "error": str(exc)})
 
         result = {
             "ok": not failures,
             "component": "00B_saveVectorDB",
-            "table": table,
+            "tables": [rag_table, sql_table],
             "vector_column": VECTOR_COLUMN,
             "update_mode": "ALL",
-            "row_scope": "USE_YN='Y' AND SOURCE_SQL IS NOT NULL",
+            "row_scope": {
+                RAG_TABLE: "USE_YN='Y' AND SOURCE_SQL IS NOT NULL",
+                SQL_TABLE: "FR_SQL or EDIT_FR_SQL is not empty",
+            },
             "batch_size": BATCH_SIZE,
             "embedding_model": embed_config["model"],
-            "loaded_count": len(rows),
-            "updated_count": updated,
+            "loaded_count": len(rag_rows) + len(sql_rows),
+            "updated_count": rag_updated + sql_updated,
+            "rag_loaded_count": len(rag_rows),
+            "rag_updated_count": rag_updated,
+            "sql_loaded_count": len(sql_rows),
+            "sql_updated_count": sql_updated,
             "failed_batch_count": len(failures),
             "failures": failures[:10],
             "elapsed_seconds": round(time.perf_counter() - started, 3),
@@ -81,7 +103,7 @@ class NewType00BSaveVectorDB(Component):
         self.status = result
         return Data(data=result)
 
-    def _load_rows(
+    def _load_rag_rows(
         self,
         db_config: dict[str, Any],
         table: str,
@@ -106,7 +128,50 @@ class NewType00BSaveVectorDB(Component):
                 for row in cur.fetchall()
             ]
 
-    def _save_vectors(
+    def _load_sql_rows(
+        self,
+        db_config: dict[str, Any],
+        table: str,
+    ) -> list[dict[str, Any]]:
+        columns = self._table_columns(db_config, table)
+        if "FR_SQL" not in columns:
+            return []
+        edit_fr_expr = "EDIT_FR_SQL" if "EDIT_FR_SQL" in columns else "TO_CLOB(NULL)"
+        status_expr = "STATUS_CONVERSION" if "STATUS_CONVERSION" in columns else "CAST(NULL AS VARCHAR2(100))"
+        space_nm_expr = "SPACE_NM" if "SPACE_NM" in columns else "CAST(NULL AS VARCHAR2(4000))"
+        sql_id_expr = "SQL_ID" if "SQL_ID" in columns else "CAST(NULL AS VARCHAR2(4000))"
+        order_expr = "UPD_TS DESC NULLS LAST" if "UPD_TS" in columns else "ROWID"
+        where_sql = "FR_SQL IS NOT NULL"
+        if "EDIT_FR_SQL" in columns:
+            where_sql = f"{where_sql} OR EDIT_FR_SQL IS NOT NULL"
+        sql = f"""
+            SELECT ROWIDTOCHAR(ROWID), {space_nm_expr}, {sql_id_expr}, FR_SQL, {edit_fr_expr}, {status_expr}
+              FROM {table}
+             WHERE {where_sql}
+             ORDER BY {order_expr}
+        """
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(sql)
+            rows: list[dict[str, Any]] = []
+            for row in cur.fetchall():
+                edit_fr_sql = self._lob_to_str(row[4]).strip()
+                fr_sql = self._lob_to_str(row[3]).strip()
+                source_sql = edit_fr_sql or fr_sql
+                if not source_sql:
+                    continue
+                rows.append(
+                    {
+                        "row_id": self._lob_to_str(row[0]).strip(),
+                        "space_nm": self._lob_to_str(row[1]).strip(),
+                        "sql_id": self._lob_to_str(row[2]).strip(),
+                        "status_conversion": self._lob_to_str(row[5]).strip(),
+                        "source_sql": source_sql,
+                    }
+                )
+            return rows
+
+    def _save_rag_vectors(
         self,
         db_config: dict[str, Any],
         table: str,
@@ -116,20 +181,61 @@ class NewType00BSaveVectorDB(Component):
         import numpy as np
         import oracledb
 
+        columns = self._table_columns(db_config, table)
+        if VECTOR_COLUMN not in columns:
+            raise ValueError(f"{table}.{VECTOR_COLUMN} column does not exist")
+
         payloads = []
         for row, vector in zip(rows, vectors):
             blob = np.asarray(vector, dtype="<f4").tobytes()
             payloads.append({"rag_id": row["rag_id"], "embedding_vector": blob})
 
+        set_clause = f"{VECTOR_COLUMN} = :embedding_vector"
+        if "UPDATED_AT" in columns:
+            set_clause += ", UPDATED_AT = SYSTIMESTAMP"
         with self._connect(db_config) as conn:
             cur = conn.cursor()
             cur.setinputsizes(embedding_vector=oracledb.DB_TYPE_BLOB)
             cur.executemany(
                 f"""
                 UPDATE {table}
-                   SET {VECTOR_COLUMN} = :embedding_vector,
-                       UPDATED_AT = SYSTIMESTAMP
+                   SET {set_clause}
                  WHERE RAG_ID = :rag_id
+                """,
+                payloads,
+            )
+            conn.commit()
+
+    def _save_sql_vectors(
+        self,
+        db_config: dict[str, Any],
+        table: str,
+        rows: list[dict[str, Any]],
+        vectors: list[list[float]],
+    ) -> None:
+        import numpy as np
+        import oracledb
+
+        columns = self._table_columns(db_config, table)
+        if VECTOR_COLUMN not in columns:
+            raise ValueError(f"{table}.{VECTOR_COLUMN} column does not exist")
+
+        payloads = []
+        for row, vector in zip(rows, vectors):
+            blob = np.asarray(vector, dtype="<f4").tobytes()
+            payloads.append({"row_id": row["row_id"], "embedding_vector": blob})
+
+        set_clause = f"{VECTOR_COLUMN} = :embedding_vector"
+        if "UPD_TS" in columns:
+            set_clause += ", UPD_TS = CURRENT_TIMESTAMP"
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.setinputsizes(embedding_vector=oracledb.DB_TYPE_BLOB)
+            cur.executemany(
+                f"""
+                UPDATE {table}
+                   SET {set_clause}
+                 WHERE ROWID = CHARTOROWID(:row_id)
                 """,
                 payloads,
             )
@@ -261,6 +367,38 @@ class NewType00BSaveVectorDB(Component):
         if not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", clean):
             raise ValueError(f"Invalid identifier: {clean}")
         return clean
+
+    def _table_columns(self, db_config: dict[str, Any], table: str) -> set[str]:
+        owner, table_name = self._split_owner_table(table)
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            if owner:
+                cur.execute(
+                    """
+                    SELECT COLUMN_NAME
+                      FROM ALL_TAB_COLUMNS
+                     WHERE OWNER = :owner
+                       AND TABLE_NAME = :table_name
+                    """,
+                    {"owner": owner, "table_name": table_name},
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT COLUMN_NAME
+                      FROM USER_TAB_COLUMNS
+                     WHERE TABLE_NAME = :table_name
+                    """,
+                    {"table_name": table_name},
+                )
+            return {str(row[0]).upper() for row in cur.fetchall()}
+
+    def _split_owner_table(self, table: str) -> tuple[str | None, str]:
+        value = str(table or "").strip().upper()
+        if "." not in value:
+            return None, self._clean_identifier(value)
+        owner, table_name = value.split(".", 1)
+        return self._clean_identifier(owner), self._clean_identifier(table_name)
 
     def _lob_to_str(self, value: Any) -> str:
         if value is not None and hasattr(value, "read"):

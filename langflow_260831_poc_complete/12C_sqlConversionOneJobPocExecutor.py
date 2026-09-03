@@ -4,6 +4,7 @@ import logging
 import json
 import os
 import re
+import struct
 import time
 from contextlib import contextmanager
 from typing import Any
@@ -1223,7 +1224,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         source_sql_expr = "SOURCE_SQL" if "SOURCE_SQL" in columns else "TO_CLOB(NULL)"
         target_sql_expr = "TARGET_SQL" if "TARGET_SQL" in columns else "TO_CLOB(NULL)"
         source_tables_expr = "SOURCE_TABLES" if "SOURCE_TABLES" in columns else "CAST(NULL AS VARCHAR2(4000))"
-        vector_column = self._clean_identifier(os.getenv("RAG_EMBED_VECTOR_COLUMN", "EMBEDDING_VECTOR"))
+        vector_column = "EMBEDDING_VECTOR"
         embedding_vector_expr = vector_column if rule_type == RAG_SEARCH and vector_column in columns else "NULL"
         with self._connect(db_config) as conn:
             cur = conn.cursor()
@@ -1433,6 +1434,13 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             return bytes(data) if isinstance(data, bytearray) else data
         return bytes(value)
 
+    # Restore a cached float32 little-endian vector for Correct SQL FR_SQL similarity.
+    def _float32_blob_vector(self, blob: Any) -> list[float] | None:
+        data = self._blob_to_bytes(blob)
+        if not data or len(data) % 4:
+            return None
+        return [float(item[0]) for item in struct.iter_unpack("<f", data)]
+
     # Score two normalized SQL strings when vector search cannot run.
     def _lexical_similarity(self, left: str, right: str) -> float:
         left_tokens = set(re.findall(r"[A-Z_]+|\d+", left.upper()))
@@ -1483,6 +1491,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         if not required.issubset(columns):
             return "- (empty)"
 
+        vector_column = "EMBEDDING_VECTOR"
+        vector_expr = vector_column if vector_column in columns else "NULL"
         edit_fr_expr = "EDIT_FR_SQL" if "EDIT_FR_SQL" in columns else "TO_CLOB(NULL)"
         space_nm_expr = "SPACE_NM" if "SPACE_NM" in columns else "CAST(NULL AS VARCHAR2(4000))"
         sql_id_expr = "SQL_ID" if "SQL_ID" in columns else "CAST(NULL AS VARCHAR2(4000))"
@@ -1491,11 +1501,11 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         query = f"""
             SELECT *
               FROM (
-                    SELECT ROWIDTOCHAR(ROWID), {space_nm_expr}, {sql_id_expr}, FR_SQL, {edit_fr_expr}, {hint_column}
-                      FROM {table}
-                     WHERE UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y'
-                       AND UPPER(TRIM(NVL(STATUS_CONVERSION, ''))) = :status
-                       AND {hint_column} IS NOT NULL
+                    SELECT ROWIDTOCHAR(ROWID), {space_nm_expr}, {sql_id_expr}, FR_SQL, {edit_fr_expr}, {hint_column}, {vector_expr}
+                       FROM {table}
+                      WHERE UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y'
+                        AND UPPER(TRIM(NVL(STATUS_CONVERSION, ''))) = :status
+                        AND {hint_column} IS NOT NULL
                      ORDER BY {order_expr}
                    )
              WHERE ROWNUM <= {limit}
@@ -1522,6 +1532,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                             "from_sql": candidate_from_sql,
                             "normalized_from_sql": self._normalize_sql_shape(candidate_from_sql),
                             "hint_sql": candidate_hint_sql,
+                            "embedding_vector": self._blob_to_bytes(row[6]) if vector_column in columns else b"",
                         }
                     )
         except Exception as exc:
@@ -1534,15 +1545,22 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         method = "token_fallback"
         try:
             rag_config = self._rag_config()
-            vectors = self._embed_texts([candidate["normalized_from_sql"] for candidate in candidates] + [query_sql], rag_config)
-            query_vector = vectors[-1]
+            cached_vectors = [self._float32_blob_vector(candidate.get("embedding_vector")) for candidate in candidates]
+            if cached_vectors and all(vector is not None for vector in cached_vectors):
+                query_vector = self._embed_texts([query_sql], rag_config)[0]
+                candidate_vectors = cached_vectors
+                method = "embedding_blob"
+            else:
+                vectors = self._embed_texts([candidate["normalized_from_sql"] for candidate in candidates] + [query_sql], rag_config)
+                query_vector = vectors[-1]
+                candidate_vectors = vectors[:-1]
+                method = "embedding"
             scored = []
-            for candidate, vector in zip(candidates, vectors[:-1]):
+            for candidate, vector in zip(candidates, candidate_vectors):
                 left_norm = sum(float(value) * float(value) for value in vector) ** 0.5
                 right_norm = sum(float(value) * float(value) for value in query_vector) ** 0.5
                 score = sum(float(left) * float(right) for left, right in zip(vector, query_vector)) / (left_norm * right_norm) if left_norm and right_norm else 0.0
                 scored.append((score, candidate))
-            method = "embedding"
         except Exception:
             scored = [(self._lexical_similarity(query_sql, candidate["normalized_from_sql"]), candidate) for candidate in candidates]
 

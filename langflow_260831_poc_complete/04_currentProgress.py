@@ -48,7 +48,7 @@ TERMINAL_STATUSES = {
 class NewType04CurrentProgress(Component):
 
     display_name = "04 Current Progress"
-    description = "Infers currently running SmartMigrate jobs from RUNNING statuses and recent NEXT_MIG_LOG activity."
+    description = "Shows currently running SmartMigrate jobs from RUNNING status columns and includes recent logs only as reference data."
     name = "NewType04CurrentProgress"
     icon = "Activity"
 
@@ -99,7 +99,7 @@ class NewType04CurrentProgress(Component):
             remaining = self._load_remaining_counts(conn)
             running_jobs = self._load_running_status_jobs(conn)
             recent_jobs = self._load_recent_log_jobs(conn, lookback)
-        active_jobs = self._merge_active_jobs(running_jobs, recent_jobs)
+        active_jobs = self._merge_active_jobs(running_jobs)
         return {
             "ok": True,
             "lookback_minutes": lookback,
@@ -284,9 +284,10 @@ class NewType04CurrentProgress(Component):
                                PARTITION BY NVL(TO_CHAR(MAP_ID), '-'), NVL(TO_CHAR(MIG_KIND), '-')
                                ORDER BY CREATED_AT DESC NULLS LAST, {log_order_expr} DESC NULLS LAST
                            ) AS RN
-                      FROM {table}
+                     FROM {table}
                      WHERE CREATED_AT >= SYSTIMESTAMP - NUMTODSINTERVAL(:minutes, 'MINUTE')
                        AND MIG_KIND IS NOT NULL
+                       AND UPPER(TRIM(TO_CHAR(MIG_KIND))) IN ('DB_MIGRATION', 'SQL_CONVERSION', 'SQL_TUNING', 'SQL_FORMATTING')
                    )
              WHERE RN = 1
              ORDER BY CREATED_AT_TEXT DESC
@@ -310,15 +311,14 @@ class NewType04CurrentProgress(Component):
                     "last_log_at": row.get("created_at_text"),
                     "last_log_age_seconds": self._to_int(row.get("age_seconds")),
                     "message": self._short(row.get("message"), 220),
-                    "active_by_recent_log": not self._is_terminal_status(status),
                 }
             )
         return jobs
 
-    def _merge_active_jobs(self, running_jobs: list[dict[str, Any]], recent_jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _merge_active_jobs(self, running_jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         seen: set[tuple[str, str]] = set()
-        for job in [*running_jobs, *[item for item in recent_jobs if item.get("active_by_recent_log")]]:
+        for job in running_jobs:
             key = (str(job.get("route") or ""), str(job.get("job_id") or job.get("row_id") or ""))
             if key in seen:
                 continue
@@ -333,22 +333,19 @@ class NewType04CurrentProgress(Component):
         lines = ["# Current Progress"]
         lines.append("")
         if active_jobs:
-            lines.append(f"Active job candidates: {len(active_jobs)}")
+            lines.append(f"진행 중인 작업: {len(active_jobs)}건")
             lines.append("")
-            lines.append("| Stage | Job | Basis | Status | Last log | Message |")
-            lines.append("|---|---|---|---|---:|---|")
+            lines.append("| Stage | Job | Status |")
+            lines.append("|---|---|---|")
             for job in active_jobs[:20]:
                 lines.append(
                     "| "
                     f"{job.get('label') or job.get('route') or '-'} | "
                     f"{self._cell(job.get('job_id') or job.get('detail') or '-')} | "
-                    f"{self._cell(job.get('source') or '-')} | "
-                    f"{self._cell(job.get('status') or '-')} | "
-                    f"{self._age(job.get('last_log_age_seconds'))} | "
-                    f"{self._cell(job.get('message') or '')} |"
+                    f"{self._cell(job.get('status') or '-')} |"
                 )
         else:
-            lines.append(f"No active job inferred from RUNNING status or recent non-terminal logs in the last {lookback} minutes.")
+            lines.append("진행 중인 작업이 없습니다.")
 
         lines.append("")
         lines.append("## Remaining")
