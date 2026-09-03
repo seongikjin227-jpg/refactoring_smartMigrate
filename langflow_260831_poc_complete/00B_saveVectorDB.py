@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -10,68 +9,55 @@ from contextlib import contextmanager
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
-from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
+from lfx.io import IntInput, Output, SecretStrInput, StrInput
 from lfx.schema.data import Data
-from lfx.schema.message import Message
 
-try:
-    from lfx.io import DataInput
-except Exception:
-    DataInput = MessageTextInput
+
+RAG_TABLE = "NEXT_MIG_RAG_INFO"
+VECTOR_COLUMN = "EMBEDDING_VECTOR"
+BATCH_SIZE = 32
 
 
 class NewType00BSaveVectorDB(Component):
     display_name = "00B Save Vector DB"
-    description = "One-shot loader that embeds NEXT_MIG_RAG_INFO SEARCH rules and stores vectors in a BLOB column."
+    description = "One-shot loader that regenerates all NEXT_MIG_RAG_INFO source SQL vectors into EMBEDDING_VECTOR."
     name = "NewType00BSaveVectorDB"
     icon = "Database"
 
     inputs = [
-        DataInput(name="payload_json", display_name="Payload JSON", required=False),
         StrInput(name="db_host", display_name="DB Host", required=False),
         IntInput(name="db_port", display_name="DB Port", value=1521, required=False),
         StrInput(name="db_service_name", display_name="DB Service Name", required=False),
         StrInput(name="db_username", display_name="DB Username", required=False),
         SecretStrInput(name="db_password", display_name="DB Password", required=False),
         StrInput(name="system_schema", display_name="System Schema", value="SFAADM", required=False),
-        StrInput(name="rag_table", display_name="RAG Table", value="NEXT_MIG_RAG_INFO", required=False),
-        StrInput(name="vector_column", display_name="Vector BLOB Column", value="EMBEDDING_VECTOR", required=False),
-        StrInput(name="category", display_name="Category", value="ALL", required=False),
-        StrInput(name="rule_type", display_name="Rule Type", value="SEARCH", required=False),
-        StrInput(name="update_mode", display_name="Update Mode", value="MISSING_ONLY", required=False),
         StrInput(name="rag_embed_base_url", display_name="RAG Embedding Base URL", required=True),
         SecretStrInput(name="rag_embed_api_key", display_name="RAG Embedding API Key", required=False),
         StrInput(name="rag_embed_model", display_name="RAG Embedding Model", value="BAAI/bge-m3", required=False),
         IntInput(name="rag_embed_timeout_seconds", display_name="RAG Embedding Timeout Seconds", value=60, required=False),
-        IntInput(name="batch_size", display_name="Embedding Batch Size", value=32, required=False),
     ]
 
     outputs = [Output(display_name="Result", name="result", method="run", types=["Data"])]
 
     def run(self) -> Data:
         started = time.perf_counter()
-        payload = self._parse_payload(getattr(self, "payload_json", None))
-        db_config = self._db_config(payload)
+        db_config = self._db_config()
         embed_config = self._embed_config()
-        table = self._qualify(str(getattr(self, "rag_table", "") or "NEXT_MIG_RAG_INFO"), db_config.get("system_schema"))
-        vector_column = self._clean_identifier(str(getattr(self, "vector_column", "") or "EMBEDDING_VECTOR"))
-        category = str(getattr(self, "category", "") or "ALL").strip().upper()
-        rule_type = str(getattr(self, "rule_type", "") or "SEARCH").strip().upper()
-        update_mode = str(getattr(self, "update_mode", "") or "MISSING_ONLY").strip().upper()
+        table = self._qualify(RAG_TABLE, db_config.get("system_schema"))
 
         self._require_db_config(db_config)
         self._require_embed_config(embed_config)
-        rows = self._load_rows(db_config, table, vector_column, category, rule_type, update_mode)
+        rows = self._load_rows(db_config, table)
 
         updated = 0
         failures: list[dict[str, Any]] = []
-        for batch in self._chunks(rows, max(1, int(getattr(self, "batch_size", None) or 32))):
+        for batch in self._chunks(rows, BATCH_SIZE):
             texts = [self._embedding_text(row) for row in batch]
             try:
                 vectors = self._embed_texts(texts, embed_config)
                 if len(vectors) != len(batch):
                     raise ValueError(f"embedding response count mismatch: expected={len(batch)}, actual={len(vectors)}")
-                self._save_vectors(db_config, table, vector_column, batch, vectors)
+                self._save_vectors(db_config, table, batch, vectors)
                 updated += len(batch)
             except Exception as exc:
                 failures.append({"rag_ids": [row["rag_id"] for row in batch], "error": str(exc)})
@@ -80,10 +66,10 @@ class NewType00BSaveVectorDB(Component):
             "ok": not failures,
             "component": "00B_saveVectorDB",
             "table": table,
-            "vector_column": vector_column,
-            "category": category,
-            "rule_type": rule_type,
-            "update_mode": update_mode,
+            "vector_column": VECTOR_COLUMN,
+            "update_mode": "ALL",
+            "row_scope": "USE_YN='Y' AND SOURCE_SQL IS NOT NULL",
+            "batch_size": BATCH_SIZE,
             "embedding_model": embed_config["model"],
             "loaded_count": len(rows),
             "updated_count": updated,
@@ -99,32 +85,17 @@ class NewType00BSaveVectorDB(Component):
         self,
         db_config: dict[str, Any],
         table: str,
-        vector_column: str,
-        category: str,
-        rule_type: str,
-        update_mode: str,
     ) -> list[dict[str, Any]]:
-        category_filter = "" if category in {"", "ALL", "*"} else "AND UPPER(TRIM(CATEGORY)) = :category"
-        rule_type_filter = "" if rule_type in {"", "ALL", "*"} else "AND UPPER(TRIM(RULE_TYPE)) = :rule_type"
-        vector_filter = f"AND {vector_column} IS NULL" if update_mode != "ALL" else ""
         sql = f"""
             SELECT RAG_ID, CATEGORY, RULE_TYPE, SOURCE_SQL
               FROM {table}
              WHERE UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
                AND SOURCE_SQL IS NOT NULL
-               {category_filter}
-               {rule_type_filter}
-               {vector_filter}
              ORDER BY RAG_ID
         """
-        binds: dict[str, Any] = {}
-        if category_filter:
-            binds["category"] = category
-        if rule_type_filter:
-            binds["rule_type"] = rule_type
         with self._connect(db_config) as conn:
             cur = conn.cursor()
-            cur.execute(sql, binds)
+            cur.execute(sql)
             return [
                 {
                     "rag_id": int(row[0]),
@@ -139,7 +110,6 @@ class NewType00BSaveVectorDB(Component):
         self,
         db_config: dict[str, Any],
         table: str,
-        vector_column: str,
         rows: list[dict[str, Any]],
         vectors: list[list[float]],
     ) -> None:
@@ -157,7 +127,7 @@ class NewType00BSaveVectorDB(Component):
             cur.executemany(
                 f"""
                 UPDATE {table}
-                   SET {vector_column} = :embedding_vector,
+                   SET {VECTOR_COLUMN} = :embedding_vector,
                        UPDATED_AT = SYSTIMESTAMP
                  WHERE RAG_ID = :rag_id
                 """,
@@ -237,15 +207,14 @@ class NewType00BSaveVectorDB(Component):
             "timeout_seconds": self._positive_int(getattr(self, "rag_embed_timeout_seconds", None) or os.getenv("RAG_EMBED_TIMEOUT_SEC"), 60),
         }
 
-    def _db_config(self, payload: dict[str, Any]) -> dict[str, Any]:
-        item_config = dict(payload.get("db_config") or {})
+    def _db_config(self) -> dict[str, Any]:
         return {
-            "db_host": str(getattr(self, "db_host", "") or item_config.get("db_host") or "").strip(),
-            "db_port": int(getattr(self, "db_port", None) or item_config.get("db_port") or 1521),
-            "db_service_name": str(getattr(self, "db_service_name", "") or item_config.get("db_service_name") or "").strip(),
-            "db_username": str(getattr(self, "db_username", "") or item_config.get("db_username") or "").strip(),
-            "db_password": self._secret_to_str(getattr(self, "db_password", None)) or str(item_config.get("db_password") or ""),
-            "system_schema": str(getattr(self, "system_schema", "") or item_config.get("system_schema") or "SFAADM").strip(),
+            "db_host": str(getattr(self, "db_host", "") or "").strip(),
+            "db_port": int(getattr(self, "db_port", None) or 1521),
+            "db_service_name": str(getattr(self, "db_service_name", "") or "").strip(),
+            "db_username": str(getattr(self, "db_username", "") or "").strip(),
+            "db_password": self._secret_to_str(getattr(self, "db_password", None)),
+            "system_schema": str(getattr(self, "system_schema", "") or "SFAADM").strip(),
         }
 
     def _require_db_config(self, db_config: dict[str, Any]) -> None:
@@ -292,24 +261,6 @@ class NewType00BSaveVectorDB(Component):
         if not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", clean):
             raise ValueError(f"Invalid identifier: {clean}")
         return clean
-
-    def _parse_payload(self, raw: Any) -> dict[str, Any]:
-        if isinstance(raw, Data):
-            return dict(raw.data or {})
-        if isinstance(raw, Message):
-            raw = raw.text
-        if isinstance(raw, dict):
-            return dict(raw)
-        text = str(raw or "").strip()
-        if text.startswith("```"):
-            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
-            text = re.sub(r"\s*```$", "", text)
-        if not text:
-            return {}
-        parsed = json.loads(text)
-        if not isinstance(parsed, dict):
-            raise ValueError("payload_json must be a JSON object")
-        return parsed
 
     def _lob_to_str(self, value: Any) -> str:
         if value is not None and hasattr(value, "read"):
