@@ -4,7 +4,6 @@ import logging
 import json
 import os
 import re
-import struct
 import time
 from contextlib import contextmanager
 from typing import Any
@@ -194,6 +193,12 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         SecretStrInput(name="rag_embed_api_key", display_name="RAG Embedding API Key", required=False),
         StrInput(name="rag_embed_model", display_name="RAG Embedding Model", value="BAAI/bge-m3", required=False),
         IntInput(name="rag_embed_timeout_seconds", display_name="RAG Embedding Timeout Seconds", value=30, required=False),
+        StrInput(name="milvus_uri", display_name="Milvus URI", required=False),
+        StrInput(name="milvus_username", display_name="Milvus Username", required=False),
+        SecretStrInput(name="milvus_password", display_name="Milvus Password", required=False),
+        StrInput(name="milvus_db_name", display_name="Milvus DB Name", value="default", required=False),
+        StrInput(name="rag_collection_name", display_name="RAG Collection Name", value="SM_RAG_RULES", required=False),
+        StrInput(name="correct_sql_collection_name", display_name="Correct SQL Collection Name", value="SM_CORRECT_SQL", required=False),
     ]
 
     outputs = [
@@ -1142,55 +1147,52 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
 
     # Retrieve SEARCH RAG examples using the policy for each category.
     def _retrieve_rag_examples(self, db_config: dict[str, Any], rag_config: dict[str, Any], category: str, sql_text: str, source_tables: set[str], map_id: str) -> list[dict[str, Any]]:
-        # SQL_CONVERSION uses one whole-SQL search and returns only top 3 matches.
-        # SQL_TUNING uses block search because tuning rules may apply to each subquery independently.
-        # Tuning block matches are kept only when similarity score is at least 0.7.
-        rules = self._load_rag_rules(db_config, category, RAG_SEARCH, source_tables, map_id)
         if category == "SQL_TUNING":
             blocks = self._split_sql_blocks(sql_text)
             blocks = [block for block in blocks if block["block_type"] == "SUBQUERY"] + [block for block in blocks if block["block_type"] != "SUBQUERY"]
         else:
             blocks = [{"block_id": "FULL_SQL", "block_type": "FULL", "sql": str(sql_text or ""), "normalized_sql": self._normalize_sql_shape(sql_text)}] if str(sql_text or "").strip() else []
-        if not rules or not blocks:
+        if not blocks:
             logging.getLogger("smartmigrate.workflow").info(
                 f"RAG SEARCH skipped category={category}",
-                extra={"workflow_log": [map_id, "SQL_CONVERSION", "RAG_RETRIEVE", "INFO", f"{category}_SEARCH", "SKIP", 0, f"rules={len(rules)}, blocks={len(blocks)}"]},
+                extra={"workflow_log": [map_id, "SQL_CONVERSION", "RAG_RETRIEVE", "INFO", f"{category}_SEARCH", "SKIP", 0, "blocks=0"]},
             )
             return []
+        client = self._milvus_client()
+        config = self._milvus_config()
+        output_fields = ["rag_id", "category", "rule_type", "source_tables", "guidance_text", "source_sql", "target_sql"]
+        filter_expr = f'category == "{category}" and rule_type == "{RAG_SEARCH}" and is_active == true'
+        top_k = self._positive_int(os.getenv("TOBE_SQL_TUNING_TOP_K"), 3) if category == "SQL_TUNING" else 3
+        fetch_k = max(top_k * 5, top_k)
+        matches_by_block: list[list[tuple[dict[str, Any], float]]] = []
         try:
-            import faiss
-            import numpy as np
-
-            cached_rule_vectors = [self._rule_blob_vector(rule, np) for rule in rules]
-            if cached_rule_vectors and all(vector is not None for vector in cached_rule_vectors):
-                rule_vectors = np.asarray(cached_rule_vectors, dtype="float32")
-                block_vectors = np.asarray(self._embed_texts([block["normalized_sql"] for block in blocks], rag_config), dtype="float32")
-                method = "faiss_blob_vector"
-            else:
-                vectors = self._embed_texts([self._rule_embedding_text(rule) for rule in rules] + [block["normalized_sql"] for block in blocks], rag_config)
-                rule_vectors = np.asarray(vectors[: len(rules)], dtype="float32")
-                block_vectors = np.asarray(vectors[len(rules) :], dtype="float32")
-                method = "faiss_vector"
-            faiss.normalize_L2(rule_vectors)
-            faiss.normalize_L2(block_vectors)
-            index = faiss.IndexFlatIP(rule_vectors.shape[1])
-            index.add(rule_vectors)
-            top_k = self._positive_int(os.getenv("TOBE_SQL_TUNING_TOP_K"), 3) if category == "SQL_TUNING" else 3
-            scores, indexes = index.search(block_vectors, min(top_k, len(rules)))
-            matches_by_block = [
-                [(rules[int(rule_index)], float(score)) for score, rule_index in zip(scores[i], indexes[i]) if rule_index >= 0]
-                for i in range(len(blocks))
-            ]
+            vectors = self._embed_texts([block["normalized_sql"] for block in blocks], rag_config)
+            method = "milvus_dense_vector"
+            search_result = client.search(
+                collection_name=config["rag_collection"],
+                data=vectors,
+                anns_field="dense_vector",
+                filter=filter_expr,
+                limit=fetch_k,
+                output_fields=output_fields,
+                search_params={"metric_type": "COSINE"},
+            )
+            for hits in search_result:
+                matches = []
+                for hit in hits:
+                    rule = self._milvus_rag_entity(hit)
+                    if not self._source_tables_match(rule.get("source_tables") or [], source_tables):
+                        continue
+                    matches.append((rule, self._milvus_score(hit)))
+                    if len(matches) >= top_k:
+                        break
+                matches_by_block.append(matches)
         except Exception as exc:
             logging.getLogger("smartmigrate.workflow").warning(
-                f"RAG vector search fallback to token search: {type(exc).__name__}: {exc}",
-                extra={"workflow_log": [map_id, "SQL_CONVERSION", "RAG_RETRIEVE", "WARN", "RAG_SEARCH", "FALLBACK", 0]},
+                f"Milvus RAG search skipped: {type(exc).__name__}: {exc}",
+                extra={"workflow_log": [map_id, "SQL_CONVERSION", "RAG_RETRIEVE", "WARN", "RAG_SEARCH", "SKIP", 0]},
             )
-            method = "token_fallback"
-            matches_by_block = [
-                sorted(((rule, self._lexical_similarity(block["normalized_sql"], rule["normalized_source_sql"])) for rule in rules), key=lambda item: item[1], reverse=True)[: (self._positive_int(os.getenv("TOBE_SQL_TUNING_TOP_K"), 3) if category == "SQL_TUNING" else 3)]
-                for block in blocks
-            ]
+            return []
         if category == "SQL_TUNING":
             matches_by_block = [[(rule, score) for rule, score in matches if score >= 0.7] for matches in matches_by_block]
         else:
@@ -1208,55 +1210,27 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         search_mode = "block_top3_score_0.7" if category == "SQL_TUNING" else "full_sql_top3"
         logging.getLogger("smartmigrate.workflow").info(
             f"RAG SEARCH completed category={category}",
-            extra={"workflow_log": [map_id, "SQL_CONVERSION", "RAG_RETRIEVE", "INFO", f"{category}_SEARCH", "PASS", 0, f"method={method}, mode={search_mode}, blocks={len(blocks)}, rules={len(rules)}, matches={match_count}, threshold={'0.7' if category == 'SQL_TUNING' else 'none'}, matched={match_summary}"]},
+            extra={"workflow_log": [map_id, "SQL_CONVERSION", "RAG_RETRIEVE", "INFO", f"{category}_SEARCH", "PASS", 0, f"collection={config['rag_collection']}, method={method}, mode={search_mode}, blocks={len(blocks)}, matches={match_count}, threshold={'0.7' if category == 'SQL_TUNING' else 'none'}, matched={match_summary}"]},
         )
         return payloads
 
-    # Load raw RAG rows from NEXT_MIG_RAG_INFO for GENERAL or SEARCH use.
+    # Load RAG metadata from Milvus for GENERAL guidance.
     def _load_rag_rules(self, db_config: dict[str, Any], category: str, rule_type: str, source_tables: set[str], map_id: str) -> list[dict[str, Any]]:
-        # GENERAL rows become direct prompt guidance. SEARCH rows become vector-search candidates.
-        # SOURCE_TABLES must match the current conversion source table set, so unrelated domains stay out of the prompt.
-        table = self._qualify(os.getenv("RAG_INFO_TABLE", "NEXT_MIG_RAG_INFO"), db_config.get("system_schema"))
-        columns = self._table_columns(db_config, table)
-        if not {"RAG_ID", "CATEGORY", "RULE_TYPE", "USE_YN"}.issubset(columns):
-            raise ValueError("NEXT_MIG_RAG_INFO requires RAG_ID, CATEGORY, RULE_TYPE, and USE_YN columns")
-        guidance_expr = "GUIDANCE_TEXT" if "GUIDANCE_TEXT" in columns else "CAST(NULL AS VARCHAR2(4000))"
-        source_sql_expr = "SOURCE_SQL" if "SOURCE_SQL" in columns else "TO_CLOB(NULL)"
-        target_sql_expr = "TARGET_SQL" if "TARGET_SQL" in columns else "TO_CLOB(NULL)"
-        source_tables_expr = "SOURCE_TABLES" if "SOURCE_TABLES" in columns else "CAST(NULL AS VARCHAR2(4000))"
-        vector_column = "EMBEDDING_VECTOR"
-        embedding_vector_expr = vector_column if rule_type == RAG_SEARCH and vector_column in columns else "NULL"
-        with self._connect(db_config) as conn:
-            cur = conn.cursor()
-            cur.execute(
-                f"""SELECT RAG_ID, {source_tables_expr}, {guidance_expr}, {source_sql_expr}, {target_sql_expr}, {embedding_vector_expr}
-                      FROM {table}
-                     WHERE UPPER(TRIM(CATEGORY)) = :category
-                       AND UPPER(TRIM(RULE_TYPE)) = :rule_type
-                       AND UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
-                     ORDER BY CREATED_AT ASC""",
-                {"category": category, "rule_type": rule_type},
-            )
-            result = []
-            for row in cur.fetchall():
-                rule_tables = self._source_tables(self._lob_to_str(row[1]))
-                if rule_type == RAG_SEARCH and not rule_tables:
-                    continue
-                if rule_tables and not (rule_tables & source_tables):
-                    continue
-                source_sql = self._lob_to_str(row[3]).strip()
-                if rule_type == RAG_SEARCH and not source_sql:
-                    continue
-                result.append({
-                    "rule_id": self._lob_to_str(row[0]).strip(), "source_tables": sorted(rule_tables),
-                    "guidance": [line.strip() for line in self._lob_to_str(row[2]).splitlines() if line.strip()],
-                    "source_sql": source_sql, "target_sql": self._lob_to_str(row[4]).strip(),
-                    "normalized_source_sql": self._normalize_sql_shape(source_sql),
-                    "embedding_vector": self._blob_to_bytes(row[5]) if rule_type == RAG_SEARCH else b"",
-                })
+        config = self._milvus_config()
+        rows = self._milvus_client().query(
+            collection_name=config["rag_collection"],
+            filter=f'category == "{category}" and rule_type == "{rule_type}" and is_active == true',
+            output_fields=["rag_id", "category", "rule_type", "source_tables", "guidance_text", "source_sql", "target_sql"],
+            limit=1000,
+        )
+        result = []
+        for row in rows or []:
+            rule = self._milvus_rag_entity({"entity": row})
+            if self._source_tables_match(rule.get("source_tables") or [], source_tables):
+                result.append(rule)
         logging.getLogger("smartmigrate.workflow").info(
             f"RAG {rule_type} loaded category={category}",
-            extra={"workflow_log": [map_id, "SQL_CONVERSION", "RAG_LOAD", "INFO", f"{category}_{rule_type}", "PASS", 0, f"rows={len(result)}"]},
+            extra={"workflow_log": [map_id, "SQL_CONVERSION", "RAG_LOAD", "INFO", f"{category}_{rule_type}", "PASS", 0, f"collection={config['rag_collection']}, rows={len(result)}, rag_ids={','.join(rule.get('rule_id') or '' for rule in result[:20])}"]},
         )
         return result
 
@@ -1409,38 +1383,6 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             parts.append(f"{block.get('block_id')}:{matched}")
         return "; ".join(parts)[:3500]
 
-    # Restore a cached float32 vector saved in NEXT_MIG_RAG_INFO.EMBEDDING_VECTOR.
-    def _rule_blob_vector(self, rule: dict[str, Any], np: Any) -> Any:
-        blob = rule.get("embedding_vector")
-        if not blob:
-            return None
-        vector = np.frombuffer(blob, dtype="<f4")
-        if vector.ndim != 1 or vector.size == 0:
-            return None
-        return vector.astype("float32", copy=False)
-
-    # Convert Oracle BLOB values into bytes before leaving the cursor scope.
-    def _blob_to_bytes(self, value: Any) -> bytes:
-        if value is None:
-            return b""
-        if isinstance(value, bytes):
-            return value
-        if isinstance(value, bytearray):
-            return bytes(value)
-        if hasattr(value, "read"):
-            data = value.read()
-            if data is None:
-                return b""
-            return bytes(data) if isinstance(data, bytearray) else data
-        return bytes(value)
-
-    # Restore a cached float32 little-endian vector for Correct SQL FR_SQL similarity.
-    def _float32_blob_vector(self, blob: Any) -> list[float] | None:
-        data = self._blob_to_bytes(blob)
-        if not data or len(data) % 4:
-            return None
-        return [float(item[0]) for item in struct.iter_unpack("<f", data)]
-
     # Score two normalized SQL strings when vector search cannot run.
     def _lexical_similarity(self, left: str, right: str) -> float:
         left_tokens = set(re.findall(r"[A-Z_]+|\d+", left.upper()))
@@ -1481,105 +1423,53 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
 
     # Retrieve one human-corrected conversion row similar to the current FROM SQL.
     def _correct_sql_hint_text(self, db_config: dict[str, Any], source_sql: str, current_row_id: str | None, map_id: str, retry_count: int, hint_column: str) -> str:
-        # Candidates are successful user-edited conversion rows; current row is excluded.
-        table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
-        columns = self._table_columns(db_config, table)
         hint_column = str(hint_column or "").strip().upper()
         if hint_column not in {"TO_SQL", "BIND_SQL", "TEST_SQL"}:
             return "- (empty)"
-        required = {"FR_SQL", hint_column, "STATUS_CONVERSION", "USER_EDITED"}
-        if not required.issubset(columns):
-            return "- (empty)"
-
-        vector_column = "EMBEDDING_VECTOR"
-        vector_expr = vector_column if vector_column in columns else "NULL"
-        edit_fr_expr = "EDIT_FR_SQL" if "EDIT_FR_SQL" in columns else "TO_CLOB(NULL)"
-        space_nm_expr = "SPACE_NM" if "SPACE_NM" in columns else "CAST(NULL AS VARCHAR2(4000))"
-        sql_id_expr = "SQL_ID" if "SQL_ID" in columns else "CAST(NULL AS VARCHAR2(4000))"
-        order_expr = "UPD_TS DESC NULLS LAST" if "UPD_TS" in columns else "ROWID"
-        limit = self._positive_int(os.getenv("CORRECT_SQL_HINT_CORPUS_LIMIT"), 2000)
-        query = f"""
-            SELECT *
-              FROM (
-                    SELECT ROWIDTOCHAR(ROWID), {space_nm_expr}, {sql_id_expr}, FR_SQL, {edit_fr_expr}, {hint_column}, {vector_expr}
-                       FROM {table}
-                      WHERE UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y'
-                        AND UPPER(TRIM(NVL(STATUS_CONVERSION, ''))) = :status
-                        AND {hint_column} IS NOT NULL
-                     ORDER BY {order_expr}
-                   )
-             WHERE ROWNUM <= {limit}
-        """
-        query_sql = self._normalize_sql_shape(source_sql)
-        candidates: list[dict[str, str]] = []
+        hint_field = {"TO_SQL": "to_sql", "BIND_SQL": "bind_sql", "TEST_SQL": "test_sql"}[hint_column]
+        config = self._milvus_config()
         try:
-            with self._connect(db_config) as conn:
-                cur = conn.cursor()
-                cur.execute(query, {"status": CONVERSION_PASS})
-                for row in cur.fetchall():
-                    row_id = self._lob_to_str(row[0]).strip()
-                    if current_row_id and row_id == str(current_row_id).strip():
-                        continue
-                    candidate_from_sql = self._lob_to_str(row[4]).strip() or self._lob_to_str(row[3]).strip()
-                    candidate_hint_sql = self._lob_to_str(row[5]).strip()
-                    if not candidate_from_sql or not candidate_hint_sql:
-                        continue
-                    candidates.append(
-                        {
-                            "row_id": row_id,
-                            "space_nm": self._lob_to_str(row[1]).strip(),
-                            "sql_id": self._lob_to_str(row[2]).strip(),
-                            "from_sql": candidate_from_sql,
-                            "normalized_from_sql": self._normalize_sql_shape(candidate_from_sql),
-                            "hint_sql": candidate_hint_sql,
-                            "embedding_vector": self._blob_to_bytes(row[6]) if vector_column in columns else b"",
-                        }
-                    )
-        except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").warning(
-                f"Correct SQL hint skipped: {type(exc).__name__}: {exc}",
-                extra={"workflow_log": [map_id, "SQL_CONVERSION", "CORRECT_SQL_HINT", "WARN", f"LOAD_{hint_column}_HINT", "SKIP", retry_count]},
+            query_vector = self._embed_texts([self._normalize_sql_shape(source_sql)], self._rag_config())[0]
+            rows = self._milvus_client().search(
+                collection_name=config["correct_sql_collection"],
+                data=[query_vector],
+                anns_field="dense_vector",
+                filter=f'user_edited == "Y" and is_active == true and {hint_field} != ""',
+                limit=10,
+                output_fields=["row_id", "space_nm", "sql_id", "source_sql", "to_sql", "bind_sql", "test_sql", "status_conversion", "user_edited"],
+                search_params={"metric_type": "COSINE"},
             )
-            return "- (empty)"
-
-        method = "token_fallback"
-        try:
-            rag_config = self._rag_config()
-            cached_vectors = [self._float32_blob_vector(candidate.get("embedding_vector")) for candidate in candidates]
-            if cached_vectors and all(vector is not None for vector in cached_vectors):
-                query_vector = self._embed_texts([query_sql], rag_config)[0]
-                candidate_vectors = cached_vectors
-                method = "embedding_blob"
-            else:
-                vectors = self._embed_texts([candidate["normalized_from_sql"] for candidate in candidates] + [query_sql], rag_config)
-                query_vector = vectors[-1]
-                candidate_vectors = vectors[:-1]
-                method = "embedding"
-            scored = []
-            for candidate, vector in zip(candidates, candidate_vectors):
-                left_norm = sum(float(value) * float(value) for value in vector) ** 0.5
-                right_norm = sum(float(value) * float(value) for value in query_vector) ** 0.5
-                score = sum(float(left) * float(right) for left, right in zip(vector, query_vector)) / (left_norm * right_norm) if left_norm and right_norm else 0.0
-                scored.append((score, candidate))
-        except Exception:
-            scored = [(self._lexical_similarity(query_sql, candidate["normalized_from_sql"]), candidate) for candidate in candidates]
-
-        if not scored:
+            hits = rows[0] if rows else []
+            selected = None
+            for hit in hits:
+                entity = self._milvus_entity(hit)
+                if current_row_id and str(entity.get("row_id") or "").strip() == str(current_row_id).strip():
+                    continue
+                if self._status(entity.get("status_conversion")) not in {"PASS", CONVERSION_PASS}:
+                    continue
+                hint_sql = str(entity.get(hint_field) or "").strip()
+                if not hint_sql:
+                    continue
+                selected = (self._milvus_score(hit), entity, hint_sql)
+                break
+            if not selected:
+                raise ValueError("no matching corrected SQL hint")
+        except Exception as exc:
             logging.getLogger("smartmigrate.workflow").info(
                 "Correct SQL hint not found",
-                extra={"workflow_log": [map_id, "SQL_CONVERSION", "CORRECT_SQL_HINT", "INFO", f"LOAD_{hint_column}_HINT", "SKIP", retry_count, f"candidates={len(candidates)}"]},
+                extra={"workflow_log": [map_id, "SQL_CONVERSION", "CORRECT_SQL_HINT", "INFO", f"LOAD_{hint_column}_HINT", "SKIP", retry_count, f"collection={config['correct_sql_collection']}, reason={type(exc).__name__}: {exc}"]},
             )
             return "- (empty)"
 
-        score, hint = max(scored, key=lambda item: item[0])
+        score, hint, hint_sql = selected
         lines = [
-            f"- SCORE={round(score, 6)} | METHOD={method} | SPACE_NM={hint['space_nm']} | SQL_ID={hint['sql_id']}",
-            f"  FROM_SQL: {hint['from_sql']}",
-            f"  {hint_column}: {hint['hint_sql']}",
+            f"- SCORE={round(score, 6)} | METHOD=milvus_dense_vector | SPACE_NM={hint.get('space_nm') or ''} | SQL_ID={hint.get('sql_id') or ''}",
+            f"  FROM_SQL: {hint.get('source_sql') or ''}",
+            f"  {hint_column}: {hint_sql}",
         ]
         logging.getLogger("smartmigrate.workflow").info(
             "Correct SQL hint loaded",
-            extra={"workflow_log": [map_id, "SQL_CONVERSION", "CORRECT_SQL_HINT", "INFO", f"LOAD_{hint_column}_HINT", "PASS", retry_count, f"method={method}, score={round(score, 6)}, space_nm={hint['space_nm']}, sql_id={hint['sql_id']}"]},
+            extra={"workflow_log": [map_id, "SQL_CONVERSION", "CORRECT_SQL_HINT", "INFO", f"LOAD_{hint_column}_HINT", "PASS", retry_count, f"collection={config['correct_sql_collection']}, method=milvus_dense_vector, score={round(score, 6)}, space_nm={hint.get('space_nm') or ''}, sql_id={hint.get('sql_id') or ''}"]},
         )
         return "\n".join(lines)
 
@@ -1895,6 +1785,72 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "rag_embed_model": str(getattr(self, "rag_embed_model", "") or os.getenv("RAG_EMBED_MODEL") or "BAAI/bge-m3").strip(),
             "rag_embed_timeout_seconds": self._positive_int(getattr(self, "rag_embed_timeout_seconds", None) or os.getenv("RAG_EMBED_TIMEOUT_SEC"), 30),
         }
+
+    def _milvus_config(self) -> dict[str, Any]:
+        return {
+            "uri": str(getattr(self, "milvus_uri", "") or os.getenv("MILVUS_URI") or "").strip(),
+            "username": str(getattr(self, "milvus_username", "") or os.getenv("MILVUS_USERNAME") or "").strip(),
+            "password": self._secret_to_str(getattr(self, "milvus_password", None)) or str(os.getenv("MILVUS_PASSWORD") or ""),
+            "db_name": str(getattr(self, "milvus_db_name", "") or os.getenv("MILVUS_DB_NAME") or "default").strip(),
+            "rag_collection": self._clean_collection_name(getattr(self, "rag_collection_name", "") or os.getenv("MILVUS_RAG_COLLECTION") or "SM_RAG_RULES"),
+            "correct_sql_collection": self._clean_collection_name(getattr(self, "correct_sql_collection_name", "") or os.getenv("MILVUS_CORRECT_SQL_COLLECTION") or "SM_CORRECT_SQL"),
+        }
+
+    def _milvus_client(self) -> Any:
+        from pymilvus import MilvusClient
+
+        config = self._milvus_config()
+        missing = [key for key in ("uri", "username", "password", "db_name") if not str(config.get(key) or "").strip()]
+        if missing:
+            raise ValueError(f"missing Milvus config: {', '.join(missing)}")
+        return MilvusClient(uri=config["uri"], user=config["username"], password=config["password"], db_name=config["db_name"])
+
+    def _milvus_rag_entity(self, hit: Any) -> dict[str, Any]:
+        entity = self._milvus_entity(hit)
+        source_tables = self._source_tables(entity.get("source_tables") or "")
+        return {
+            "rule_id": str(entity.get("rag_id") or "").strip(),
+            "category": str(entity.get("category") or "").strip(),
+            "rule_type": str(entity.get("rule_type") or "").strip(),
+            "source_tables": sorted(source_tables),
+            "guidance": [line.strip() for line in str(entity.get("guidance_text") or "").splitlines() if line.strip()],
+            "source_sql": str(entity.get("source_sql") or "").strip(),
+            "target_sql": str(entity.get("target_sql") or "").strip(),
+            "normalized_source_sql": self._normalize_sql_shape(entity.get("source_sql") or ""),
+        }
+
+    def _milvus_entity(self, hit: Any) -> dict[str, Any]:
+        if isinstance(hit, dict):
+            entity = hit.get("entity") or hit.get("fields") or hit
+            return dict(entity) if isinstance(entity, dict) else {}
+        entity = getattr(hit, "entity", None) or getattr(hit, "fields", None)
+        if isinstance(entity, dict):
+            return dict(entity)
+        if hasattr(hit, "to_dict"):
+            data = hit.to_dict()
+            entity = data.get("entity") or data.get("fields") or data
+            return dict(entity) if isinstance(entity, dict) else {}
+        return {}
+
+    def _milvus_score(self, hit: Any) -> float:
+        if isinstance(hit, dict):
+            value = hit.get("distance", hit.get("score", 0.0))
+        else:
+            value = getattr(hit, "distance", getattr(hit, "score", 0.0))
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _source_tables_match(self, rule_tables: list[str] | set[str], source_tables: set[str]) -> bool:
+        rule_set = set(rule_tables)
+        return not rule_set or not source_tables or bool(rule_set & source_tables)
+
+    def _clean_collection_name(self, value: Any) -> str:
+        clean = str(value or "").strip()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", clean):
+            raise ValueError(f"Invalid Milvus collection name: {clean}")
+        return clean
 
     # Normalize Langflow secret inputs to plain strings for client libraries.
     def _secret_to_str(self, value: Any) -> str:
