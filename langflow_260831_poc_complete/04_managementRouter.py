@@ -12,6 +12,20 @@ from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
 from lfx.schema.data import Data
 from lfx.schema.message import Message
 
+CURRENT_PROGRESS_ROUTER_PROMPT = """
+
+Additional management route:
+- CURRENT_PROGRESS: Use this when the user asks for currently running jobs, current progress, active work, running work status, or "현재 진행중인 작업".
+
+Updated JSON schema:
+{
+  "management_route": "DASHBOARD|CURRENT_PROGRESS|STATUS_CHANGE|CORRECT_SQL_INPUT|EXCEPTION",
+  "target": {},
+  "correct_sql": "",
+  "reason": "routing reason"
+}
+"""
+
 try:
     from lfx.io import DataInput
 except Exception:
@@ -49,7 +63,7 @@ Dashboard 조회, Status/priority/USE_YN 변경, Correct SQL 입력 중 어떤 �
 class NewType04ManagementRouter(Component):
 
     display_name = "04 Management LLM Router"
-    description = "Routes management requests to Dashboard, Status Change, Correct SQL Input, or Exception."
+    description = "Routes management requests to Dashboard, Current Progress, Status Change, Correct SQL Input, or Exception."
     name = "NewType04ManagementRouter"
     icon = "Route"
 
@@ -64,6 +78,7 @@ class NewType04ManagementRouter(Component):
 
     outputs = [
         Output(display_name="Dashboard", name="dashboard", method="dashboard_response", group_outputs=True),
+        Output(display_name="Current Progress", name="current_progress", method="current_progress_response", group_outputs=True),
         Output(display_name="Status Change", name="status_change", method="status_change_response", group_outputs=True),
         Output(display_name="Correct SQL Input", name="correct_sql_input", method="correct_sql_input_response", group_outputs=True),
         Output(display_name="Exception Message", name="exception", method="exception_response", group_outputs=True, types=["Message"]),
@@ -78,6 +93,17 @@ class NewType04ManagementRouter(Component):
             return __log_result
         except Exception as exc:
             logging.getLogger("smartmigrate.workflow").error(f"error dashboard_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "ERROR", "DASHBOARD_RESPONSE", "ERROR", 0]})
+            raise
+
+    def current_progress_response(self) -> Data:
+        # Return the current-progress branch when management routing matches.
+        logging.getLogger("smartmigrate.workflow").info("before current_progress_response", extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "CURRENT_PROGRESS_RESPONSE", "START", 0]})
+        try:
+            __log_result = self._route_output("CURRENT_PROGRESS", "current_progress")
+            logging.getLogger("smartmigrate.workflow").info("after current_progress_response", extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "CURRENT_PROGRESS_RESPONSE", "END", 0]})
+            return __log_result
+        except Exception as exc:
+            logging.getLogger("smartmigrate.workflow").error(f"error current_progress_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "ERROR", "CURRENT_PROGRESS_RESPONSE", "ERROR", 0]})
             raise
 
     def status_change_response(self) -> Data:
@@ -171,7 +197,7 @@ class NewType04ManagementRouter(Component):
         body = {
             "model": model,
             "messages": [
-                {"role": "system", "content": MANAGEMENT_ROUTER_PROMPT},
+                {"role": "system", "content": MANAGEMENT_ROUTER_PROMPT + CURRENT_PROGRESS_ROUTER_PROMPT},
                 {"role": "user", "content": json.dumps({"user_request": payload.get("user_request") or ""}, ensure_ascii=False)},
             ],
             "temperature": 0,
@@ -196,7 +222,7 @@ class NewType04ManagementRouter(Component):
     def _normalize_decision(self, decision: dict[str, Any]) -> dict[str, Any]:
         # Validate and normalize the management router decision.
         route = str(decision.get("management_route") or "").upper()
-        if route not in {"DASHBOARD", "STATUS_CHANGE", "CORRECT_SQL_INPUT", "EXCEPTION"}:
+        if route not in {"DASHBOARD", "CURRENT_PROGRESS", "STATUS_CHANGE", "CORRECT_SQL_INPUT", "EXCEPTION"}:
             raise ValueError(f"Invalid management_route: {route}")
         target = decision.get("target") if isinstance(decision.get("target"), dict) else {}
         return {
@@ -210,6 +236,7 @@ class NewType04ManagementRouter(Component):
         # Resolve the next component name for a route.
         return {
             "DASHBOARD": "04_dashboard",
+            "CURRENT_PROGRESS": "04_currentProgress",
             "STATUS_CHANGE": "04_statusChange",
             "CORRECT_SQL_INPUT": "04_correctSqlInput",
             "EXCEPTION": "04_managementRouter",

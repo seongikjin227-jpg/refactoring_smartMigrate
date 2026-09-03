@@ -375,7 +375,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         def retry_prepare_node(state: dict[str, Any]) -> dict[str, Any]:
             attempt = self._attempt_result_from_state(state, ok=False)
             retry_count = int(state.get("db_attempts") or 1)
-            self._update_job(db_config, int(state["map_id"]), attempt["status"], 0, retry_count)
+            self._update_job(db_config, int(state["map_id"]), f"RUNNING-{attempt['status']}", 0, retry_count)
             logging.getLogger("smartmigrate.workflow").warning(
                 attempt["message"],
                 extra={

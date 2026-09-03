@@ -75,6 +75,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                     return __log_result
 
                 self._increment_batch_count(db_config, str(job["row_id"]))
+                self._mark_running_status(db_config, str(job["row_id"]), "RUNNING", "SQL tuning started")
                 result = self._run_tuning(merged, job, db_config, started)
             except Exception as exc:
                 result = self._finish_failure(payload, job, db_config, started, FAIL_TUNED, str(exc))
@@ -161,6 +162,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                 if self._poc_stage_failed(job, attempt_no, "APPLY_TUNING_RULES"):
                     last_status = FAIL_TUNED
                     last_message = "[POC] tuning rule application failed"
+                    self._mark_running_status(db_config, str(job["row_id"]), f"RUNNING-{last_status}", last_message, attempt_no - 1)
                     attempts.append({"attempt": attempt_no, "stage": "APPLY_TUNING_RULES", "status": last_status, "reason": last_message})
                     logger.error(last_message, extra={"workflow_log": [map_id, "SQL_TUNING", "TUNED_TO_SQL", "ERROR", "APPLY_TUNING_RULES", last_status, attempt_no - 1]})
                     resume_stage = "APPLY_TUNING_RULES"
@@ -199,6 +201,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                 if self._poc_stage_failed(job, attempt_no, "VALIDATE_TUNED_SQL"):
                     last_status = FAIL_TEST
                     last_message = "[POC] tuned SQL validation failed"
+                    self._mark_running_status(db_config, str(job["row_id"]), f"RUNNING-{last_status}", last_message, attempt_no - 1)
                     attempts.append({"attempt": attempt_no, "stage": "VALIDATE_TUNED_SQL", "status": last_status, "reason": last_message})
                     logger.error(last_message, extra={"workflow_log": [map_id, "SQL_TUNING", "TUNED_TEST_SQL", "ERROR", "VALIDATE_TUNED_SQL", last_status, attempt_no - 1, tuned_sql]})
                     resume_stage = "VALIDATE_TUNED_SQL"
@@ -565,6 +568,18 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                 [row_id],
             )
             conn.commit()
+
+    def _mark_running_status(self, db_config: dict[str, Any], row_id: str, status: str, message: str, retry_count: int = 0) -> None:
+        """Persist a running SQL tuning status while retry is still active."""
+        self._update_row(
+            db_config,
+            row_id,
+            {
+                "STATUS_TUNING": status,
+                "LOG": f"RUNNING stage=SQL_TUNING status={status} message={message}",
+                "RETRY_COUNT": retry_count,
+            },
+        )
 
     def _status(self, value: Any) -> str:
         """Normalize a status string for comparisons."""

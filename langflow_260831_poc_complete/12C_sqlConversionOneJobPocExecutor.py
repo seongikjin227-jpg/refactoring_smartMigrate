@@ -237,6 +237,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                     return __log_result
                 job = self._load_sql_job(db_config, payload)
                 self._increment_batch_count(db_config, str(job["row_id"]))
+                self._mark_running_status(db_config, str(job["row_id"]), "STATUS_CONVERSION", "RUNNING", "SQL conversion started")
 
                 # ##############################
                 # Actual conversion execution
@@ -517,6 +518,15 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             next_attempt = int(state["attempt_no"]) + 1
             final_retry_mode = "ON" if next_attempt >= int(state["max_retry"]) else "OFF"
             user_edited = str(state["job"].get("user_edited") or "").strip().upper() == "Y"
+            running_status = f"RUNNING-{state.get('last_status') or FAIL_TOBE}"
+            self._mark_running_status(
+                state["db_config"],
+                str(state["job"]["row_id"]),
+                "STATUS_CONVERSION",
+                running_status,
+                state.get("last_message") or "",
+                next_attempt - 1,
+            )
             return {
                 **state,
                 "attempt_no": next_attempt,
@@ -1030,6 +1040,18 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 [row_id],
             )
             conn.commit()
+
+    def _mark_running_status(self, db_config: dict[str, Any], row_id: str, status_column: str, status: str, message: str, retry_count: int = 0) -> None:
+        """Persist a running SQL status while retry is still active."""
+        self._update_row(
+            db_config,
+            row_id,
+            {
+                status_column: status,
+                "LOG": f"RUNNING stage=SQL_CONVERSION status={status} message={message}",
+                "RETRY_COUNT": retry_count,
+            },
+        )
 
     # Pick EDIT_FR_SQL first and fall back to original FR_SQL.
     def _source_sql(self, job: dict[str, Any]) -> str:
