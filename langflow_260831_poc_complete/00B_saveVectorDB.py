@@ -253,7 +253,6 @@ class NewType00BSaveVectorDB(Component):
 
         deactivated = self._deactivate_missing_docs(client, collection_name, existing, active_doc_ids)
         return {
-            "source": source_name,
             "loaded_count": len(rows),
             "active_count": len(active_doc_ids),
             "upserted_count": upserted,
