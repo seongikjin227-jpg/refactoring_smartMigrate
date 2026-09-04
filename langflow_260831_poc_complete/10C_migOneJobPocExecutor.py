@@ -5,6 +5,7 @@ import json
 import os
 import re
 import time
+import urllib.request
 from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -40,6 +41,16 @@ class NewType10CMigOneJobPocExecutor(Component):
         StrInput(name="llm_fallback_models", display_name="LLM Fallback Models", value="GLM-5.1,Qwen3.6-35B-A3B,Kimi-K2.5", required=False),
         IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=4096, required=False),
         IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=900, required=False),
+        StrInput(name="rag_embed_base_url", display_name="RAG Embedding Base URL", required=False),
+        SecretStrInput(name="rag_embed_api_key", display_name="RAG Embedding API Key", required=False),
+        StrInput(name="rag_embed_model", display_name="RAG Embedding Model", value="BAAI/bge-m3", required=False),
+        IntInput(name="rag_embed_timeout_seconds", display_name="RAG Embedding Timeout Seconds", value=30, required=False),
+        StrInput(name="milvus_uri", display_name="Milvus URI", required=False),
+        StrInput(name="milvus_username", display_name="Milvus Username", required=False),
+        SecretStrInput(name="milvus_password", display_name="Milvus Password", required=False),
+        StrInput(name="milvus_db_name", display_name="Milvus DB Name", value="default", required=False),
+        StrInput(name="correct_sql_migration_collection_name", display_name="Correct SQL Migration Collection", value="SM_CORRECT_SQL_MIGRATION", required=False),
+        IntInput(name="correct_sql_top_k", display_name="Correct SQL Top K", value=1, required=False),
     ]
 
     outputs = [Output(display_name="Job Result", name="job_result", method="run_job", types=["Data"])]
@@ -223,6 +234,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         map_id = self._to_int(context.get("map_id"))
         db_config = self._db_config(context["job"])
         metadata = self._load_mig_metadata(db_config, map_id)
+        metadata["correct_sql_hints"] = self._migration_correct_sql_hints(metadata, map_id)
         return {
             "stage": "FETCH_DDL",
             "status": "PASS",
@@ -532,6 +544,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             ddl_info_block=ddl_info_block,
             verification_instruction=verification_instruction,
             condition=str(context.get("condition") or ""),
+            correct_sql_hints=str(context.get("correct_sql_hints") or "- (no matching user-edited migration SQL)"),
         )
         last_error = str(context.get("last_error") or "").strip()
         last_sql = str(context.get("last_sql") or "").strip()
@@ -584,6 +597,99 @@ class NewType10CMigOneJobPocExecutor(Component):
         if re.match(r"^(SELECT|WITH)\b", stripped, flags=re.I):
             return f"({self._qualify_source_tables_in_sql(stripped, dict(context.get('db_config') or {}))})"
         return self._qualify_source_tables_in_sql(stripped, dict(context.get("db_config") or {}))
+
+    def _migration_correct_sql_hints(self, metadata: dict[str, Any], map_id: int) -> str:
+        """Return at most Correct SQL Top K confirmed migration examples; retrieval failure is non-fatal."""
+        try:
+            fr_table = str(metadata.get("fr_table") or "").strip()
+            to_table = str(metadata.get("to_table") or "").strip()
+            condition = str(metadata.get("condition") or "").strip()
+            mig_sql = str(metadata.get("saved_migration_sql") or "").strip()
+            query_text = "\n".join((f"FR_TABLE: {fr_table}", f"TO_TABLE: {to_table}", f"CONDITION: {condition}", f"MIG_SQL: {mig_sql}"))
+            vector = self._embed_rag_text(query_text)
+            rows = self._migration_milvus_client().search(
+                collection_name=self._migration_rag_config()["collection"],
+                data=[vector],
+                anns_field="dense_vector",
+                filter='user_edited == "Y" and is_active == true and target_sql != ""',
+                limit=self._positive_int(getattr(self, "correct_sql_top_k", None), 1),
+                output_fields=["row_id", "source_tables", "target_table", "guidance_text", "target_sql", "test_sql", "user_edited"],
+                search_params={"metric_type": "COSINE"},
+            )
+            lines: list[str] = []
+            for hit in (rows[0] if rows else []):
+                entity = self._milvus_entity(hit)
+                if str(entity.get("row_id") or "") == str(map_id):
+                    continue
+                score = self._milvus_score(hit)
+                lines.extend((
+                    f"- SCORE={round(score, 6)} | FR_TABLE={entity.get('source_tables') or ''} | TO_TABLE={entity.get('target_table') or ''}",
+                    f"  CONDITION: {entity.get('guidance_text') or ''}",
+                    f"  MIG_SQL: {entity.get('target_sql') or ''}",
+                    f"  VERIFY_SQL: {entity.get('test_sql') or ''}",
+                ))
+            return "\n".join(lines) if lines else "- (no matching user-edited migration SQL)"
+        except Exception as exc:
+            logging.getLogger("smartmigrate.workflow").info(
+                f"Migration Correct SQL hint skipped: {type(exc).__name__}: {exc}",
+                extra={"workflow_log": [map_id, "DB_MIGRATION", "CORRECT_SQL_HINT", "INFO", "LOAD_MIGRATION_HINT", "SKIP", 0]},
+            )
+            return "- (no matching user-edited migration SQL)"
+
+    def _migration_rag_config(self) -> dict[str, str | int]:
+        return {
+            "base_url": str(getattr(self, "rag_embed_base_url", "") or os.getenv("RAG_EMBED_BASE_URL") or "").strip(),
+            "api_key": self._secret_to_str(getattr(self, "rag_embed_api_key", None)) or str(os.getenv("RAG_EMBED_API_KEY") or ""),
+            "model": str(getattr(self, "rag_embed_model", "") or os.getenv("RAG_EMBED_MODEL") or "BAAI/bge-m3").strip(),
+            "timeout": self._positive_int(getattr(self, "rag_embed_timeout_seconds", None), 30),
+            "collection": self._clean_collection_name(getattr(self, "correct_sql_migration_collection_name", "") or os.getenv("MILVUS_CORRECT_SQL_MIGRATION_COLLECTION") or "SM_CORRECT_SQL_MIGRATION"),
+        }
+
+    def _embed_rag_text(self, text: str) -> list[float]:
+        config = self._migration_rag_config()
+        base_url = str(config["base_url"]).rstrip("/")
+        if not base_url:
+            raise ValueError("RAG Embedding Base URL is not configured")
+        endpoint = base_url if base_url.endswith("/embeddings") else (f"{base_url}/embeddings" if base_url.endswith("/v1") else f"{base_url}/v1/embeddings")
+        headers = {"Content-Type": "application/json"}
+        if config["api_key"]:
+            headers["Authorization"] = f"Bearer {config['api_key']}"
+        request = urllib.request.Request(endpoint, data=json.dumps({"model": config["model"], "input": [text]}).encode("utf-8"), headers=headers, method="POST")
+        with urllib.request.urlopen(request, timeout=int(config["timeout"])) as response:
+            body = json.loads(response.read().decode("utf-8"))
+        values = (body.get("data") or [{}])[0].get("embedding") if isinstance(body, dict) else None
+        if not isinstance(values, list):
+            raise ValueError("invalid embedding response")
+        return [float(value) for value in values]
+
+    def _migration_milvus_client(self) -> Any:
+        from pymilvus import MilvusClient
+        config = self._migration_rag_config()
+        uri = str(getattr(self, "milvus_uri", "") or os.getenv("MILVUS_URI") or "").strip()
+        username = str(getattr(self, "milvus_username", "") or os.getenv("MILVUS_USERNAME") or "").strip()
+        password = self._secret_to_str(getattr(self, "milvus_password", None)) or str(os.getenv("MILVUS_PASSWORD") or "")
+        db_name = str(getattr(self, "milvus_db_name", "") or os.getenv("MILVUS_DB_NAME") or "default").strip()
+        if not all((uri, username, password, db_name, config["collection"])):
+            raise ValueError("Milvus migration Correct SQL settings are incomplete")
+        return MilvusClient(uri=uri, user=username, password=password, db_name=db_name, timeout=10)
+
+    def _milvus_entity(self, hit: Any) -> dict[str, Any]:
+        if isinstance(hit, dict):
+            return dict(hit.get("entity") or hit.get("fields") or hit)
+        return dict(getattr(hit, "entity", None) or getattr(hit, "fields", None) or {})
+
+    def _milvus_score(self, hit: Any) -> float:
+        value = hit.get("distance", hit.get("score", 0.0)) if isinstance(hit, dict) else getattr(hit, "distance", getattr(hit, "score", 0.0))
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _clean_collection_name(self, value: Any) -> str:
+        clean = str(value or "").strip()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", clean):
+            raise ValueError(f"Invalid Milvus collection name: {clean}")
+        return clean
 
     def _mapping_info(self, details: list[dict[str, Any]]) -> str:
         lines = []
@@ -1667,12 +1773,7 @@ The target table already exists, so ddl_sql may be an empty string unless a safe
     - Return JSON only.
     - Required keys: ddl_sql, migration_sql, verification_sql.
     - Do not include markdown, comments, explanations, or trailing semicolons inside SQL values.
-6. SQL formatting:
-   - Format migration_sql and verification_sql before returning them.
-   - Use line breaks for SELECT, FROM, JOIN, WHERE, GROUP BY, HAVING, ORDER BY, INSERT INTO, VALUES, UPDATE, SET, and DELETE FROM clauses.
-   - Use 4 spaces for indentation in nested subqueries, CASE expressions, and column lists.
-   - Put each major SELECT expression or INSERT column on its own line when the list has more than three items.
-   - Only change whitespace and indentation for formatting; do not add comments or explanations.
+6. Return SQL only; final whitespace formatting is handled by 17C.
 
 {ddl_info_block}
 [Mapping rules]
@@ -1680,6 +1781,10 @@ The target table already exists, so ddl_sql may be an empty string unless a safe
 - Target table: {to_table}
 - Column mappings:
 {mapping_info}
+
+[Correct SQL examples]
+Use these only as examples. For migration_sql use the retrieved MIG_SQL; for verification_sql use the retrieved VERIFY_SQL.
+{correct_sql_hints}
 
 [Migration SQL requirements]
 - Prefer this shape unless retry guidance says otherwise:

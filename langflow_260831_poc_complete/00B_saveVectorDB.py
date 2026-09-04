@@ -17,7 +17,8 @@ from lfx.schema.data import Data
 RAG_TABLE = "NEXT_MIG_RAG_INFO"
 SQL_TABLE = "NEXT_SQL_INFO"
 RAG_COLLECTION = "SM_RAG_RULES"
-CORRECT_SQL_COLLECTION = "SM_CORRECT_SQL"
+CORRECT_SQL_CONVERSION_COLLECTION = "SM_CORRECT_SQL_CONVERSION"
+CORRECT_SQL_MIGRATION_COLLECTION = "SM_CORRECT_SQL_MIGRATION"
 RAG_GENERAL = "GENERAL"
 RAG_SEARCH = "SEARCH"
 BATCH_SIZE = 32
@@ -61,7 +62,8 @@ class NewType00BSaveVectorDB(Component):
         SecretStrInput(name="milvus_password", display_name="Milvus Password", required=True),
         StrInput(name="milvus_db_name", display_name="Milvus DB Name", value="default", required=True),
         StrInput(name="rag_collection_name", display_name="RAG Collection Name", value=RAG_COLLECTION, required=False),
-        StrInput(name="correct_sql_collection_name", display_name="Correct SQL Collection Name", value=CORRECT_SQL_COLLECTION, required=False),
+        StrInput(name="correct_sql_conversion_collection_name", display_name="Correct SQL Conversion Collection Name", value=CORRECT_SQL_CONVERSION_COLLECTION, required=False),
+        StrInput(name="correct_sql_migration_collection_name", display_name="Correct SQL Migration Collection Name", value=CORRECT_SQL_MIGRATION_COLLECTION, required=False),
         StrInput(name="rag_embed_base_url", display_name="RAG Embedding Base URL", required=True),
         SecretStrInput(name="rag_embed_api_key", display_name="RAG Embedding API Key", required=False),
         StrInput(name="rag_embed_model", display_name="RAG Embedding Model", value="BAAI/bge-m3", required=False),
@@ -88,26 +90,30 @@ class NewType00BSaveVectorDB(Component):
         self._require_embed_config(embed_config)
 
         rag_rows = self._load_rag_rows(db_config)
-        correct_rows = self._load_correct_sql_rows(db_config)
-        active_rows = rag_rows + correct_rows
+        conversion_rows = self._load_correct_sql_rows(db_config)
+        migration_rows = self._load_correct_migration_rows(db_config)
+        active_rows = rag_rows + conversion_rows + migration_rows
         vector_dim = self._detect_vector_dim(active_rows, embed_config)
 
         client = self._milvus_client(milvus_config)
         created = {
             "rag": self._ensure_collection(client, milvus_config["rag_collection"], vector_dim),
-            "correct_sql": self._ensure_collection(client, milvus_config["correct_sql_collection"], vector_dim),
+            "correct_sql_conversion": self._ensure_collection(client, milvus_config["correct_sql_conversion_collection"], vector_dim),
+            "correct_sql_migration": self._ensure_collection(client, milvus_config["correct_sql_migration_collection"], vector_dim),
         }
 
         rag_result = self._sync_collection(client, milvus_config["rag_collection"], rag_rows, embed_config, "NEXT_MIG_RAG_INFO")
-        sql_result = self._sync_collection(client, milvus_config["correct_sql_collection"], correct_rows, embed_config, "NEXT_SQL_INFO")
+        conversion_result = self._sync_collection(client, milvus_config["correct_sql_conversion_collection"], conversion_rows, embed_config, "NEXT_SQL_INFO")
+        migration_result = self._sync_collection(client, milvus_config["correct_sql_migration_collection"], migration_rows, embed_config, "NEXT_MIG_INFO")
 
         result = {
-            "ok": not rag_result["failures"] and not sql_result["failures"],
+            "ok": not rag_result["failures"] and not conversion_result["failures"] and not migration_result["failures"],
             "component": "00B_syncMilvusVectorDB",
             "milvus_db_name": milvus_config["db_name"],
             "collections": {
                 "rag_rules": milvus_config["rag_collection"],
-                "correct_sql": milvus_config["correct_sql_collection"],
+                "correct_sql_conversion": milvus_config["correct_sql_conversion_collection"],
+                "correct_sql_migration": milvus_config["correct_sql_migration_collection"],
             },
             "collection_created": created,
             "vector_dim": vector_dim,
@@ -117,7 +123,8 @@ class NewType00BSaveVectorDB(Component):
                 SQL_TABLE: "USER_EDITED='Y' and STATUS_CONVERSION pass rows become active for correct SQL hints",
             },
             "rag": rag_result,
-            "correct_sql": sql_result,
+            "correct_sql_conversion": conversion_result,
+            "correct_sql_migration": migration_result,
             "elapsed_seconds": round(time.perf_counter() - started, 3),
         }
         self.status = result
@@ -433,6 +440,62 @@ class NewType00BSaveVectorDB(Component):
                 )
             return rows
 
+    def _load_correct_migration_rows(self, db_config: dict[str, Any]) -> list[dict[str, Any]]:
+        """Load user-confirmed migration SQL examples for SM_CORRECT_SQL_MIGRATION."""
+        table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
+        columns = self._table_columns(db_config, table)
+        required = {"MAP_ID", "MIG_SQL", "USER_EDITED", "STATUS"}
+        if not required.issubset(columns):
+            return []
+        fr_table_expr = "FR_TABLE" if "FR_TABLE" in columns else "CAST(NULL AS VARCHAR2(4000))"
+        to_table_expr = "TO_TABLE" if "TO_TABLE" in columns else "CAST(NULL AS VARCHAR2(4000))"
+        condition_expr = "CONDITION" if "CONDITION" in columns else "TO_CLOB(NULL)"
+        verify_expr = "VERIFY_SQL" if "VERIFY_SQL" in columns else "TO_CLOB(NULL)"
+        updated_expr = "TO_CHAR(UPD_TS, 'YYYY-MM-DD HH24:MI:SS')" if "UPD_TS" in columns else "TO_CHAR(SYSDATE, 'YYYY-MM-DD HH24:MI:SS')"
+        sql = f"""
+            SELECT MAP_ID, {fr_table_expr}, {to_table_expr}, {condition_expr}, MIG_SQL, {verify_expr}, USER_EDITED, STATUS, {updated_expr}
+              FROM {table}
+             WHERE MIG_SQL IS NOT NULL
+             ORDER BY {updated_expr} DESC
+        """
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(sql)
+            rows = []
+            for row in cur.fetchall():
+                map_id = self._lob_to_str(row[0]).strip()
+                fr_table = self._lob_to_str(row[1]).strip()
+                to_table = self._lob_to_str(row[2]).strip()
+                condition = self._lob_to_str(row[3]).strip()
+                mig_sql = self._lob_to_str(row[4]).strip()
+                verify_sql = self._lob_to_str(row[5]).strip()
+                user_edited = self._lob_to_str(row[6]).strip().upper()
+                status = self._lob_to_str(row[7]).strip().upper()
+                # Retrieval needs the same business context used to create a migration:
+                # source/target table, filter condition, and the confirmed MIG_SQL.
+                search_content = "\n".join(
+                    part for part in (f"FR_TABLE: {fr_table}", f"TO_TABLE: {to_table}", f"CONDITION: {condition}", f"MIG_SQL: {mig_sql}") if part.strip()
+                )
+                rows.append(
+                    self._entity(
+                        doc_id=f"MIG:{self._hash_text(map_id)[:24]}",
+                        source="NEXT_MIG_INFO",
+                        row_id=map_id,
+                        source_tables=fr_table,
+                        target_table=to_table,
+                        guidance_text=condition,
+                        source_sql=search_content,
+                        target_sql=mig_sql,
+                        test_sql=verify_sql,
+                        user_edited=user_edited,
+                        status_conversion=status,
+                        content=search_content,
+                        is_active=user_edited == "Y" and status == "PASS" and bool(mig_sql),
+                        updated_at=self._lob_to_str(row[8]),
+                    )
+                )
+            return rows
+
     def _entity(self, **values: Any) -> dict[str, Any]:
         # Normalize every Milvus entity to the same shape. Both collections share
         # this schema so 12C/15C can request stable output_fields regardless of
@@ -595,7 +658,8 @@ class NewType00BSaveVectorDB(Component):
             "password": self._secret_to_str(getattr(self, "milvus_password", None)) or str(os.getenv("MILVUS_PASSWORD") or ""),
             "db_name": str(getattr(self, "milvus_db_name", "") or os.getenv("MILVUS_DB_NAME") or "default").strip(),
             "rag_collection": self._clean_collection_name(getattr(self, "rag_collection_name", "") or os.getenv("MILVUS_RAG_COLLECTION") or RAG_COLLECTION),
-            "correct_sql_collection": self._clean_collection_name(getattr(self, "correct_sql_collection_name", "") or os.getenv("MILVUS_CORRECT_SQL_COLLECTION") or CORRECT_SQL_COLLECTION),
+            "correct_sql_conversion_collection": self._clean_collection_name(getattr(self, "correct_sql_conversion_collection_name", "") or os.getenv("MILVUS_CORRECT_SQL_CONVERSION_COLLECTION") or CORRECT_SQL_CONVERSION_COLLECTION),
+            "correct_sql_migration_collection": self._clean_collection_name(getattr(self, "correct_sql_migration_collection_name", "") or os.getenv("MILVUS_CORRECT_SQL_MIGRATION_COLLECTION") or CORRECT_SQL_MIGRATION_COLLECTION),
         }
 
     def _embed_config(self) -> dict[str, Any]:

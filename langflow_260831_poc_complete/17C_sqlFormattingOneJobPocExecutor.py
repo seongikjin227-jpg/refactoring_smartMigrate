@@ -24,21 +24,7 @@ TUNING_SUCCESS_STATUSES = {"PASS", "PASS-TUNING"}
 FORMATTED = "FORMATTED"
 FAIL_FORMATTING = "FAIL-FORMATTING"
 
-SQL_FORMAT_PROMPT = """
-You are an Oracle/MyBatis SQL formatter.
-
-Goal:
-Format the input SQL using line breaks and 4-space indentation only.
-
-Hard rules:
-- Do not change table names, column names, aliases, JOIN/WHERE logic, MyBatis tags, #{param}, or ${param}.
-- Do not add explanations, markdown fences, comments, wrappers, or extra SQL.
-- Preserve Oracle/MyBatis semantics exactly.
-- Return only the formatted SQL text.
-
-Input SQL:
-{input_sql}
-""".strip()
+SQL_FORMAT_PROMPT = "Format this SQL without changing semantics. Return SQL only.\n{input_sql}"
 
 
 class NewType17CSqlFormattingOneJobPocExecutor(Component):
@@ -49,6 +35,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
 
     inputs = [
         DataInput(name="job_item", display_name="Job Item", required=True),
+        MessageTextInput(name="formatting_prompt_template", display_name="Formatting Prompt Template", value=SQL_FORMAT_PROMPT, required=False),
         IntInput(name="max_retry", display_name="Max Retry", value=2, required=False),
         StrInput(name="llm_base_url", display_name="LLM Base URL", required=False),
         SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=False),
@@ -68,6 +55,12 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         job: dict[str, Any] = {}
         try:
             payload = self._parse_payload(getattr(self, "job_item", ""))
+            if payload.get("generated_sql_list"):
+                db_config = self._db_config(payload)
+                self._require_db_config(db_config)
+                result = self._run_batch_formatting(payload, db_config, started)
+                self.status = result
+                return Data(data=result)
             if not self._should_run_formatting(payload):
                 result = self._component_pass_through(payload, started, "17C skipped because job_name is migration.")
                 self.status = result
@@ -126,6 +119,90 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             extra={"formatting_status": FORMATTED, "formatted_sql": formatted_sql, "format_method": method, "next_node": self._dashboard_node(payload)},
         )
 
+    def _run_batch_formatting(self, payload: dict[str, Any], db_config: dict[str, Any], started: float) -> dict[str, Any]:
+        """Format the generated SQL references once at the end of a job, reading SQL from DB by key."""
+        allowed = {
+            "NEXT_MIG_INFO": {"MIG_SQL", "VERIFY_SQL"},
+            "NEXT_SQL_INFO": {"TUNED_FR_SQL", "TO_SQL", "BIND_SQL", "TEST_SQL", "TUNED_TO_SQL"},
+        }
+        results: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for item in payload.get("generated_sql_list") or []:
+            if not isinstance(item, dict):
+                continue
+            table_name = str(item.get("table") or "").strip().upper()
+            column = str(item.get("column") or "").strip().upper()
+            if table_name not in allowed or column not in allowed[table_name]:
+                continue
+            key = str(item.get("row_id") or item.get("key_value") or "").strip()
+            identity = (table_name, key, column)
+            if not key or identity in seen:
+                continue
+            seen.add(identity)
+            try:
+                sql_text = self._load_generated_sql(db_config, table_name, item, column)
+                if not sql_text:
+                    results.append({"table": table_name, "column": column, "key": key, "status": "SKIPPED_EMPTY"})
+                    continue
+                formatted_sql, method = self._format_sql(sql_text, self._llm_config(payload))
+                if not formatted_sql:
+                    raise ValueError("formatter returned empty SQL")
+                self._update_generated_sql(db_config, table_name, item, column, formatted_sql)
+                results.append({"table": table_name, "column": column, "key": key, "status": FORMATTED, "method": method})
+            except Exception as exc:
+                results.append({"table": table_name, "column": column, "key": key, "status": FAIL_FORMATTING, "error": str(exc)})
+        failures = [item for item in results if item["status"] == FAIL_FORMATTING]
+        status = FORMATTED if not failures else FAIL_FORMATTING
+        return {
+            **payload,
+            "component": "17C_sqlFormattingOneJobPocExecutor",
+            "ok": not failures,
+            "status": status,
+            "formatting_status": status,
+            "formatting_results": results,
+            "formatted_count": len([item for item in results if item["status"] == FORMATTED]),
+            "failed_count": len(failures),
+            "elapsed_seconds": round(time.perf_counter() - started, 3),
+            "db_status_updated": bool(results and not failures),
+            "next_node": self._dashboard_node(payload),
+        }
+
+    def _load_generated_sql(self, db_config: dict[str, Any], table_name: str, item: dict[str, Any], column: str) -> str:
+        table = self._qualify(table_name, db_config.get("system_schema"))
+        if table_name == "NEXT_MIG_INFO":
+            map_id = item.get("key_value") or item.get("map_id")
+            if map_id is None:
+                raise ValueError("NEXT_MIG_INFO formatting item requires key_value/map_id")
+            where_sql, params = "MAP_ID = :key", {"key": int(map_id)}
+        else:
+            row_id = str(item.get("row_id") or "").strip()
+            if not row_id:
+                raise ValueError("NEXT_SQL_INFO formatting item requires row_id")
+            where_sql, params = "ROWID = CHARTOROWID(:key)", {"key": row_id}
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(f"SELECT {column} FROM {table} WHERE {where_sql}", params)
+            row = cur.fetchone()
+        if not row:
+            raise ValueError(f"{table_name} row not found")
+        return self._lob_to_str(row[0]).strip()
+
+    def _update_generated_sql(self, db_config: dict[str, Any], table_name: str, item: dict[str, Any], column: str, value: str) -> None:
+        table = self._qualify(table_name, db_config.get("system_schema"))
+        columns = self._table_columns(db_config, table)
+        if column not in columns:
+            raise ValueError(f"{table_name}.{column} does not exist")
+        if table_name == "NEXT_MIG_INFO":
+            key_sql, params = "MAP_ID = :key", {"key": int(item.get("key_value") or item.get("map_id"))}
+        else:
+            key_sql, params = "ROWID = CHARTOROWID(:key)", {"key": str(item.get("row_id") or "").strip()}
+        params["value"] = value
+        update_ts = ", UPD_TS = CURRENT_TIMESTAMP" if "UPD_TS" in columns else ""
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(f"UPDATE {table} SET {column} = :value{update_ts} WHERE {key_sql}", params)
+            conn.commit()
+
     def _format_sql(self, sql_text: str, llm_config: dict[str, Any]) -> tuple[str, str]:
         source = str(sql_text or "").strip()
         if not source:
@@ -152,7 +229,8 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         if not provider:
             provider = "anthropic" if "anthropic" in base_url.lower() or model.lower().startswith("claude") else "openai"
         candidates = [model, *[item.strip() for item in str(config.get("llm_fallback_models") or "").split(",") if item.strip()]]
-        prompt = SQL_FORMAT_PROMPT.format(input_sql=sql_text)
+        template = str(getattr(self, "formatting_prompt_template", "") or SQL_FORMAT_PROMPT).strip()
+        prompt = template.format(input_sql=sql_text) if "{input_sql}" in template else f"{template}\n{sql_text}"
         candidate_models = list(dict.fromkeys(candidates))
         for index, candidate in enumerate(candidate_models):
             try:

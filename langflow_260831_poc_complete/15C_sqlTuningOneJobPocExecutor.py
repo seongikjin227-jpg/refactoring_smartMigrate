@@ -27,16 +27,7 @@ FAIL_TEST = "FAIL-TEST"
 RAG_SEARCH = "SEARCH"
 RAG_GENERAL = "GENERAL"
 
-SQL_OUTPUT_FORMATTING_GUIDE = """
-
-[SQL Formatting Guide]
-- Format the generated SQL before returning it.
-- Use line breaks for SELECT, FROM, JOIN, WHERE, GROUP BY, HAVING, ORDER BY, UNION ALL, INSERT INTO, VALUES, UPDATE, SET, and DELETE FROM clauses.
-- Use 4 spaces for indentation in nested subqueries, CASE expressions, MyBatis dynamic tags, and column lists.
-- Put each major SELECT expression on its own line when the list has more than three items.
-- Keep MyBatis tags and bind markers intact; only change whitespace and indentation.
-- Do not add comments, explanations, markdown fences, wrappers, or a trailing semicolon.
-""".rstrip()
+SQL_OUTPUT_FORMATTING_GUIDE = "\nReturn SQL only; final whitespace formatting is handled by 17C."
 
 
 class _PromptValues(dict):
@@ -131,6 +122,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         SecretStrInput(name="milvus_password", display_name="Milvus Password", required=False),
         StrInput(name="milvus_db_name", display_name="Milvus DB Name", value="default", required=False),
         StrInput(name="rag_collection_name", display_name="RAG Collection Name", value="SM_RAG_RULES", required=False),
+        IntInput(name="rag_top_k", display_name="MIG RAG Top K", value=3, required=False),
     ]
 
     outputs = [Output(display_name="Job Result", name="job_result", method="run_job", types=["Data"])]
@@ -422,7 +414,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             return []
         ordered_blocks = [block for block in blocks if block["block_type"] == "SUBQUERY"]
         ordered_blocks.extend(block for block in blocks if block["block_type"] != "SUBQUERY")
-        top_k = self._positive_int(os.getenv("TOBE_SQL_TUNING_TOP_K"), 3)
+        top_k = self._positive_int(getattr(self, "rag_top_k", None), 3)
         fetch_k = max(top_k * 5, top_k)
         try:
             # Embed each current TO_SQL block once, then search those query
@@ -461,7 +453,6 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                 extra={"workflow_log": [map_id, "SQL_TUNING", "RAG_RETRIEVE", "WARN", "RAG_SEARCH", "SKIP", retry_count]},
             )
             return []
-        matches_by_block = [[(rule, score) for rule, score in matches if score >= 0.7] for matches in matches_by_block]
         payloads = [
             {
                 "block_id": block["block_id"],
@@ -475,7 +466,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         match_count = sum(len(block["top_rule_matches"]) for block in payloads)
         logging.getLogger("smartmigrate.workflow").info(
             "RAG SEARCH completed category=SQL_TUNING",
-            extra={"workflow_log": [map_id, "SQL_TUNING", "RAG_RETRIEVE", "INFO", "SQL_TUNING_SEARCH", "PASS", retry_count, f"collection={self._milvus_config()['rag_collection']}, method={method}, blocks={len(ordered_blocks)}, matches={match_count}, threshold=0.7, matched={self._rag_match_summary(ordered_blocks, matches_by_block)}"]},
+            extra={"workflow_log": [map_id, "SQL_TUNING", "RAG_RETRIEVE", "INFO", "SQL_TUNING_SEARCH", "PASS", retry_count, f"collection={self._milvus_config()['rag_collection']}, method={method}, blocks={len(ordered_blocks)}, matches={match_count}, threshold=none, matched={self._rag_match_summary(ordered_blocks, matches_by_block)}"]},
         )
         return payloads
 

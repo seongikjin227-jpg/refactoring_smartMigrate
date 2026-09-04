@@ -28,16 +28,7 @@ TUNED_FR_SQL_PRETUNING_MIN_LENGTH_DEFAULT = 8000
 RAG_SEARCH = "SEARCH"
 RAG_GENERAL = "GENERAL"
 
-SQL_OUTPUT_FORMATTING_GUIDE = """
-
-[SQL Formatting Guide]
-- Format the generated SQL before returning it.
-- Use line breaks for SELECT, FROM, JOIN, WHERE, GROUP BY, HAVING, ORDER BY, UNION ALL, INSERT INTO, VALUES, UPDATE, SET, and DELETE FROM clauses.
-- Use 4 spaces for indentation in nested subqueries, CASE expressions, MyBatis dynamic tags, and column lists.
-- Put each major SELECT expression or INSERT column on its own line when the list has more than three items.
-- Keep MyBatis tags and bind markers intact; only change whitespace and indentation.
-- Do not add comments, explanations, markdown fences, wrappers, or a trailing semicolon.
-""".rstrip()
+SQL_OUTPUT_FORMATTING_GUIDE = "\nReturn SQL only; final whitespace formatting is handled by 17C."
 
 
 class _PromptValues(dict):
@@ -198,7 +189,9 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         SecretStrInput(name="milvus_password", display_name="Milvus Password", required=False),
         StrInput(name="milvus_db_name", display_name="Milvus DB Name", value="default", required=False),
         StrInput(name="rag_collection_name", display_name="RAG Collection Name", value="SM_RAG_RULES", required=False),
-        StrInput(name="correct_sql_collection_name", display_name="Correct SQL Collection Name", value="SM_CORRECT_SQL", required=False),
+        StrInput(name="correct_sql_collection_name", display_name="Correct SQL Collection Name", value="SM_CORRECT_SQL_CONVERSION", required=False),
+        IntInput(name="rag_top_k", display_name="MIG RAG Top K", value=3, required=False),
+        IntInput(name="correct_sql_top_k", display_name="Correct SQL Top K", value=1, required=False),
     ]
 
     outputs = [
@@ -1182,7 +1175,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         config = self._milvus_config()
         output_fields = ["rag_id", "category", "rule_type", "source_tables", "guidance_text", "source_sql", "target_sql"]
         filter_expr = f'category == "{category}" and rule_type == "{RAG_SEARCH}" and is_active == true'
-        top_k = self._positive_int(os.getenv("TOBE_SQL_TUNING_TOP_K"), 3) if category == "SQL_TUNING" else 3
+        top_k = self._positive_int(getattr(self, "rag_top_k", None), 3)
         fetch_k = max(top_k * 5, top_k)
         matches_by_block: list[list[tuple[dict[str, Any], float]]] = []
         try:
@@ -1219,10 +1212,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 extra={"workflow_log": [map_id, "SQL_CONVERSION", "RAG_RETRIEVE", "WARN", "RAG_SEARCH", "SKIP", 0]},
             )
             return []
-        if category == "SQL_TUNING":
-            matches_by_block = [[(rule, score) for rule, score in matches if score >= 0.7] for matches in matches_by_block]
-        else:
-            top_matches = sorted([item for matches in matches_by_block for item in matches], key=lambda item: item[1], reverse=True)[:3]
+        if category != "SQL_TUNING":
+            top_matches = sorted([item for matches in matches_by_block for item in matches], key=lambda item: item[1], reverse=True)[:top_k]
             matches_by_block = [top_matches]
         match_summary = self._rag_match_summary(blocks, matches_by_block)
         payloads = [
@@ -1233,10 +1224,10 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             for block, matches in zip(blocks, matches_by_block)
         ]
         match_count = sum(len(block["top_rule_matches"]) for block in payloads)
-        search_mode = "block_top3_score_0.7" if category == "SQL_TUNING" else "full_sql_top3"
+        search_mode = f"block_top{top_k}" if category == "SQL_TUNING" else f"full_sql_top{top_k}"
         logging.getLogger("smartmigrate.workflow").info(
             f"RAG SEARCH completed category={category}",
-            extra={"workflow_log": [map_id, "SQL_CONVERSION", "RAG_RETRIEVE", "INFO", f"{category}_SEARCH", "PASS", 0, f"collection={config['rag_collection']}, method={method}, mode={search_mode}, blocks={len(blocks)}, matches={match_count}, threshold={'0.7' if category == 'SQL_TUNING' else 'none'}, matched={match_summary}"]},
+            extra={"workflow_log": [map_id, "SQL_CONVERSION", "RAG_RETRIEVE", "INFO", f"{category}_SEARCH", "PASS", 0, f"collection={config['rag_collection']}, method={method}, mode={search_mode}, blocks={len(blocks)}, matches={match_count}, threshold=none, matched={match_summary}"]},
         )
         return payloads
 
@@ -1475,7 +1466,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 data=[query_vector],
                 anns_field="dense_vector",
                 filter=f'user_edited == "Y" and is_active == true and {hint_field} != ""',
-                limit=10,
+                limit=self._positive_int(getattr(self, "correct_sql_top_k", None), 1),
                 output_fields=["row_id", "space_nm", "sql_id", "source_sql", "to_sql", "bind_sql", "test_sql", "status_conversion", "user_edited"],
                 # COSINE metric is explicitly requested in Milvus search_params.
                 # No FAISS index is created in this path.
@@ -1835,7 +1826,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "password": self._secret_to_str(getattr(self, "milvus_password", None)) or str(os.getenv("MILVUS_PASSWORD") or ""),
             "db_name": str(getattr(self, "milvus_db_name", "") or os.getenv("MILVUS_DB_NAME") or "default").strip(),
             "rag_collection": self._clean_collection_name(getattr(self, "rag_collection_name", "") or os.getenv("MILVUS_RAG_COLLECTION") or "SM_RAG_RULES"),
-            "correct_sql_collection": self._clean_collection_name(getattr(self, "correct_sql_collection_name", "") or os.getenv("MILVUS_CORRECT_SQL_COLLECTION") or "SM_CORRECT_SQL"),
+            "correct_sql_collection": self._clean_collection_name(getattr(self, "correct_sql_collection_name", "") or os.getenv("MILVUS_CORRECT_SQL_CONVERSION_COLLECTION") or "SM_CORRECT_SQL_CONVERSION"),
         }
 
     def _milvus_client(self) -> Any:
