@@ -379,6 +379,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "bind_sql": str(job.get("bind_sql") or "").strip(),
             "bind_set": str(job.get("bind_set") or "") or None,
             "test_sql": str(job.get("test_sql") or "").strip(),
+            # Capture the user-owned SQL before this run writes any generated values.
+            "initial_user_edited_columns": self._initial_user_edited_columns(job),
             "tuned_fr_sql": str(job.get("tuned_fr_sql") or "").strip() or None,
             "sql_length": self._sql_length_kind(source_sql),
             "resume_stage": self._initial_resume_stage(job, tag_kind, str(job.get("to_sql") or "").strip(), str(job.get("bind_sql") or "").strip()),
@@ -526,7 +528,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 state.get("last_message") or "",
                 next_attempt - 1,
             )
-            return {
+            next_state = {
                 **state,
                 "attempt_no": next_attempt,
                 "retry_count": next_attempt - 1,
@@ -535,6 +537,9 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 "status": "RUNNING",
                 "node_failed": False,
             }
+            if user_edited:
+                next_state = self._reset_unprotected_user_edited_sql(next_state)
+            return next_state
 
         # Final node: persist the final NEXT_SQL_INFO status and build the Langflow result payload.
         def finalize_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -582,6 +587,25 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         workflow.add_edge("retry_prepare", "prepare_source")
         workflow.add_edge("finalize", END)
         return workflow.compile().invoke(context)
+
+    def _initial_user_edited_columns(self, job: dict[str, Any]) -> set[str]:
+        if str(job.get("user_edited") or "").strip().upper() != "Y":
+            return set()
+        return {
+            column
+            for column, key in (("TO_SQL", "to_sql"), ("BIND_SQL", "bind_sql"), ("TEST_SQL", "test_sql"))
+            if str(job.get(key) or "").strip()
+        }
+
+    def _reset_unprotected_user_edited_sql(self, state: dict[str, Any]) -> dict[str, Any]:
+        protected = set(state.get("initial_user_edited_columns") or [])
+        if "TO_SQL" not in protected:
+            return {**state, "to_sql": "", "bind_sql": "", "bind_set": None, "test_sql": "", "resume_stage": "GENERATE_TOBE_SQL"}
+        if state.get("tag_kind") == "SELECT" and "BIND_SQL" not in protected:
+            return {**state, "bind_sql": "", "bind_set": None, "test_sql": "", "resume_stage": "GENERATE_BIND_SQL"}
+        if state.get("tag_kind") == "SELECT" and "TEST_SQL" not in protected:
+            return {**state, "test_sql": "", "resume_stage": "GENERATE_TEST_SQL"}
+        return state
 
     # Choose the source SQL used by TO_SQL generation and optionally create TUNED_FR_SQL.
     def _prepare_conversion_source(self, job: dict[str, Any], db_config: dict[str, Any], llm_config: dict[str, Any], rag_config: dict[str, Any], source_sql: str, target_table: str, map_id: str, allow_generate: bool = True) -> tuple[str, str | None, str]:
@@ -1215,7 +1239,6 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         if category != "SQL_TUNING":
             top_matches = sorted([item for matches in matches_by_block for item in matches], key=lambda item: item[1], reverse=True)[:top_k]
             matches_by_block = [top_matches]
-        self._log_rag_comparisons(map_id, category, blocks, matches_by_block)
         match_summary = self._rag_match_summary(blocks, matches_by_block)
         payloads = [
             {
@@ -1465,7 +1488,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
     # -------------------------------------------------------------------------
     # Milvus Correct SQL hint retrieval
     # -------------------------------------------------------------------------
-    # This searches SM_CORRECT_SQL, which 00B builds from NEXT_SQL_INFO.
+    # This searches SM_CORRECT_SQL_CONVERSION, which 00B builds from NEXT_SQL_INFO.
     # dense_vector is generated from EDIT_FR_SQL first, otherwise FR_SQL.
     #
     # Runtime meaning:
@@ -1481,7 +1504,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         config = self._milvus_config()
         try:
             # Correct SQL hint compares the current FROM SQL embedding with
-            # SM_CORRECT_SQL.dense_vector using Milvus COSINE search.
+            # SM_CORRECT_SQL_CONVERSION.dense_vector using Milvus COSINE search.
             query_vector = self._embed_texts([self._normalize_sql_shape(source_sql)], self._rag_config())[0]
             rows = self._milvus_client().search(
                 collection_name=config["correct_sql_collection"],

@@ -120,8 +120,10 @@ class NewType11BFailureCauseAnalyzer(Component):
                 f"""
                 SELECT MAX(CREATED_AT)
                   FROM {table}
-                 WHERE UPPER(TRIM(NVL(LOG_TYPE, ''))) = 'LOG_RUNTIME_START'
-                   AND UPPER(TRIM(NVL(STEP_NAME, ''))) = 'RUN'
+                 WHERE UPPER(TRIM(NVL(MIG_KIND, ''))) = 'WORKFLOW'
+                   AND UPPER(TRIM(NVL(LOG_TYPE, ''))) = '08_JOB_ROUTER'
+                   AND UPPER(TRIM(NVL(STEP_NAME, ''))) = 'ROUTE'
+                   AND UPPER(TRIM(NVL(STATUS, ''))) = 'START'
                 """
             )
             row = cur.fetchone()
@@ -645,8 +647,8 @@ class NewType11BFailureCauseAnalyzer(Component):
 FAILURE_ANALYSIS_PROMPT = """
 You are the SmartMigrate workflow failure analyst.
 
-Input is a compact JSON object collected after one workflow loop.
-The code already filtered logs by the latest WORKFLOW_START marker, selected statuses matching FAIL-*, deduplicated retries, and removed low-value fields.
+Input is a compact JSON object collected after one workflow loop or a Management request.
+The code already filters logs from the latest 08_JOB_ROUTER route start, selects statuses matching FAIL-*, deduplicates retries, and removes low-value fields.
 SKIP-* records are not root causes; report them separately as jobs skipped because a prior phase failed.
 
 Write the answer in Korean Markdown.

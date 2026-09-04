@@ -61,30 +61,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                 result = self._run_batch_formatting(payload, db_config, started)
                 self.status = result
                 return Data(data=result)
-            if not self._should_run_formatting(payload):
-                result = self._component_pass_through(payload, started, "17C skipped because job_name is migration.")
-                self.status = result
-                return Data(data=result)
-
-            db_config = self._db_config(payload)
-            self._require_db_config(db_config)
-            job = self._load_sql_job(db_config, payload)
-            merged = {**job, **payload}
-
-            tuning_status = self._status(merged.get("tuning_status") or merged.get("status_tuning") or job.get("status_tuning"))
-            if not self._is_tuning_pass(tuning_status):
-                result = self._pass_through(
-                    payload=merged,
-                    job=job,
-                    started=started,
-                    status=self._status(merged.get("status")) or tuning_status or "NOT-RUN",
-                    message=f"SQL formatting passed through without DB update because tuning status is {tuning_status or 'NULL'}.",
-                )
-                self.status = result
-                return Data(data=result)
-
-            self._increment_batch_count(db_config, str(job["row_id"]))
-            result = self._run_formatting(merged, job, db_config, started)
+            result = self._component_pass_through(payload, started, "17C skipped because generated_sql_list is empty.")
             self.status = result
             return Data(data=result)
         except Exception as exc:
@@ -93,31 +70,6 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             return Data(data=result)
         finally:
             logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "17C_SQL_FORMAT", "INFO", "RUN_JOB", "END", 0]})
-
-    def _run_formatting(self, payload: dict[str, Any], job: dict[str, Any], db_config: dict[str, Any], started: float) -> dict[str, Any]:
-        source_sql = str(payload.get("tuned_to_sql") or job.get("tuned_to_sql") or payload.get("to_sql") or job.get("to_sql") or "").strip()
-        if not source_sql:
-            return self._finish_failure(payload, job, started, "TUNED_TO_SQL is empty")
-
-        formatted_sql, method = self._format_sql(source_sql, self._llm_config(payload))
-        if not formatted_sql.strip():
-            return self._finish_failure(payload, job, started, "SQL formatting returned empty SQL")
-
-        self._update_row(db_config, str(job["row_id"]), {"FORMATTED_SQL": formatted_sql})
-        logging.getLogger("smartmigrate.workflow").info(
-            "FORMATTED_SQL generated",
-            extra={"workflow_log": [self._map_id(job), "SQL_FORMATTING", "FORMATTED_SQL", "INFO", "GENERATE_FORMATTED_SQL", "SUCCESS", 0, f"method={method}, source_column=TUNED_TO_SQL"]},
-        )
-        return self._result(
-            payload=payload,
-            job=job,
-            ok=True,
-            status=FORMATTED,
-            elapsed=time.perf_counter() - started,
-            attempts=[{"attempt": 1, "stage": "GENERATE_FORMATTED_SQL", "status": FORMATTED, "method": method}],
-            message="SQL formatting completed.",
-            extra={"formatting_status": FORMATTED, "formatted_sql": formatted_sql, "format_method": method, "next_node": self._dashboard_node(payload)},
-        )
 
     def _run_batch_formatting(self, payload: dict[str, Any], db_config: dict[str, Any], started: float) -> dict[str, Any]:
         """Format the generated SQL references once at the end of a job, reading SQL from DB by key."""
@@ -373,6 +325,12 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
 
     def _should_run_formatting(self, payload: dict[str, Any]) -> bool:
         return self._job_name(payload) in {"conversion", "tuning", "formatting"}
+
+    def _format_source_column(self, payload: dict[str, Any], job: dict[str, Any]) -> str:
+        for column, key in (("TUNED_TO_SQL", "tuned_to_sql"), ("TO_SQL", "to_sql")):
+            if str(payload.get(key) or job.get(key) or "").strip():
+                return column
+        return ""
 
     def _job_name(self, payload: dict[str, Any]) -> str:
         value = str(payload.get("job_name") or "").strip().lower()

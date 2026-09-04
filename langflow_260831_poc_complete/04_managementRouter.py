@@ -20,18 +20,19 @@ except Exception:
 
 MANAGEMENT_ROUTER_PROMPT = """You are the SmartMigrate management router. Return exactly one JSON object, no Markdown.
 
-Routes: DASHBOARD (read-only summary), CURRENT_PROGRESS (active/running work), STATUS_CHANGE (reset), CORRECT_SQL_INPUT (save user-supplied SQL), EXCEPTION (missing or ambiguous data).
+Routes: DASHBOARD (read-only summary), CURRENT_PROGRESS (active/running work), STATUS_CHANGE (reset), CORRECT_SQL_INPUT (save user-supplied SQL), FAIL_ANALYSIS (aggregate failure-cause analysis), EXCEPTION (missing or ambiguous data).
 
 STATUS_CHANGE reset means the status becomes NULL and RETRY_COUNT becomes 0. It never deletes SQL.
 For STATUS_CHANGE and CORRECT_SQL_INPUT extract target.work_type: DB_MIGRATION, SQL_CONVERSION, SQL_TUNING, or SQL_FORMATTING.
 - DB_MIGRATION requires target.map_id.
 - SQL_* requires BOTH target.sql_id and target.space_nm.
 - Correct SQL requires target.sql_column. DB_MIGRATION permits MIG_SQL or VERIFY_SQL. SQL_* permits TO_SQL, BIND_SQL, TEST_SQL, TUNED_TO_SQL, or FORMATTED_SQL.
+- Use FAIL_ANALYSIS when the user asks to aggregate, summarize, or analyze failure causes. It requires no target fields.
 - Put the exact user-provided SQL in correct_sql. Never invent SQL, identifiers, or a column.
 - If any required value is absent, set management_route=EXCEPTION and write a specific Korean exception_message. Examples: "DB Migration Correct SQL 입력을 위해 MAP_ID를 알려주셔야 합니다.", "Status Change(Reset)를 위해 SQL_ID와 SPACE_NM을 모두 알려주셔야 합니다."
 
 JSON schema:
-{"management_route":"DASHBOARD|CURRENT_PROGRESS|STATUS_CHANGE|CORRECT_SQL_INPUT|EXCEPTION","target":{"work_type":"","map_id":"","sql_id":"","space_nm":"","sql_column":""},"correct_sql":"","exception_message":"","reason":""}"""
+{"management_route":"DASHBOARD|CURRENT_PROGRESS|STATUS_CHANGE|CORRECT_SQL_INPUT|FAIL_ANALYSIS|EXCEPTION","target":{"work_type":"","map_id":"","sql_id":"","space_nm":"","sql_column":""},"correct_sql":"","exception_message":"","reason":""}"""
 
 EXCEPTION_MESSAGE = "Management 요청을 처리할 수 없습니다. 작업 종류와 필요한 식별자를 다시 알려주세요."
 
@@ -55,6 +56,7 @@ class NewType04ManagementRouter(Component):
         Output(display_name="Current Progress", name="current_progress", method="current_progress_response", group_outputs=True),
         Output(display_name="Status Change", name="status_change", method="status_change_response", group_outputs=True),
         Output(display_name="Correct SQL Input", name="correct_sql_input", method="correct_sql_input_response", group_outputs=True),
+        Output(display_name="Failure Analysis", name="fail_analysis", method="fail_analysis_response", group_outputs=True),
         Output(display_name="Exception Message", name="exception", method="exception_response", group_outputs=True, types=["Message"]),
     ]
 
@@ -69,6 +71,9 @@ class NewType04ManagementRouter(Component):
 
     def correct_sql_input_response(self) -> Data:
         return self._route_output("CORRECT_SQL_INPUT", "correct_sql_input")
+
+    def fail_analysis_response(self) -> Data:
+        return self._route_output("FAIL_ANALYSIS", "fail_analysis")
 
     def exception_response(self) -> Message:
         routed = self._get_routed_payload()
@@ -121,7 +126,7 @@ class NewType04ManagementRouter(Component):
 
     def _normalize_decision(self, decision: dict[str, Any]) -> dict[str, Any]:
         route = str(decision.get("management_route") or "").upper()
-        if route not in {"DASHBOARD", "CURRENT_PROGRESS", "STATUS_CHANGE", "CORRECT_SQL_INPUT", "EXCEPTION"}:
+        if route not in {"DASHBOARD", "CURRENT_PROGRESS", "STATUS_CHANGE", "CORRECT_SQL_INPUT", "FAIL_ANALYSIS", "EXCEPTION"}:
             raise ValueError(f"Invalid management_route: {route}")
         return {"management_route": route, "target": dict(decision.get("target") or {}), "correct_sql": str(decision.get("correct_sql") or ""), "exception_message": str(decision.get("exception_message") or ""), "reason": str(decision.get("reason") or "")}
 
@@ -158,7 +163,7 @@ class NewType04ManagementRouter(Component):
         return "Status Change(Reset)"
 
     def _next_node(self, route: str) -> str:
-        return {"DASHBOARD": "04_dashboard", "CURRENT_PROGRESS": "04_currentProgress", "STATUS_CHANGE": "04_statusChange", "CORRECT_SQL_INPUT": "04_correctSqlInput", "EXCEPTION": "04_managementRouter"}.get(route, "04_dashboard")
+        return {"DASHBOARD": "04_dashboard", "CURRENT_PROGRESS": "04_currentProgress", "STATUS_CHANGE": "04_statusChange", "CORRECT_SQL_INPUT": "04_correctSqlInput", "FAIL_ANALYSIS": "11B_failureCauseAnalyzer", "EXCEPTION": "04_managementRouter"}.get(route, "04_dashboard")
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):

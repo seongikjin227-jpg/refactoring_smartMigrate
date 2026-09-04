@@ -37,7 +37,7 @@ TEXT_MAX = 65535
 #
 # Data ownership:
 # - NEXT_MIG_RAG_INFO  -> SM_RAG_RULES
-# - NEXT_SQL_INFO      -> SM_CORRECT_SQL
+# - NEXT_SQL_INFO      -> SM_CORRECT_SQL_CONVERSION
 #
 # Vector ownership:
 # - dense_vector is generated from SOURCE SQL only.
@@ -372,7 +372,7 @@ class NewType00BSaveVectorDB(Component):
 
     def _load_correct_sql_rows(self, db_config: dict[str, Any]) -> list[dict[str, Any]]:
         # ---------------------------------------------------------------------
-        # Oracle -> SM_CORRECT_SQL row mapping
+        # Oracle -> SM_CORRECT_SQL_CONVERSION row mapping
         # ---------------------------------------------------------------------
         # This collection stores previously corrected SQL pairs. 12C uses it as
         # a hint source when generating TO_SQL/BIND_SQL/TEST_SQL.
@@ -452,7 +452,7 @@ class NewType00BSaveVectorDB(Component):
         """Load user-confirmed migration SQL examples for SM_CORRECT_SQL_MIGRATION."""
         table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
         columns = self._table_columns(db_config, table)
-        required = {"MAP_ID", "MIG_SQL", "USER_EDITED", "STATUS"}
+        required = {"MAP_ID", "MIG_SQL", "VERIFY_SQL", "USER_EDITED", "STATUS"}
         if not required.issubset(columns):
             return []
         fr_table_expr = "FR_TABLE" if "FR_TABLE" in columns else "CAST(NULL AS VARCHAR2(4000))"
@@ -464,6 +464,7 @@ class NewType00BSaveVectorDB(Component):
             SELECT MAP_ID, {fr_table_expr}, {to_table_expr}, {condition_expr}, MIG_SQL, {verify_expr}, USER_EDITED, STATUS, {updated_expr}
               FROM {table}
              WHERE MIG_SQL IS NOT NULL
+               AND VERIFY_SQL IS NOT NULL
              ORDER BY {updated_expr} DESC
         """
         with self._connect(db_config) as conn:
@@ -480,7 +481,7 @@ class NewType00BSaveVectorDB(Component):
                 user_edited = self._lob_to_str(row[6]).strip().upper()
                 status = self._lob_to_str(row[7]).strip().upper()
                 # Retrieval needs the same business context used to create a migration:
-                # source/target table, filter condition, and the confirmed MIG_SQL.
+                # source/target table, filter condition, and confirmed MIG/VERIFY SQL.
                 search_content = "\n".join(
                     part for part in (f"FR_TABLE: {fr_table}", f"TO_TABLE: {to_table}", f"CONDITION: {condition}", f"MIG_SQL: {mig_sql}") if part.strip()
                 )
@@ -496,7 +497,7 @@ class NewType00BSaveVectorDB(Component):
                         user_edited=user_edited,
                         status=status,
                         content=search_content,
-                        is_active=user_edited == "Y" and status == "PASS" and bool(mig_sql),
+                        is_active=user_edited == "Y" and status == "PASS" and bool(mig_sql) and bool(verify_sql),
                         updated_at=self._lob_to_str(row[8]),
                     )
                 )

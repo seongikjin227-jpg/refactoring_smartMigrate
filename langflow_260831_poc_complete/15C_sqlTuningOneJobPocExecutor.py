@@ -463,7 +463,6 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             }
             for block, matches in zip(ordered_blocks, matches_by_block)
         ]
-        self._log_rag_comparisons(map_id, category, ordered_blocks, matches_by_block, retry_count)
         match_count = sum(len(block["top_rule_matches"]) for block in payloads)
         logging.getLogger("smartmigrate.workflow").info(
             "RAG SEARCH completed category=SQL_TUNING",
