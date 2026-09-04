@@ -613,7 +613,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                 collection_name=self._migration_rag_config()["collection"],
                 data=[vector],
                 anns_field="dense_vector",
-                filter="is_active == true",
+                filter='is_active == true and mig_sql != "" and verify_sql != ""',
                 limit=self._positive_int(getattr(self, "correct_sql_top_k", None), 1),
                 output_fields=["map_id", "fr_table", "to_table", "condition", "mig_sql", "verify_sql", "user_edited", "status"],
                 search_params={"metric_type": "COSINE"},
@@ -621,8 +621,6 @@ class NewType10CMigOneJobPocExecutor(Component):
             lines: list[str] = []
             for hit in (rows[0] if rows else []):
                 entity = self._milvus_entity(hit)
-                if str(entity.get("map_id") or "") == str(map_id):
-                    continue
                 score = self._milvus_score(hit)
                 reference_map_id = str(entity.get("map_id") or "-")
                 comparison_sql = "\n".join(
@@ -640,6 +638,10 @@ class NewType10CMigOneJobPocExecutor(Component):
                     f"  MIG_SQL: {entity.get('mig_sql') or ''}",
                     f"  VERIFY_SQL: {entity.get('verify_sql') or ''}",
                 ))
+                logging.getLogger("smartmigrate.workflow").info(
+                    "Migration Correct SQL hint loaded",
+                    extra={"workflow_log": [map_id, "DB_MIGRATION", "CORRECT_SQL_HINT", "INFO", "LOAD_MIGRATION_HINT", "PASS", 0, f"collection={self._migration_rag_config()['collection']}, reference_map_id={reference_map_id}, score={round(score, 6)}, has_mig_sql={bool(str(entity.get('mig_sql') or '').strip())}, has_verify_sql={bool(str(entity.get('verify_sql') or '').strip())}"]},
+                )
             return "\n".join(lines) if lines else "- (no matching user-edited migration SQL)"
         except Exception as exc:
             logging.getLogger("smartmigrate.workflow").info(

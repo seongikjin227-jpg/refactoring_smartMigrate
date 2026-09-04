@@ -202,9 +202,9 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             cur = conn.cursor()
             cur.execute(f"SELECT {column} FROM {table} WHERE {where_sql}", params)
             row = cur.fetchone()
-        if not row:
-            raise ValueError(f"{table_name} row not found")
-        return self._lob_to_str(row[0]).strip()
+            if not row:
+                raise ValueError(f"{table_name} row not found")
+            return self._lob_to_str(row[0]).strip()
 
     def _update_generated_sql(self, db_config: dict[str, Any], table_name: str, item: dict[str, Any], column: str, value: str) -> None:
         table = self._qualify(table_name, db_config.get("system_schema"))
