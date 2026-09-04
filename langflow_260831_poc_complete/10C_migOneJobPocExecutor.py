@@ -611,22 +611,36 @@ class NewType10CMigOneJobPocExecutor(Component):
                 collection_name=self._migration_rag_config()["collection"],
                 data=[vector],
                 anns_field="dense_vector",
-                filter='user_edited == "Y" and is_active == true and target_sql != ""',
+                filter='user_edited == "Y" and is_active == true and mig_sql != ""',
                 limit=self._positive_int(getattr(self, "correct_sql_top_k", None), 1),
-                output_fields=["row_id", "source_tables", "target_table", "guidance_text", "target_sql", "test_sql", "user_edited"],
+                output_fields=["map_id", "fr_table", "to_table", "condition", "mig_sql", "verify_sql", "user_edited", "status"],
                 search_params={"metric_type": "COSINE"},
             )
             lines: list[str] = []
             for hit in (rows[0] if rows else []):
                 entity = self._milvus_entity(hit)
-                if str(entity.get("row_id") or "") == str(map_id):
+                if str(entity.get("map_id") or "") == str(map_id):
                     continue
                 score = self._milvus_score(hit)
+                reference_map_id = str(entity.get("map_id") or "-")
+                comparison_sql = "\n".join(
+                    [
+                        "[작업 대상 SQL]",
+                        query_text,
+                        "",
+                        "[검색된 참고 SQL]",
+                        str(entity.get("mig_sql") or ""),
+                    ]
+                )
+                logging.getLogger("smartmigrate.workflow").info(
+                    f"Migration RAG comparison REFERENCE_MAP_ID={reference_map_id}, score={round(score, 6)}",
+                    extra={"workflow_log": [map_id, "DB_MIGRATION", "RAG_COMPARE", "INFO", "CORRECT_SQL_COMPARE", "PASS", 0, comparison_sql]},
+                )
                 lines.extend((
-                    f"- SCORE={round(score, 6)} | FR_TABLE={entity.get('source_tables') or ''} | TO_TABLE={entity.get('target_table') or ''}",
-                    f"  CONDITION: {entity.get('guidance_text') or ''}",
-                    f"  MIG_SQL: {entity.get('target_sql') or ''}",
-                    f"  VERIFY_SQL: {entity.get('test_sql') or ''}",
+                    f"- REFERENCE_MAP_ID={reference_map_id} | SCORE={round(score, 6)} | FR_TABLE={entity.get('fr_table') or ''} | TO_TABLE={entity.get('to_table') or ''}",
+                    f"  CONDITION: {entity.get('condition') or ''}",
+                    f"  MIG_SQL: {entity.get('mig_sql') or ''}",
+                    f"  VERIFY_SQL: {entity.get('verify_sql') or ''}",
                 ))
             return "\n".join(lines) if lines else "- (no matching user-edited migration SQL)"
         except Exception as exc:
@@ -1505,7 +1519,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         for item in values:
             key = (
                 str(item.get("table") or "").upper(),
-                str(item.get("row_id") or ""),
+                str(item.get("key_column") or "").upper(),
                 str(item.get("key_value") or ""),
                 str(item.get("column") or "").upper(),
             )

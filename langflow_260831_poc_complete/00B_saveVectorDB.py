@@ -97,14 +97,14 @@ class NewType00BSaveVectorDB(Component):
 
         client = self._milvus_client(milvus_config)
         created = {
-            "rag": self._ensure_collection(client, milvus_config["rag_collection"], vector_dim),
-            "correct_sql_conversion": self._ensure_collection(client, milvus_config["correct_sql_conversion_collection"], vector_dim),
-            "correct_sql_migration": self._ensure_collection(client, milvus_config["correct_sql_migration_collection"], vector_dim),
+            "rag": self._ensure_collection(client, milvus_config["rag_collection"], vector_dim, "rag"),
+            "correct_sql_conversion": self._ensure_collection(client, milvus_config["correct_sql_conversion_collection"], vector_dim, "conversion"),
+            "correct_sql_migration": self._ensure_collection(client, milvus_config["correct_sql_migration_collection"], vector_dim, "migration"),
         }
 
-        rag_result = self._sync_collection(client, milvus_config["rag_collection"], rag_rows, embed_config, "NEXT_MIG_RAG_INFO")
-        conversion_result = self._sync_collection(client, milvus_config["correct_sql_conversion_collection"], conversion_rows, embed_config, "NEXT_SQL_INFO")
-        migration_result = self._sync_collection(client, milvus_config["correct_sql_migration_collection"], migration_rows, embed_config, "NEXT_MIG_INFO")
+        rag_result = self._sync_collection(client, milvus_config["rag_collection"], rag_rows, embed_config)
+        conversion_result = self._sync_collection(client, milvus_config["correct_sql_conversion_collection"], conversion_rows, embed_config)
+        migration_result = self._sync_collection(client, milvus_config["correct_sql_migration_collection"], migration_rows, embed_config)
 
         result = {
             "ok": not rag_result["failures"] and not conversion_result["failures"] and not migration_result["failures"],
@@ -130,7 +130,7 @@ class NewType00BSaveVectorDB(Component):
         self.status = result
         return Data(data=result)
 
-    def _ensure_collection(self, client: Any, collection_name: str, vector_dim: int) -> bool:
+    def _ensure_collection(self, client: Any, collection_name: str, vector_dim: int, schema_kind: str) -> bool:
         # ---------------------------------------------------------------------
         # Milvus collection bootstrap
         # ---------------------------------------------------------------------
@@ -145,13 +145,13 @@ class NewType00BSaveVectorDB(Component):
             client.load_collection(collection_name=collection_name)
             return False
         try:
-            self._create_collection(client, collection_name, vector_dim, with_bm25=True)
+            self._create_collection(client, collection_name, vector_dim, schema_kind, with_bm25=True)
         except Exception:
-            self._create_collection(client, collection_name, vector_dim, with_bm25=False)
+            self._create_collection(client, collection_name, vector_dim, schema_kind, with_bm25=False)
         client.load_collection(collection_name=collection_name)
         return True
 
-    def _create_collection(self, client: Any, collection_name: str, vector_dim: int, with_bm25: bool) -> None:
+    def _create_collection(self, client: Any, collection_name: str, vector_dim: int, schema_kind: str, with_bm25: bool) -> None:
         # ---------------------------------------------------------------------
         # Milvus schema definition
         # ---------------------------------------------------------------------
@@ -168,25 +168,37 @@ class NewType00BSaveVectorDB(Component):
 
         schema = MilvusClient.create_schema(auto_id=False, enable_dynamic_field=False)
         schema.add_field("doc_id", DataType.VARCHAR, is_primary=True, auto_id=False, max_length=256)
-        schema.add_field("source", DataType.VARCHAR, max_length=64)
-        schema.add_field("rag_id", DataType.VARCHAR, max_length=128)
-        schema.add_field("row_id", DataType.VARCHAR, max_length=128)
-        schema.add_field("space_nm", DataType.VARCHAR, max_length=512)
-        schema.add_field("sql_id", DataType.VARCHAR, max_length=512)
-        schema.add_field("category", DataType.VARCHAR, max_length=64)
-        schema.add_field("rule_type", DataType.VARCHAR, max_length=32)
-        schema.add_field("use_yn", DataType.VARCHAR, max_length=8)
-        schema.add_field("user_edited", DataType.VARCHAR, max_length=8)
-        schema.add_field("status_conversion", DataType.VARCHAR, max_length=100)
-        schema.add_field("tag_kind", DataType.VARCHAR, max_length=100)
-        schema.add_field("source_tables", DataType.VARCHAR, max_length=2048)
-        schema.add_field("target_table", DataType.VARCHAR, max_length=2048)
-        schema.add_field("guidance_text", DataType.VARCHAR, max_length=8192)
-        schema.add_field("source_sql", DataType.VARCHAR, max_length=TEXT_MAX)
-        schema.add_field("target_sql", DataType.VARCHAR, max_length=TEXT_MAX)
-        schema.add_field("to_sql", DataType.VARCHAR, max_length=TEXT_MAX)
-        schema.add_field("bind_sql", DataType.VARCHAR, max_length=TEXT_MAX)
-        schema.add_field("test_sql", DataType.VARCHAR, max_length=TEXT_MAX)
+        if schema_kind == "rag":
+            schema.add_field("rag_id", DataType.VARCHAR, max_length=128)
+            schema.add_field("category", DataType.VARCHAR, max_length=64)
+            schema.add_field("rule_type", DataType.VARCHAR, max_length=32)
+            schema.add_field("use_yn", DataType.VARCHAR, max_length=8)
+            schema.add_field("source_tables", DataType.VARCHAR, max_length=2048)
+            schema.add_field("guidance_text", DataType.VARCHAR, max_length=8192)
+            schema.add_field("source_sql", DataType.VARCHAR, max_length=TEXT_MAX)
+            schema.add_field("target_sql", DataType.VARCHAR, max_length=TEXT_MAX)
+        elif schema_kind == "conversion":
+            schema.add_field("space_nm", DataType.VARCHAR, max_length=512)
+            schema.add_field("sql_id", DataType.VARCHAR, max_length=512)
+            schema.add_field("status_conversion", DataType.VARCHAR, max_length=100)
+            schema.add_field("user_edited", DataType.VARCHAR, max_length=8)
+            schema.add_field("tag_kind", DataType.VARCHAR, max_length=100)
+            schema.add_field("target_table", DataType.VARCHAR, max_length=2048)
+            schema.add_field("source_sql", DataType.VARCHAR, max_length=TEXT_MAX)
+            schema.add_field("to_sql", DataType.VARCHAR, max_length=TEXT_MAX)
+            schema.add_field("bind_sql", DataType.VARCHAR, max_length=TEXT_MAX)
+            schema.add_field("test_sql", DataType.VARCHAR, max_length=TEXT_MAX)
+        elif schema_kind == "migration":
+            schema.add_field("map_id", DataType.VARCHAR, max_length=128)
+            schema.add_field("fr_table", DataType.VARCHAR, max_length=2048)
+            schema.add_field("to_table", DataType.VARCHAR, max_length=2048)
+            schema.add_field("condition", DataType.VARCHAR, max_length=8192)
+            schema.add_field("mig_sql", DataType.VARCHAR, max_length=TEXT_MAX)
+            schema.add_field("verify_sql", DataType.VARCHAR, max_length=TEXT_MAX)
+            schema.add_field("user_edited", DataType.VARCHAR, max_length=8)
+            schema.add_field("status", DataType.VARCHAR, max_length=100)
+        else:
+            raise ValueError(f"Unsupported collection schema: {schema_kind}")
         schema.add_field("content", DataType.VARCHAR, max_length=TEXT_MAX, enable_analyzer=with_bm25)
         schema.add_field("content_hash", DataType.VARCHAR, max_length=64)
         schema.add_field("is_active", DataType.BOOL)
@@ -206,7 +218,7 @@ class NewType00BSaveVectorDB(Component):
             index_params.add_index(field_name="sparse_vector", index_type="SPARSE_INVERTED_INDEX", metric_type="BM25", params={"inverted_index_algo": "DAAT_MAXSCORE", "bm25_k1": 1.2, "bm25_b": 0.75})
         client.create_collection(collection_name=collection_name, schema=schema, index_params=index_params, consistency_level="Bounded")
 
-    def _sync_collection(self, client: Any, collection_name: str, rows: list[dict[str, Any]], embed_config: dict[str, Any], source_name: str) -> dict[str, Any]:
+    def _sync_collection(self, client: Any, collection_name: str, rows: list[dict[str, Any]], embed_config: dict[str, Any]) -> dict[str, Any]:
         # ---------------------------------------------------------------------
         # Changed-row sync
         # ---------------------------------------------------------------------
@@ -222,7 +234,7 @@ class NewType00BSaveVectorDB(Component):
         # not blindly deleted first. We mark them inactive when possible so old
         # records are kept out of search while preserving traceability.
         active_doc_ids = {row["doc_id"] for row in rows if row.get("is_active")}
-        existing = self._query_existing_docs(client, collection_name, source_name)
+        existing = self._query_existing_docs(client, collection_name)
         to_upsert = [row for row in rows if row.get("is_active") and existing.get(row["doc_id"]) != row["content_hash"]]
         skipped = len([row for row in rows if row.get("is_active")]) - len(to_upsert)
         failures: list[dict[str, Any]] = []
@@ -251,15 +263,15 @@ class NewType00BSaveVectorDB(Component):
             "failures": failures[:10],
         }
 
-    def _query_existing_docs(self, client: Any, collection_name: str, source_name: str) -> dict[str, str]:
+    def _query_existing_docs(self, client: Any, collection_name: str) -> dict[str, str]:
         # Read only active documents for this Oracle source table.
         # The result is deliberately small: doc_id and content_hash are enough to
         # decide whether a row must be re-embedded.
         result: dict[str, str] = {}
         try:
-            rows = client.query(collection_name=collection_name, filter=f'source == "{source_name}"', output_fields=["doc_id", "content_hash", "is_active"], limit=16384)
+            rows = client.query(collection_name=collection_name, filter='doc_id != ""', output_fields=["doc_id", "content_hash", "is_active"], limit=16384)
         except TypeError:
-            rows = client.query(collection_name=collection_name, filter=f'source == "{source_name}"', output_fields=["doc_id", "content_hash", "is_active"])
+            rows = client.query(collection_name=collection_name, filter='doc_id != ""', output_fields=["doc_id", "content_hash", "is_active"])
         for row in rows or []:
             if row.get("is_active"):
                 result[str(row.get("doc_id"))] = str(row.get("content_hash") or "")
@@ -344,7 +356,6 @@ class NewType00BSaveVectorDB(Component):
                 rows.append(
                     self._entity(
                         doc_id=f"RAG:{rag_id}",
-                        source=RAG_TABLE,
                         rag_id=rag_id,
                         category=category,
                         rule_type=rule_type,
@@ -420,8 +431,6 @@ class NewType00BSaveVectorDB(Component):
                 rows.append(
                     self._entity(
                         doc_id=f"SQL:{self._hash_text(doc_key)[:24]}",
-                        source=SQL_TABLE,
-                        row_id=row_id,
                         space_nm=space_nm,
                         sql_id=sql_id,
                         status_conversion=status,
@@ -479,16 +488,14 @@ class NewType00BSaveVectorDB(Component):
                 rows.append(
                     self._entity(
                         doc_id=f"MIG:{self._hash_text(map_id)[:24]}",
-                        source="NEXT_MIG_INFO",
-                        row_id=map_id,
-                        source_tables=fr_table,
-                        target_table=to_table,
-                        guidance_text=condition,
-                        source_sql=search_content,
-                        target_sql=mig_sql,
-                        test_sql=verify_sql,
+                        map_id=map_id,
+                        fr_table=fr_table,
+                        to_table=to_table,
+                        condition=condition,
+                        mig_sql=mig_sql,
+                        verify_sql=verify_sql,
                         user_edited=user_edited,
-                        status_conversion=status,
+                        status=status,
                         content=search_content,
                         is_active=user_edited == "Y" and status == "PASS" and bool(mig_sql),
                         updated_at=self._lob_to_str(row[8]),
@@ -497,39 +504,19 @@ class NewType00BSaveVectorDB(Component):
             return rows
 
     def _entity(self, **values: Any) -> dict[str, Any]:
-        # Normalize every Milvus entity to the same shape. Both collections share
-        # this schema so 12C/15C can request stable output_fields regardless of
-        # whether the row came from NEXT_MIG_RAG_INFO or NEXT_SQL_INFO.
-        defaults = {
-            "source": "",
-            "rag_id": "",
-            "row_id": "",
-            "space_nm": "",
-            "sql_id": "",
-            "category": "",
-            "rule_type": "",
-            "use_yn": "",
-            "user_edited": "",
-            "status_conversion": "",
-            "tag_kind": "",
-            "source_tables": "",
-            "target_table": "",
-            "guidance_text": "",
-            "source_sql": "",
-            "target_sql": "",
-            "to_sql": "",
-            "bind_sql": "",
-            "test_sql": "",
-            "content": "",
-            "is_active": False,
-            "updated_at": "",
-        }
-        entity = {**defaults, **values}
-        for key in ("source_sql", "target_sql", "to_sql", "bind_sql", "test_sql", "content"):
-            entity[key] = self._truncate(entity.get(key), TEXT_MAX)
-        entity["guidance_text"] = self._truncate(entity.get("guidance_text"), 8192)
-        entity["source_tables"] = self._truncate(entity.get("source_tables"), 2048)
-        entity["target_table"] = self._truncate(entity.get("target_table"), 2048)
+        # Each collection passes only its own schema fields. Dynamic fields are
+        # disabled in Milvus, so a RAG rule can never add SQL-job columns and
+        # vice versa.
+        entity = dict(values)
+        for key in ("source_sql", "target_sql", "to_sql", "bind_sql", "test_sql", "mig_sql", "verify_sql", "content"):
+            if key in entity:
+                entity[key] = self._truncate(entity.get(key), TEXT_MAX)
+        for key in ("guidance_text", "condition"):
+            if key in entity:
+                entity[key] = self._truncate(entity.get(key), 8192)
+        for key in ("source_tables", "target_table", "fr_table", "to_table"):
+            if key in entity:
+                entity[key] = self._truncate(entity.get(key), 2048)
         # content_hash includes metadata as well as content. This intentionally
         # causes an upsert when prompt metadata changes, even if SOURCE_SQL stays
         # the same. In that case the dense_vector may be numerically unchanged,

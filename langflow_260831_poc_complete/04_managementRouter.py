@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import logging
 import json
+import logging
 import re
 import urllib.error
 import urllib.request
@@ -12,58 +12,33 @@ from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
 from lfx.schema.data import Data
 from lfx.schema.message import Message
 
-CURRENT_PROGRESS_ROUTER_PROMPT = """
-
-Additional management route:
-- CURRENT_PROGRESS: Use this when the user asks for currently running jobs, current progress, active work, running work status, or "현재 진행중인 작업".
-
-Updated JSON schema:
-{
-  "management_route": "DASHBOARD|CURRENT_PROGRESS|STATUS_CHANGE|CORRECT_SQL_INPUT|EXCEPTION",
-  "target": {},
-  "correct_sql": "",
-  "reason": "routing reason"
-}
-"""
-
 try:
     from lfx.io import DataInput
 except Exception:
     DataInput = MessageTextInput
 
 
-MANAGEMENT_ROUTER_PROMPT = """당신은 SmartMigrate의 Management 라우터입니다. 반드시 JSON 객체만 반환하세요.
+MANAGEMENT_ROUTER_PROMPT = """You are the SmartMigrate management router. Return exactly one JSON object, no Markdown.
 
-Management route:
-- DASHBOARD: Dashboard, 상태/현황/건수/실패/잔여 작업/대기 작업 조회. DB Migration, SQL Conversion, SQL Tuning, SQL Formatting 잔여 조회를 포함합니다.
-- STATUS_CHANGE: status, priority, USE_YN, retry 상태, 포함/제외, 실행 대상 순서 변경.
-- CORRECT_SQL_INPUT: 사용자가 수정 SQL을 입력하거나 Correct SQL 저장을 요청하는 경우.
-- EXCEPTION: Management로 들어왔지만 위 세 가지 중 하나로 판단하기 어려운 경우.
+Routes: DASHBOARD (read-only summary), CURRENT_PROGRESS (active/running work), STATUS_CHANGE (reset), CORRECT_SQL_INPUT (save user-supplied SQL), EXCEPTION (missing or ambiguous data).
 
-주의:
-- 실제 작업 실행 요청은 이 컴포넌트가 처리하지 않습니다. 그런 요청은 01 Request Classifier가 JOB_EXECUTION으로 보내야 합니다.
-- "DB Migration 작업 남은거 있어?", "SQL Conversion 잔여 작업 조회", "SQL Tuning 잔여 보여줘", "Formatting 대기 작업 몇 건이야" 같은 읽기 요청은 DASHBOARD입니다.
-- "남은거 있어?", "남은 작업 있어?", "잔여 작업 조회", "대기 작업 몇 건이야"는 DASHBOARD입니다.
-- 애매하면 억지로 Dashboard나 Status Change로 보내지 말고 EXCEPTION을 반환하세요.
+STATUS_CHANGE reset means only the status and RETRY_COUNT become NULL. It never deletes SQL.
+For STATUS_CHANGE and CORRECT_SQL_INPUT extract target.work_type: DB_MIGRATION, SQL_CONVERSION, SQL_TUNING, or SQL_FORMATTING.
+- DB_MIGRATION requires target.map_id.
+- SQL_* requires BOTH target.sql_id and target.space_nm.
+- Correct SQL requires target.sql_column. DB_MIGRATION permits MIG_SQL or VERIFY_SQL. SQL_* permits TO_SQL, BIND_SQL, TEST_SQL, TUNED_TO_SQL, or FORMATTED_SQL.
+- Put the exact user-provided SQL in correct_sql. Never invent SQL, identifiers, or a column.
+- If any required value is absent, set management_route=EXCEPTION and write a specific Korean exception_message. Examples: "DB Migration Correct SQL 입력을 위해 MAP_ID를 알려주셔야 합니다.", "Status Change(Reset)를 위해 SQL_ID와 SPACE_NM을 모두 알려주셔야 합니다."
 
-반환 JSON schema:
-{
-  "management_route": "DASHBOARD|STATUS_CHANGE|CORRECT_SQL_INPUT|EXCEPTION",
-  "target": {},
-  "correct_sql": "",
-  "reason": "짧은 한국어 사유"
-}
-"""
+JSON schema:
+{"management_route":"DASHBOARD|CURRENT_PROGRESS|STATUS_CHANGE|CORRECT_SQL_INPUT|EXCEPTION","target":{"work_type":"","map_id":"","sql_id":"","space_nm":"","sql_column":""},"correct_sql":"","exception_message":"","reason":""}"""
 
-EXCEPTION_MESSAGE = """Management 요청을 분류할 수 없습니다.
-Dashboard 조회, Status/priority/USE_YN 변경, Correct SQL 입력 중 어떤 작업인지 다시 요청해주세요.
-실행 요청이라면 "map_id=101 실행"처럼 실행할 식별자와 실행 의도를 함께 입력해주세요."""
+EXCEPTION_MESSAGE = "Management 요청을 처리할 수 없습니다. 작업 종류와 필요한 식별자를 다시 알려주세요."
 
 
 class NewType04ManagementRouter(Component):
-
     display_name = "04 Management LLM Router"
-    description = "Routes management requests to Dashboard, Current Progress, Status Change, Correct SQL Input, or Exception."
+    description = "Routes management requests and extracts validated DB update parameters."
     name = "NewType04ManagementRouter"
     icon = "Route"
 
@@ -75,7 +50,6 @@ class NewType04ManagementRouter(Component):
         IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=1200, required=False),
         IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=90, required=False),
     ]
-
     outputs = [
         Output(display_name="Dashboard", name="dashboard", method="dashboard_response", group_outputs=True),
         Output(display_name="Current Progress", name="current_progress", method="current_progress_response", group_outputs=True),
@@ -85,165 +59,104 @@ class NewType04ManagementRouter(Component):
     ]
 
     def dashboard_response(self) -> Data:
-        # Return the dashboard branch when management routing matches.
-        logging.getLogger("smartmigrate.workflow").info("before dashboard_response", extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "DASHBOARD_RESPONSE", "START", 0]})
-        try:
-            __log_result = self._route_output("DASHBOARD", "dashboard")
-            logging.getLogger("smartmigrate.workflow").info("after dashboard_response", extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "DASHBOARD_RESPONSE", "END", 0]})
-            return __log_result
-        except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error dashboard_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "ERROR", "DASHBOARD_RESPONSE", "ERROR", 0]})
-            raise
+        return self._route_output("DASHBOARD", "dashboard")
 
     def current_progress_response(self) -> Data:
-        # Return the current-progress branch when management routing matches.
-        logging.getLogger("smartmigrate.workflow").info("before current_progress_response", extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "CURRENT_PROGRESS_RESPONSE", "START", 0]})
-        try:
-            __log_result = self._route_output("CURRENT_PROGRESS", "current_progress")
-            logging.getLogger("smartmigrate.workflow").info("after current_progress_response", extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "CURRENT_PROGRESS_RESPONSE", "END", 0]})
-            return __log_result
-        except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error current_progress_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "ERROR", "CURRENT_PROGRESS_RESPONSE", "ERROR", 0]})
-            raise
+        return self._route_output("CURRENT_PROGRESS", "current_progress")
 
     def status_change_response(self) -> Data:
-        # Return the status-change branch when management routing matches.
-        logging.getLogger("smartmigrate.workflow").info("before status_change_response", extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "STATUS_CHANGE_RESPONSE", "START", 0]})
-        try:
-            __log_result = self._route_output("STATUS_CHANGE", "status_change")
-            logging.getLogger("smartmigrate.workflow").info("after status_change_response", extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "STATUS_CHANGE_RESPONSE", "END", 0]})
-            return __log_result
-        except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error status_change_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "ERROR", "STATUS_CHANGE_RESPONSE", "ERROR", 0]})
-            raise
+        return self._route_output("STATUS_CHANGE", "status_change")
 
     def correct_sql_input_response(self) -> Data:
-        # Return the Correct SQL branch when management routing matches.
-        logging.getLogger("smartmigrate.workflow").info("before correct_sql_input_response", extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "CORRECT_SQL_INPUT_RESPONSE", "START", 0]})
-        try:
-            __log_result = self._route_output("CORRECT_SQL_INPUT", "correct_sql_input")
-            logging.getLogger("smartmigrate.workflow").info("after correct_sql_input_response", extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "CORRECT_SQL_INPUT_RESPONSE", "END", 0]})
-            return __log_result
-        except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error correct_sql_input_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "ERROR", "CORRECT_SQL_INPUT_RESPONSE", "ERROR", 0]})
-            raise
+        return self._route_output("CORRECT_SQL_INPUT", "correct_sql_input")
 
     def exception_response(self) -> Message:
-        # Return a user-facing exception message for ambiguous management requests.
-        logging.getLogger("smartmigrate.workflow").info("before exception_response", extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "EXCEPTION_RESPONSE", "START", 0]})
-        try:
-            routed = self._get_routed_payload()
-            if routed.get("management_route") != "EXCEPTION":
-                self.stop("exception")
-                __log_result = Message(text="")
-                logging.getLogger("smartmigrate.workflow").info("after exception_response", extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "EXCEPTION_RESPONSE", "END", 0]})
-                return __log_result
-            self.status = {**routed, "selected_output": "exception", "answer_text": EXCEPTION_MESSAGE, "final": True}
-            __log_result = Message(text=EXCEPTION_MESSAGE)
-            logging.getLogger("smartmigrate.workflow").info("after exception_response", extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "EXCEPTION_RESPONSE", "END", 0]})
-            return __log_result
-        except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error exception_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "ERROR", "EXCEPTION_RESPONSE", "ERROR", 0]})
-            raise
+        routed = self._get_routed_payload()
+        if routed.get("management_route") != "EXCEPTION":
+            self.stop("exception")
+            return Message(text="")
+        answer = str(routed.get("exception_message") or EXCEPTION_MESSAGE)
+        self.status = {**routed, "selected_output": "exception", "answer_text": answer, "final": True}
+        return Message(text=answer)
 
     def _route_output(self, expected_route: str, output_name: str) -> Data:
-        # Build a routed payload for the active output branch.
-        try:
-            routed = self._get_routed_payload()
-            if routed.get("management_route") != expected_route:
-                self.stop(output_name)
-                return Data(data={})
-            routed = {**routed, "selected_output": output_name, "next_node": self._next_node(expected_route)}
-            self.status = routed
-            return Data(data=routed)
-        except Exception as exc:
-            result = {"ok": False, "component": "04_managementRouter", "error": str(exc)}
-            self.status = result
-            return Data(data=result)
+        routed = self._get_routed_payload()
+        if routed.get("management_route") != expected_route:
+            self.stop(output_name)
+            return Data(data={})
+        routed = {**routed, "selected_output": output_name, "next_node": self._next_node(expected_route)}
+        self.status = routed
+        return Data(data=routed)
 
     def _get_routed_payload(self) -> dict[str, Any]:
-        # Compute and cache the routed payload for this component.
         cached = getattr(self, "_cached_routed_payload", None)
         if cached is not None:
             return cached
         payload = self._parse_payload(getattr(self, "payload_json", ""))
-        decision = self._normalize_decision(self._route_with_llm(payload))
-        routed = {
-            **payload,
-            "component": "04_managementRouter",
-            "management_route": decision["management_route"],
-            "target": decision.get("target") or {},
-            "correct_sql": decision.get("correct_sql") or "",
-            "management_routing_reason": decision.get("reason") or "",
-        }
-        routed.setdefault("history", []).append(
-            {"step": "management_route", "message": f"management_route={routed['management_route']}"}
-        )
+        decision = self._validate_management_request(self._normalize_decision(self._route_with_llm(payload)))
+        routed = {**payload, "component": "04_managementRouter", "management_route": decision["management_route"], "target": decision["target"], "correct_sql": decision["correct_sql"], "exception_message": decision["exception_message"], "management_routing_reason": decision["reason"]}
+        routed.setdefault("history", []).append({"step": "management_route", "message": f"management_route={routed['management_route']}"})
         self._cached_routed_payload = routed
         return routed
 
     def _route_with_llm(self, payload: dict[str, Any]) -> dict[str, Any]:
-        # Call the configured LLM to decide the route.
         api_key = self._secret_to_str(getattr(self, "llm_api_key", None)).strip()
         model = str(getattr(self, "llm_model", "") or "").strip()
         base_url = str(getattr(self, "llm_base_url", "") or "").strip().rstrip("/")
-        if not api_key:
-            raise ValueError("llm_api_key is required for 04 Management Router")
-        if not model:
-            raise ValueError("llm_model is required for 04 Management Router")
-        if not base_url:
-            raise ValueError("llm_base_url is required for 04 Management Router")
-
-        body = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": MANAGEMENT_ROUTER_PROMPT + CURRENT_PROGRESS_ROUTER_PROMPT},
-                {"role": "user", "content": json.dumps({"user_request": payload.get("user_request") or ""}, ensure_ascii=False)},
-            ],
-            "temperature": 0,
-            "max_tokens": int(getattr(self, "llm_max_tokens", None) or 1200),
-        }
+        if not all((api_key, model, base_url)):
+            raise ValueError("llm_base_url, llm_api_key, and llm_model are required for 04 Management Router")
+        body = {"model": model, "messages": [{"role": "system", "content": MANAGEMENT_ROUTER_PROMPT}, {"role": "user", "content": json.dumps({"user_request": payload.get("user_request") or ""}, ensure_ascii=False)}], "temperature": 0, "max_tokens": int(getattr(self, "llm_max_tokens", None) or 1200)}
         url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
-        request = urllib.request.Request(
-            url,
-            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-            method="POST",
-        )
+        request = urllib.request.Request(url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"), headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}, method="POST")
         try:
             with urllib.request.urlopen(request, timeout=int(getattr(self, "llm_timeout_seconds", None) or 90)) as response:
                 raw = json.loads(response.read().decode("utf-8", errors="ignore"))
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="ignore")
-            raise ValueError(f"04 Management Router LLM HTTP {exc.code}: {detail[:1000]}") from exc
-        content = (((raw.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
-        return self._parse_json_object(content)
+            raise ValueError(f"04 Management Router LLM HTTP {exc.code}: {exc.read().decode('utf-8', errors='ignore')[:1000]}") from exc
+        return self._parse_json_object((((raw.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip())
 
     def _normalize_decision(self, decision: dict[str, Any]) -> dict[str, Any]:
-        # Validate and normalize the management router decision.
         route = str(decision.get("management_route") or "").upper()
         if route not in {"DASHBOARD", "CURRENT_PROGRESS", "STATUS_CHANGE", "CORRECT_SQL_INPUT", "EXCEPTION"}:
             raise ValueError(f"Invalid management_route: {route}")
-        target = decision.get("target") if isinstance(decision.get("target"), dict) else {}
-        return {
-            "management_route": route,
-            "target": target,
-            "correct_sql": str(decision.get("correct_sql") or ""),
-            "reason": str(decision.get("reason") or ""),
-        }
+        return {"management_route": route, "target": dict(decision.get("target") or {}), "correct_sql": str(decision.get("correct_sql") or ""), "exception_message": str(decision.get("exception_message") or ""), "reason": str(decision.get("reason") or "")}
+
+    def _validate_management_request(self, decision: dict[str, Any]) -> dict[str, Any]:
+        route, target = decision["management_route"], dict(decision["target"])
+        if route not in {"STATUS_CHANGE", "CORRECT_SQL_INPUT"}:
+            return decision
+        work_type = str(target.get("work_type") or "").strip().upper()
+        if work_type not in {"DB_MIGRATION", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"}:
+            return self._exception(decision, "Status Change 또는 Correct SQL 입력을 위해 작업 종류(DB Migration, SQL Conversion, SQL Tuning, SQL Formatting)를 알려주셔야 합니다.")
+        target["work_type"] = work_type
+        if route == "STATUS_CHANGE" and work_type == "SQL_FORMATTING":
+            return self._exception(decision, "SQL Formatting은 SQL을 삭제하지 않는 Reset 대상 상태 컬럼이 없으므로 Status Change(Reset)를 지원하지 않습니다.")
+        if work_type == "DB_MIGRATION" and not str(target.get("map_id") or "").strip():
+            return self._exception(decision, f"{self._operation_label(route, work_type)}을 위해 MAP_ID를 알려주셔야 합니다.")
+        if work_type != "DB_MIGRATION" and (not str(target.get("sql_id") or "").strip() or not str(target.get("space_nm") or "").strip()):
+            return self._exception(decision, f"{self._operation_label(route, work_type)}을 위해 SQL_ID와 SPACE_NM을 모두 알려주셔야 합니다.")
+        if route == "CORRECT_SQL_INPUT":
+            column = str(target.get("sql_column") or "").strip().upper()
+            allowed = {"MIG_SQL", "VERIFY_SQL"} if work_type == "DB_MIGRATION" else {"TO_SQL", "BIND_SQL", "TEST_SQL", "TUNED_TO_SQL", "FORMATTED_SQL"}
+            if column not in allowed:
+                return self._exception(decision, "Correct SQL 입력을 위해 저장할 SQL 컬럼을 정확히 알려주셔야 합니다.")
+            if not str(decision["correct_sql"]).strip():
+                return self._exception(decision, "Correct SQL 입력을 위해 저장할 SQL 본문을 알려주셔야 합니다.")
+            target["sql_column"] = column
+        return {**decision, "target": target}
+
+    def _exception(self, decision: dict[str, Any], message: str) -> dict[str, Any]:
+        return {**decision, "management_route": "EXCEPTION", "exception_message": message}
+
+    def _operation_label(self, route: str, work_type: str) -> str:
+        if route == "CORRECT_SQL_INPUT":
+            return "DB Migration Correct SQL 입력" if work_type == "DB_MIGRATION" else "Correct SQL 입력"
+        return "Status Change(Reset)"
 
     def _next_node(self, route: str) -> str:
-        # Resolve the next component name for a route.
-        return {
-            "DASHBOARD": "04_dashboard",
-            "CURRENT_PROGRESS": "04_currentProgress",
-            "STATUS_CHANGE": "04_statusChange",
-            "CORRECT_SQL_INPUT": "04_correctSqlInput",
-            "EXCEPTION": "04_managementRouter",
-        }.get(route, "04_dashboard")
+        return {"DASHBOARD": "04_dashboard", "CURRENT_PROGRESS": "04_currentProgress", "STATUS_CHANGE": "04_statusChange", "CORRECT_SQL_INPUT": "04_correctSqlInput", "EXCEPTION": "04_managementRouter"}.get(route, "04_dashboard")
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
-        # Parse a Langflow Data, dict, or JSON string payload.
         if isinstance(raw, Data):
             return dict(raw.data or {})
         if isinstance(raw, dict):
@@ -251,22 +164,12 @@ class NewType04ManagementRouter(Component):
         return self._parse_json_object(str(raw or "").strip()) if str(raw or "").strip() else {}
 
     def _parse_json_object(self, text: str) -> dict[str, Any]:
-        # Parse a JSON object from raw LLM or text output.
-        clean = str(text or "").strip()
-        if clean.startswith("```"):
-            clean = re.sub(r"^```(?:json)?\s*", "", clean, flags=re.I)
-            clean = re.sub(r"\s*```$", "", clean)
+        clean = re.sub(r"^```(?:json)?\s*|\s*```$", "", str(text or "").strip(), flags=re.I)
         match = re.search(r"\{.*\}", clean, flags=re.S)
-        clean = match.group(0) if match else clean
-        parsed = json.loads(clean)
+        parsed = json.loads(match.group(0) if match else clean)
         if not isinstance(parsed, dict):
             raise ValueError("LLM must return a JSON object")
         return parsed
 
     def _secret_to_str(self, value: Any) -> str:
-        # Convert a Langflow secret value into a plain string.
-        if value is None:
-            return ""
-        if hasattr(value, "get_secret_value"):
-            return str(value.get_secret_value())
-        return str(value)
+        return str(value.get_secret_value()) if hasattr(value, "get_secret_value") else str(value or "")
