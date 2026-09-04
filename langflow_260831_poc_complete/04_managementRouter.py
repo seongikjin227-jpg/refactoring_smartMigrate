@@ -22,7 +22,7 @@ MANAGEMENT_ROUTER_PROMPT = """You are the SmartMigrate management router. Return
 
 Routes: DASHBOARD (read-only summary), CURRENT_PROGRESS (active/running work), STATUS_CHANGE (reset), CORRECT_SQL_INPUT (save user-supplied SQL), EXCEPTION (missing or ambiguous data).
 
-STATUS_CHANGE reset means only the status and RETRY_COUNT become NULL. It never deletes SQL.
+STATUS_CHANGE reset means the status becomes NULL and RETRY_COUNT becomes 0. It never deletes SQL.
 For STATUS_CHANGE and CORRECT_SQL_INPUT extract target.work_type: DB_MIGRATION, SQL_CONVERSION, SQL_TUNING, or SQL_FORMATTING.
 - DB_MIGRATION requires target.map_id.
 - SQL_* requires BOTH target.sql_id and target.space_nm.
@@ -92,8 +92,12 @@ class NewType04ManagementRouter(Component):
         cached = getattr(self, "_cached_routed_payload", None)
         if cached is not None:
             return cached
-        payload = self._parse_payload(getattr(self, "payload_json", ""))
-        decision = self._validate_management_request(self._normalize_decision(self._route_with_llm(payload)))
+        logging.getLogger("smartmigrate.workflow").info("04 Management Router started", extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "ROUTE", "START", 0]})
+        try:
+            payload = self._parse_payload(getattr(self, "payload_json", ""))
+            decision = self._validate_management_request(self._normalize_decision(self._route_with_llm(payload)))
+        except Exception:
+            raise
         routed = {**payload, "component": "04_managementRouter", "management_route": decision["management_route"], "target": decision["target"], "correct_sql": decision["correct_sql"], "exception_message": decision["exception_message"], "management_routing_reason": decision["reason"]}
         routed.setdefault("history", []).append({"step": "management_route", "message": f"management_route={routed['management_route']}"})
         self._cached_routed_payload = routed

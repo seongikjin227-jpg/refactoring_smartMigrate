@@ -643,7 +643,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         source_tables = self._source_tables(target_table)
         general_rules = self._load_rag_general_rules(db_config, "SQL_CONVERSION", source_tables, map_id)
         examples = self._retrieve_rag_examples(db_config, rag_config, "SQL_CONVERSION", source_sql, source_tables, map_id)
-        correct_sql_hint_text = self._correct_sql_hint_text(db_config, source_sql, job.get("row_id"), map_id, retry_count, "TO_SQL")
+        correct_sql_hint_text = self._correct_sql_hint_text(db_config, source_sql, job.get("sql_id"), job.get("space_nm"), map_id, retry_count, "TO_SQL")
         prompt = self._build_prompt(
             "TOBE_SQL",
             from_sql=source_sql,
@@ -688,7 +688,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 from_sql=source_sql,
                 from_schema=db_config["source_schema"],
                 asis_source_filter_conditions=self._source_filter_prompt_text(mapping_rules),
-                correct_sql_hint_text=self._correct_sql_hint_text(db_config, source_sql, job.get("row_id"), map_id, retry_count, "BIND_SQL"),
+                correct_sql_hint_text=self._correct_sql_hint_text(db_config, source_sql, job.get("sql_id"), job.get("space_nm"), map_id, retry_count, "BIND_SQL"),
                 last_error=last_error or "None",
             )
             if "FINAL_RETRY_MODE=ON" in str(last_error or "").upper():
@@ -734,7 +734,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             from_schema=db_config["source_schema"],
             tobe_schema=db_config["target_schema"],
             bind_set_text=bind_set or "- no bind case",
-            correct_sql_hint_text=self._correct_sql_hint_text(db_config, source_sql, job.get("row_id"), map_id, retry_count, "TEST_SQL"),
+            correct_sql_hint_text=self._correct_sql_hint_text(db_config, source_sql, job.get("sql_id"), job.get("space_nm"), map_id, retry_count, "TEST_SQL"),
             last_error=last_error or "None",
         )
         if retry_count >= self._configured_retry_limit():
@@ -1473,7 +1473,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
     #
     # If a similar user-edited PASS row exists, its TO_SQL/BIND_SQL/TEST_SQL is
     # injected as a hint into the corresponding generation prompt.
-    def _correct_sql_hint_text(self, db_config: dict[str, Any], source_sql: str, current_row_id: str | None, map_id: str, retry_count: int, hint_column: str) -> str:
+    def _correct_sql_hint_text(self, db_config: dict[str, Any], source_sql: str, current_sql_id: str | None, current_space_nm: str | None, map_id: str, retry_count: int, hint_column: str) -> str:
         hint_column = str(hint_column or "").strip().upper()
         if hint_column not in {"TO_SQL", "BIND_SQL", "TEST_SQL"}:
             return "- (empty)"
@@ -1489,7 +1489,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 anns_field="dense_vector",
                 filter=f'user_edited == "Y" and is_active == true and {hint_field} != ""',
                 limit=self._positive_int(getattr(self, "correct_sql_top_k", None), 1),
-                output_fields=["row_id", "space_nm", "sql_id", "source_sql", "to_sql", "bind_sql", "test_sql", "status_conversion", "user_edited"],
+                output_fields=["space_nm", "sql_id", "source_sql", "to_sql", "bind_sql", "test_sql", "status_conversion", "user_edited"],
                 # COSINE metric is explicitly requested in Milvus search_params.
                 # No FAISS index is created in this path.
                 search_params={"metric_type": "COSINE"},
@@ -1498,7 +1498,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             selected = None
             for hit in hits:
                 entity = self._milvus_entity(hit)
-                if current_row_id and str(entity.get("row_id") or "").strip() == str(current_row_id).strip():
+                if (str(entity.get("sql_id") or "").strip(), str(entity.get("space_nm") or "").strip()) == (str(current_sql_id or "").strip(), str(current_space_nm or "").strip()):
                     continue
                 if self._status(entity.get("status_conversion")) not in {"PASS", CONVERSION_PASS}:
                     continue

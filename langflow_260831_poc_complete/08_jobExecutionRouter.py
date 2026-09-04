@@ -100,74 +100,25 @@ class NewType08JobExecutionRouter(Component):
     ]
 
     def mig_response(self) -> Data:
-        logging.getLogger("smartmigrate.workflow").info("before mig_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "MIG_RESPONSE", "START", 0]})
-        try:
-            __log_result = self._route_output("MIG", "mig_job")
-            logging.getLogger("smartmigrate.workflow").info("after mig_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "MIG_RESPONSE", "END", 0]})
-            return __log_result
-        except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error mig_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "ERROR", "MIG_RESPONSE", "ERROR", 0]})
-            raise
+        return self._route_output("MIG", "mig_job")
 
     def sql_conversion_response(self) -> Data:
-        logging.getLogger("smartmigrate.workflow").info("before sql_conversion_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "SQL_CONVERSION_RESPONSE", "START", 0]})
-        try:
-            __log_result = self._route_output("SQL_CONVERSION", "sql_conversion_job")
-            logging.getLogger("smartmigrate.workflow").info("after sql_conversion_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "SQL_CONVERSION_RESPONSE", "END", 0]})
-            return __log_result
-        except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error sql_conversion_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "ERROR", "SQL_CONVERSION_RESPONSE", "ERROR", 0]})
-            raise
+        return self._route_output("SQL_CONVERSION", "sql_conversion_job")
 
     def sql_tuning_response(self) -> Data:
-        logging.getLogger("smartmigrate.workflow").info("before sql_tuning_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "SQL_TUNING_RESPONSE", "START", 0]})
-        try:
-            __log_result = self._route_output("SQL_TUNING", "sql_tuning_job")
-            logging.getLogger("smartmigrate.workflow").info("after sql_tuning_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "SQL_TUNING_RESPONSE", "END", 0]})
-            return __log_result
-        except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error sql_tuning_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "ERROR", "SQL_TUNING_RESPONSE", "ERROR", 0]})
-            raise
+        return self._route_output("SQL_TUNING", "sql_tuning_job")
 
     def sql_formatting_response(self) -> Data:
-        logging.getLogger("smartmigrate.workflow").info("before sql_formatting_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "SQL_FORMATTING_RESPONSE", "START", 0]})
-        try:
-            __log_result = self._route_output("SQL_FORMATTING", "sql_formatting_job")
-            logging.getLogger("smartmigrate.workflow").info("after sql_formatting_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "SQL_FORMATTING_RESPONSE", "END", 0]})
-            return __log_result
-        except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error sql_formatting_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "ERROR", "SQL_FORMATTING_RESPONSE", "ERROR", 0]})
-            raise
+        return self._route_output("SQL_FORMATTING", "sql_formatting_job")
 
     def full_workflow_response(self) -> Data:
-        logging.getLogger("smartmigrate.workflow").info("before full_workflow_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "FULL_WORKFLOW_RESPONSE", "START", 0]})
-        try:
-            __log_result = self._route_output("FULL_WORKFLOW", "full_workflow_job")
-            logging.getLogger("smartmigrate.workflow").info("after full_workflow_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "FULL_WORKFLOW_RESPONSE", "END", 0]})
-            return __log_result
-        except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error full_workflow_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "ERROR", "FULL_WORKFLOW_RESPONSE", "ERROR", 0]})
-            raise
+        return self._route_output("FULL_WORKFLOW", "full_workflow_job")
 
     def prerequisite_required_response(self) -> Message:
-        logging.getLogger("smartmigrate.workflow").info("before prerequisite_required_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "PREREQUISITE_REQUIRED_RESPONSE", "START", 0]})
-        try:
-            __log_result = self._message_route_output("PREREQUISITE_REQUIRED", "prerequisite_required")
-            logging.getLogger("smartmigrate.workflow").info("after prerequisite_required_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "PREREQUISITE_REQUIRED_RESPONSE", "END", 0]})
-            return __log_result
-        except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error prerequisite_required_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "ERROR", "PREREQUISITE_REQUIRED_RESPONSE", "ERROR", 0]})
-            raise
+        return self._message_route_output("PREREQUISITE_REQUIRED", "prerequisite_required")
 
     def no_runnable_response(self) -> Message:
-        logging.getLogger("smartmigrate.workflow").info("before no_runnable_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "NO_RUNNABLE_RESPONSE", "START", 0]})
-        try:
-            __log_result = self._message_route_output("NO_RUNNABLE_JOB", "no_runnable_job")
-            logging.getLogger("smartmigrate.workflow").info("after no_runnable_response", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "NO_RUNNABLE_RESPONSE", "END", 0]})
-            return __log_result
-        except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error no_runnable_response: {exc}", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "ERROR", "NO_RUNNABLE_RESPONSE", "ERROR", 0]})
-            raise
+        return self._message_route_output("NO_RUNNABLE_JOB", "no_runnable_job")
 
     def _route_output(self, expected_route: str, output_name: str) -> Data:
         try:
@@ -202,6 +153,8 @@ class NewType08JobExecutionRouter(Component):
         cached = getattr(self, "_cached_routed_payload", None)
         if cached is not None:
             return cached
+
+        logging.getLogger("smartmigrate.workflow").info("08 Job Execution Router started", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "ROUTE", "START", 0]})
 
         payload = self._parse_payload(getattr(self, "payload_json", ""))
         decision_hint = self._normalize_llm_hint(self._route_with_llm(payload), payload)

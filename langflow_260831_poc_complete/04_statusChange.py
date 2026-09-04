@@ -19,13 +19,14 @@ except Exception:
 
 class NewType04StatusChange(Component):
     display_name = "04 Status Change"
-    description = "Resets only the selected job status and retry count; SQL is preserved."
+    description = "Resets the selected job status and sets retry count to zero; SQL is preserved."
     name = "NewType04StatusChange"
     icon = "RotateCcw"
     inputs = [DataInput(name="payload_json", display_name="Payload JSON", required=True), StrInput(name="db_host", display_name="DB Host", required=True), IntInput(name="db_port", display_name="DB Port", value=1521, required=False), StrInput(name="db_service_name", display_name="DB Service Name", required=True), StrInput(name="db_username", display_name="DB Username", required=True), SecretStrInput(name="db_password", display_name="DB Password", required=True), StrInput(name="system_schema", display_name="System Schema", required=False)]
     outputs = [Output(display_name="Result Message", name="result", method="run", types=["Message"])]
 
     def run(self) -> Message:
+        logging.getLogger("smartmigrate.workflow").info("04 Status Change started", extra={"workflow_log": [0, "WORKFLOW", "04_STATUS_CHANGE", "INFO", "RESET", "START", 0]})
         try:
             payload, target = self._parse_payload(getattr(self, "payload_json", "")), {}
             target = dict(payload.get("target") or {})
@@ -36,18 +37,20 @@ class NewType04StatusChange(Component):
                 if not required.issubset(columns):
                     raise ValueError(f"{table}에 Reset에 필요한 컬럼({', '.join(sorted(required))})이 없습니다.")
                 cur = conn.cursor()
-                cur.execute(f"UPDATE {self._qualify(table)} SET {status_column} = NULL, RETRY_COUNT = NULL WHERE {where_sql}", params)
+                cur.execute(f"UPDATE {self._qualify(table)} SET {status_column} = NULL, RETRY_COUNT = 0 WHERE {where_sql}", params)
                 if cur.rowcount != 1:
                     conn.rollback()
                     raise ValueError(f"대상 작업을 정확히 1건 찾지 못했습니다. ({identity}, count={cur.rowcount})")
                 conn.commit()
-            answer = f"Status Change(Reset) 완료: {identity}. {status_column}와 RETRY_COUNT만 NULL로 변경했으며 SQL 본문은 유지했습니다."
+            answer = f"Status Change(Reset) 완료: {identity}. {status_column}는 NULL, RETRY_COUNT는 0으로 변경했으며 SQL 본문은 유지했습니다."
             self.status = {**payload, "component": "04_statusChange", "updated_rows": 1, "answer_text": answer, "final": True}
-            logging.getLogger("smartmigrate.workflow").info(answer, extra={"workflow_log": [target.get("map_id") or 0, "WORKFLOW", "STATUS_CHANGE", "INFO", "RESET", "PASS", 0]})
+            log_id = target.get("map_id") or f"{target.get('sql_id') or ''} / {target.get('space_nm') or ''}".strip(" / ") or 0
+            logging.getLogger("smartmigrate.workflow").info(answer, extra={"workflow_log": [log_id, "WORKFLOW", "04_STATUS_CHANGE", "INFO", "RESET", "PASS", 0]})
             return Message(text=answer)
         except Exception as exc:
             answer = f"Status Change(Reset) 실패: {exc}"
             self.status = {"ok": False, "component": "04_statusChange", "error": str(exc), "answer_text": answer}
+            logging.getLogger("smartmigrate.workflow").error(answer, extra={"workflow_log": [0, "WORKFLOW", "04_STATUS_CHANGE", "ERROR", "RESET", "ERROR", 0]})
             return Message(text=answer)
 
     def _target(self, target: dict[str, Any]) -> tuple[str, str, str, dict[str, str], str]:

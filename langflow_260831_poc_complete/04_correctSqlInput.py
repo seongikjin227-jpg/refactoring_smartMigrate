@@ -26,6 +26,7 @@ class NewType04CorrectSqlInput(Component):
     outputs = [Output(display_name="Result Message", name="result", method="run", types=["Message"])]
 
     def run(self) -> Message:
+        logging.getLogger("smartmigrate.workflow").info("04 Correct SQL Input started", extra={"workflow_log": [0, "WORKFLOW", "04_CORRECT_SQL_INPUT", "INFO", "SAVE_SQL", "START", 0]})
         try:
             payload = self._parse_payload(getattr(self, "payload_json", ""))
             target, sql_text = dict(payload.get("target") or {}), str(payload.get("correct_sql") or "").strip()
@@ -42,11 +43,13 @@ class NewType04CorrectSqlInput(Component):
                 conn.commit()
             answer = f"Correct SQL 저장 완료: {table}.{column}, {identity}. USER_EDITED='Y'로 변경했습니다."
             self.status = {**payload, "component": "04_correctSqlInput", "updated_rows": 1, "answer_text": answer, "final": True}
-            logging.getLogger("smartmigrate.workflow").info(answer, extra={"workflow_log": [target.get("map_id") or 0, "WORKFLOW", "CORRECT_SQL_INPUT", "INFO", column, "PASS", 0, sql_text]})
+            log_id = target.get("map_id") or f"{target.get('sql_id') or ''} / {target.get('space_nm') or ''}".strip(" / ") or 0
+            logging.getLogger("smartmigrate.workflow").info(answer, extra={"workflow_log": [log_id, "WORKFLOW", "04_CORRECT_SQL_INPUT", "INFO", column, "PASS", 0, sql_text]})
             return Message(text=answer)
         except Exception as exc:
             answer = f"Correct SQL 저장 실패: {exc}"
             self.status = {"ok": False, "component": "04_correctSqlInput", "error": str(exc), "answer_text": answer}
+            logging.getLogger("smartmigrate.workflow").error(answer, extra={"workflow_log": [0, "WORKFLOW", "04_CORRECT_SQL_INPUT", "ERROR", "SAVE_SQL", "ERROR", 0]})
             return Message(text=answer)
 
     def _target(self, target: dict[str, Any], sql_text: str) -> tuple[str, str, str, dict[str, str], str]:
