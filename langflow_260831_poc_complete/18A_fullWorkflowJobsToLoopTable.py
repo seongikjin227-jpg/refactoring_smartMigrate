@@ -160,7 +160,7 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
                       FROM {sql_table}
                      WHERE STATUS_CONVERSION IS NULL
                         OR (UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y' AND UPPER(TRIM(NVL(STATUS_CONVERSION, 'NULL'))) LIKE 'FAIL-%')
-                     ORDER BY PRIORITY ASC NULLS LAST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
+                     ORDER BY PRIORITY ASC NULLS LAST, UPD_TS ASC NULLS FIRST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                     """,
                     "SQL_CONVERSION",
                     ["space_nm", "sql_id", "priority"],
@@ -172,7 +172,7 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
                       FROM {sql_table}
                      WHERE UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')
                        AND (STATUS_TUNING IS NULL OR (UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y' AND UPPER(TRIM(NVL(STATUS_TUNING, 'NULL'))) LIKE 'FAIL-%'))
-                     ORDER BY PRIORITY ASC NULLS LAST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
+                     ORDER BY PRIORITY ASC NULLS LAST, UPD_TS ASC NULLS FIRST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                     """,
                     "SQL_TUNING",
                     ["space_nm", "sql_id", "priority"],
@@ -184,7 +184,7 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
                       FROM {sql_table}
                      WHERE UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING')
                        AND (FORMATTED_SQL IS NULL OR NVL(DBMS_LOB.GETLENGTH(FORMATTED_SQL), 0) = 0)
-                     ORDER BY PRIORITY ASC NULLS LAST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
+                     ORDER BY PRIORITY ASC NULLS LAST, UPD_TS ASC NULLS FIRST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                     """,
                     "SQL_FORMATTING",
                     ["space_nm", "sql_id", "priority"],

@@ -49,27 +49,46 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
     outputs = [Output(display_name="Job Result", name="job_result", method="run_job", types=["Data"])]
 
     def run_job(self) -> Data:
-        logging.getLogger("smartmigrate.workflow").info("before run_job", extra={"workflow_log": [0, "WORKFLOW", "17C_SQL_FORMAT", "INFO", "RUN_JOB", "START", 0]})
+        logger = logging.getLogger("smartmigrate.workflow")
+        logger.info("before run_job", extra={"workflow_log": [0, "WORKFLOW", "17C_SQL_FORMAT", "INFO", "RUN_JOB", "START", 0]})
         started = time.perf_counter()
         payload: dict[str, Any] = {}
         job: dict[str, Any] = {}
         try:
             payload = self._parse_payload(getattr(self, "job_item", ""))
-            if payload.get("generated_sql_list"):
+            raw_generated_sql_list = payload.get("generated_sql_list") if isinstance(payload.get("generated_sql_list"), list) else []
+            self._log_formatting_event(
+                payload,
+                step_name="RAW_GENERATED_SQL_LIST",
+                status="PASS",
+                message=f"raw_generated_sql_list_count={len(raw_generated_sql_list)}",
+                generate_sql=self._json_dump(raw_generated_sql_list),
+            )
+            generated_sql_list = self._formatting_candidates(payload)
+            payload["generated_sql_list"] = generated_sql_list
+            self._log_formatting_event(
+                payload,
+                step_name="GENERATED_SQL_LIST",
+                status="PASS",
+                message=f"generated_sql_list_count={len(generated_sql_list)}",
+                generate_sql=self._json_dump(generated_sql_list),
+            )
+            if generated_sql_list:
                 db_config = self._db_config(payload)
                 self._require_db_config(db_config)
                 result = self._run_batch_formatting(payload, db_config, started)
                 self.status = result
                 return Data(data=result)
-            result = self._component_pass_through(payload, started, "17C skipped because generated_sql_list is empty.")
+            result = self._run_batch_formatting(payload, {}, started)
             self.status = result
             return Data(data=result)
         except Exception as exc:
+            self._log_formatting_event(payload, step_name="RUN_JOB", status="ERROR", message=str(exc))
             result = self._finish_failure(payload, job, started, str(exc))
             self.status = result
             return Data(data=result)
         finally:
-            logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "17C_SQL_FORMAT", "INFO", "RUN_JOB", "END", 0]})
+            logger.info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "17C_SQL_FORMAT", "INFO", "RUN_JOB", "END", 0]})
 
     def _run_batch_formatting(self, payload: dict[str, Any], db_config: dict[str, Any], started: float) -> dict[str, Any]:
         """Format the generated SQL references once at the end of a job, reading SQL from DB by key."""
@@ -81,30 +100,48 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         seen: set[tuple[str, str, str]] = set()
         for item in payload.get("generated_sql_list") or []:
             if not isinstance(item, dict):
+                results.append({"status": "SKIPPED_INVALID_ITEM", "item": str(item)[:500]})
+                self._log_formatting_event(payload, step_name="ITEM_VALIDATE", status="SKIP", message=f"invalid_item={item}")
                 continue
             table_name = str(item.get("table") or "").strip().upper()
             column = str(item.get("column") or "").strip().upper()
             if table_name not in allowed or column not in allowed[table_name]:
+                results.append({"table": table_name, "column": column, "status": "SKIPPED_UNSUPPORTED"})
+                self._log_formatting_event(payload, step_name="ITEM_VALIDATE", status="SKIP", message=f"unsupported table={table_name}, column={column}", generate_sql=self._json_dump(item))
                 continue
             key = str(item.get("row_id") or item.get("key_value") or "").strip()
             identity = (table_name, key, column)
             if not key or identity in seen:
+                results.append({"table": table_name, "column": column, "key": key, "status": "SKIPPED_DUPLICATE_OR_EMPTY_KEY"})
+                self._log_formatting_event(payload, step_name="ITEM_VALIDATE", status="SKIP", message=f"empty_or_duplicate_key table={table_name}, column={column}, key={key}", generate_sql=self._json_dump(item))
                 continue
             seen.add(identity)
             try:
+                self._log_formatting_event(payload, step_name="LOAD_SQL", status="START", message=f"table={table_name}, column={column}, key={key}", generate_sql=self._json_dump(item))
                 sql_text = self._load_generated_sql(db_config, table_name, item, column)
                 if not sql_text:
                     results.append({"table": table_name, "column": column, "key": key, "status": "SKIPPED_EMPTY"})
+                    self._log_formatting_event(payload, step_name="LOAD_SQL", status="SKIP", message=f"empty_sql table={table_name}, column={column}, key={key}")
                     continue
+                self._log_formatting_event(payload, step_name="FORMAT_SQL", status="START", message=f"table={table_name}, column={column}, key={key}, sql_len={len(sql_text)}", generate_sql=sql_text)
                 formatted_sql, method = self._format_sql(sql_text, self._llm_config(payload))
                 if not formatted_sql:
                     raise ValueError("formatter returned empty SQL")
                 self._update_generated_sql(db_config, table_name, item, column, formatted_sql)
                 results.append({"table": table_name, "column": column, "key": key, "status": FORMATTED, "method": method})
+                self._log_formatting_event(payload, step_name="FORMAT_SQL", status=FORMATTED, message=f"table={table_name}, column={column}, key={key}, method={method}, formatted_len={len(formatted_sql)}", generate_sql=formatted_sql)
             except Exception as exc:
                 results.append({"table": table_name, "column": column, "key": key, "status": FAIL_FORMATTING, "error": str(exc)})
+                self._log_formatting_event(payload, step_name="FORMAT_SQL", status=FAIL_FORMATTING, message=f"table={table_name}, column={column}, key={key}, error={type(exc).__name__}: {exc}")
         failures = [item for item in results if item["status"] == FAIL_FORMATTING]
         status = FORMATTED if not failures else FAIL_FORMATTING
+        self._log_formatting_event(
+            payload,
+            step_name="BATCH_SUMMARY",
+            status=status,
+            message=f"items={len(payload.get('generated_sql_list') or [])}, results={len(results)}, formatted={len([item for item in results if item['status'] == FORMATTED])}, failed={len(failures)}, skipped={len([item for item in results if str(item.get('status') or '').startswith('SKIPPED')])}",
+            generate_sql=self._json_dump(results),
+        )
         return {
             **payload,
             "component": "17C_sqlFormattingOneJobPocExecutor",
@@ -118,6 +155,36 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             "db_status_updated": bool(results and not failures),
             "next_node": self._dashboard_node(payload),
         }
+
+    def _formatting_candidates(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        raw = payload.get("generated_sql_list")
+        if isinstance(raw, list) and raw:
+            return list(raw)
+        route = str(payload.get("planned_job_route") or payload.get("job_route") or "").strip().upper()
+        job_name = self._job_name(payload)
+        if route == "MIG" or job_name == "migration":
+            map_id = payload.get("map_id") or payload.get("key_value")
+            if map_id is None or str(map_id).strip() == "":
+                return []
+            return [
+                {"table": "NEXT_MIG_INFO", "key_column": "MAP_ID", "key_value": map_id, "column": "MIG_SQL"},
+                {"table": "NEXT_MIG_INFO", "key_column": "MAP_ID", "key_value": map_id, "column": "VERIFY_SQL"},
+            ]
+        return []
+
+    def _log_formatting_event(self, payload: dict[str, Any], *, step_name: str, status: str, message: str, generate_sql: Any = None) -> None:
+        map_id = str(payload.get("map_id") or payload.get("sql_id") or 0)[:100]
+        retry_count = self._to_int(payload.get("retry_count"), 0)
+        logging.getLogger("smartmigrate.workflow").info(
+            str(message or ""),
+            extra={"workflow_log": [map_id, "SQL_FORMATTING", "17C_SQL_FORMAT", "INFO", str(step_name or "")[:50], str(status or "")[:20], retry_count, generate_sql]},
+        )
+
+    def _json_dump(self, value: Any) -> str:
+        try:
+            return json.dumps(value, ensure_ascii=False, default=str)
+        except Exception:
+            return str(value)
 
     def _load_generated_sql(self, db_config: dict[str, Any], table_name: str, item: dict[str, Any], column: str) -> str:
         table = self._qualify(table_name, db_config.get("system_schema"))
@@ -521,6 +588,12 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         try:
             parsed = int(value)
             return parsed if parsed > 0 else default
+        except (TypeError, ValueError):
+            return default
+
+    def _to_int(self, value: Any, default: int = 0) -> int:
+        try:
+            return int(value)
         except (TypeError, ValueError):
             return default
 

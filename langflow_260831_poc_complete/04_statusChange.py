@@ -30,20 +30,24 @@ class NewType04StatusChange(Component):
         try:
             payload, target = self._parse_payload(getattr(self, "payload_json", "")), {}
             target = dict(payload.get("target") or {})
+            priority = self._priority(target)
             table, status_column, where_sql, params, identity = self._target(target)
             with self._connect() as conn:
                 columns = self._columns(conn, table)
-                required = {status_column, "RETRY_COUNT"}
+                required = {status_column, "RETRY_COUNT", "PRIORITY"}
                 if not required.issubset(columns):
                     raise ValueError(f"{table}에 Reset에 필요한 컬럼({', '.join(sorted(required))})이 없습니다.")
                 cur = conn.cursor()
-                cur.execute(f"UPDATE {self._qualify(table)} SET {status_column} = NULL, RETRY_COUNT = 0 WHERE {where_sql}", params)
+                cur.execute(
+                    f"UPDATE {self._qualify(table)} SET {status_column} = NULL, RETRY_COUNT = 0, PRIORITY = :priority WHERE {where_sql}",
+                    {**params, "priority": priority},
+                )
                 if cur.rowcount != 1:
                     conn.rollback()
                     raise ValueError(f"대상 작업을 정확히 1건 찾지 못했습니다. ({identity}, count={cur.rowcount})")
                 conn.commit()
-            answer = f"Status Change(Reset) 완료: {identity}. {status_column}는 NULL, RETRY_COUNT는 0으로 변경했으며 SQL 본문은 유지했습니다."
-            self.status = {**payload, "component": "04_statusChange", "updated_rows": 1, "answer_text": answer, "final": True}
+            answer = f"Status Change(Reset) 완료: {identity}. {status_column}=NULL, RETRY_COUNT=0, PRIORITY={priority}로 변경했으며 SQL 본문은 유지했습니다."
+            self.status = {**payload, "component": "04_statusChange", "updated_rows": 1, "priority": priority, "answer_text": answer, "final": True}
             log_id = target.get("map_id") or f"{target.get('sql_id') or ''} / {target.get('space_nm') or ''}".strip(" / ") or 0
             logging.getLogger("smartmigrate.workflow").info(answer, extra={"workflow_log": [log_id, "WORKFLOW", "04_STATUS_CHANGE", "INFO", "RESET", "PASS", 0]})
             return Message(text=answer)
@@ -63,6 +67,12 @@ class NewType04StatusChange(Component):
         sql_id, space_nm = str(target.get("sql_id") or "").strip(), str(target.get("space_nm") or "").strip()
         if not status or not sql_id or not space_nm: raise ValueError("Status Change(Reset)를 위해 SQL_ID와 SPACE_NM을 모두 알려주셔야 합니다.")
         return "NEXT_SQL_INFO", status, "SQL_ID = :sql_id AND SPACE_NM = :space_nm", {"sql_id": sql_id, "space_nm": space_nm}, f"SQL_ID={sql_id}, SPACE_NM={space_nm}"
+
+    def _priority(self, target: dict[str, Any]) -> int:
+        try:
+            return 1 if int(target.get("priority") or 5) == 1 else 5
+        except (TypeError, ValueError):
+            return 5
 
     @contextmanager
     def _connect(self):

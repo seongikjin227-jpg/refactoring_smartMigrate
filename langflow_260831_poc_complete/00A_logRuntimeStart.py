@@ -181,7 +181,10 @@ class NewType00ALogRuntimeStart(Component):
         logger.propagate = False
         handler = SmartMigrateDBHandler(self._db_config())
         logger.addHandler(handler)
-        logger.info(f"workflow start input_len={len(text)}", extra={"workflow_log": [0, "WORKFLOW", "LOG_RUNTIME_START", "INFO", "RUN", "START", 0]})
+        logger.info(
+            f"workflow start input_len={len(text)}; user_request={text}",
+            extra={"workflow_log": [0, "WORKFLOW", "LOG_RUNTIME_START", "INFO", "RUN", "START", 0]},
+        )
         self.status = {"ok": handler.insert_error is None, "db_insert_error": handler.insert_error}
         return Message(text=text)
 

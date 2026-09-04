@@ -264,6 +264,7 @@ class NewType04CurrentProgress(Component):
                            TO_CHAR(STEP_NAME) AS STEP_NAME,
                            TO_CHAR(MAP_ID) AS MAP_ID
                      FROM {table}
+                    WHERE UPPER(TRIM(NVL(MIG_KIND, ''))) <> 'WORKFLOW'
                      ORDER BY LOG_ID DESC
                    )
              WHERE ROWNUM <= 5

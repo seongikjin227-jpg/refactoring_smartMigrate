@@ -361,6 +361,13 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         llm_config = self._llm_config(payload)
         rag_config = self._rag_config()
         mapping_rules = self._load_mapping_rules(db_config, target_table)
+        source_tables = self._source_tables(target_table)
+        sql_conversion_general_rules = self._load_rag_general_rules(db_config, "SQL_CONVERSION", source_tables, map_id)
+        sql_conversion_examples = self._retrieve_rag_examples(db_config, rag_config, "SQL_CONVERSION", source_sql, source_tables, map_id)
+        correct_sql_hints = {
+            column: self._correct_sql_hint_text(db_config, source_sql, job.get("sql_id"), job.get("space_nm"), map_id, 0, column, tag_kind)
+            for column in ("TO_SQL", "BIND_SQL", "TEST_SQL")
+        }
         logger = logging.getLogger("smartmigrate.workflow")
 
         # ##############################
@@ -373,6 +380,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "source_sql": source_sql, "source_for_conversion": source_sql, "target_table": target_table,
             "map_id": map_id, "tag_kind": tag_kind, "attempts": attempts,
             "llm_config": llm_config, "rag_config": rag_config, "mapping_rules": mapping_rules,
+            "source_tables": source_tables, "sql_conversion_general_rules": sql_conversion_general_rules,
+            "sql_conversion_examples": sql_conversion_examples, "correct_sql_hints": correct_sql_hints,
             "max_retry": self._max_retry(), "attempt_no": 1, "retry_count": 0,
             "last_status": FAIL_TOBE, "last_message": "SQL conversion failed.",
             "to_sql": str(job.get("to_sql") or "").strip(),
@@ -437,6 +446,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 to_sql = self._generate_tobe_sql(
                     state["job"], state["db_config"], state["llm_config"], state["rag_config"],
                     state["source_for_conversion"], state["mapping_rules"], state["target_table"], state.get("retry_context") or "", state["retry_count"],
+                    state.get("sql_conversion_general_rules") or [], state.get("sql_conversion_examples") or [],
+                    str((state.get("correct_sql_hints") or {}).get("TO_SQL") or "- (empty)"),
                 )
                 state["to_sql"] = to_sql
                 state["node_failed"] = False
@@ -475,6 +486,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 bind_sql, bind_set = self._generate_bind_payload(
                     state["job"], state["db_config"], state["llm_config"], state["source_for_conversion"],
                     state["to_sql"], state["mapping_rules"], state.get("retry_context") or "", state["retry_count"],
+                    str((state.get("correct_sql_hints") or {}).get("BIND_SQL") or "- (empty)"),
                 )
                 state.update({"bind_sql": bind_sql, "bind_set": bind_set, "resume_stage": "GENERATE_TEST_SQL", "last_status": "", "last_message": "", "node_failed": False})
                 state["attempts"].append({"attempt": state["attempt_no"], "stage": bind_reuse_stage, "status": CONVERSION_PASS})
@@ -497,6 +509,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 test_sql = self._generate_test_sql(
                     state["job"], state["db_config"], state["llm_config"], state["source_sql"],
                     state["to_sql"], state.get("bind_set"), state.get("retry_context") or "", state["retry_count"],
+                    str((state.get("correct_sql_hints") or {}).get("TEST_SQL") or "- (empty)"),
                 )
                 state["test_sql"] = test_sql
                 self._update_row(state["db_config"], state["job"]["row_id"], {"TEST_SQL": test_sql})
@@ -647,7 +660,21 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         return tuned_fr_sql, tuned_fr_sql, sql_length
 
     # Generate TO_SQL from mapping rules, SQL_CONVERSION RAG, and retry context.
-    def _generate_tobe_sql(self, job: dict[str, Any], db_config: dict[str, Any], llm_config: dict[str, Any], rag_config: dict[str, Any], source_sql: str, mapping_rules: list[dict[str, str]], target_table: str, last_error: str, retry_count: int) -> str:
+    def _generate_tobe_sql(
+        self,
+        job: dict[str, Any],
+        db_config: dict[str, Any],
+        llm_config: dict[str, Any],
+        rag_config: dict[str, Any],
+        source_sql: str,
+        mapping_rules: list[dict[str, str]],
+        target_table: str,
+        last_error: str,
+        retry_count: int,
+        general_rules: list[dict[str, Any]] | None = None,
+        examples: list[dict[str, Any]] | None = None,
+        correct_sql_hint_text: str | None = None,
+    ) -> str:
         map_id = f"{job.get('sql_id')} / {job.get('space_nm')}"[:100]
         if str(job.get("user_edited") or "").strip().upper() == "Y" and str(job.get("to_sql") or "").strip():
             logging.getLogger("smartmigrate.workflow").info(
@@ -664,10 +691,11 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         # TO_SQL prompt context is assembled in this order:
         # migration table/column mapping rules, SQL_CONVERSION GENERAL RAG guidance,
         # and SQL_CONVERSION SEARCH examples ranked by vector similarity per SQL block.
-        source_tables = self._source_tables(target_table)
-        general_rules = self._load_rag_general_rules(db_config, "SQL_CONVERSION", source_tables, map_id)
-        examples = self._retrieve_rag_examples(db_config, rag_config, "SQL_CONVERSION", source_sql, source_tables, map_id)
-        correct_sql_hint_text = self._correct_sql_hint_text(db_config, source_sql, job.get("sql_id"), job.get("space_nm"), map_id, retry_count, "TO_SQL")
+        if general_rules is None or examples is None:
+            source_tables = self._source_tables(target_table)
+            general_rules = self._load_rag_general_rules(db_config, "SQL_CONVERSION", source_tables, map_id)
+            examples = self._retrieve_rag_examples(db_config, rag_config, "SQL_CONVERSION", source_sql, source_tables, map_id)
+        correct_sql_hint_text = correct_sql_hint_text if correct_sql_hint_text is not None else self._correct_sql_hint_text(db_config, source_sql, job.get("sql_id"), job.get("space_nm"), map_id, retry_count, "TO_SQL", job.get("tag_kind"))
         prompt = self._build_prompt(
             "TOBE_SQL",
             from_sql=source_sql,
@@ -685,7 +713,18 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         return sql
 
     # Generate executable BIND_SQL and convert its result rows into BIND_SET JSON.
-    def _generate_bind_payload(self, job: dict[str, Any], db_config: dict[str, Any], llm_config: dict[str, Any], source_sql: str, to_sql: str, mapping_rules: list[dict[str, str]], last_error: str, retry_count: int) -> tuple[str, str | None]:
+    def _generate_bind_payload(
+        self,
+        job: dict[str, Any],
+        db_config: dict[str, Any],
+        llm_config: dict[str, Any],
+        source_sql: str,
+        to_sql: str,
+        mapping_rules: list[dict[str, str]],
+        last_error: str,
+        retry_count: int,
+        correct_sql_hint_text: str | None = None,
+    ) -> tuple[str, str | None]:
         map_id = f"{job.get('sql_id')} / {job.get('space_nm')}"[:100]
         bind_param_names = self._bind_names(source_sql) or self._bind_names(to_sql)
         logging.getLogger("smartmigrate.workflow").info(
@@ -712,7 +751,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 from_sql=source_sql,
                 from_schema=db_config["source_schema"],
                 asis_source_filter_conditions=self._source_filter_prompt_text(mapping_rules),
-                correct_sql_hint_text=self._correct_sql_hint_text(db_config, source_sql, job.get("sql_id"), job.get("space_nm"), map_id, retry_count, "BIND_SQL"),
+                correct_sql_hint_text=correct_sql_hint_text if correct_sql_hint_text is not None else self._correct_sql_hint_text(db_config, source_sql, job.get("sql_id"), job.get("space_nm"), map_id, retry_count, "BIND_SQL", job.get("tag_kind")),
                 last_error=last_error or "None",
             )
             if "FINAL_RETRY_MODE=ON" in str(last_error or "").upper():
@@ -742,7 +781,18 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         return bind_sql, bind_set
 
     # Generate validation TEST_SQL that compares FROM SQL and TO_SQL row counts.
-    def _generate_test_sql(self, job: dict[str, Any], db_config: dict[str, Any], llm_config: dict[str, Any], source_sql: str, to_sql: str, bind_set: str | None, last_error: str, retry_count: int) -> str:
+    def _generate_test_sql(
+        self,
+        job: dict[str, Any],
+        db_config: dict[str, Any],
+        llm_config: dict[str, Any],
+        source_sql: str,
+        to_sql: str,
+        bind_set: str | None,
+        last_error: str,
+        retry_count: int,
+        correct_sql_hint_text: str | None = None,
+    ) -> str:
         map_id = f"{job.get('sql_id')} / {job.get('space_nm')}"[:100]
         if str(job.get("user_edited") or "").strip().upper() == "Y" and str(job.get("test_sql") or "").strip():
             logging.getLogger("smartmigrate.workflow").info(
@@ -758,7 +808,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             from_schema=db_config["source_schema"],
             tobe_schema=db_config["target_schema"],
             bind_set_text=bind_set or "- no bind case",
-            correct_sql_hint_text=self._correct_sql_hint_text(db_config, source_sql, job.get("sql_id"), job.get("space_nm"), map_id, retry_count, "TEST_SQL"),
+            correct_sql_hint_text=correct_sql_hint_text if correct_sql_hint_text is not None else self._correct_sql_hint_text(db_config, source_sql, job.get("sql_id"), job.get("space_nm"), map_id, retry_count, "TEST_SQL", job.get("tag_kind")),
             last_error=last_error or "None",
         )
         if retry_count >= self._configured_retry_limit():
@@ -1496,7 +1546,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
     #
     # If a similar user-edited PASS row exists, its TO_SQL/BIND_SQL/TEST_SQL is
     # injected as a hint into the corresponding generation prompt.
-    def _correct_sql_hint_text(self, db_config: dict[str, Any], source_sql: str, current_sql_id: str | None, current_space_nm: str | None, map_id: str, retry_count: int, hint_column: str) -> str:
+    def _correct_sql_hint_text(self, db_config: dict[str, Any], source_sql: str, current_sql_id: str | None, current_space_nm: str | None, map_id: str, retry_count: int, hint_column: str, tag_kind: Any = "") -> str:
         hint_column = str(hint_column or "").strip().upper()
         if hint_column not in {"TO_SQL", "BIND_SQL", "TEST_SQL"}:
             return "- (empty)"
@@ -1506,13 +1556,18 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             # Correct SQL hint compares the current FROM SQL embedding with
             # SM_CORRECT_SQL_CONVERSION.dense_vector using Milvus COSINE search.
             query_vector = self._embed_texts([self._normalize_sql_shape(source_sql)], self._rag_config())[0]
+            filter_expr = f'user_edited == "Y" and is_active == true and {hint_field} != ""'
+            tag_kind_value = str(tag_kind or "").strip().upper()
+            if tag_kind_value:
+                filter_expr += f' and tag_kind == {self._milvus_string(tag_kind_value)}'
+            top_k = self._positive_int(getattr(self, "correct_sql_top_k", None), 1)
             rows = self._milvus_client().search(
                 collection_name=config["correct_sql_collection"],
                 data=[query_vector],
                 anns_field="dense_vector",
-                filter=f'user_edited == "Y" and is_active == true and {hint_field} != ""',
-                limit=self._positive_int(getattr(self, "correct_sql_top_k", None), 1),
-                output_fields=["space_nm", "sql_id", "source_sql", "to_sql", "bind_sql", "test_sql", "status_conversion", "user_edited"],
+                filter=filter_expr,
+                limit=top_k,
+                output_fields=["space_nm", "sql_id", "source_sql", "to_sql", "bind_sql", "test_sql", "status_conversion", "user_edited", "tag_kind"],
                 # COSINE metric is explicitly requested in Milvus search_params.
                 # No FAISS index is created in this path.
                 search_params={"metric_type": "COSINE"},
@@ -1521,8 +1576,6 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             selected = None
             for hit in hits:
                 entity = self._milvus_entity(hit)
-                if (str(entity.get("sql_id") or "").strip(), str(entity.get("space_nm") or "").strip()) == (str(current_sql_id or "").strip(), str(current_space_nm or "").strip()):
-                    continue
                 if self._status(entity.get("status_conversion")) not in {"PASS", CONVERSION_PASS}:
                     continue
                 hint_sql = str(entity.get(hint_field) or "").strip()
@@ -1547,7 +1600,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         ]
         logging.getLogger("smartmigrate.workflow").info(
             "Correct SQL hint loaded",
-            extra={"workflow_log": [map_id, "SQL_CONVERSION", "CORRECT_SQL_HINT", "INFO", f"LOAD_{hint_column}_HINT", "PASS", retry_count, f"collection={config['correct_sql_collection']}, method=milvus_dense_vector, score={round(score, 6)}, space_nm={hint.get('space_nm') or ''}, sql_id={hint.get('sql_id') or ''}"]},
+            extra={"workflow_log": [map_id, "SQL_CONVERSION", "CORRECT_SQL_HINT", "INFO", f"LOAD_{hint_column}_HINT", "PASS", retry_count, f"collection={config['correct_sql_collection']}, method=milvus_dense_vector, tag_kind={str(tag_kind or '').strip().upper()}, score={round(score, 6)}, space_nm={hint.get('space_nm') or ''}, sql_id={hint.get('sql_id') or ''}"]},
         )
         return "\n".join(lines)
 
@@ -1931,6 +1984,12 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
     def _source_tables_match(self, rule_tables: list[str] | set[str], source_tables: set[str]) -> bool:
         rule_set = set(rule_tables)
         return not rule_set or not source_tables or bool(rule_set & source_tables)
+
+    def _status(self, value: Any) -> str:
+        return str(value or "").strip().upper()
+
+    def _milvus_string(self, value: Any) -> str:
+        return json.dumps(str(value or ""), ensure_ascii=False)
 
     def _clean_collection_name(self, value: Any) -> str:
         clean = str(value or "").strip()

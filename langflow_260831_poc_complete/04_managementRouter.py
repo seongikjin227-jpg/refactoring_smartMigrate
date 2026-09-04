@@ -23,6 +23,7 @@ MANAGEMENT_ROUTER_PROMPT = """You are the SmartMigrate management router. Return
 Routes: DASHBOARD (read-only summary), CURRENT_PROGRESS (active/running work), STATUS_CHANGE (reset), CORRECT_SQL_INPUT (save user-supplied SQL), FAIL_ANALYSIS (aggregate failure-cause analysis), EXCEPTION (missing or ambiguous data).
 
 STATUS_CHANGE reset means the status becomes NULL and RETRY_COUNT becomes 0. It never deletes SQL.
+For STATUS_CHANGE set target.priority to 1 when the user asks for higher priority, urgency, or immediate processing. Otherwise set target.priority to 5.
 For STATUS_CHANGE and CORRECT_SQL_INPUT extract target.work_type: DB_MIGRATION, SQL_CONVERSION, SQL_TUNING, or SQL_FORMATTING.
 - DB_MIGRATION requires target.map_id.
 - SQL_* requires BOTH target.sql_id and target.space_nm.
@@ -32,7 +33,7 @@ For STATUS_CHANGE and CORRECT_SQL_INPUT extract target.work_type: DB_MIGRATION, 
 - If any required value is absent, set management_route=EXCEPTION and write a specific Korean exception_message. Examples: "DB Migration Correct SQL 입력을 위해 MAP_ID를 알려주셔야 합니다.", "Status Change(Reset)를 위해 SQL_ID와 SPACE_NM을 모두 알려주셔야 합니다."
 
 JSON schema:
-{"management_route":"DASHBOARD|CURRENT_PROGRESS|STATUS_CHANGE|CORRECT_SQL_INPUT|FAIL_ANALYSIS|EXCEPTION","target":{"work_type":"","map_id":"","sql_id":"","space_nm":"","sql_column":""},"correct_sql":"","exception_message":"","reason":""}"""
+{"management_route":"DASHBOARD|CURRENT_PROGRESS|STATUS_CHANGE|CORRECT_SQL_INPUT|FAIL_ANALYSIS|EXCEPTION","target":{"work_type":"","map_id":"","sql_id":"","space_nm":"","sql_column":"","priority":5},"correct_sql":"","exception_message":"","reason":""}"""
 
 EXCEPTION_MESSAGE = "Management 요청을 처리할 수 없습니다. 작업 종류와 필요한 식별자를 다시 알려주세요."
 
@@ -140,6 +141,11 @@ class NewType04ManagementRouter(Component):
         target["work_type"] = work_type
         if route == "STATUS_CHANGE" and work_type == "SQL_FORMATTING":
             return self._exception(decision, "SQL Formatting은 SQL을 삭제하지 않는 Reset 대상 상태 컬럼이 없으므로 Status Change(Reset)를 지원하지 않습니다.")
+        if route == "STATUS_CHANGE":
+            try:
+                target["priority"] = 1 if int(target.get("priority") or 5) == 1 else 5
+            except (TypeError, ValueError):
+                target["priority"] = 5
         if work_type == "DB_MIGRATION" and not str(target.get("map_id") or "").strip():
             return self._exception(decision, f"{self._operation_label(route, work_type)}을 위해 MAP_ID를 알려주셔야 합니다.")
         if work_type != "DB_MIGRATION" and (not str(target.get("sql_id") or "").strip() or not str(target.get("space_nm") or "").strip()):
