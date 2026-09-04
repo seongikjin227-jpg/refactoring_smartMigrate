@@ -463,6 +463,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             }
             for block, matches in zip(ordered_blocks, matches_by_block)
         ]
+        self._log_rag_comparisons(map_id, category, ordered_blocks, matches_by_block, retry_count)
         match_count = sum(len(block["top_rule_matches"]) for block in payloads)
         logging.getLogger("smartmigrate.workflow").info(
             "RAG SEARCH completed category=SQL_TUNING",
@@ -925,6 +926,27 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             matched = ",".join(f"{rule.get('rule_id')}:{round(float(score), 4)}" for rule, score in matches[:5])
             parts.append(f"{block.get('block_id')}:{matched}")
         return "; ".join(parts)[:3500]
+
+    # Store one auditable log per vector-search match: the searched SQL and
+    # the matched RAG SOURCE_SQL remain paired, while RAG_ID stays searchable.
+    def _log_rag_comparisons(self, map_id: str, category: str, blocks: list[dict[str, str]], matches_by_block: list[list[tuple[dict[str, Any], float]]], retry_count: int) -> None:
+        logger = logging.getLogger("smartmigrate.workflow")
+        for block, matches in zip(blocks, matches_by_block):
+            for rule, score in matches:
+                rule_id = str(rule.get("rule_id") or "-")
+                comparison_sql = "\n".join(
+                    [
+                        "[작업 대상 SQL]",
+                        str(block.get("sql") or ""),
+                        "",
+                        "[검색된 참고 SQL]",
+                        str(rule.get("source_sql") or ""),
+                    ]
+                )
+                logger.info(
+                    f"RAG comparison category={category}, block={block.get('block_id')}, RAG_ID={rule_id}, score={round(float(score), 6)}",
+                    extra={"workflow_log": [map_id, "SQL_TUNING", "RAG_COMPARE", "INFO", f"{category}_COMPARE", "PASS", retry_count, comparison_sql]},
+                )
 
     def _should_run_tuning(self, payload: dict[str, Any]) -> bool:
         return self._job_name(payload) in {"conversion", "tuning"}

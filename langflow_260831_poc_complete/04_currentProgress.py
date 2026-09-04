@@ -48,7 +48,7 @@ TERMINAL_STATUSES = {
 class NewType04CurrentProgress(Component):
 
     display_name = "04 Current Progress"
-    description = "Shows currently running SmartMigrate jobs from RUNNING status columns and includes recent logs only as reference data."
+    description = "Shows currently running SmartMigrate jobs and the five most recent migration logs."
     name = "NewType04CurrentProgress"
     icon = "Activity"
 
@@ -60,7 +60,6 @@ class NewType04CurrentProgress(Component):
         StrInput(name="db_username", display_name="DB Username", required=False),
         SecretStrInput(name="db_password", display_name="DB Password", required=False),
         StrInput(name="system_schema", display_name="System Schema", required=False),
-        IntInput(name="lookback_minutes", display_name="Recent Log Lookback Minutes", value=20, required=False),
     ]
 
     outputs = [Output(display_name="Result Message", name="result", method="run", types=["Message"])]
@@ -94,19 +93,17 @@ class NewType04CurrentProgress(Component):
     def _query_progress(self) -> dict[str, Any]:
         if not self._has_db_config():
             raise ValueError("DB connection settings are required for 04 Current Progress")
-        lookback = max(1, int(getattr(self, "lookback_minutes", None) or 20))
         with self._connect() as conn:
             remaining = self._load_remaining_counts(conn)
             running_jobs = self._load_running_status_jobs(conn)
-            recent_jobs = self._load_recent_log_jobs(conn, lookback)
+            recent_logs = self._load_recent_logs(conn)
         active_jobs = self._merge_active_jobs(running_jobs)
         return {
             "ok": True,
-            "lookback_minutes": lookback,
             "active_count": len(active_jobs),
             "active_jobs": active_jobs,
             "remaining_summary": remaining,
-            "recent_activity": recent_jobs[:10],
+            "recent_logs": recent_logs,
         }
 
     def _load_remaining_counts(self, conn: Any) -> dict[str, int]:
@@ -248,72 +245,31 @@ class NewType04CurrentProgress(Component):
             for row in rows
         ]
 
-    def _load_recent_log_jobs(self, conn: Any, lookback: int) -> list[dict[str, Any]]:
+    def _load_recent_logs(self, conn: Any) -> list[dict[str, Any]]:
         cols = self._available_columns(conn, "NEXT_MIG_LOG")
-        required = {"CREATED_AT", "MIG_KIND", "MAP_ID"}
+        required = {"LOG_ID", "CREATED_AT", "MIG_KIND", "STEP_NAME", "MAP_ID"}
         if not required.issubset(cols):
             return []
         table = self._qualify("NEXT_MIG_LOG")
-        map_expr = self._select_expr(cols, "MAP_ID", "MAP_ID")
-        step_expr = self._select_expr(cols, "STEP_NAME", "STEP_NAME")
-        status_expr = self._select_expr(cols, "STATUS", "STATUS_VALUE")
-        message_expr = self._select_expr(cols, "MESSAGE", "MESSAGE", "CLOB")
-        log_id_expr = "LOG_ID" if "LOG_ID" in cols else "0 AS LOG_ID"
-        log_order_expr = "LOG_ID" if "LOG_ID" in cols else "0"
         cur = conn.cursor()
         cur.execute(
             f"""
-            SELECT MAP_ID,
+            SELECT CREATED_AT,
                    MIG_KIND,
                    STEP_NAME,
-                   STATUS_VALUE,
-                   MESSAGE,
-                   LOG_ID,
-                   CREATED_AT_TEXT,
-                   AGE_SECONDS
+                   MAP_ID
               FROM (
-                    SELECT {map_expr},
+                    SELECT TO_CHAR(CREATED_AT, 'YYYY-MM-DD HH24:MI:SS') AS CREATED_AT,
                            TO_CHAR(MIG_KIND) AS MIG_KIND,
-                           {step_expr},
-                           {status_expr},
-                           {message_expr},
-                           {log_id_expr},
-                           TO_CHAR(CREATED_AT, 'YYYY-MM-DD HH24:MI:SS') AS CREATED_AT_TEXT,
-                           ROUND((CAST(SYSTIMESTAMP AS DATE) - CAST(CREATED_AT AS DATE)) * 86400) AS AGE_SECONDS,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY NVL(TO_CHAR(MAP_ID), '-'), NVL(TO_CHAR(MIG_KIND), '-')
-                               ORDER BY CREATED_AT DESC NULLS LAST, {log_order_expr} DESC NULLS LAST
-                           ) AS RN
+                           TO_CHAR(STEP_NAME) AS STEP_NAME,
+                           TO_CHAR(MAP_ID) AS MAP_ID
                      FROM {table}
-                     WHERE CREATED_AT >= SYSTIMESTAMP - NUMTODSINTERVAL(:minutes, 'MINUTE')
-                       AND MIG_KIND IS NOT NULL
-                       AND UPPER(TRIM(TO_CHAR(MIG_KIND))) IN ('DB_MIGRATION', 'SQL_CONVERSION', 'SQL_TUNING', 'SQL_FORMATTING')
+                     ORDER BY LOG_ID DESC
                    )
-             WHERE RN = 1
-             ORDER BY CREATED_AT_TEXT DESC
-            """,
-            {"minutes": lookback},
+             WHERE ROWNUM <= 5
+            """
         )
-        jobs: list[dict[str, Any]] = []
-        for row in self._rows(cur):
-            route = self._route_from_mig_kind(row.get("mig_kind"))
-            status = self._norm(row.get("status_value"))
-            job_id = str(row.get("map_id") or "").strip()
-            jobs.append(
-                {
-                    "route": route,
-                    "label": ROUTE_LABELS.get(route, route),
-                    "job_id": job_id,
-                    "status": status or "",
-                    "stage": row.get("step_name") or "",
-                    "source": "RECENT_LOG",
-                    "detail": job_id,
-                    "last_log_at": row.get("created_at_text"),
-                    "last_log_age_seconds": self._to_int(row.get("age_seconds")),
-                    "message": self._short(row.get("message"), 220),
-                }
-            )
-        return jobs
+        return self._rows(cur)
 
     def _merge_active_jobs(self, running_jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
@@ -327,9 +283,9 @@ class NewType04CurrentProgress(Component):
         return result
 
     def _build_answer(self, progress: dict[str, Any]) -> str:
-        lookback = int(progress.get("lookback_minutes") or 20)
         active_jobs = list(progress.get("active_jobs") or [])
         remaining = dict(progress.get("remaining_summary") or {})
+        recent_logs = list(progress.get("recent_logs") or [])
         lines = ["# Current Progress"]
         lines.append("")
         if active_jobs:
@@ -354,6 +310,21 @@ class NewType04CurrentProgress(Component):
         for route in ("MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"):
             lines.append(f"| {ROUTE_LABELS[route]} | {int(remaining.get(route) or 0)} |")
         lines.append(f"| Total | {int(remaining.get('TOTAL') or 0)} |")
+
+        lines.extend(["", "## 최근 로그입니다."])
+        if recent_logs:
+            lines.append("| Created At | Mig Kind | Step Name | Map ID |")
+            lines.append("|---|---|---|---|")
+            for log in recent_logs:
+                lines.append(
+                    "| "
+                    f"{self._cell(log.get('created_at'))} | "
+                    f"{self._cell(log.get('mig_kind'))} | "
+                    f"{self._cell(log.get('step_name'))} | "
+                    f"{self._cell(log.get('map_id'))} |"
+                )
+        else:
+            lines.append("최근 로그가 없습니다.")
         return "\n".join(lines)
 
     def _count(self, cur: Any, sql: str) -> int:

@@ -1215,6 +1215,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         if category != "SQL_TUNING":
             top_matches = sorted([item for matches in matches_by_block for item in matches], key=lambda item: item[1], reverse=True)[:top_k]
             matches_by_block = [top_matches]
+        self._log_rag_comparisons(map_id, category, blocks, matches_by_block)
         match_summary = self._rag_match_summary(blocks, matches_by_block)
         payloads = [
             {
@@ -1401,6 +1402,27 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             matched = ",".join(f"{rule.get('rule_id')}:{round(float(score), 4)}" for rule, score in matches[:5])
             parts.append(f"{block.get('block_id')}:{matched}")
         return "; ".join(parts)[:3500]
+
+    # Store the exact SQL pair used for each vector-search match.  The message
+    # keeps RAG_ID searchable; the SQL CLOB keeps both full comparison inputs.
+    def _log_rag_comparisons(self, map_id: str, category: str, blocks: list[dict[str, str]], matches_by_block: list[list[tuple[dict[str, Any], float]]]) -> None:
+        logger = logging.getLogger("smartmigrate.workflow")
+        for block, matches in zip(blocks, matches_by_block):
+            for rule, score in matches:
+                rule_id = str(rule.get("rule_id") or "-")
+                comparison_sql = "\n".join(
+                    [
+                        "[작업 대상 SQL]",
+                        str(block.get("sql") or ""),
+                        "",
+                        "[검색된 참고 SQL]",
+                        str(rule.get("source_sql") or ""),
+                    ]
+                )
+                logger.info(
+                    f"RAG comparison category={category}, block={block.get('block_id')}, RAG_ID={rule_id}, score={round(float(score), 6)}",
+                    extra={"workflow_log": [map_id, "SQL_CONVERSION", "RAG_COMPARE", "INFO", f"{category}_COMPARE", "PASS", 0, comparison_sql]},
+                )
 
     # Score two normalized SQL strings when vector search cannot run.
     def _lexical_similarity(self, left: str, right: str) -> float:
