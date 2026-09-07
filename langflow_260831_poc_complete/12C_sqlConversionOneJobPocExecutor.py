@@ -1204,7 +1204,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
 
     # Extract MyBatis bind parameter names and dynamic tag variables.
     def _bind_names(self, sql_text: str) -> list[str]:
-        """Extract MyBatis bind names, including foreach collections and dynamic conditions."""
+        """Extract MyBatis bind names while ignoring foreach-only parameters."""
         names: list[str] = []
         seen: set[str] = set()
 
@@ -1217,9 +1217,6 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
 
         sql_without_foreach = str(sql_text or "")
         for match in re.finditer(r"<foreach\b([^>]*)>.*?</\s*foreach\s*>", sql_without_foreach, flags=re.I | re.S):
-            collection = re.search(r"\bcollection\s*=\s*['\"]([^'\"]+)['\"]", match.group(1) or "", flags=re.I)
-            if collection:
-                add(collection.group(1))
             sql_without_foreach = sql_without_foreach.replace(match.group(0), " ")
         for match in re.finditer(r"[#$]\{\s*([^}]+?)\s*\}", sql_without_foreach):
             add(match.group(1))
