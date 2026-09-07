@@ -58,12 +58,14 @@ class NewType10DMigIterationDashboard(Component):
         if cached is not None:
             return cached
         result = self._parse_payload(getattr(self, "job_result", ""))
+        current_status = self._current_status(result)
         answer = self._answer(result)
         loop_result = {
             "job_type": "MIG",
             "map_id": result.get("map_id"),
             "ok": bool(result.get("ok")),
-            "status": result.get("status"),
+            "status": current_status,
+            "current_status": current_status,
             "retry_count": result.get("retry_count", 0),
             "attempt_count": result.get("attempt_count", 0),
             "elapsed_seconds": result.get("elapsed_seconds", 0),
@@ -77,6 +79,7 @@ class NewType10DMigIterationDashboard(Component):
         payload = {
             **result,
             "component": "10D_migIterationDashboard",
+            "current_status": current_status,
             "answer_text": answer,
             "loop_result": loop_result,
             "final": False,
@@ -93,6 +96,7 @@ class NewType10DMigIterationDashboard(Component):
         progress_rate = (completed / total * 100) if total else 0.0
         not_runnable = bool(result.get("not_runnable"))
         skipped = bool(result.get("skipped"))
+        current_status = self._current_status(result)
         current_success = 1 if result.get("ok") and not not_runnable and not skipped else 0
         current_failure = 0 if result.get("ok") or not_runnable or skipped else 1
 
@@ -102,7 +106,7 @@ class NewType10DMigIterationDashboard(Component):
             f"- Current job: map_id={result.get('map_id')}",
             f"- Progress: {completed}/{total} jobs, {progress_rate:.1f}%",
             self._bar(completed, total),
-            f"- Current status: {result.get('status')}",
+            f"- Current status: {current_status}",
             f"- retry: {result.get('retry_count', 0)}",
             f"- elapsed: {result.get('elapsed_seconds', 0)} seconds",
             "",
@@ -131,7 +135,7 @@ class NewType10DMigIterationDashboard(Component):
                     "",
                     f"- Target jobs: {total}",
                     f"- Completed: {completed}/{total}",
-                    f"- Last job status: {result.get('status')}",
+                    f"- Last job status: {current_status}",
                     "",
                     "Requested MIG loop is complete.",
                 ]
@@ -143,6 +147,19 @@ class NewType10DMigIterationDashboard(Component):
         filled = round(clamped / total * width) if total > 0 else 0
         percent = (clamped / total * 100) if total > 0 else 0.0
         return f"{'#' * filled}{'-' * (width - filled)} `{percent:.1f}%`"
+
+    def _current_status(self, result: dict[str, Any]) -> str:
+        """Prefer failed stage status over wrapper statuses such as FORMATTED."""
+        stages = result.get("stages") or {}
+        for stage_name in ("migration", "conversion", "tuning", "formatting"):
+            status = str((stages.get(stage_name) or {}).get("status") or "").strip()
+            if status.upper().startswith("FAIL"):
+                return status
+        for key in ("status_mig", "migration_status", "status_conversion", "conversion_status", "status_tuning", "tuning_status", "formatting_status", "status"):
+            status = str(result.get(key) or "").strip()
+            if status.upper().startswith("FAIL"):
+                return status
+        return str(result.get("status") or result.get("formatting_status") or "").strip()
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):

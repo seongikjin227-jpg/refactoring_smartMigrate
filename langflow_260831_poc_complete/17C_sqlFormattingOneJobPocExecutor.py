@@ -70,6 +70,13 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         job: dict[str, Any] = {}
         try:
             payload = self._parse_payload(getattr(self, "job_item", ""))
+            prior_failure = self._prior_failure_status(payload)
+            if prior_failure:
+                result = self._component_pass_through(payload, started, f"SQL formatting skipped because prior stage failed: {prior_failure}")
+                result["status"] = prior_failure
+                result["formatting_skipped"] = True
+                self.status = result
+                return Data(data=result)
             raw_generated_sql_list = payload.get("generated_sql_list") if isinstance(payload.get("generated_sql_list"), list) else []
             self._log_formatting_event(
                 payload,
@@ -539,6 +546,21 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
 
     def _should_run_formatting(self, payload: dict[str, Any]) -> bool:
         return self._job_name(payload) in {"conversion", "tuning", "formatting"}
+
+    def _prior_failure_status(self, payload: dict[str, Any]) -> str:
+        stages = payload.get("stages") or {}
+        for stage_name in ("migration", "conversion", "tuning"):
+            status = str((stages.get(stage_name) or {}).get("status") or "").strip()
+            if status.upper().startswith("FAIL"):
+                return status
+        for key in ("status_mig", "migration_status", "status_conversion", "conversion_status", "status_tuning", "tuning_status", "status"):
+            status = str(payload.get(key) or "").strip()
+            if status.upper().startswith("FAIL"):
+                return status
+        if payload.get("ok") is False:
+            status = str(payload.get("status") or "").strip()
+            return status or "FAIL"
+        return ""
 
     def _format_source_column(self, payload: dict[str, Any], job: dict[str, Any]) -> str:
         for column, key in (("TUNED_TO_SQL", "tuned_to_sql"), ("TO_SQL", "to_sql")):

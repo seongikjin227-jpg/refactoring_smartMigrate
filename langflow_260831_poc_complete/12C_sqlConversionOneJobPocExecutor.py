@@ -494,8 +494,9 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         # Node 2: generate or reuse TO_SQL and persist it to NEXT_SQL_INFO.
         def generate_tobe_node(state: dict[str, Any]) -> dict[str, Any]:
             if state.get("resume_stage") != "GENERATE_TOBE_SQL" and state.get("to_sql"):
-                state["attempts"].append({"attempt": state["attempt_no"], "stage": "REUSE_TOBE_SQL", "status": CONVERSION_PASS, "reason": f"resume_from={state.get('resume_stage')}"})
-                logger.info("TOBE_SQL reused", extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "TOBE_SQL", "INFO", "REUSE_TOBE_SQL", "SUCCESS", state["retry_count"], state.get("to_sql") or ""]})
+                reason = self._stage_reuse_reason(state, "TOBE_SQL")
+                state["attempts"].append({"attempt": state["attempt_no"], "stage": "REUSE_TOBE_SQL", "status": CONVERSION_PASS, "reason": reason})
+                logger.info(f"TOBE_SQL reused ({reason})", extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "TOBE_SQL", "INFO", "REUSE_TOBE_SQL", "SUCCESS", state["retry_count"], f"{reason}\n\n{state.get('to_sql') or ''}"]})
                 state["node_failed"] = False
                 return state
             try:
@@ -510,8 +511,12 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 state["node_failed"] = False
                 state["last_status"] = ""
                 state["last_message"] = ""
-                state["attempts"].append({"attempt": state["attempt_no"], "stage": tobe_reuse_stage, "status": CONVERSION_PASS, "sql_length": len(to_sql)})
-                logger.info("TOBE_SQL completed", extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "TOBE_SQL", "INFO", tobe_reuse_stage, "SUCCESS", state["retry_count"], to_sql]})
+                attempt_entry = {"attempt": state["attempt_no"], "stage": tobe_reuse_stage, "status": CONVERSION_PASS, "sql_length": len(to_sql)}
+                if tobe_reuse_stage == "USE_USER_EDITED_TO_SQL":
+                    attempt_entry["reason"] = "USER_EDITED=Y; TO_SQL is not null"
+                state["attempts"].append(attempt_entry)
+                tobe_log_sql = f"USER_EDITED=Y; TO_SQL is not null\n\n{to_sql}" if tobe_reuse_stage == "USE_USER_EDITED_TO_SQL" else to_sql
+                logger.info("TOBE_SQL completed", extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "TOBE_SQL", "INFO", tobe_reuse_stage, "SUCCESS", state["retry_count"], tobe_log_sql]})
                 update_values = {"TO_SQL": to_sql}
                 if state.get("tuned_fr_sql"):
                     update_values["TUNED_FR_SQL"] = state["tuned_fr_sql"]
@@ -534,8 +539,9 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 state["attempts"].append({"attempt": state["attempt_no"], "stage": "SKIP_TEST_FOR_NON_SELECT", "status": CONVERSION_PASS, "tag_kind": state["tag_kind"] or "UNKNOWN"})
                 return state
             if state.get("resume_stage") == "GENERATE_TEST_SQL":
-                state["attempts"].append({"attempt": state["attempt_no"], "stage": "REUSE_BIND_SQL", "status": CONVERSION_PASS, "reason": "resume_from=GENERATE_TEST_SQL"})
-                logger.info("BIND_SQL reused", extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "BIND_SQL", "INFO", "REUSE_BIND_SQL", "SUCCESS", state["retry_count"], state.get("bind_sql") or ""]})
+                reason = self._stage_reuse_reason(state, "BIND_SQL")
+                state["attempts"].append({"attempt": state["attempt_no"], "stage": "REUSE_BIND_SQL", "status": CONVERSION_PASS, "reason": reason})
+                logger.info(f"BIND_SQL reused ({reason})", extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "BIND_SQL", "INFO", "REUSE_BIND_SQL", "SUCCESS", state["retry_count"], f"{reason}\n\n{state.get('bind_sql') or ''}"]})
                 state["node_failed"] = False
                 return state
             try:
@@ -546,8 +552,12 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                     str((state.get("correct_sql_hints") or {}).get("BIND_SQL") or "- (empty)"),
                 )
                 state.update({"bind_sql": bind_sql, "bind_set": bind_set, "resume_stage": "GENERATE_TEST_SQL", "last_status": "", "last_message": "", "node_failed": False})
-                state["attempts"].append({"attempt": state["attempt_no"], "stage": bind_reuse_stage, "status": CONVERSION_PASS})
-                logger.info("BIND_SQL completed", extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "BIND_SQL", "INFO", bind_reuse_stage, "SUCCESS", state["retry_count"], bind_sql]})
+                attempt_entry = {"attempt": state["attempt_no"], "stage": bind_reuse_stage, "status": CONVERSION_PASS}
+                if bind_reuse_stage == "USE_USER_EDITED_BIND_SQL":
+                    attempt_entry["reason"] = "USER_EDITED=Y; BIND_SQL is not null"
+                state["attempts"].append(attempt_entry)
+                bind_log_sql = f"USER_EDITED=Y; BIND_SQL is not null\n\n{bind_sql}" if bind_reuse_stage == "USE_USER_EDITED_BIND_SQL" else bind_sql
+                logger.info("BIND_SQL completed", extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "BIND_SQL", "INFO", bind_reuse_stage, "SUCCESS", state["retry_count"], bind_log_sql]})
                 self._update_row(state["db_config"], state["job"]["row_id"], {"BIND_SQL": bind_sql, "BIND_SET": bind_set})
                 return state
             except Exception as exc:
@@ -563,6 +573,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 state["node_failed"] = False
                 return state
             try:
+                test_reuse_stage = "USE_USER_EDITED_TEST_SQL" if str(state["job"].get("user_edited") or "").strip().upper() == "Y" and str(state["job"].get("test_sql") or "").strip() else "GENERATE_TEST_SQL"
                 test_sql = self._generate_test_sql(
                     state["job"], state["db_config"], state["llm_config"], state["source_sql"],
                     state["to_sql"], state.get("bind_set"), state.get("retry_context") or "", state["retry_count"],
@@ -573,7 +584,10 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 test_rows = self._execute_test_query(state["db_config"], test_sql)
                 self._evaluate_test_rows(test_rows)
                 state.update({"test_sql": test_sql, "status": CONVERSION_PASS, "node_failed": False})
-                state["attempts"].append({"attempt": state["attempt_no"], "stage": "GENERATE_TEST_SQL", "status": CONVERSION_PASS})
+                attempt_entry = {"attempt": state["attempt_no"], "stage": test_reuse_stage, "status": CONVERSION_PASS}
+                if test_reuse_stage == "USE_USER_EDITED_TEST_SQL":
+                    attempt_entry["reason"] = "USER_EDITED=Y; TEST_SQL is not null"
+                state["attempts"].append(attempt_entry)
                 state["attempts"].append({"attempt": state["attempt_no"], "stage": "VALIDATE_TEST_SQL", "status": CONVERSION_PASS, "rows": len(test_rows)})
                 logger.info("TEST_SQL validated", extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "TEST_SQL", "INFO", "VALIDATE_TEST_SQL", "PASS", state["retry_count"], test_sql]})
                 return state
@@ -735,9 +749,10 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
     ) -> str:
         map_id = f"{job.get('sql_id')} / {job.get('space_nm')}"[:100]
         if str(job.get("user_edited") or "").strip().upper() == "Y" and str(job.get("to_sql") or "").strip():
+            reason = "USER_EDITED=Y; TO_SQL is not null"
             logging.getLogger("smartmigrate.workflow").info(
-                "USER_EDITED TO_SQL reused",
-                extra={"workflow_log": [map_id, "SQL_CONVERSION", "TOBE_SQL", "INFO", "USE_USER_EDITED_TO_SQL", "SUCCESS", retry_count, str(job["to_sql"])]},
+                f"USER_EDITED TO_SQL reused ({reason})",
+                extra={"workflow_log": [map_id, "SQL_CONVERSION", "TOBE_SQL", "INFO", "USE_USER_EDITED_TO_SQL", "SUCCESS", retry_count, f"{reason}\n\n{str(job['to_sql'])}"]},
             )
             return str(job["to_sql"])
         if str(job.get("to_sql") or "").strip():
@@ -792,9 +807,10 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         )
         if str(job.get("user_edited") or "").strip().upper() == "Y" and str(job.get("bind_sql") or "").strip():
             bind_sql = str(job["bind_sql"])
+            reason = "USER_EDITED=Y; BIND_SQL is not null"
             logging.getLogger("smartmigrate.workflow").info(
-                "USER_EDITED BIND_SQL reused",
-                extra={"workflow_log": [map_id, "SQL_CONVERSION", "BIND_SQL", "INFO", "USE_USER_EDITED_BIND_SQL", "SUCCESS", retry_count, bind_sql]},
+                f"USER_EDITED BIND_SQL reused ({reason})",
+                extra={"workflow_log": [map_id, "SQL_CONVERSION", "BIND_SQL", "INFO", "USE_USER_EDITED_BIND_SQL", "SUCCESS", retry_count, f"{reason}\n\n{bind_sql}"]},
             )
         else:
             # Existing logic checks both source SQL and generated TO_SQL. If neither contains MyBatis
@@ -855,9 +871,10 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
     ) -> str:
         map_id = f"{job.get('sql_id')} / {job.get('space_nm')}"[:100]
         if str(job.get("user_edited") or "").strip().upper() == "Y" and str(job.get("test_sql") or "").strip():
+            reason = "USER_EDITED=Y; TEST_SQL is not null"
             logging.getLogger("smartmigrate.workflow").info(
-                "USER_EDITED TEST_SQL reused",
-                extra={"workflow_log": [map_id, "SQL_CONVERSION", "TEST_SQL", "INFO", "USE_USER_EDITED_TEST_SQL", "SUCCESS", retry_count, str(job["test_sql"])]},
+                f"USER_EDITED TEST_SQL reused ({reason})",
+                extra={"workflow_log": [map_id, "SQL_CONVERSION", "TEST_SQL", "INFO", "USE_USER_EDITED_TEST_SQL", "SUCCESS", retry_count, f"{reason}\n\n{str(job['test_sql'])}"]},
             )
             return str(job["test_sql"])
         # TEST_SQL compares the original AS-IS SQL with TO_SQL using bind cases from BIND_SET.
@@ -1040,7 +1057,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         if status == FAIL_BIND:
             return "GENERATE_BIND_SQL"
         if status == FAIL_TEST:
-            return "VALIDATE_TEST_SQL"
+            return "GENERATE_TEST_SQL"
         return "GENERATE_TOBE_SQL"
 
     # Decide where to resume when a user-edited failed row already has partial SQL.
@@ -1059,6 +1076,23 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         if status in {FAIL_TOBE, FAIL_BIND, FAIL_TEST} or status.startswith("FAIL-"):
             return "GENERATE_BIND_SQL"
         return "GENERATE_TOBE_SQL"
+
+    def _stage_reuse_reason(self, state: dict[str, Any], sql_name: str) -> str:
+        """Explain why an already generated SQL was reused in this attempt."""
+        resume_stage = str(state.get("resume_stage") or "").strip() or "UNKNOWN"
+        last_status = str(state.get("last_status") or "").strip()
+        user_edited = str((state.get("job") or {}).get("user_edited") or "").strip().upper()
+        state_key = "to_sql" if sql_name == "TOBE_SQL" else "bind_sql"
+        has_sql = bool(str(state.get(state_key) or "").strip())
+        parts = [f"resume_stage={resume_stage}"]
+        if last_status:
+            parts.append(f"because {last_status}")
+        if user_edited == "Y":
+            parts.append("USER_EDITED=Y")
+        parts.append(f"{sql_name} is {'not null' if has_sql else 'null'}")
+        if resume_stage == "GENERATE_TEST_SQL":
+            parts.append("next_stage=GENERATE_TEST_SQL")
+        return "; ".join(parts)
 
     # Derive retry count from recorded attempt history.
     def _retry_count(self, attempts: list[dict[str, Any]]) -> int:

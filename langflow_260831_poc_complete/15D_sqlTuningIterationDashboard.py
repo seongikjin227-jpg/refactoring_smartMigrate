@@ -60,13 +60,15 @@ class NewType15DSqlTuningIterationDashboard(Component):
         if cached is not None:
             return cached
         result = self._parse_payload(getattr(self, "job_result", ""))
+        current_status = self._current_status(result)
         answer = self._answer(result)
         loop_result = {
             "job_type": "SQL_TUNING",
             "space_nm": result.get("space_nm"),
             "sql_id": result.get("sql_id"),
             "ok": bool(result.get("ok")),
-            "status": result.get("status"),
+            "status": current_status,
+            "current_status": current_status,
             "job_index": result.get("job_index", 1),
             "total_jobs": result.get("total_jobs", 1),
             "completed_count": result.get("completed_count", result.get("job_index", 1)),
@@ -75,7 +77,7 @@ class NewType15DSqlTuningIterationDashboard(Component):
             "stages": result.get("stages") or {},
             "message": result.get("message") or "",
         }
-        payload = {**result, "component": "15D_sqlTuningIterationDashboard", "answer_text": answer, "loop_result": loop_result, "final": False}
+        payload = {**result, "component": "15D_sqlTuningIterationDashboard", "current_status": current_status, "answer_text": answer, "loop_result": loop_result, "final": False}
         self._cached_payload = payload
         return payload
 
@@ -85,13 +87,14 @@ class NewType15DSqlTuningIterationDashboard(Component):
         total = int(result.get("total_jobs") or 1)
         completed = int(result.get("completed_count") or index)
         progress_rate = (completed / total * 100) if total else 0.0
+        current_status = self._current_status(result)
         lines = [
             "## SQL Tuning Progress",
             "",
             f"- Current job: space_nm={result.get('space_nm')}, sql_id={result.get('sql_id')}",
             f"- Progress: {completed}/{total} jobs, {progress_rate:.1f}%",
             self._bar(completed, total),
-            f"- Current status: {result.get('status')}",
+            f"- Current status: {current_status}",
             f"- retry: {self._retry_count(result)}",
             "",
             "| Stage | Status | Message |",
@@ -167,6 +170,19 @@ class NewType15DSqlTuningIterationDashboard(Component):
                     value = ", ".join(str(item) for item in value)
                 details.append(f"{key}={value}")
         return ", ".join(details)
+
+    def _current_status(self, result: dict[str, Any]) -> str:
+        """Prefer failed stage status over wrapper statuses such as FORMATTED."""
+        stages = result.get("stages") or {}
+        for stage_name in ("conversion", "tuning", "formatting"):
+            status = self._cell((stages.get(stage_name) or {}).get("status")).strip()
+            if status.upper().startswith("FAIL"):
+                return status
+        for key in ("status_tuning", "tuning_status", "status_conversion", "conversion_status", "formatting_status", "status"):
+            status = self._cell(result.get(key)).strip()
+            if status.upper().startswith("FAIL"):
+                return status
+        return self._cell(result.get("status") or result.get("formatting_status") or "").strip()
 
     def _guide_lines(self, guides: list[dict[str, Any]]) -> list[str]:
         """Format applied tuning guide metadata."""
