@@ -251,7 +251,7 @@ extra={
 
 - `RAG_GENERAL`, `RAG_SEARCH` 성공 로그는 따로 남기지 않고 `RAG_CONTEXT` 한 번으로 묶습니다.
 - TO/BIND/TEST correct SQL hint도 개별 로그 대신 `LOAD_SQL_HINTS` 한 번으로 묶습니다.
-- `[REAL]` prefix는 더 이상 사용하지 않습니다.
+- 과거 POC/실행 구분용 로그 prefix는 더 이상 사용하지 않습니다.
 
 ## DB Tables
 
@@ -355,4 +355,3 @@ Prompt를 수정했다면 별도로 `.format()`/`.format_map()` brace 오류가 
 4. LLM 결과가 문제면 파일 상단 prompt와 `_clean_generated_sql()`을 확인합니다.
 5. DB 저장 값이 문제면 `_update_row()` 또는 `_update_generated_sql()`을 확인합니다.
 6. retry가 문제면 `last_status`, `resume_stage`, `retry_prepare_node`를 확인합니다.
-

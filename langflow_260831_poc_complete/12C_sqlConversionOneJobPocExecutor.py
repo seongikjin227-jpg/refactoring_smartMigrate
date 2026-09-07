@@ -1656,10 +1656,50 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
     # If a similar user-edited PASS row exists, its TO_SQL/BIND_SQL/TEST_SQL is
     # injected as a hint into the corresponding generation prompt.
     def _correct_sql_hints_text(self, db_config: dict[str, Any], source_sql: str, current_sql_id: str | None, current_space_nm: str | None, map_id: str, retry_count: int, tag_kind: Any = "") -> dict[str, str]:
-        hints = {
-            column: self._correct_sql_hint_text(db_config, source_sql, current_sql_id, current_space_nm, map_id, retry_count, column, tag_kind)
-            for column in ("TO_SQL", "BIND_SQL", "TEST_SQL")
-        }
+        hints = {column: "- (empty)" for column in ("TO_SQL", "BIND_SQL", "TEST_SQL")}
+        config = self._milvus_config()
+        try:
+            # Correct SQL hint compares the current FROM SQL embedding with
+            # SM_CORRECT_SQL_CONVERSION.dense_vector once, then reuses the same
+            # ranked hits for TO_SQL/BIND_SQL/TEST_SQL hints.
+            query_vector = self._embed_texts([self._normalize_sql_shape(source_sql)], self._rag_config())[0]
+            filter_expr = 'user_edited == "Y" and is_active == true'
+            tag_kind_value = str(tag_kind or "").strip().upper()
+            if tag_kind_value:
+                filter_expr += f' and tag_kind == {self._milvus_string(tag_kind_value)}'
+            top_k = self._positive_int(getattr(self, "correct_sql_top_k", None), 1)
+            rows = self._milvus_client().search(
+                collection_name=config["correct_sql_collection"],
+                data=[query_vector],
+                anns_field="dense_vector",
+                filter=filter_expr,
+                limit=max(top_k * 10, 10),
+                output_fields=["space_nm", "sql_id", "source_sql", "to_sql", "bind_sql", "test_sql", "status_conversion", "user_edited", "tag_kind"],
+                search_params={"metric_type": "COSINE"},
+            )
+            hits = rows[0] if rows else []
+            hint_fields = {"TO_SQL": "to_sql", "BIND_SQL": "bind_sql", "TEST_SQL": "test_sql"}
+            selected_counts = {column: 0 for column in hint_fields}
+            for hit in hits:
+                entity = self._milvus_entity(hit)
+                if self._status(entity.get("status_conversion")) not in {"PASS", CONVERSION_PASS}:
+                    continue
+                score = self._milvus_score(hit)
+                for column, field in hint_fields.items():
+                    if selected_counts[column] >= top_k:
+                        continue
+                    hint_sql = str(entity.get(field) or "").strip()
+                    if not hint_sql:
+                        continue
+                    if hints[column] == "- (empty)":
+                        hints[column] = self._format_correct_sql_hint(column, score, entity, hint_sql)
+                    else:
+                        hints[column] += "\n" + self._format_correct_sql_hint(column, score, entity, hint_sql)
+                    selected_counts[column] += 1
+                if all(count >= top_k for count in selected_counts.values()):
+                    break
+        except Exception:
+            hints = {column: "- (empty)" for column in ("TO_SQL", "BIND_SQL", "TEST_SQL")}
         loaded = [column for column, text in hints.items() if str(text or "").strip() != "- (empty)"]
         logging.getLogger("smartmigrate.workflow").info(
             "Correct SQL hints loaded",
@@ -1682,45 +1722,9 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         hint_column = str(hint_column or "").strip().upper()
         if hint_column not in {"TO_SQL", "BIND_SQL", "TEST_SQL"}:
             return "- (empty)"
-        hint_field = {"TO_SQL": "to_sql", "BIND_SQL": "bind_sql", "TEST_SQL": "test_sql"}[hint_column]
-        config = self._milvus_config()
-        try:
-            # Correct SQL hint compares the current FROM SQL embedding with
-            # SM_CORRECT_SQL_CONVERSION.dense_vector using Milvus COSINE search.
-            query_vector = self._embed_texts([self._normalize_sql_shape(source_sql)], self._rag_config())[0]
-            filter_expr = f'user_edited == "Y" and is_active == true and {hint_field} != ""'
-            tag_kind_value = str(tag_kind or "").strip().upper()
-            if tag_kind_value:
-                filter_expr += f' and tag_kind == {self._milvus_string(tag_kind_value)}'
-            top_k = self._positive_int(getattr(self, "correct_sql_top_k", None), 1)
-            rows = self._milvus_client().search(
-                collection_name=config["correct_sql_collection"],
-                data=[query_vector],
-                anns_field="dense_vector",
-                filter=filter_expr,
-                limit=top_k,
-                output_fields=["space_nm", "sql_id", "source_sql", "to_sql", "bind_sql", "test_sql", "status_conversion", "user_edited", "tag_kind"],
-                # COSINE metric is explicitly requested in Milvus search_params.
-                # No FAISS index is created in this path.
-                search_params={"metric_type": "COSINE"},
-            )
-            hits = rows[0] if rows else []
-            selected = None
-            for hit in hits:
-                entity = self._milvus_entity(hit)
-                if self._status(entity.get("status_conversion")) not in {"PASS", CONVERSION_PASS}:
-                    continue
-                hint_sql = str(entity.get(hint_field) or "").strip()
-                if not hint_sql:
-                    continue
-                selected = (self._milvus_score(hit), entity, hint_sql)
-                break
-            if not selected:
-                raise ValueError("no matching corrected SQL hint")
-        except Exception:
-            return "- (empty)"
+        return self._correct_sql_hints_text(db_config, source_sql, current_sql_id, current_space_nm, map_id, retry_count, tag_kind).get(hint_column, "- (empty)")
 
-        score, hint, hint_sql = selected
+    def _format_correct_sql_hint(self, hint_column: str, score: float, hint: dict[str, Any], hint_sql: str) -> str:
         lines = [
             f"- SCORE={round(score, 6)} | METHOD=milvus_dense_vector | SPACE_NM={hint.get('space_nm') or ''} | SQL_ID={hint.get('sql_id') or ''}",
             f"  FROM_SQL: {hint.get('source_sql') or ''}",
