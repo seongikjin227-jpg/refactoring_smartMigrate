@@ -259,8 +259,13 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             with self._connect(db_config) as conn:
                 cur = conn.cursor()
                 cur.execute(f"SELECT MAP_ID, {', '.join(columns)} FROM {table} WHERE MAP_ID IN ({placeholders})", params)
-                rows = cur.fetchall()
-            by_key = {str(row[0]): {column: self._lob_to_str(row[index + 1]).strip() for index, column in enumerate(columns)} for row in rows}
+                by_key = {
+                    str(row[0]): {
+                        column: self._lob_to_str(row[index + 1]).strip()
+                        for index, column in enumerate(columns)
+                    }
+                    for row in cur.fetchall()
+                }
             for item in mig_items:
                 loaded[item["item_id"]] = by_key.get(str(item["key"]), {}).get(item["column"], "")
 
@@ -273,8 +278,13 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             with self._connect(db_config) as conn:
                 cur = conn.cursor()
                 cur.execute(f"SELECT ROWIDTOCHAR(ROWID) AS ROW_ID, {', '.join(columns)} FROM {table} WHERE {predicates}", params)
-                rows = cur.fetchall()
-            by_key = {str(row[0]): {column: self._lob_to_str(row[index + 1]).strip() for index, column in enumerate(columns)} for row in rows}
+                by_key = {
+                    str(row[0]): {
+                        column: self._lob_to_str(row[index + 1]).strip()
+                        for index, column in enumerate(columns)
+                    }
+                    for row in cur.fetchall()
+                }
             for item in sql_items:
                 loaded[item["item_id"]] = by_key.get(str(item["key"]), {}).get(item["column"], "")
 
