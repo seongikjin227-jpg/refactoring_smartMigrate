@@ -98,12 +98,15 @@ class NewType04CurrentProgress(Component):
             running_jobs = self._load_running_status_jobs(conn)
             recent_logs = self._load_recent_logs(conn)
         active_jobs = self._merge_active_jobs(running_jobs)
+        recent_log_age_seconds = self._recent_log_age_seconds(recent_logs)
         return {
             "ok": True,
             "active_count": len(active_jobs),
             "active_jobs": active_jobs,
             "remaining_summary": remaining,
             "recent_logs": recent_logs,
+            "recent_log_age_seconds": recent_log_age_seconds,
+            "recent_activity_possible": bool(not active_jobs and recent_log_age_seconds is not None and recent_log_age_seconds <= 600),
         }
 
     def _load_remaining_counts(self, conn: Any) -> dict[str, int]:
@@ -257,12 +260,14 @@ class NewType04CurrentProgress(Component):
             SELECT CREATED_AT,
                    MIG_KIND,
                    STEP_NAME,
-                   MAP_ID
+                   MAP_ID,
+                   AGE_SECONDS
               FROM (
                     SELECT TO_CHAR(CREATED_AT, 'YYYY-MM-DD HH24:MI:SS') AS CREATED_AT,
                            TO_CHAR(MIG_KIND) AS MIG_KIND,
                            TO_CHAR(STEP_NAME) AS STEP_NAME,
-                           TO_CHAR(MAP_ID) AS MAP_ID
+                           TO_CHAR(MAP_ID) AS MAP_ID,
+                           ROUND((SYSDATE - CAST(CREATED_AT AS DATE)) * 86400) AS AGE_SECONDS
                      FROM {table}
                     WHERE UPPER(TRIM(NVL(MIG_KIND, ''))) <> 'WORKFLOW'
                      ORDER BY LOG_ID DESC
@@ -302,7 +307,10 @@ class NewType04CurrentProgress(Component):
                     f"{self._cell(job.get('status') or '-')} |"
                 )
         else:
-            lines.append("진행 중인 작업이 없습니다.")
+            if progress.get("recent_activity_possible"):
+                lines.append("최근 10분 내에 진행된 작업이 있으니 프로세스가 진행 중일 가능성이 높습니다. 현재 Running 중인 작업은 없습니다.")
+            else:
+                lines.append("진행 중인 작업이 없습니다.")
 
         lines.append("")
         lines.append("## Remaining")
@@ -327,6 +335,14 @@ class NewType04CurrentProgress(Component):
         else:
             lines.append("최근 로그가 없습니다.")
         return "\n".join(lines)
+
+    def _recent_log_age_seconds(self, recent_logs: list[dict[str, Any]]) -> int | None:
+        if not recent_logs:
+            return None
+        value = self._to_int((recent_logs[0] or {}).get("age_seconds"))
+        if value is None:
+            return None
+        return abs(value)
 
     def _count(self, cur: Any, sql: str) -> int:
         cur.execute(sql)
