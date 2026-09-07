@@ -22,6 +22,145 @@ except Exception:
     DataInput = MessageTextInput
 
 
+MIGRATION_PROMPT_TEMPLATE: dict[str, str] = {
+    "system_anthropic": "Oracle 19c 문법으로 SQL을 생성하십시오. migration_sql과 verification_sql key를 가진 유효한 JSON object 하나만 반환하고 SQL 값 끝에는 세미콜론을 붙이지 마십시오.",
+    "system_openai": "Oracle 19c 문법으로 SQL을 생성하십시오. migration_sql과 verification_sql key를 가진 유효한 JSON object 하나만 반환하고 SQL 값 끝에는 세미콜론을 붙이지 마십시오.",
+    "main_prompt": """
+당신은 Oracle 데이터 마이그레이션 SQL 전문가입니다.
+제공된 mapping rule과 DDL 정보만 사용하여 Oracle 19c migration SQL과 verification SQL을 생성하거나 수정하십시오.
+
+[절대 규칙]
+1. Hallucination 금지:
+   - mapping rule 또는 DDL 정보에 없는 테이블과 컬럼을 사용하지 마십시오.
+2. 타입 안정성:
+   - NUMBER, VARCHAR2, DATE, TIMESTAMP 값을 비교하거나 변환할 때 필요한 경우 CAST, TO_NUMBER, TO_DATE, TO_TIMESTAMP를 명시적으로 사용하십시오.
+3. Oracle 19c 호환성:
+   - alias는 짧게 작성하고 가능하면 1-5자 범위로 유지하십시오.
+   - 모든 alias는 Oracle 30 byte identifier 제한을 넘지 않게 하십시오.
+   - LIMIT 같은 비 Oracle 문법을 사용하지 마십시오.
+4. Schema 규칙:
+   - 아래에 제공된 schema-qualified Source table과 Target table 값을 그대로 사용하십시오.
+   - Source/from 물리 테이블은 SFAMIG schema로 qualify되어야 합니다.
+   - Target/to 물리 테이블은 SFAADM schema로 qualify되어야 합니다.
+   - 물리 AS-IS 또는 TO-BE 테이블의 schema prefix를 제거하지 마십시오.
+   - DUAL, CTE 이름, inline view alias, table alias, subquery alias에는 schema prefix를 붙이지 마십시오.
+5. 출력:
+   - JSON만 반환하십시오.
+   - 필수 key는 migration_sql, verification_sql입니다.
+   - SQL 값 내부에 markdown, 주석, 설명, 끝 세미콜론을 포함하지 마십시오.
+6. 최종 공백/들여쓰기 정리는 17C에서 처리합니다.
+
+{ddl_info_block}
+[Mapping rules]
+- Source table: {from_table}
+- Target table: {to_table}
+- Column mappings:
+{mapping_info}
+
+[Correct SQL examples]
+아래 예시는 참고용으로만 사용하십시오. migration_sql에는 검색된 MIG_SQL 패턴을, verification_sql에는 검색된 VERIFY_SQL 패턴을 참고할 수 있습니다.
+{correct_sql_hints}
+
+[Migration SQL requirements]
+- 권장 형태: MIG_SQL.
+- retry guidance가 다른 형태를 요구하지 않는 한 다음 형태를 우선하십시오:
+  INSERT INTO {to_table} (target_columns...)
+  SELECT source_expressions...
+  FROM {from_table} S
+  [WHERE condition]
+- Source filter condition: {condition}
+- condition이 비어 있으면 WHERE 절을 생략하십시오.
+- condition이 있으면 migration_sql과 verification_sql에 동일한 source scope로 적용하십시오.
+- Target columns와 expressions는 반드시 target DDL과 mapping rules를 따라야 합니다.
+
+{verification_instruction}
+
+[Output constraint]
+- migration_sql 또는 verification_sql 끝에 세미콜론(;)을 붙이지 마십시오.
+
+[JSON shape]
+{{
+  "migration_sql": "INSERT INTO ... SELECT ...",
+  "verification_sql": "SELECT ..."
+}}
+""",
+    "verification_append": """
+[Verification SQL requirements - append mode]
+- target table에는 이전 job이 insert한 row가 이미 있을 수 있습니다.
+- 전체 target table count를 source count와 비교하지 마십시오.
+- current source scope에 대한 EXISTS 조건으로 target side를 필터링하여 이 job이 insert한 row만 검증하십시오.
+- UNION ALL 없이 SELECT 문 하나만 사용하십시오.
+- 제공된 DDL로 data type을 판단하십시오.
+- CLOB, NCLOB, BLOB, LONG, LONG RAW 같은 LOB/LONG 컬럼은 모든 verification column-count 비교에서 제외하십시오.
+- LOB/LONG 컬럼은 COUNT(column), DISTINCT, GROUP BY, ORDER BY, MINUS, JOIN key, equality predicate, value comparison에 사용하지 마십시오.
+- 권장 형태:
+  SELECT ABS(S.TOT - T.TOT) AS DIFF_TOT,
+         ABS(S.C1 - T.C1) AS DIFF_C1,
+         ABS(S.C2 - T.C2) AS DIFF_C2
+  FROM (SELECT COUNT(*) TOT,
+               COUNT(source_non_lob_col1) C1,
+               COUNT(source_non_lob_col2) C2
+        FROM {from_table}
+        [WHERE CONDITION]) S,
+       (SELECT COUNT(*) TOT,
+               COUNT(target_non_lob_col1) C1,
+               COUNT(target_non_lob_col2) C2
+        FROM {to_table} T2
+        WHERE EXISTS (
+            SELECT 1
+            FROM {from_table} SRC
+            WHERE T2.target_key = SRC.source_key
+            [AND CONDITION]
+        )) T
+- EXISTS key는 mapping rules와 DDL에서 선택하십시오. primary/unique key 또는 안정적인 non-LOB source discriminator를 우선하십시오.
+- 단일 결과 row의 모든 DIFF_* 컬럼이 0일 때만 verification이 통과합니다.""",
+    "verification_regular": """
+[Verification SQL requirements]
+- UNION ALL 없이 SELECT 문 하나만 사용하십시오.
+- source와 target 사이의 total row count 및 mapped non-null column count를 비교하십시오.
+- 제공된 DDL로 data type을 판단하십시오.
+- CLOB, NCLOB, BLOB, LONG, LONG RAW 같은 LOB/LONG 컬럼은 모든 verification column-count 비교에서 제외하십시오.
+- LOB/LONG 컬럼은 COUNT(column), DISTINCT, GROUP BY, ORDER BY, MINUS, JOIN key, equality predicate, value comparison에 사용하지 마십시오.
+- 권장 형태:
+  SELECT ABS(S.TOT - T.TOT) AS DIFF_TOT,
+         ABS(S.C1 - T.C1) AS DIFF_C1,
+         ABS(S.C2 - T.C2) AS DIFF_C2
+  FROM (SELECT COUNT(*) TOT,
+               COUNT(source_non_lob_col1) C1,
+               COUNT(source_non_lob_col2) C2
+        FROM {from_table}
+        [WHERE CONDITION]) S,
+       (SELECT COUNT(*) TOT,
+               COUNT(target_non_lob_col1) C1,
+               COUNT(target_non_lob_col2) C2
+        FROM {to_table}) T
+- 단일 결과 row의 모든 DIFF_* 컬럼이 0일 때만 verification이 통과합니다.""",
+    "error_suffix": """
+
+[Previous execution failure]
+- Failed SQL: {last_sql}
+- Error: {last_error}
+오류 원인을 분석하고 수정된 SQL을 재생성하십시오.""",
+    "append_mode_suffix": """
+
+[Append mode migration_sql note]
+- Target table '{to_table}'은 이미 존재하며 이전 job이 insert한 row를 포함할 수 있습니다.
+- 기존 row를 보존하십시오.
+- 이 job의 source row만 추가하십시오.
+""",
+    "dup_key_suffix": """
+
+[ORA-00001 duplicate key retry guidance - MERGE 금지]
+- 이전 INSERT INTO가 primary/unique key 중복으로 실패했습니다.
+- DB Migration에서는 MERGE, MERGE INTO, UPDATE, UPSERT-style SQL을 사용하지 마십시오.
+- migration_sql은 INSERT INTO ... SELECT ... 형태로 유지하십시오.
+- source scope를 좁히거나, 제공된 condition을 일관되게 적용하거나, SELECT 내부에서 중복 source row를 제거해 duplicate 문제를 해결하십시오.
+- duplicate source row 가능성이 있으면 INSERT 전 source subquery에서 deterministic ROW_NUMBER() filter 또는 SELECT DISTINCT를 사용하십시오.
+- 필수 target column을 누락하지 말고 unmapped column을 참조하지 마십시오.
+""",
+}
+
+
 class NewType10CMigOneJobPocExecutor(Component):
 
     display_name = "10C MIG One Job Executor"
@@ -640,7 +779,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                 ))
                 logging.getLogger("smartmigrate.workflow").info(
                     "Migration Correct SQL hint loaded",
-                    extra={"workflow_log": [map_id, "DB_MIGRATION", "CORRECT_SQL_HINT", "INFO", "LOAD_MIGRATION_HINT", "PASS", 0, f"collection={self._migration_rag_config()['collection']}, reference_map_id={reference_map_id}, score={round(score, 6)}, has_mig_sql={bool(str(entity.get('mig_sql') or '').strip())}, has_verify_sql={bool(str(entity.get('verify_sql') or '').strip())}"]},
+                    extra={"workflow_log": [map_id, "DB_MIGRATION", "CORRECT_SQL_HINT", "INFO", "LOAD_MIGRATION_HINT", "PASS", 0, f"collection={self._migration_rag_config()['collection']}, reference_map_id={reference_map_id}, score={round(score, 6)}"]},
                 )
             return "\n".join(lines) if lines else "- (no matching user-edited migration SQL)"
         except Exception as exc:
@@ -1762,142 +1901,3 @@ class NewType10CMigOneJobPocExecutor(Component):
             owner, name = value.split(".", 1)
             return owner, name
         return None, value
-
-
-MIGRATION_PROMPT_TEMPLATE: dict[str, str] = {
-    "system_anthropic": "Generate SQL using Oracle 19c syntax. Return only one valid JSON object with migration_sql and verification_sql keys. Do not end SQL values with semicolons.",
-    "system_openai": "Generate SQL using Oracle 19c syntax. Return only one valid JSON object with migration_sql and verification_sql keys. Do not end SQL values with semicolons.",
-    "main_prompt": """
-You are an Oracle data migration SQL specialist.
-Generate or fix Oracle 19c SQL using only the provided mapping rules and DDL information.
-
-[Non-negotiable rules]
-1. Zero hallucination:
-   - Do not use tables or columns that are not present in the mapping rules or DDL information.
-2. Type safety:
-   - When comparing or converting NUMBER, VARCHAR2, DATE, or TIMESTAMP values, use explicit CAST, TO_NUMBER, TO_DATE, or TO_TIMESTAMP as needed.
-3. Oracle 19c compatibility:
-   - Keep aliases short, preferably 1-5 characters.
-   - Keep every alias within Oracle's 30 byte identifier limit.
-   - Do not use non-Oracle syntax such as LIMIT.
-4. Schema qualification:
-   - Use the exact schema-qualified Source table and Target table values provided below.
-   - Source/from physical tables must be qualified with the SFAMIG schema.
-   - Target/to physical tables must be qualified with the SFAADM schema.
-   - Do not remove schema prefixes from physical AS-IS or TO-BE tables.
-   - Do not add schema prefixes to DUAL, CTE names, inline view aliases, table aliases, or subquery aliases.
-5. Output:
-    - Return JSON only.
-    - Required keys: migration_sql, verification_sql.
-    - Do not include markdown, comments, explanations, or trailing semicolons inside SQL values.
-6. Return SQL only; final whitespace formatting is handled by 17C.
-
-{ddl_info_block}
-[Mapping rules]
-- Source table: {from_table}
-- Target table: {to_table}
-- Column mappings:
-{mapping_info}
-
-[Correct SQL examples]
-Use these only as examples. For migration_sql use the retrieved MIG_SQL; for verification_sql use the retrieved VERIFY_SQL.
-{correct_sql_hints}
-
-[Migration SQL requirements]
-- Recommended shape type: MIG_SQL.
-- Prefer this shape unless retry guidance says otherwise:
-  INSERT INTO {to_table} (target_columns...)
-  SELECT source_expressions...
-  FROM {from_table} S
-  [WHERE condition]
-- Source filter condition: {condition}
-- If condition is blank, omit the WHERE clause.
-- If condition is present, apply the same source scope in migration_sql and verification_sql.
-- Target columns and expressions must follow the target DDL and mapping rules.
-
-{verification_instruction}
-
-[Output constraint]
-- Do not end migration_sql or verification_sql with a semicolon (;).
-
-[JSON shape]
-{{
-  "migration_sql": "INSERT INTO ... SELECT ...",
-  "verification_sql": "SELECT ..."
-}}
-""",
-    "verification_append": """
-[Verification SQL requirements - append mode]
-- The target table already contains rows inserted by earlier jobs.
-- Do not compare the full target table count with the source count.
-- Verify only rows inserted by this job by filtering the target side with EXISTS against the current source scope.
-- Use one SELECT statement without UNION ALL.
-- Use the provided DDL to identify data types.
-- Exclude LOB/LONG columns from all verification column-count comparisons: CLOB, NCLOB, BLOB, LONG, LONG RAW.
-- Do not use LOB/LONG columns in COUNT(column), DISTINCT, GROUP BY, ORDER BY, MINUS, JOIN keys, equality predicates, or value comparisons.
-- Recommended shape:
-  SELECT ABS(S.TOT - T.TOT) AS DIFF_TOT,
-         ABS(S.C1 - T.C1) AS DIFF_C1,
-         ABS(S.C2 - T.C2) AS DIFF_C2
-  FROM (SELECT COUNT(*) TOT,
-               COUNT(source_non_lob_col1) C1,
-               COUNT(source_non_lob_col2) C2
-        FROM {from_table}
-        [WHERE CONDITION]) S,
-       (SELECT COUNT(*) TOT,
-               COUNT(target_non_lob_col1) C1,
-               COUNT(target_non_lob_col2) C2
-        FROM {to_table} T2
-        WHERE EXISTS (
-            SELECT 1
-            FROM {from_table} SRC
-            WHERE T2.target_key = SRC.source_key
-            [AND CONDITION]
-        )) T
-- Choose EXISTS keys from mapping rules and DDL. Prefer primary/unique keys or a stable non-LOB source discriminator.
-- The verification passes only when every DIFF_* column in the single result row is 0.""",
-    "verification_regular": """
-[Verification SQL requirements]
-- Use one SELECT statement without UNION ALL.
-- Compare total row count and mapped non-null column counts between source and target.
-- Use the provided DDL to identify data types.
-- Exclude LOB/LONG columns from all verification column-count comparisons: CLOB, NCLOB, BLOB, LONG, LONG RAW.
-- Do not use LOB/LONG columns in COUNT(column), DISTINCT, GROUP BY, ORDER BY, MINUS, JOIN keys, equality predicates, or value comparisons.
-- Recommended shape:
-  SELECT ABS(S.TOT - T.TOT) AS DIFF_TOT,
-         ABS(S.C1 - T.C1) AS DIFF_C1,
-         ABS(S.C2 - T.C2) AS DIFF_C2
-  FROM (SELECT COUNT(*) TOT,
-               COUNT(source_non_lob_col1) C1,
-               COUNT(source_non_lob_col2) C2
-        FROM {from_table}
-        [WHERE CONDITION]) S,
-       (SELECT COUNT(*) TOT,
-               COUNT(target_non_lob_col1) C1,
-               COUNT(target_non_lob_col2) C2
-        FROM {to_table}) T
-- The verification passes only when every DIFF_* column in the single result row is 0.""",
-    "error_suffix": """
-
-[Previous execution failure]
-- Failed SQL: {last_sql}
-- Error: {last_error}
-Analyze the error and regenerate corrected SQL.""",
-    "append_mode_suffix": """
-
-[Append mode migration_sql note]
-- Target table '{to_table}' already exists and may contain rows inserted by previous jobs.
-- Preserve existing rows.
-- Add only this job's source rows.
-""",
-    "dup_key_suffix": """
-
-[ORA-00001 duplicate key retry guidance - MERGE is forbidden]
-- The previous INSERT INTO failed because of a primary/unique key duplicate.
-- Do not use MERGE, MERGE INTO, UPDATE, or UPSERT-style SQL in DB Migration.
-- Keep migration_sql as INSERT INTO ... SELECT ... only.
-- Fix the duplicate by narrowing the source scope, applying the provided condition consistently, or removing duplicate source rows inside the SELECT.
-- If duplicate source rows are possible, use a deterministic ROW_NUMBER() filter or SELECT DISTINCT in the source subquery before INSERT.
-- Do not skip required target columns and do not reference unmapped columns.
-""",
-}

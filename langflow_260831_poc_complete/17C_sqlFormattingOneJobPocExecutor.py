@@ -24,7 +24,21 @@ TUNING_SUCCESS_STATUSES = {"PASS", "PASS-TUNING"}
 FORMATTED = "FORMATTED"
 FAIL_FORMATTING = "FAIL-FORMATTING"
 
-SQL_FORMAT_PROMPT = "Format this SQL without changing semantics. Return SQL only.\n{input_sql}"
+SQL_FORMAT_PROMPT = "SQL 의미를 변경하지 말고 Oracle/MyBatis SQL을 보기 좋게 포맷하십시오. SQL만 반환하십시오.\n{input_sql}"
+SQL_FORMAT_BATCH_PROMPT = """
+다음 Oracle/MyBatis SQL 목록을 의미 변경 없이 포맷하십시오.
+
+[규칙]
+- 입력 JSON 배열의 각 item_id를 그대로 유지하십시오.
+- SQL 의미, 테이블명, 컬럼명, alias, MyBatis 동적 태그, bind parameter를 변경하지 마십시오.
+- SQL 끝에 세미콜론을 붙이지 마십시오.
+- markdown, 설명, 주석, wrapper 문구를 출력하지 마십시오.
+- 유효한 JSON 배열만 반환하십시오.
+- 각 항목은 item_id와 formatted_sql key만 포함하십시오.
+
+[입력 JSON]
+{input_sql_list_json}
+""".strip()
 
 
 class NewType17CSqlFormattingOneJobPocExecutor(Component):
@@ -35,7 +49,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
 
     inputs = [
         DataInput(name="job_item", display_name="Job Item", required=True),
-        MessageTextInput(name="formatting_prompt_template", display_name="Formatting Prompt Template", value=SQL_FORMAT_PROMPT, required=False),
+        MessageTextInput(name="formatting_prompt_template", display_name="Formatting Prompt Template", value=SQL_FORMAT_BATCH_PROMPT, required=False),
         IntInput(name="max_retry", display_name="Max Retry", value=2, required=False),
         StrInput(name="llm_base_url", display_name="LLM Base URL", required=False),
         SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=False),
@@ -91,12 +105,13 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             logger.info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "17C_SQL_FORMAT", "INFO", "RUN_JOB", "END", 0]})
 
     def _run_batch_formatting(self, payload: dict[str, Any], db_config: dict[str, Any], started: float) -> dict[str, Any]:
-        """Format the generated SQL references once at the end of a job, reading SQL from DB by key."""
+        """Format generated SQL references with one DB load pass and one LLM batch call."""
         allowed = {
             "NEXT_MIG_INFO": {"MIG_SQL", "VERIFY_SQL"},
             "NEXT_SQL_INFO": {"TUNED_FR_SQL", "TO_SQL", "BIND_SQL", "TEST_SQL", "TUNED_TO_SQL"},
         }
         results: list[dict[str, Any]] = []
+        candidates: list[dict[str, Any]] = []
         seen: set[tuple[str, str, str]] = set()
         for item in payload.get("generated_sql_list") or []:
             if not isinstance(item, dict):
@@ -116,23 +131,46 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                 self._log_formatting_event(payload, step_name="ITEM_VALIDATE", status="SKIP", message=f"empty_or_duplicate_key table={table_name}, column={column}, key={key}", generate_sql=self._json_dump(item))
                 continue
             seen.add(identity)
+            candidates.append({**item, "table": table_name, "column": column, "key": key, "item_id": f"{len(candidates) + 1}"})
+
+        loaded_sqls: dict[str, str] = {}
+        if candidates:
             try:
-                self._log_formatting_event(payload, step_name="LOAD_SQL", status="START", message=f"table={table_name}, column={column}, key={key}", generate_sql=self._json_dump(item))
-                sql_text = self._load_generated_sql(db_config, table_name, item, column)
-                if not sql_text:
-                    results.append({"table": table_name, "column": column, "key": key, "status": "SKIPPED_EMPTY"})
-                    self._log_formatting_event(payload, step_name="LOAD_SQL", status="SKIP", message=f"empty_sql table={table_name}, column={column}, key={key}")
-                    continue
-                self._log_formatting_event(payload, step_name="FORMAT_SQL", status="START", message=f"table={table_name}, column={column}, key={key}, sql_len={len(sql_text)}", generate_sql=sql_text)
-                formatted_sql, method = self._format_sql(sql_text, self._llm_config(payload))
-                if not formatted_sql:
-                    raise ValueError("formatter returned empty SQL")
-                self._update_generated_sql(db_config, table_name, item, column, formatted_sql)
-                results.append({"table": table_name, "column": column, "key": key, "status": FORMATTED, "method": method})
-                self._log_formatting_event(payload, step_name="FORMAT_SQL", status=FORMATTED, message=f"table={table_name}, column={column}, key={key}, method={method}, formatted_len={len(formatted_sql)}", generate_sql=formatted_sql)
+                self._log_formatting_event(payload, step_name="LOAD_SQL_BATCH", status="START", message=f"items={len(candidates)}", generate_sql=self._json_dump(candidates))
+                loaded_sqls = self._load_generated_sqls(db_config, candidates)
             except Exception as exc:
-                results.append({"table": table_name, "column": column, "key": key, "status": FAIL_FORMATTING, "error": str(exc)})
-                self._log_formatting_event(payload, step_name="FORMAT_SQL", status=FAIL_FORMATTING, message=f"table={table_name}, column={column}, key={key}, error={type(exc).__name__}: {exc}")
+                for item in candidates:
+                    results.append({"table": item["table"], "column": item["column"], "key": item["key"], "status": FAIL_FORMATTING, "error": str(exc)})
+                self._log_formatting_event(payload, step_name="LOAD_SQL_BATCH", status=FAIL_FORMATTING, message=f"error={type(exc).__name__}: {exc}")
+                candidates = []
+
+        format_inputs = []
+        for item in candidates:
+            sql_text = loaded_sqls.get(item["item_id"], "").strip()
+            if not sql_text:
+                results.append({"table": item["table"], "column": item["column"], "key": item["key"], "status": "SKIPPED_EMPTY"})
+                continue
+            format_inputs.append({"item_id": item["item_id"], "sql": sql_text})
+
+        formatted_by_id: dict[str, tuple[str, str]] = {}
+        if format_inputs:
+            self._log_formatting_event(payload, step_name="FORMAT_SQL_BATCH", status="START", message=f"items={len(format_inputs)}", generate_sql=self._json_dump(format_inputs))
+            formatted_by_id = self._format_sql_batch(format_inputs, self._llm_config(payload))
+
+        for item in candidates:
+            if item["item_id"] not in formatted_by_id:
+                continue
+            formatted_sql, method = formatted_by_id[item["item_id"]]
+            if not formatted_sql:
+                results.append({"table": item["table"], "column": item["column"], "key": item["key"], "status": "SKIPPED_EMPTY"})
+                continue
+            try:
+                self._update_generated_sql(db_config, item["table"], item, item["column"], formatted_sql)
+                results.append({"table": item["table"], "column": item["column"], "key": item["key"], "status": FORMATTED, "method": method})
+            except Exception as exc:
+                results.append({"table": item["table"], "column": item["column"], "key": item["key"], "status": FAIL_FORMATTING, "error": str(exc)})
+        if formatted_by_id:
+            self._log_formatting_event(payload, step_name="FORMAT_SQL_BATCH", status=FORMATTED, message=f"formatted={len([item for item in results if item.get('status') == FORMATTED])}", generate_sql=self._json_dump(results))
         failures = [item for item in results if item["status"] == FAIL_FORMATTING]
         status = FORMATTED if not failures else FAIL_FORMATTING
         self._log_formatting_event(
@@ -206,6 +244,42 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                 raise ValueError(f"{table_name} row not found")
             return self._lob_to_str(row[0]).strip()
 
+    def _load_generated_sqls(self, db_config: dict[str, Any], items: list[dict[str, Any]]) -> dict[str, str]:
+        """Load all requested SQL columns in table-level batches."""
+        loaded: dict[str, str] = {}
+        mig_items = [item for item in items if item["table"] == "NEXT_MIG_INFO"]
+        sql_items = [item for item in items if item["table"] == "NEXT_SQL_INFO"]
+
+        if mig_items:
+            table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
+            columns = sorted({item["column"] for item in mig_items})
+            keys = sorted({int(item.get("key_value") or item.get("map_id") or item["key"]) for item in mig_items})
+            params = {f"k{index}": key for index, key in enumerate(keys)}
+            placeholders = ", ".join(f":{name}" for name in params)
+            with self._connect(db_config) as conn:
+                cur = conn.cursor()
+                cur.execute(f"SELECT MAP_ID, {', '.join(columns)} FROM {table} WHERE MAP_ID IN ({placeholders})", params)
+                rows = cur.fetchall()
+            by_key = {str(row[0]): {column: self._lob_to_str(row[index + 1]).strip() for index, column in enumerate(columns)} for row in rows}
+            for item in mig_items:
+                loaded[item["item_id"]] = by_key.get(str(item["key"]), {}).get(item["column"], "")
+
+        if sql_items:
+            table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
+            columns = sorted({item["column"] for item in sql_items})
+            row_ids = sorted({str(item["key"]).strip() for item in sql_items})
+            params = {f"r{index}": row_id for index, row_id in enumerate(row_ids)}
+            predicates = " OR ".join(f"ROWID = CHARTOROWID(:{name})" for name in params)
+            with self._connect(db_config) as conn:
+                cur = conn.cursor()
+                cur.execute(f"SELECT ROWIDTOCHAR(ROWID) AS ROW_ID, {', '.join(columns)} FROM {table} WHERE {predicates}", params)
+                rows = cur.fetchall()
+            by_key = {str(row[0]): {column: self._lob_to_str(row[index + 1]).strip() for index, column in enumerate(columns)} for row in rows}
+            for item in sql_items:
+                loaded[item["item_id"]] = by_key.get(str(item["key"]), {}).get(item["column"], "")
+
+        return loaded
+
     def _update_generated_sql(self, db_config: dict[str, Any], table_name: str, item: dict[str, Any], column: str, value: str) -> None:
         table = self._qualify(table_name, db_config.get("system_schema"))
         columns = self._table_columns(db_config, table)
@@ -238,7 +312,67 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             )
         return self._format_sql_deterministic(source), "deterministic_fallback"
 
-    def _call_formatter_llm(self, sql_text: str, config: dict[str, Any]) -> str:
+    def _format_sql_batch(self, items: list[dict[str, str]], llm_config: dict[str, Any]) -> dict[str, tuple[str, str]]:
+        if not items:
+            return {}
+        try:
+            raw = self._call_formatter_llm_batch(items, llm_config)
+            parsed = self._parse_formatter_batch_response(raw)
+            result = {
+                item_id: (self._clean_formatted_sql(sql), "llm_batch")
+                for item_id, sql in parsed.items()
+                if self._clean_formatted_sql(sql)
+            }
+            missing = [item for item in items if item["item_id"] not in result]
+            for item in missing:
+                result[item["item_id"]] = (self._format_sql_deterministic(item["sql"]), "deterministic_fallback")
+            return result
+        except Exception as exc:
+            logging.getLogger("smartmigrate.workflow").warning(
+                f"LLM SQL batch formatting fallback: {type(exc).__name__}: {exc}",
+                extra={"workflow_log": [0, "SQL_FORMATTING", "FORMATTED_SQL", "WARN", "LLM_FORMAT_SQL_BATCH", "FALLBACK", 0]},
+            )
+            return {item["item_id"]: (self._format_sql_deterministic(item["sql"]), "deterministic_fallback") for item in items}
+
+    def _call_formatter_llm_batch(self, items: list[dict[str, str]], config: dict[str, Any]) -> str:
+        sql_list_json = json.dumps(items, ensure_ascii=False, default=str)
+        template = str(getattr(self, "formatting_prompt_template", "") or SQL_FORMAT_BATCH_PROMPT).strip()
+        if "{input_sql_list_json}" in template:
+            prompt = template.format(input_sql_list_json=sql_list_json)
+        elif "{input_sql}" in template:
+            prompt = SQL_FORMAT_BATCH_PROMPT.format(input_sql_list_json=sql_list_json)
+        else:
+            prompt = f"{template}\n{sql_list_json}"
+        return self._call_formatter_prompt(prompt, config)
+
+    def _parse_formatter_batch_response(self, raw: str) -> dict[str, str]:
+        text = str(raw or "").strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json|sql)?\s*", "", text, flags=re.I)
+            text = re.sub(r"\s*```$", "", text)
+        parsed: Any
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            match = re.search(r"\[.*\]", text, flags=re.S)
+            if not match:
+                raise
+            parsed = json.loads(match.group(0))
+        if isinstance(parsed, dict):
+            parsed = parsed.get("items") or parsed.get("results") or []
+        if not isinstance(parsed, list):
+            raise ValueError("formatter batch response must be a JSON array")
+        result: dict[str, str] = {}
+        for item in parsed:
+            if not isinstance(item, dict):
+                continue
+            item_id = str(item.get("item_id") or item.get("id") or "").strip()
+            sql = str(item.get("formatted_sql") or item.get("sql") or "").strip()
+            if item_id and sql:
+                result[item_id] = sql
+        return result
+
+    def _call_formatter_prompt(self, prompt: str, config: dict[str, Any]) -> str:
         api_key = str(config.get("llm_api_key") or "").strip()
         model = str(config.get("llm_model") or "").strip()
         base_url = str(config.get("llm_base_url") or "").strip().rstrip("/")
@@ -248,8 +382,6 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         if not provider:
             provider = "anthropic" if "anthropic" in base_url.lower() or model.lower().startswith("claude") else "openai"
         candidates = [model, *[item.strip() for item in str(config.get("llm_fallback_models") or "").split(",") if item.strip()]]
-        template = str(getattr(self, "formatting_prompt_template", "") or SQL_FORMAT_PROMPT).strip()
-        prompt = template.format(input_sql=sql_text) if "{input_sql}" in template else f"{template}\n{sql_text}"
         candidate_models = list(dict.fromkeys(candidates))
         for index, candidate in enumerate(candidate_models):
             try:
@@ -260,7 +392,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                         model=candidate,
                         max_tokens=self._positive_int(config.get("llm_max_tokens"), 4096),
                         temperature=0,
-                        system="You format Oracle/MyBatis SQL without changing semantics.",
+                        system="Oracle/MyBatis SQL을 의미 변경 없이 포맷하십시오.",
                         messages=[{"role": "user", "content": prompt}],
                     )
                     return "".join(str(getattr(item, "text", "")) for item in response.content).strip()
@@ -271,7 +403,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                         {
                             "model": candidate,
                             "messages": [
-                                {"role": "system", "content": "You format Oracle/MyBatis SQL without changing semantics."},
+                                {"role": "system", "content": "Oracle/MyBatis SQL을 의미 변경 없이 포맷하십시오."},
                                 {"role": "user", "content": prompt},
                             ],
                             "temperature": 0,
@@ -293,6 +425,11 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                 if index == len(candidate_models) - 1:
                     raise
         raise ValueError("LLM formatter returned no content")
+
+    def _call_formatter_llm(self, sql_text: str, config: dict[str, Any]) -> str:
+        template = str(getattr(self, "formatting_prompt_template", "") or SQL_FORMAT_PROMPT).strip()
+        prompt = template.format(input_sql=sql_text) if "{input_sql}" in template else f"{template}\n{sql_text}"
+        return self._call_formatter_prompt(prompt, config)
 
     def _clean_formatted_sql(self, value: str) -> str:
         sql = str(value or "").strip()

@@ -27,7 +27,7 @@ FAIL_TEST = "FAIL-TEST"
 RAG_SEARCH = "SEARCH"
 RAG_GENERAL = "GENERAL"
 
-SQL_OUTPUT_FORMATTING_GUIDE = "\nReturn SQL only; final whitespace formatting is handled by 17C."
+SQL_OUTPUT_FORMATTING_GUIDE = "\nSQL만 반환하십시오. 최종 공백/들여쓰기 정리는 17C에서 처리합니다."
 
 
 class _PromptValues(dict):
@@ -37,37 +37,49 @@ class _PromptValues(dict):
 
 SQL_PROMPT_TEMPLATES: dict[str, str] = {
     "TUNE_TOBE_SQL": """
-You are an Oracle/MyBatis SQL tuning specialist.
+당신은 Oracle/MyBatis TO-BE SQL 튜닝 전문가입니다.
 
-[Goal]
-Improve the current TO-BE SQL only when the supplied SQL_TUNING RAG rules clearly apply.
-Keep the same business result, filters, joins, aliases, bind names, and MyBatis dynamic tags.
+[목표]
+검증된 TO-BE SQL의 결과 의미와 MyBatis 구조를 보존하면서 관련 SQL_TUNING RAG 규칙이 명확히 적용될 때만 안전하게 튜닝하십시오.
 
-[Current TO-BE SQL]
+[현재 TO-BE SQL]
 {current_tobe_sql}
 
 [SQL_TUNING GENERAL RAG]
 {universal_tuning_rules}
 
-[SQL_TUNING SEARCH RAG EXAMPLES]
+[SQL_TUNING SEARCH RAG 예시]
 {tuning_examples_text}
 
-[Last Error]
+[이전 오류]
 {last_error}
 
-[Output]
-Return only valid JSON with keys tuned_sql and tuned_result.
+[출력]
+유효한 JSON object 하나만 반환하십시오. key는 tuned_sql, tuned_result만 사용하십시오.
 
-[Rules]
-- If no rule should be applied, return the original SQL and set tuned_result to "NO TUNING".
-- Do not change the query result.
-- Do not add comments, markdown fences, explanations, PL/SQL blocks, multiple SQL statements, or a trailing semicolon.
+[규칙]
+- tuned_sql에는 Oracle/MyBatis SQL 템플릿 하나만 넣으십시오.
+- tuned_result에는 적용한 튜닝 내용을 한국어 자연어로 짧게 작성하십시오. SQL은 넣지 마십시오.
+- SQL 의미, 테이블명, 컬럼명, alias, join 의미, MyBatis 동적 태그, #{{param}}/${{param}} bind parameter를 보존하십시오.
+- 결과 무결성을 보장하는 전제하에 불필요한 중첩, 중복 join, 과다한 inline view, 비효율적 조건을 제거하여 쿼리 구조를 최적화하고 단순화하십시오.
+- universal_tuning_rules는 NEXT_MIG_RAG_INFO의 SQL_TUNING GENERAL 필수 규칙입니다. 현재 SQL에 관련되면 우선 적용하십시오.
+- SQL_TUNING SEARCH RAG 예시는 현재 SQL에 관련될 때만 참고하십시오.
+- 튜닝 규칙을 적용하더라도 원본 결과 set, 필터 의도, 집계 의도, join 의도, bind parameter 의미가 바뀌면 안 됩니다.
+- 적용할 튜닝이 없으면 원본 SQL을 그대로 반환하고 tuned_result는 정확히 "NO TUNING"으로 설정하십시오.
+- last_error가 검증 또는 실행 오류를 나타내면 원본 결과를 보존하는 최소 수정으로 오류를 우선 해결하십시오.
+- markdown, 설명, 주석, PL/SQL block, 여러 SQL 문, SQL 끝 세미콜론을 포함하지 마십시오.
+
+[JSON 형식]
+{{
+  "tuned_sql": "SELECT ...",
+  "tuned_result": "적용한 튜닝 요약 또는 NO TUNING"
+}}
 """.strip(),
     "TUNED_TEST_SQL": """
-You are an Oracle SQL validation query generator.
+당신은 Oracle SQL Tuning 검증 쿼리 생성기입니다.
 
-[Goal]
-Create one executable Oracle SELECT that compares row counts between the baseline TO_SQL and TUNED_TO_SQL for the same bind cases.
+[목표]
+같은 bind case 기준으로 baseline TO_SQL과 TUNED_TO_SQL의 row count를 비교하는 실행 가능한 Oracle SELECT 문 하나를 생성하십시오.
 
 [Baseline TO_SQL]
 {baseline_tobe_sql}
@@ -84,14 +96,28 @@ Create one executable Oracle SELECT that compares row counts between the baselin
 [Last Error]
 {last_error}
 
-[Rules]
-- Return only one executable Oracle SQL statement.
-- The SQL must return CASE_NO, FROM_COUNT, TO_COUNT columns.
-- FROM_COUNT must count rows from baseline TO_SQL.
-- TO_COUNT must count rows from TUNED_TO_SQL.
-- Use the supplied bind values as literals in each case.
-- If there are no bind values, generate one case with CASE_NO = 1.
-- Do not include markdown, explanations, comments, wrappers, or a trailing semicolon.
+[규칙]
+- Oracle 19c에서 실행 가능한 SELECT 문 하나만 반환하십시오.
+- 설명, markdown, JSON, 주석, PL/SQL, 여러 SQL 문, SQL 끝 세미콜론을 출력하지 마십시오.
+- 최종 컬럼은 CASE_NO, FROM_COUNT, TO_COUNT만 포함하십시오.
+- FROM_COUNT는 baseline TO_SQL의 row count이고, TO_COUNT는 TUNED_TO_SQL의 row count입니다.
+- 각 bind case마다 SELECT <case_no> AS CASE_NO, (<baseline_count_query>) AS FROM_COUNT, (<tuned_count_query>) AS TO_COUNT FROM DUAL 형태를 따르십시오.
+- 여러 bind case는 UNION ALL로 연결하고, 각 SELECT block은 반드시 FROM DUAL로 끝나야 합니다.
+- bind_set_json은 최대 3개 case만 사용하십시오. 3개를 초과하면 앞의 3개만 사용하십시오.
+- bind 값이 없으면 CASE_NO = 1인 단일 case를 생성하십시오.
+- baseline TO_SQL과 TUNED_TO_SQL의 물리 테이블은 기존 schema가 있더라도 제거하고 tobe_schema.TABLE_NAME 형식으로 다시 붙이십시오.
+- CTE 이름, inline view alias, subquery alias, table alias, DUAL에는 schema를 붙이지 마십시오.
+- 각 SQL의 의미를 최대한 보존하고 SELECT COUNT(*) FROM (<sql>) alias 형태로 감싸십시오.
+- 이미 SELECT COUNT(*), SELECT COUNT(1), SELECT COUNT(column)처럼 단일 count 값을 반환하는 검증용 count query라면 다시 SELECT COUNT(*) FROM (<sql>)로 감싸지 마십시오.
+- bind case 값을 사용해 MyBatis 바인딩 파라미터 태그를 Oracle literal로 치환하십시오.
+- bind parameter 자리에 숫자 데이터를 대입할 때는 작은따옴표로 감싸서 문자열 literal 형태로 대입하십시오.
+- <choose> 태그, <foreach> 태그, SYSDATE가 포함된 block은 선처리하여 제거하십시오.
+- <if test="param != null"> 형태의 조건에서 bind case 값이 NULL이면 해당 <if> block 전체를 비활성으로 처리하고 최종 SQL에서 제거하십시오.
+- <where>, <trim> 제거 후 WHERE/AND/OR 문법을 정리하십시오.
+- <choose>, <when>, <otherwise>는 첫 번째 <when> branch를 사용하는 것을 기본으로 하십시오.
+- ORDER BY는 검증 SQL에서 제거하십시오. subquery, inline view, CTE 내부 ORDER BY도 제거하십시오.
+- 최종 SQL에는 #{{param}}, ${{param}}, :param, ?, {{{{param}}}} 같은 미해결 parameter 표현이 남으면 안 됩니다.
+- last_error가 있으면 이전 오류를 우선 해결하십시오.
 """.strip(),
 }
 
@@ -324,7 +350,19 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             next_attempt = int(state["attempt_no"]) + 1
             running_status = f"RUNNING-{state.get('last_status') or FAIL_TUNED}"
             self._mark_running_status(state["db_config"], str(state["job"]["row_id"]), running_status, state.get("last_message") or "", next_attempt - 1)
-            return {**state, "attempt_no": next_attempt, "retry_count": next_attempt - 1, "retry_context": f"RETRY_CONTEXT: attempt={next_attempt}/{state['max_retry']}; last_error={state.get('last_message') or ''}", "status": "RUNNING", "node_failed": False, "tuned_sql": "", "tuned_result": ""}
+            retry_from = "GENERATE_TUNED_TEST_SQL" if state.get("last_status") == FAIL_TEST else "APPLY_TUNING_RULES"
+            next_state = {
+                **state,
+                "attempt_no": next_attempt,
+                "retry_count": next_attempt - 1,
+                "retry_context": f"RETRY_CONTEXT: attempt={next_attempt}/{state['max_retry']}; retry_from={retry_from}; last_error={state.get('last_message') or ''}",
+                "resume_stage": retry_from,
+                "status": "RUNNING",
+                "node_failed": False,
+            }
+            if retry_from != "GENERATE_TUNED_TEST_SQL":
+                next_state.update({"tuned_sql": "", "tuned_result": ""})
+            return next_state
 
         def finalize_node(state: dict[str, Any]) -> dict[str, Any]:
             if state.get("status") == TUNING_PASS:
@@ -383,7 +421,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         workflow.add_conditional_edges("load_rules", lambda state: route_after_stage(state) if state.get("node_failed") else "apply_tuning", {"apply_tuning": "apply_tuning", "retry_prepare": "retry_prepare", "finalize": "finalize"})
         workflow.add_conditional_edges("apply_tuning", route_after_stage, {"validate_tuned": "validate_tuned", "retry_prepare": "retry_prepare", "finalize": "finalize"})
         workflow.add_conditional_edges("validate_tuned", route_after_stage, {"validate_tuned": "validate_tuned", "retry_prepare": "retry_prepare", "finalize": "finalize"})
-        workflow.add_edge("retry_prepare", "load_rules")
+        workflow.add_conditional_edges("retry_prepare", lambda state: "validate_tuned" if state.get("resume_stage") in {"GENERATE_TUNED_TEST_SQL", "VALIDATE_TUNED_SQL"} else "load_rules", {"validate_tuned": "validate_tuned", "load_rules": "load_rules"})
         workflow.add_edge("finalize", END)
         return workflow.compile().invoke(context)
 
@@ -391,6 +429,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         source_tables = self._source_tables(target_table)
         general_rules = self._load_rag_rules(db_config, "SQL_TUNING", RAG_GENERAL, source_tables, map_id)
         tuning_examples = self._retrieve_rag_examples(db_config, rag_config, "SQL_TUNING", sql_text, source_tables, map_id, retry_count)
+        self._log_rag_context(map_id, "SQL_TUNING", general_rules, tuning_examples, retry_count)
         return general_rules, tuning_examples, source_tables
 
     # -------------------------------------------------------------------------
@@ -464,10 +503,6 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             for block, matches in zip(ordered_blocks, matches_by_block)
         ]
         match_count = sum(len(block["top_rule_matches"]) for block in payloads)
-        logging.getLogger("smartmigrate.workflow").info(
-            "RAG SEARCH completed category=SQL_TUNING",
-            extra={"workflow_log": [map_id, "SQL_TUNING", "RAG_RETRIEVE", "INFO", "SQL_TUNING_SEARCH", "PASS", retry_count, f"collection={self._milvus_config()['rag_collection']}, method={method}, blocks={len(ordered_blocks)}, matches={match_count}, threshold=none, matched={self._rag_match_summary(ordered_blocks, matches_by_block)}"]},
-        )
         return payloads
 
     def _load_rag_rules(self, db_config: dict[str, Any], category: str, rule_type: str, source_tables: set[str], map_id: str) -> list[dict[str, Any]]:
@@ -485,21 +520,45 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             rule = self._milvus_rag_entity({"entity": row})
             if self._source_tables_match(rule.get("source_tables") or [], source_tables):
                 result.append(rule)
-        logging.getLogger("smartmigrate.workflow").info(f"RAG {rule_type} loaded category={category}", extra={"workflow_log": [map_id, "SQL_TUNING", "RAG_LOAD", "INFO", f"{category}_{rule_type}", "PASS", 0, f"collection={config['rag_collection']}, rows={len(result)}, rag_ids={','.join(rule.get('rule_id') or '' for rule in result[:20])}"]})
         return result
+
+    def _log_rag_context(self, map_id: str, category: str, general_rules: list[dict[str, Any]], examples: list[dict[str, Any]], retry_count: int) -> None:
+        match_count = sum(len(block.get("top_rule_matches") or []) for block in examples)
+        general_ids = ",".join(str(rule.get("rule_id") or "") for rule in general_rules[:20])
+        search_ids = ",".join(
+            str(match.get("rule_id") or "")
+            for block in examples
+            for match in (block.get("top_rule_matches") or [])[:20]
+            if match.get("rule_id")
+        )
+        logging.getLogger("smartmigrate.workflow").info(
+            f"RAG context loaded category={category}",
+            extra={
+                "workflow_log": [
+                    map_id,
+                    "SQL_TUNING",
+                    "RAG_CONTEXT",
+                    "INFO",
+                    f"{category}_RAG_CONTEXT",
+                    "PASS",
+                    retry_count,
+                    f"general_rows={len(general_rules)}, search_blocks={len(examples)}, search_matches={match_count}, general_rag_ids={general_ids}, search_rag_ids={search_ids}",
+                ]
+            },
+        )
 
     def _generate_tuned_sql(self, job: dict[str, Any], llm_config: dict[str, Any], current_sql: str, general_rules: list[dict[str, Any]], tuning_examples: list[dict[str, Any]], last_error: str, retry_count: int) -> tuple[str, str]:
         prompt = self._build_prompt("TUNE_TOBE_SQL", current_tobe_sql=current_sql, universal_tuning_rules=self._serialize_general_rules(general_rules), tuning_examples_text=self._serialize_tuning_examples(tuning_examples), last_error=last_error or "None")
         map_id = self._map_id(job)
         self._log_prompt(map_id, "TUNE_TOBE_SQL_PROMPT", prompt, retry_count)
-        raw, _ = self._call_llm_text(prompt, llm_config, system="You tune Oracle/MyBatis SQL without changing semantics.")
+        raw, _ = self._call_llm_text(prompt, llm_config, system="의미를 변경하지 않고 Oracle/MyBatis SQL을 튜닝하십시오.")
         return self._parse_tuning_response(raw)
 
     def _generate_tuned_test_sql(self, job: dict[str, Any], db_config: dict[str, Any], llm_config: dict[str, Any], to_sql: str, tuned_sql: str, bind_set: Any, last_error: str, retry_count: int) -> str:
         prompt = self._build_prompt("TUNED_TEST_SQL", baseline_tobe_sql=to_sql, tuned_sql=tuned_sql, tobe_schema=str(db_config.get("target_schema") or os.getenv("ORACLE_SCHEMA_TGT") or "UNKNOWN").strip().upper(), bind_set_json=self._load_bind_sets_json(bind_set), last_error=last_error or "None")
         map_id = self._map_id(job)
         self._log_prompt(map_id, "TUNED_TEST_SQL_PROMPT", prompt, retry_count)
-        raw, _ = self._call_llm_text(prompt, llm_config, system="You generate Oracle SQL validation queries.")
+        raw, _ = self._call_llm_text(prompt, llm_config, system="Oracle SQL 검증 쿼리만 생성하십시오.")
         test_sql = self._clean_generated_sql(raw)
         if not test_sql:
             raise ValueError("TUNED_TEST_SQL generation returned empty SQL")
@@ -714,7 +773,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
     def _log_prompt(self, map_id: str, step_name: str, prompt: str, retry_count: int) -> None:
         logging.getLogger("smartmigrate.workflow").info(f"{step_name} assembled", extra={"workflow_log": [map_id, "SQL_TUNING", "PROMPT_BUILD", "INFO", step_name, "PASS", retry_count, prompt]})
 
-    def _call_llm_text(self, prompt: str, config: dict[str, Any], system: str = "You generate Oracle/MyBatis SQL.") -> tuple[str, str]:
+    def _call_llm_text(self, prompt: str, config: dict[str, Any], system: str = "Oracle/MyBatis SQL만 생성하십시오.") -> tuple[str, str]:
         api_key = str(config.get("llm_api_key") or os.getenv("LLM_API_KEY") or os.getenv("OPEN_API_KEY") or "").strip()
         base_url = str(config.get("llm_base_url") or os.getenv("LLM_BASE_URL") or "").strip()
         model = str(config.get("llm_model") or os.getenv("LLM_MODEL") or "GLM-5.1").strip()
@@ -829,6 +888,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             parsed = []
         if not parsed:
             parsed = [{}]
+        parsed = parsed[:3]
         return json.dumps(parsed, ensure_ascii=False, default=str)
 
     def _serialize_general_rules(self, rules: list[dict[str, Any]]) -> str:
@@ -975,7 +1035,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         return "15D_sqlTuningIterationDashboard"
 
     def _failure_stage(self, status: str) -> str:
-        return "VALIDATE_TUNED_SQL" if status == FAIL_TEST else "APPLY_TUNING_RULES"
+        return "GENERATE_TUNED_TEST_SQL" if status == FAIL_TEST else "APPLY_TUNING_RULES"
 
     def _map_id(self, job: dict[str, Any]) -> str:
         return f"{job.get('sql_id') or ''} / {job.get('space_nm') or ''}"[:100]
