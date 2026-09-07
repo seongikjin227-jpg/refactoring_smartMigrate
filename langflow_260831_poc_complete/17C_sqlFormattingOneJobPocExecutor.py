@@ -40,6 +40,9 @@ SQL_FORMAT_BATCH_PROMPT = """
 - formatted_sql 값은 JSON string이어야 하며 줄바꿈은 JSON 문자열 escape 규칙에 맞게 포함하십시오.
 - item_id가 누락되거나 입력에 없는 item_id가 추가되면 실패입니다.
 
+[Formatting 가이드]
+{input_prompt}
+
 [반환 형식]
 [
   {{
@@ -52,7 +55,6 @@ SQL_FORMAT_BATCH_PROMPT = """
 {input_sql_list_json}
 """.strip()
 
-
 class NewType17CSqlFormattingOneJobPocExecutor(Component):
     display_name = "17C SQL Formatting One Job Executor"
     description = "Formats TUNED_TO_SQL for a passed tuning job and stores FORMATTED_SQL."
@@ -61,7 +63,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
 
     inputs = [
         DataInput(name="job_item", display_name="Job Item", required=True),
-        MessageTextInput(name="formatting_prompt_template", display_name="Formatting Prompt Template", value=SQL_FORMAT_BATCH_PROMPT, required=False),
+        MessageTextInput(name="input_prompt", display_name="Formatting Guide", value="", required=False),
         IntInput(name="max_retry", display_name="Max Retry", value=2, required=False),
         StrInput(name="llm_base_url", display_name="LLM Base URL", required=False),
         SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=False),
@@ -329,10 +331,8 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
 
     def _build_formatter_batch_prompt(self, items: list[dict[str, str]]) -> str:
         sql_list_json = json.dumps(items, ensure_ascii=False, default=str)
-        template = str(getattr(self, "formatting_prompt_template", "") or SQL_FORMAT_BATCH_PROMPT).strip()
-        if "{input_sql_list_json}" in template:
-            return template.format(input_sql_list_json=sql_list_json)
-        return SQL_FORMAT_BATCH_PROMPT.format(input_sql_list_json=sql_list_json)
+        input_prompt = self._text_input(getattr(self, "input_prompt", "")).strip() or "- (empty)"
+        return SQL_FORMAT_BATCH_PROMPT.format(input_prompt=input_prompt, input_sql_list_json=sql_list_json)
 
     def _parse_formatter_batch_response(self, raw: str) -> dict[str, str]:
         text = str(raw or "").strip()
@@ -703,6 +703,19 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             return ""
         if hasattr(value, "get_secret_value"):
             return str(value.get_secret_value() or "")
+        return str(value or "")
+
+    def _text_input(self, value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, Message):
+            return str(value.text or "")
+        if isinstance(value, Data):
+            data = dict(value.data or {})
+            for key in ("text", "message", "prompt", "value"):
+                if str(data.get(key) or "").strip():
+                    return str(data.get(key) or "")
+            return json.dumps(data, ensure_ascii=False, default=str)
         return str(value or "")
 
     def _positive_int(self, value: Any, default: int) -> int:

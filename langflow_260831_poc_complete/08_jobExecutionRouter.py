@@ -65,7 +65,7 @@ JOB_EXECUTION_ROUTER_PROMPT = """당신은 SmartMigrate 작업 실행 라우터�
 - FULL_WORKFLOW는 DB Migration부터 SQL Formatting까지 순서대로 처리하므로 선행 작업이 남아 있어도 PREREQUISITE_REQUIRED로 보내지 않습니다.
 - SQL_CONVERSION 단독 실행 요청에서 migration_total이 1 이상이면 PREREQUISITE_REQUIRED입니다.
 - SQL_TUNING 단독 실행 요청에서 migration_total 또는 sql_conversion_total이 1 이상이면 PREREQUISITE_REQUIRED입니다.
-- SQL_FORMATTING 단독 실행 요청에서 migration_total, sql_conversion_total, sql_tuning_total 중 하나라도 1 이상이면 PREREQUISITE_REQUIRED입니다.
+- SQL_FORMATTING 단독 실행 요청은 선행 migration_total, sql_conversion_total, sql_tuning_total이 남아 있어도 PREREQUISITE_REQUIRED로 보내지 않습니다. 현재 SQL Formatting 잔여 작업이 있으면 해당 잔여 작업을 실행합니다.
 - targeted MIG 요청에서 requested_target_status의 PRIOR_MAP_ID 대상이 아직 완료되지 않았다고 확인되는 경우 PREREQUISITE_REQUIRED입니다.
 
 반드시 입력 JSON에 있는 구조화 값을 우선 신뢰하세요.
@@ -324,12 +324,10 @@ class NewType08JobExecutionRouter(Component):
         if run_mode != "all_pending" or route in {"MIG", "FULL_WORKFLOW", "PREREQUISITE_REQUIRED", "NO_RUNNABLE_JOB"}:
             return ""
         blockers: list[str] = []
-        if route in {"SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"} and counts.get("MIG", 0) > 0:
+        if route in {"SQL_CONVERSION", "SQL_TUNING"} and counts.get("MIG", 0) > 0:
             blockers.append(f"DB Migration 잔여 {counts.get('MIG', 0)}건")
-        if route in {"SQL_TUNING", "SQL_FORMATTING"} and counts.get("SQL_CONVERSION", 0) > 0:
+        if route == "SQL_TUNING" and counts.get("SQL_CONVERSION", 0) > 0:
             blockers.append(f"SQL Conversion 잔여 {counts.get('SQL_CONVERSION', 0)}건")
-        if route == "SQL_FORMATTING" and counts.get("SQL_TUNING", 0) > 0:
-            blockers.append(f"SQL Tuning 잔여 {counts.get('SQL_TUNING', 0)}건")
         return "선행 작업이 남아 있어 요청한 단계를 실행할 수 없습니다: " + ", ".join(blockers) if blockers else ""
 
     def _route_from_payload(self, payload: dict[str, Any], targets: dict[str, Any]) -> str | None:
