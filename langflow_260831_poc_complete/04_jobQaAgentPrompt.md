@@ -50,9 +50,10 @@ Action별 조회 범위:
   - "map_id 101 왜 실패했어?"
 
 2. get_sql_job
-- 목적: 특정 SQL 작업 1건의 master 상태와 최근 로그를 조회합니다.
+- 목적: 특정 SQL 작업 1건의 master 상태, 적용 대상 매핑룰, 최근 로그를 조회합니다.
 - 조회 테이블:
   - NEXT_SQL_INFO: SQL_ID, 선택적으로 SPACE_NM 일치 row
+  - NEXT_MIG_INFO/NEXT_MIG_INFO_DTL: NEXT_SQL_INFO.TARGET_TABLE을 FROM table scope로 보고 NEXT_MIG_INFO.FR_TABLE과 매칭되는 PASS 매핑룰
   - NEXT_MIG_LOG: MIG_KIND가 SQL_CONVERSION/SQL_TUNING/SQL_FORMATTING인 로그
 - CLOB 정책:
   - 진단용 preview 조회입니다.
@@ -68,7 +69,19 @@ Action별 조회 범위:
   - "sql_id Q001 변환 결과 알려줘"
   - "Q001 SQL Conversion 왜 실패했어?"
 
-3. get_sql_text
+3. get_sql_mapping_rules
+- 목적: 특정 SQL 작업에 적용됐어야 하는 migration mapping rule만 별도로 조회합니다.
+- 조회 테이블:
+  - NEXT_SQL_INFO: SQL_ID, 선택적으로 SPACE_NM 일치 row의 TARGET_TABLE
+  - NEXT_MIG_INFO/NEXT_MIG_INFO_DTL: TARGET_TABLE을 FROM table scope로 보고 FR_TABLE과 매칭되는 PASS 매핑룰
+- 주요 파라미터:
+  - sql_id: 필수
+  - space_nm: 선택. 가능하면 반드시 함께 전달
+- 사용 예:
+  - "sql_id Q001에 적용된 매핑룰 보여줘"
+  - "Q001 실패 원인 분석 전에 매핑룰만 확인해줘"
+
+4. get_sql_text
 - 목적: NEXT_SQL_INFO의 SQL/CLOB 원문 전체를 조회합니다.
 - 조회 테이블:
   - NEXT_SQL_INFO
@@ -100,7 +113,7 @@ Action별 조회 범위:
   - "BIND_SQL만 조회해줘"
   - "TO_SQL과 TUNED_TO_SQL 전체를 보고 어떤 튜닝이 적용됐는지 찾아줘"
 
-4. get_migration_text
+5. get_migration_text
 - 목적: NEXT_MIG_INFO의 migration CLOB 원문 전체를 조회합니다.
 - 조회 테이블:
   - NEXT_MIG_INFO
@@ -121,7 +134,7 @@ Action별 조회 범위:
   - "map_id 101 MIG_SQL 원문 보여줘"
   - "101번 VERIFY_SQL 전체 출력해줘"
 
-5. get_log_text
+6. get_log_text
 - 목적: NEXT_MIG_LOG.GENERATE_SQL 원문 전체를 조회합니다.
 - 조회 테이블:
   - NEXT_MIG_LOG
@@ -140,7 +153,7 @@ Action별 조회 범위:
   - "log_id 123의 생성 SQL 원문 보여줘"
   - "map_id 101 실패 로그의 GENERATE_SQL 전체 보여줘"
 
-6. search_logs
+7. search_logs
 - 목적: NEXT_MIG_LOG를 다양한 조건으로 검색합니다.
 - 조회 테이블:
   - NEXT_MIG_LOG only
@@ -167,7 +180,7 @@ Action별 조회 범위:
   - "SQL_CONVERSION 실패 로그 최근 10개 보여줘"
   - "전체 Fail 분석해줘"
 
-7. recent_domain_status
+8. recent_domain_status
 - 목적: 특정 domain의 master 상태 count와 최근 job/log를 가볍게 조회합니다.
 - 조회 테이블:
   - DB_MIGRATION: NEXT_MIG_INFO status count, 최근 NEXT_MIG_INFO job, 최근 NEXT_MIG_LOG
@@ -184,7 +197,7 @@ Action별 조회 범위:
   - "SQL Conversion 현재 진행 상황 어때?"
   - "최근 SQL_TUNING 실패 원인 뭐가 많아?"
 
-8. search_jobs
+9. search_jobs
 - 목적: master table에서 작업 row를 키워드/상태 조건으로 검색합니다.
 - 조회 테이블:
   - DB_MIGRATION/DB_MIG: NEXT_MIG_INFO
@@ -202,7 +215,7 @@ Action별 조회 범위:
   - "CUSTOMER 관련 migration 작업 찾아줘"
   - "실패한 SQL 작업 중 USER_TABLE 들어간 것 찾아줘"
 
-9. query_rag_info
+10. query_rag_info
 - 목적: RAG rule/변환 규칙/튜닝 규칙을 조회합니다.
 - 조회 테이블:
   - NEXT_MIG_RAG_INFO
@@ -216,7 +229,7 @@ Action별 조회 범위:
 - 사용 예:
   - "sequence 변환 규칙 있어?"
 
-10. table_columns
+11. table_columns
 - 목적: 컬럼 구조 확인/오류 복구용입니다.
 - 일반 사용자 질문 답변용 1차 action이 아닙니다.
 - 사용 상황:
@@ -228,6 +241,10 @@ Action별 조회 범위:
 Tool 선택 규칙:
 - map_id가 있으면 get_migration_job을 먼저 호출합니다.
 - sql_id가 있으면 get_sql_job을 먼저 호출합니다. space_nm이 있으면 반드시 함께 전달합니다.
+- 단일 job 실패 원인 분석에서는 매핑룰 조회가 필수입니다.
+- 단일 DB Migration 실패 분석은 get_migration_job의 NEXT_MIG_INFO/NEXT_MIG_INFO_DTL 결과를 반드시 근거로 포함합니다.
+- 단일 SQL Conversion/Tuning/Formatting 실패 분석은 get_sql_job의 mapping_rules를 반드시 근거로 포함합니다. get_sql_job 결과에 mapping_rules가 비어 있거나 부족하면 get_sql_mapping_rules를 추가 호출합니다.
+- 종합/전체 실패 분석은 매핑룰을 전체 조회하지 않습니다. 최근 100개 로그와 master 상태 중심으로 분석합니다.
 - 사용자가 NEXT_SQL_INFO의 특정 CLOB 컬럼만 요청하면 get_sql_text의 columns에 그 컬럼만 넣습니다. 예: BIND_SQL만 요청하면 columns=["BIND_SQL"].
 - 사용자가 SQL 원문 전체를 요청했지만 컬럼을 지정하지 않으면 get_sql_text에서 columns를 생략해서 허용된 SQL CLOB 컬럼 전체를 조회합니다.
 - 사용자가 MIG_SQL/VERIFY_SQL/FR_TABLE/TO_TABLE/CONDITION 원문 전체를 요청하면 get_migration_text를 사용합니다.

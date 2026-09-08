@@ -113,6 +113,8 @@ class NewType04JobQaCommandTool(Component):
             return self._get_migration_job(command)
         if action == "get_sql_job":
             return self._get_sql_job(command)
+        if action == "get_sql_mapping_rules":
+            return self._get_sql_mapping_rules(command)
         if action == "get_sql_text":
             return self._get_sql_text(command)
         if action == "get_migration_text":
@@ -188,12 +190,34 @@ class NewType04JobQaCommandTool(Component):
             "fail_only": bool(command.get("fail_only", False)),
         }
         logs = self._query_logs(log_command)
+        mapping_rules = self._sql_mapping_rules(sql_info)
         return {
             "ok": True,
             "component": "04_jobQaCommandTool",
             "action": "get_sql_job",
             "target": {"sql_id": sql_id, "space_nm": space_nm},
-            "data": {"sql_info": sql_info, "logs": logs},
+            "data": {"sql_info": sql_info, "mapping_rules": mapping_rules, "logs": logs},
+        }
+
+    def _get_sql_mapping_rules(self, command: dict[str, Any]) -> dict[str, Any]:
+        sql_id = self._required_text(command, "sql_id")
+        space_nm = str(command.get("space_nm") or "").strip()
+        conditions = ["UPPER(TRIM(SQL_ID)) = UPPER(TRIM(:sql_id))"]
+        params: dict[str, Any] = {"sql_id": sql_id}
+        if space_nm:
+            conditions.append("UPPER(TRIM(SPACE_NM)) = UPPER(TRIM(:space_nm))")
+            params["space_nm"] = space_nm
+        sql_info = self._query_rows(
+            f"SELECT SPACE_NM, SQL_ID, TARGET_TABLE FROM {self._qualify('NEXT_SQL_INFO')} WHERE {' AND '.join(conditions)}",
+            params,
+            table_name="NEXT_SQL_INFO",
+        )
+        return {
+            "ok": True,
+            "component": "04_jobQaCommandTool",
+            "action": "get_sql_mapping_rules",
+            "target": {"sql_id": sql_id, "space_nm": space_nm},
+            "data": {"sql_info": sql_info, "mapping_rules": self._sql_mapping_rules(sql_info)},
         }
 
     def _get_sql_text(self, command: dict[str, Any]) -> dict[str, Any]:
@@ -332,6 +356,64 @@ class NewType04JobQaCommandTool(Component):
             log_filter["fail_only"] = True
         result["recent_logs"] = self._query_logs(log_filter)
         return {"ok": True, "component": "04_jobQaCommandTool", "action": "recent_domain_status", "data": result}
+
+    def _sql_mapping_rules(self, sql_info_rows: list[dict[str, Any]]) -> dict[str, Any]:
+        source_scope_tables: set[str] = set()
+        sql_targets = []
+        for row in sql_info_rows:
+            target_table = str(row.get("target_table") or row.get("TARGET_TABLE") or "").strip()
+            if not target_table:
+                continue
+            sql_targets.append(
+                {
+                    "space_nm": row.get("space_nm") or row.get("SPACE_NM"),
+                    "sql_id": row.get("sql_id") or row.get("SQL_ID"),
+                    "target_table": target_table,
+                }
+            )
+            source_scope_tables.update(self._source_tables(target_table))
+        if not source_scope_tables:
+            return {"source_scope_tables": [], "rules": [], "message": "NEXT_SQL_INFO.TARGET_TABLE is empty; mapping rules were not queried."}
+
+        info_columns = self._available_column_types("NEXT_MIG_INFO")
+        detail_columns = self._available_column_types("NEXT_MIG_INFO_DTL")
+        if not {"MAP_ID", "STATUS", "MAP_TYPE", "FR_TABLE", "TO_TABLE"}.issubset(info_columns) or not {"MAP_ID", "FR_COL", "TO_COL"}.issubset(detail_columns):
+            return {"source_scope_tables": sorted(source_scope_tables), "rules": [], "message": "Mapping rule tables do not have required columns."}
+
+        description_expr = "M.DESCRIPTION" if "DESCRIPTION" in info_columns else "CAST(NULL AS VARCHAR2(4000))"
+        condition_expr = "M.CONDITION" if "CONDITION" in info_columns else "CAST(NULL AS VARCHAR2(4000))"
+        map_dtl_expr = "D.MAP_DTL" if "MAP_DTL" in detail_columns else "CAST(NULL AS NUMBER)"
+        rules = self._query_rows(
+            f"""
+            SELECT M.MAP_ID,
+                   M.MAP_TYPE,
+                   M.FR_TABLE,
+                   M.TO_TABLE,
+                   {description_expr} AS DESCRIPTION,
+                   {condition_expr} AS CONDITION,
+                   {map_dtl_expr} AS MAP_DTL,
+                   D.FR_COL,
+                   D.TO_COL
+              FROM {self._qualify('NEXT_MIG_INFO')} M
+              JOIN {self._qualify('NEXT_MIG_INFO_DTL')} D ON M.MAP_ID = D.MAP_ID
+             WHERE UPPER(TRIM(M.STATUS)) = 'PASS'
+             ORDER BY M.MAP_ID, D.MAP_DTL
+            """,
+            {},
+            table_name="NEXT_MIG_INFO",
+        )
+        matched = [
+            rule
+            for rule in rules
+            if self._table_matches(str(rule.get("fr_table") or ""), source_scope_tables)
+        ]
+        return {
+            "sql_targets": sql_targets,
+            "source_scope_tables": sorted(source_scope_tables),
+            "match_basis": "NEXT_SQL_INFO.TARGET_TABLE -> NEXT_MIG_INFO.FR_TABLE",
+            "rules": matched,
+            "message": "" if matched else "No PASS mapping rule matched the SQL FROM table scope.",
+        }
 
     def _search_jobs(self, command: dict[str, Any]) -> dict[str, Any]:
         domain = self._normalize_domain(command.get("domain") or "ALL")
@@ -633,6 +715,21 @@ class NewType04JobQaCommandTool(Component):
             return "1=0"
         return "(" + " OR ".join(clauses) + ")"
 
+    def _source_tables(self, value: Any) -> set[str]:
+        text = str(value or "").strip()
+        if text.startswith("["):
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, list):
+                    text = ",".join(str(item) for item in parsed)
+            except json.JSONDecodeError:
+                pass
+        return {token.split(".")[-1].strip().strip('"').upper() for token in re.split(r"[,;|\s]+", text) if token.strip()}
+
+    def _table_matches(self, table_name: str, candidates: set[str]) -> bool:
+        normalized = str(table_name or "").upper()
+        return any(re.search(rf"(?<![A-Z0-9_$#]){re.escape(table)}(?![A-Z0-9_$#])", normalized) for table in candidates)
+
     def _failure_status_condition(self, column: str) -> str:
         clean = self._clean_identifier(column)
         normalized = f"UPPER(TRIM(NVL({clean}, '')))"
@@ -834,6 +931,7 @@ class NewType04JobQaCommandTool(Component):
         return [
             {"action": "get_migration_job", "required": ["map_id"], "optional": ["limit", "fail_only", "map_id_like"]},
             {"action": "get_sql_job", "required": ["sql_id"], "optional": ["space_nm", "mig_kind", "limit", "fail_only"]},
+            {"action": "get_sql_mapping_rules", "required": ["sql_id"], "optional": ["space_nm"]},
             {"action": "get_sql_text", "required": ["sql_id"], "optional": ["space_nm", "columns", "limit"]},
             {"action": "get_migration_text", "required": ["map_id"], "optional": ["columns"]},
             {"action": "get_log_text", "optional": ["log_id", "map_id_like", "mig_kind", "status_like", "fail_only", "columns", "limit"]},
