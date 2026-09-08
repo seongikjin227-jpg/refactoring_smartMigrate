@@ -413,7 +413,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         # Conversion input setup
         # ##############################
         # Source SQL priority follows the existing flow: EDIT_FR_SQL first, then FR_SQL.
-        # TARGET_TABLE scopes both migration mapping rules and SQL_CONVERSION/SQL_TUNING RAG rules.
+        # NEXT_SQL_INFO.TARGET_TABLE is the AS-IS/FROM table scope used to find FR_TABLE mapping rules and RAG rules.
         source_sql = self._source_sql(job)
         if not source_sql.strip():
             return self._finish_failure(payload, job, db_config, started, FAIL_TOBE, "FR_SQL/EDIT_FR_SQL is empty")
@@ -776,6 +776,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 "Existing TO_SQL ignored because USER_EDITED is not Y",
                 extra={"workflow_log": [map_id, "SQL_CONVERSION", "TOBE_SQL", "INFO", "IGNORE_EXISTING_TO_SQL", "START", retry_count, str(job.get("to_sql") or "")]},
             )
+        if not mapping_rules:
+            raise ValueError(f"Mapping rules not found for FROM table scope TARGET_TABLE={target_table}")
 
         # TO_SQL prompt context is assembled in this order:
         # migration table/column mapping rules, SQL_CONVERSION GENERAL RAG guidance,
@@ -1250,7 +1252,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
     # Mapping rules and RAG retrieval
     # ##############################
 
-    # Load PASS migration mapping rules scoped to the current SQL target table.
+    # Load PASS migration mapping rules scoped by NEXT_SQL_INFO.TARGET_TABLE against NEXT_MIG_INFO.FR_TABLE.
     def _load_mapping_rules(self, db_config: dict[str, Any], target_table: str) -> list[dict[str, str]]:
         map_table = self._qualify(os.getenv("MAPPING_RULE_TABLE", "NEXT_MIG_INFO"), db_config.get("system_schema"))
         detail_table = self._qualify(os.getenv("MAPPING_RULE_DETAIL_TABLE", "NEXT_MIG_INFO_DTL"), db_config.get("system_schema"))
@@ -1265,7 +1267,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
              WHERE UPPER(TRIM(M.STATUS)) = 'PASS'
              ORDER BY M.MAP_ID, D.MAP_DTL
         """
-        target_tables = self._source_tables(target_table)
+        source_scope_tables = self._source_tables(target_table)
         with self._connect(db_config) as conn:
             cur = conn.cursor()
             cur.execute(query)
@@ -1278,9 +1280,9 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 }
                 for row in cur.fetchall()
             ]
-        if not target_tables:
+        if not source_scope_tables:
             return rules
-        return [rule for rule in rules if self._table_matches(rule["to_table"], target_tables)]
+        return [rule for rule in rules if self._table_matches(rule["fr_table"], source_scope_tables)]
 
     # Load GENERAL RAG guidance and skip it if the RAG table is not ready.
     def _load_rag_general_rules(self, db_config: dict[str, Any], category: str, source_tables: set[str], map_id: str) -> list[dict[str, Any]]:
