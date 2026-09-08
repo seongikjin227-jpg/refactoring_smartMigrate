@@ -435,7 +435,7 @@ class NewType08JobExecutionRouter(Component):
             return "17A_sqlFormattingJobsToLoopTable"
         if route == "FULL_WORKFLOW":
             return "18A_fullWorkflowJobsToLoopTable"
-        return "13_finalSummary"
+        return "chat_output"
 
     def _extract_targets(self, text: str) -> dict[str, list[Any]]:
         return {

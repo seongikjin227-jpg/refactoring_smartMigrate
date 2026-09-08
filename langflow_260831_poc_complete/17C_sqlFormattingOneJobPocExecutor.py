@@ -97,6 +97,13 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                 result = self._run_batch_formatting(payload, db_config, started)
                 self.status = result
                 return Data(data=result)
+            if self._job_name(payload) == "formatting":
+                db_config = self._db_config(payload)
+                self._require_db_config(db_config)
+                job = self._load_sql_job(db_config, payload)
+                result = self._run_single_sql_formatting({**payload, **job}, job, db_config, started)
+                self.status = result
+                return Data(data=result)
             result = self._run_batch_formatting(payload, {}, started)
             self.status = result
             return Data(data=result)
@@ -214,6 +221,51 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                 {"table": "NEXT_MIG_INFO", "key_column": "MAP_ID", "key_value": map_id, "column": "VERIFY_SQL"},
             ]
         return []
+
+    def _run_single_sql_formatting(self, payload: dict[str, Any], job: dict[str, Any], db_config: dict[str, Any], started: float) -> dict[str, Any]:
+        """Format the final tuned SQL into FORMATTED_SQL for standalone SQL Formatting runs."""
+        if not self._is_tuning_pass(job.get("status_tuning") or payload.get("status_tuning") or payload.get("tuning_status")):
+            return self._pass_through(
+                payload=payload,
+                job=job,
+                started=started,
+                status=self._status(job.get("status_tuning") or payload.get("status_tuning") or payload.get("tuning_status")) or "NOT-RUN",
+                message="SQL formatting passed through because tuning status is not PASS.",
+            )
+        source_sql = str(job.get("tuned_to_sql") or payload.get("tuned_to_sql") or "").strip()
+        if not source_sql:
+            return self._finish_failure(payload, job, started, "TUNED_TO_SQL is empty")
+
+        format_inputs = [{"item_id": "1", "sql": source_sql}]
+        prompt = self._build_formatter_batch_prompt(format_inputs)
+        self._log_formatting_event(payload, step_name="FORMAT_PROMPT", status="PASS", message="Formatting prompt assembled", generate_sql=prompt)
+        raw_response = self._call_formatter_prompt(prompt, self._llm_config(payload))
+        self._log_formatting_event(payload, step_name="LLM_RESPONSE", status="PASS", message="LLM formatting response returned", generate_sql=raw_response)
+        formatted_by_id = self._format_sql_batch_response(format_inputs, raw_response)
+        formatted_sql = (formatted_by_id.get("1") or ("", ""))[0]
+        if not formatted_sql:
+            return self._finish_failure(payload, job, started, "FORMATTED_SQL generation returned empty SQL")
+
+        self._update_row(db_config, str(job["row_id"]), {"FORMATTED_SQL": formatted_sql})
+        results = [{"table": "NEXT_SQL_INFO", "column": "FORMATTED_SQL", "key": str(job.get("row_id") or ""), "status": FORMATTED, "method": "llm_batch"}]
+        self._log_formatting_event(payload, step_name="FORMAT_COMPLETE", status=FORMATTED, message="SQL formatting completed", generate_sql=self._json_dump(results))
+        return self._result(
+            payload=payload,
+            job=job,
+            ok=True,
+            status=FORMATTED,
+            elapsed=time.perf_counter() - started,
+            attempts=[],
+            message="SQL formatting completed.",
+            extra={
+                "formatting_status": FORMATTED,
+                "formatted_sql": formatted_sql,
+                "formatting_results": results,
+                "formatted_count": 1,
+                "failed_count": 0,
+                "next_node": self._dashboard_node(payload),
+            },
+        )
 
     def _log_formatting_event(self, payload: dict[str, Any], *, step_name: str, status: str, message: str, generate_sql: Any = None) -> None:
         map_id = str(payload.get("map_id") or payload.get("sql_id") or 0)[:100]
