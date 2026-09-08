@@ -77,12 +77,12 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
     outputs = [Output(display_name="Job Result", name="job_result", method="run_job", types=["Data"])]
 
     def run_job(self) -> Data:
-        logging.getLogger("smartmigrate.workflow").info("before run_job", extra={"workflow_log": [0, "WORKFLOW", "17C_SQL_FORMAT", "INFO", "RUN_JOB", "START", 0]})
         started = time.perf_counter()
         payload: dict[str, Any] = {}
         job: dict[str, Any] = {}
         try:
             payload = self._parse_payload(getattr(self, "job_item", ""))
+            self._log_run_job(payload, job, status="START", message="before run_job")
             prior_failure = self._prior_failure_status(payload)
             generated_sql_list = self._formatting_candidates(payload)
             payload["generated_sql_list"] = generated_sql_list
@@ -93,14 +93,14 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                 if prior_failure:
                     result = self._preserve_prior_failure_after_formatting(result, payload, prior_failure)
                 self.status = result
-                logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "17C_SQL_FORMAT", "INFO", "RUN_JOB", "END", 0]})
+                self._log_run_job(payload, job, status="END", message="after run_job")
                 return Data(data=result)
             if prior_failure:
                 result = self._component_pass_through(payload, started, f"SQL formatting skipped because prior stage failed and no generated SQL exists: {prior_failure}")
                 result["status"] = prior_failure
                 result["formatting_skipped"] = True
                 self.status = result
-                logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "17C_SQL_FORMAT", "INFO", "RUN_JOB", "END", 0]})
+                self._log_run_job(payload, job, status="END", message="after run_job")
                 return Data(data=result)
             if self._job_name(payload) == "formatting":
                 db_config = self._db_config(payload)
@@ -108,16 +108,16 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                 job = self._load_sql_job(db_config, payload)
                 result = self._run_single_sql_formatting({**payload, **job}, job, db_config, started)
                 self.status = result
-                logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "17C_SQL_FORMAT", "INFO", "RUN_JOB", "END", 0]})
+                self._log_run_job(payload, job, status="END", message="after run_job")
                 return Data(data=result)
             result = self._run_batch_formatting(payload, {}, started)
             self.status = result
-            logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "17C_SQL_FORMAT", "INFO", "RUN_JOB", "END", 0]})
+            self._log_run_job(payload, job, status="END", message="after run_job")
             return Data(data=result)
         except Exception as exc:
             result = self._finish_failure(payload, job, started, str(exc))
             self.status = result
-            logging.getLogger("smartmigrate.workflow").error(f"error run_job: {exc}", extra={"workflow_log": [0, "WORKFLOW", "17C_SQL_FORMAT", "ERROR", "RUN_JOB", "ERROR", 0]})
+            self._log_run_job(payload, job, status="ERROR", message=f"error run_job: {exc}", log_level="ERROR", require_identity=False)
             return Data(data=result)
 
     def _preserve_prior_failure_after_formatting(self, result: dict[str, Any], payload: dict[str, Any], prior_failure: str) -> dict[str, Any]:
@@ -161,7 +161,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             if table_name not in allowed or column not in allowed[table_name]:
                 results.append({"table": table_name, "column": column, "status": "SKIPPED_UNSUPPORTED"})
                 continue
-            key = str(item.get("row_id") or item.get("key_value") or "").strip()
+            key = self._formatting_item_key(table_name, item)
             identity = (table_name, key, column)
             if not key or identity in seen:
                 results.append({"table": table_name, "column": column, "key": key, "status": "SKIPPED_DUPLICATE_OR_EMPTY_KEY"})
@@ -245,7 +245,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         job_name = self._job_name(payload)
         if route == "MIG" or job_name == "migration":
             map_id = payload.get("map_id") or payload.get("key_value")
-            if map_id is None or str(map_id).strip() == "":
+            if self._is_blank_log_value(map_id):
                 return []
             return [
                 {"table": "NEXT_MIG_INFO", "key_column": "MAP_ID", "key_value": map_id, "column": "MIG_SQL"},
@@ -255,6 +255,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
 
     def _run_single_sql_formatting(self, payload: dict[str, Any], job: dict[str, Any], db_config: dict[str, Any], started: float) -> dict[str, Any]:
         """Format the final tuned SQL into FORMATTED_SQL for standalone SQL Formatting runs."""
+        log_payload = {**payload, **job}
         if not self._is_tuning_pass(job.get("status_tuning") or payload.get("status_tuning") or payload.get("tuning_status")):
             return self._pass_through(
                 payload=payload,
@@ -269,17 +270,17 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
 
         format_inputs = [{"item_id": "1", "sql": source_sql}]
         prompt = self._build_formatter_batch_prompt(format_inputs)
-        self._log_formatting_event(payload, step_name="FORMAT_PROMPT", status="PASS", message="Formatting prompt assembled", generate_sql=prompt)
+        self._log_formatting_event(log_payload, step_name="FORMAT_PROMPT", status="PASS", message="Formatting prompt assembled", generate_sql=prompt)
         raw_response = self._call_formatter_prompt(prompt, self._llm_config(payload))
-        self._log_formatting_event(payload, step_name="LLM_RESPONSE", status="PASS", message="LLM formatting response returned", generate_sql=raw_response)
+        self._log_formatting_event(log_payload, step_name="LLM_RESPONSE", status="PASS", message="LLM formatting response returned", generate_sql=raw_response)
         formatted_by_id = self._format_sql_batch_response(format_inputs, raw_response)
         formatted_sql = (formatted_by_id.get("1") or ("", ""))[0]
         if not formatted_sql:
             return self._finish_failure(payload, job, started, "FORMATTED_SQL generation returned empty SQL")
 
-        self._update_row(db_config, str(job["row_id"]), {"FORMATTED_SQL": formatted_sql})
-        results = [{"table": "NEXT_SQL_INFO", "column": "FORMATTED_SQL", "key": str(job.get("row_id") or ""), "status": FORMATTED, "method": "llm_batch"}]
-        self._log_formatting_event(payload, step_name="FORMAT_COMPLETE", status=FORMATTED, message="SQL formatting completed", generate_sql=self._json_dump(results))
+        self._update_row(db_config, job, {"FORMATTED_SQL": formatted_sql})
+        results = [{"table": "NEXT_SQL_INFO", "column": "FORMATTED_SQL", "key": self._sql_item_key(job), "status": FORMATTED, "method": "llm_batch"}]
+        self._log_formatting_event(log_payload, step_name="FORMAT_COMPLETE", status=FORMATTED, message="SQL formatting completed", generate_sql=self._json_dump(results))
         return self._result(
             payload=payload,
             job=job,
@@ -299,12 +300,93 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         )
 
     def _log_formatting_event(self, payload: dict[str, Any], *, step_name: str, status: str, message: str, generate_sql: Any = None) -> None:
-        map_id = str(payload.get("map_id") or payload.get("sql_id") or 0)[:100]
+        map_id = self._log_map_id(payload, required=True)
         retry_count = self._to_int(payload.get("retry_count"), 0)
         logging.getLogger("smartmigrate.workflow").info(
             str(message or ""),
             extra={"workflow_log": [map_id, "SQL_FORMATTING", "17C_SQL_FORMAT", "INFO", str(step_name or "")[:50], str(status or "")[:20], retry_count, generate_sql]},
         )
+
+    def _log_run_job(self, payload: dict[str, Any], job: dict[str, Any] | None = None, *, status: str, message: str, log_level: str = "INFO", require_identity: bool = True) -> None:
+        retry_count = self._to_int(payload.get("retry_count"), 0)
+        logging.getLogger("smartmigrate.workflow").log(
+            logging.ERROR if str(log_level).upper() == "ERROR" else logging.INFO,
+            str(message or ""),
+            extra={"workflow_log": [self._log_map_id(payload, job, required=require_identity), "SQL_FORMATTING", "17C_SQL_FORMAT", str(log_level or "INFO").upper(), "RUN_JOB", str(status or "")[:20], retry_count]},
+        )
+
+    def _log_map_id(self, payload: dict[str, Any], job: dict[str, Any] | None = None, *, required: bool = True) -> str:
+        job = job or {}
+        for key in ("map_id", "key_value"):
+            value = payload.get(key) if payload.get(key) is not None else job.get(key)
+            if not self._is_blank_log_value(value):
+                return str(value).strip()[:100]
+        sql_identity = self._sql_log_identity(payload, job)
+        if sql_identity:
+            return sql_identity
+        for item in payload.get("generated_sql_list") or []:
+            if not isinstance(item, dict):
+                continue
+            table_name = str(item.get("table") or "").strip().upper()
+            if table_name == "NEXT_MIG_INFO":
+                for key in ("key_value", "map_id"):
+                    value = item.get(key)
+                    if not self._is_blank_log_value(value):
+                        return str(value).strip()[:100]
+            if table_name == "NEXT_SQL_INFO":
+                sql_identity = self._sql_log_identity(item)
+                if sql_identity:
+                    return sql_identity
+        if required:
+            raise ValueError("17C SQL formatting log requires NEXT_MIG_INFO.MAP_ID or NEXT_SQL_INFO.SQL_ID + SPACE_NM")
+        return "MISSING_IDENTIFIER"
+
+    def _sql_log_identity(self, *sources: dict[str, Any]) -> str:
+        sql_id = ""
+        space_nm = ""
+        for source in sources:
+            if not sql_id and not self._is_blank_log_value(source.get("sql_id")):
+                sql_id = str(source.get("sql_id")).strip()
+            if not space_nm and not self._is_blank_log_value(source.get("space_nm")):
+                space_nm = str(source.get("space_nm")).strip()
+        if sql_id and space_nm:
+            return f"{sql_id} / {space_nm}"[:100]
+        return ""
+
+    def _formatting_item_key(self, table_name: str, item: dict[str, Any]) -> str:
+        if table_name == "NEXT_MIG_INFO":
+            value = item.get("key_value") if item.get("key_value") is not None else item.get("map_id")
+            return "" if self._is_blank_log_value(value) else str(value).strip()
+        if table_name == "NEXT_SQL_INFO":
+            return self._sql_item_key(item)
+        return ""
+
+    def _sql_item_key(self, item: dict[str, Any]) -> str:
+        space_nm = str(item.get("space_nm") or "").strip()
+        sql_id = str(item.get("sql_id") or "").strip()
+        if self._is_blank_log_value(space_nm) or self._is_blank_log_value(sql_id):
+            return ""
+        return f"{space_nm}||{sql_id}"
+
+    def _sql_key_where(self, item: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        space_nm = str(item.get("space_nm") or "").strip()
+        sql_id = str(item.get("sql_id") or "").strip()
+        if self._is_blank_log_value(space_nm) or self._is_blank_log_value(sql_id):
+            raise ValueError("NEXT_SQL_INFO formatting item requires space_nm+sql_id")
+        return "TO_CHAR(SPACE_NM) = :space_nm AND TO_CHAR(SQL_ID) = :sql_id", {"space_nm": space_nm, "sql_id": sql_id}
+
+    def _has_sql_key(self, item: dict[str, Any]) -> bool:
+        return bool(self._sql_item_key(item))
+
+    def _is_blank_log_value(self, value: Any) -> bool:
+        if value is None:
+            return True
+        try:
+            if value != value:
+                return True
+        except Exception:
+            pass
+        return str(value).strip().lower() in {"", "nan", "none", "null"}
 
     def _json_dump(self, value: Any) -> str:
         try:
@@ -320,10 +402,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                 raise ValueError("NEXT_MIG_INFO formatting item requires key_value/map_id")
             where_sql, params = "MAP_ID = :key", {"key": int(map_id)}
         else:
-            row_id = str(item.get("row_id") or "").strip()
-            if not row_id:
-                raise ValueError("NEXT_SQL_INFO formatting item requires row_id")
-            where_sql, params = "ROWID = CHARTOROWID(:key)", {"key": row_id}
+            where_sql, params = self._sql_key_where(item)
         with self._connect(db_config) as conn:
             cur = conn.cursor()
             cur.execute(f"SELECT {column} FROM {table} WHERE {where_sql}", params)
@@ -361,16 +440,22 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         if sql_items:
             table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
             columns = sorted({item["column"] for item in sql_items})
-            row_ids = sorted({str(item["key"]).strip() for item in sql_items})
-            params = {f"r{index}": row_id for index, row_id in enumerate(row_ids)}
-            predicates = " OR ".join(f"ROWID = CHARTOROWID(:{name})" for name in params)
+            sql_keys = sorted({(str(item.get("space_nm") or "").strip(), str(item.get("sql_id") or "").strip()) for item in sql_items})
+            params: dict[str, Any] = {}
+            predicates: list[str] = []
+            for index, (space_nm, sql_id) in enumerate(sql_keys):
+                space_param = f"space_nm_{index}"
+                sql_param = f"sql_id_{index}"
+                predicates.append(f"(TO_CHAR(SPACE_NM) = :{space_param} AND TO_CHAR(SQL_ID) = :{sql_param})")
+                params[space_param] = space_nm
+                params[sql_param] = sql_id
             with self._connect(db_config) as conn:
                 cur = conn.cursor()
-                cur.execute(f"SELECT ROWIDTOCHAR(ROWID) AS ROW_ID, {', '.join(columns)} FROM {table} WHERE {predicates}", params)
+                cur.execute(f"SELECT TO_CHAR(SPACE_NM) AS SPACE_NM, TO_CHAR(SQL_ID) AS SQL_ID, {', '.join(columns)} FROM {table} WHERE {' OR '.join(predicates)}", params)
                 # Oracle CLOB values can be LOB locators; read them before the connection closes.
                 by_key = {
-                    str(row[0]): {
-                        column: self._lob_to_str(row[index + 1]).strip()
+                    self._sql_item_key({"space_nm": row[0], "sql_id": row[1]}): {
+                        column: self._lob_to_str(row[index + 2]).strip()
                         for index, column in enumerate(columns)
                     }
                     for row in cur.fetchall()
@@ -388,7 +473,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         if table_name == "NEXT_MIG_INFO":
             key_sql, params = "MAP_ID = :key", {"key": int(item.get("key_value") or item.get("map_id"))}
         else:
-            key_sql, params = "ROWID = CHARTOROWID(:key)", {"key": str(item.get("row_id") or "").strip()}
+            key_sql, params = self._sql_key_where(item)
         params["value"] = value
         update_ts = ", UPD_TS = CURRENT_TIMESTAMP" if "UPD_TS" in columns else ""
         with self._connect(db_config) as conn:
@@ -561,7 +646,6 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             "component": "17C_sqlFormattingOneJobPocExecutor",
             "job_route": payload.get("job_route") or "SQL_FORMATTING",
             "job_type": "SQL",
-            "row_id": job.get("row_id") or payload.get("row_id"),
             "space_nm": job.get("space_nm") or payload.get("space_nm"),
             "sql_id": job.get("sql_id") or payload.get("sql_id"),
             "ok": ok,
@@ -576,7 +660,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             "remaining_count": max(total - completed, 0),
             "stages": stages,
             "generated_sql_list": list(payload.get("generated_sql_list") or []),
-            "db_status_updated": bool(job.get("row_id")) and ok,
+            "db_status_updated": self._has_sql_key(job) and ok,
         }
 
     def _should_run_formatting(self, payload: dict[str, Any]) -> bool:
@@ -623,19 +707,9 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             ("TUNED_RESULT", "tuned_result", "VARCHAR2(4000)"),
             ("RETRY_COUNT", "retry_count", "NUMBER"),
         ]
-        select_sql = ",\n               ".join(["ROWIDTOCHAR(ROWID) AS row_id", *[self._select_expr(columns, col, alias, data_type) for col, alias, data_type in aliases]])
-        row_id = str(payload.get("row_id") or "").strip()
-        if row_id:
-            where_sql = "ROWID = CHARTOROWID(:rid)"
-            params = {"rid": row_id}
-        else:
-            space_nm = str(payload.get("space_nm") or "").strip()
-            sql_id = str(payload.get("sql_id") or "").strip()
-            if not space_nm or not sql_id:
-                raise ValueError("SQL formatting item requires row_id or space_nm+sql_id")
-            where_sql = "TO_CHAR(SPACE_NM) = :space_nm AND TO_CHAR(SQL_ID) = :sql_id"
-            params = {"space_nm": space_nm, "sql_id": sql_id}
-        order_expr = "UPD_TS NULLS FIRST" if "UPD_TS" in columns else "ROWID"
+        select_sql = ",\n               ".join([self._select_expr(columns, col, alias, data_type) for col, alias, data_type in aliases])
+        where_sql, params = self._sql_key_where(payload)
+        order_expr = "UPD_TS NULLS FIRST" if "UPD_TS" in columns else "SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST"
         query = f"SELECT {select_sql} FROM {table} WHERE {where_sql} ORDER BY {order_expr}"
         with self._connect(db_config) as conn:
             cur = conn.cursor()
@@ -643,15 +717,15 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             row = cur.fetchone()
             if not row:
                 raise ValueError(f"NEXT_SQL_INFO row not found: space_nm={payload.get('space_nm')}, sql_id={payload.get('sql_id')}")
-            keys = ["row_id", *[alias for _, alias, _ in aliases]]
+            keys = [alias for _, alias, _ in aliases]
             loaded = {key: self._lob_to_str(row[index]) for index, key in enumerate(keys)}
         return {**payload, **loaded}
 
-    def _update_row(self, db_config: dict[str, Any], row_id: str, values: dict[str, Any]) -> None:
+    def _update_row(self, db_config: dict[str, Any], job: dict[str, Any], values: dict[str, Any]) -> None:
         table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
         columns = self._table_columns(db_config, table)
         set_clauses: list[str] = []
-        params: dict[str, Any] = {"rid": row_id}
+        where_sql, params = self._sql_key_where(job)
         for index, (column, value) in enumerate(values.items(), start=1):
             if column not in columns:
                 continue
@@ -664,10 +738,10 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             return
         with self._connect(db_config) as conn:
             cur = conn.cursor()
-            cur.execute(f"UPDATE {table} SET {', '.join(set_clauses)} WHERE ROWID = CHARTOROWID(:rid)", params)
+            cur.execute(f"UPDATE {table} SET {', '.join(set_clauses)} WHERE {where_sql}", params)
             conn.commit()
 
-    def _increment_batch_count(self, db_config: dict[str, Any], row_id: str) -> None:
+    def _increment_batch_count(self, db_config: dict[str, Any], job: dict[str, Any]) -> None:
         table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
         columns = self._table_columns(db_config, table)
         if "BATCH_CNT" not in columns:
@@ -675,9 +749,10 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         set_clause = "BATCH_CNT = NVL(BATCH_CNT, 0) + 1"
         if "UPD_TS" in columns:
             set_clause += ", UPD_TS = CURRENT_TIMESTAMP"
+        where_sql, params = self._sql_key_where(job)
         with self._connect(db_config) as conn:
             cur = conn.cursor()
-            cur.execute(f"UPDATE {table} SET {set_clause} WHERE ROWID = CHARTOROWID(:1)", [row_id])
+            cur.execute(f"UPDATE {table} SET {set_clause} WHERE {where_sql}", params)
             conn.commit()
 
     def _status(self, value: Any) -> str:

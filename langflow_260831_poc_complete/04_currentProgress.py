@@ -213,7 +213,6 @@ class NewType04CurrentProgress(Component):
             return []
         select_sql = ", ".join(
             [
-                "ROWIDTOCHAR(ROWID) AS ROW_ID",
                 self._select_expr(cols, "SPACE_NM", "SPACE_NM"),
                 self._select_expr(cols, "SQL_ID", "SQL_ID"),
                 self._select_expr(cols, "PRIORITY", "PRIORITY", "NUMBER"),
@@ -234,8 +233,7 @@ class NewType04CurrentProgress(Component):
             {
                 "route": route,
                 "label": ROUTE_LABELS[route],
-                "job_id": self._join_detail([row.get("sql_id"), row.get("space_nm")]) or row.get("row_id"),
-                "row_id": row.get("row_id"),
+                "job_id": self._join_detail([row.get("sql_id"), row.get("space_nm")]),
                 "space_nm": row.get("space_nm"),
                 "sql_id": row.get("sql_id"),
                 "status": row.get("status_value") or "RUNNING",
@@ -281,7 +279,7 @@ class NewType04CurrentProgress(Component):
         result: list[dict[str, Any]] = []
         seen: set[tuple[str, str]] = set()
         for job in running_jobs:
-            key = (str(job.get("route") or ""), str(job.get("job_id") or job.get("row_id") or ""))
+            key = (str(job.get("route") or ""), str(job.get("job_id") or ""))
             if key in seen:
                 continue
             seen.add(key)

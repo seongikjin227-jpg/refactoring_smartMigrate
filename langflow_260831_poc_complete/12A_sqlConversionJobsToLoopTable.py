@@ -115,12 +115,10 @@ class NewType12ASqlConversionJobsToLoopTable(Component):
             ]
 
     def _validate_sql_key(self, job: dict[str, Any], index: int) -> None:
-        """Require ROWID or the logical SQL key used by NEXT_SQL_INFO."""
-        if str(job.get("row_id") or "").strip():
-            return
+        """Require the logical SQL key used by NEXT_SQL_INFO."""
         if str(job.get("space_nm") or "").strip() and str(job.get("sql_id") or "").strip():
             return
-        raise ValueError(f"12A SQL Conversion job row {index} requires row_id or space_nm+sql_id")
+        raise ValueError(f"12A SQL Conversion job row {index} requires space_nm+sql_id")
 
     def _db_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Collect DB connection settings for downstream Loop items."""

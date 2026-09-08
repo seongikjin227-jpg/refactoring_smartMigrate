@@ -189,16 +189,11 @@ class NewType12BSqlConversionLoop(Component):
             raise
 
     def _validate_sql_key(self, payload: dict[str, Any], index: int) -> None:
-        if str(payload.get("row_id") or "").strip():
-            return
         if str(payload.get("space_nm") or "").strip() and str(payload.get("sql_id") or "").strip():
             return
-        raise ValueError(f"12B SQL Conversion item {index} requires row_id or space_nm+sql_id")
+        raise ValueError(f"12B SQL Conversion item {index} requires space_nm+sql_id")
 
     def _job_key(self, payload: dict[str, Any]) -> str:
-        row_id = str(payload.get("row_id") or "").strip()
-        if row_id:
-            return f"row_id={row_id}"
         return f"space_nm={payload.get('space_nm')}, sql_id={payload.get('sql_id')}"
 
     def _data_dict(self, item: Any) -> dict[str, Any]:

@@ -308,8 +308,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                     logger.info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "INFO", "RUN_JOB", "END", 0]})
                     return __log_result
                 job = self._load_sql_job(db_config, payload)
-                self._increment_batch_count(db_config, str(job["row_id"]))
-                self._mark_running_status(db_config, str(job["row_id"]), "STATUS_CONVERSION", "RUNNING", "SQL conversion started")
+                self._increment_batch_count(db_config, job)
+                self._mark_running_status(db_config, job, "STATUS_CONVERSION", "RUNNING", "SQL conversion started")
 
                 # ##############################
                 # Actual conversion execution
@@ -536,7 +536,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 update_values = {"TO_SQL": to_sql}
                 if state.get("tuned_fr_sql"):
                     update_values["TUNED_FR_SQL"] = state["tuned_fr_sql"]
-                self._update_row(state["db_config"], state["job"]["row_id"], update_values)
+                self._update_row(state["db_config"], state["job"], update_values)
                 state["resume_stage"] = "GENERATE_BIND_SQL" if state["tag_kind"] == "SELECT" else "SKIP_TEST_FOR_NON_SELECT"
                 return state
             except Exception as exc:
@@ -574,7 +574,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 state["attempts"].append(attempt_entry)
                 bind_log_sql = f"USER_EDITED=Y; BIND_SQL is not null\n\n{bind_sql}" if bind_reuse_stage == "USE_USER_EDITED_BIND_SQL" else bind_sql
                 logger.info("BIND_SQL completed", extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "BIND_SQL", "INFO", bind_reuse_stage, "SUCCESS", state["retry_count"], bind_log_sql]})
-                self._update_row(state["db_config"], state["job"]["row_id"], {"BIND_SQL": bind_sql, "BIND_SET": bind_set})
+                self._update_row(state["db_config"], state["job"], {"BIND_SQL": bind_sql, "BIND_SET": bind_set})
                 return state
             except Exception as exc:
                 state["last_status"], state["last_message"], state["resume_stage"] = FAIL_BIND, str(exc), "GENERATE_BIND_SQL"
@@ -596,7 +596,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                     str((state.get("correct_sql_hints") or {}).get("TEST_SQL") or "- (empty)"),
                 )
                 state["test_sql"] = test_sql
-                self._update_row(state["db_config"], state["job"]["row_id"], {"TEST_SQL": test_sql})
+                self._update_row(state["db_config"], state["job"], {"TEST_SQL": test_sql})
                 test_rows = self._execute_test_query(state["db_config"], test_sql)
                 self._evaluate_test_rows(test_rows)
                 state.update({"test_sql": test_sql, "status": CONVERSION_PASS, "node_failed": False})
@@ -622,7 +622,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             running_status = f"RUNNING-{state.get('last_status') or FAIL_TOBE}"
             self._mark_running_status(
                 state["db_config"],
-                str(state["job"]["row_id"]),
+                state["job"],
                 "STATUS_CONVERSION",
                 running_status,
                 state.get("last_message") or "",
@@ -648,7 +648,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 values = {"TO_SQL": state.get("to_sql"), "BIND_SQL": state.get("bind_sql"), "BIND_SET": state.get("bind_set"), "TEST_SQL": state.get("test_sql"), "STATUS_CONVERSION": CONVERSION_PASS, "LOG": final_log, "RETRY_COUNT": state["retry_count"]}
                 if state.get("tuned_fr_sql"):
                     values["TUNED_FR_SQL"] = state["tuned_fr_sql"]
-                self._update_row(state["db_config"], state["job"]["row_id"], values)
+                self._update_row(state["db_config"], state["job"], values)
                 state["result"] = self._result(
                     payload=state["payload"], job=state["job"], ok=True, status=CONVERSION_PASS,
                     elapsed=time.perf_counter() - state["started"], attempts=state["attempts"],
@@ -739,7 +739,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         tuned_fr_sql = self._clean_generated_sql(tuned_fr_sql)
         if not tuned_fr_sql:
             raise ValueError("TUNED_FR_SQL generation returned empty SQL")
-        self._update_row(db_config, job["row_id"], {"TUNED_FR_SQL": tuned_fr_sql})
+        self._update_row(db_config, job, {"TUNED_FR_SQL": tuned_fr_sql})
         self._increment_rag_hits(db_config, tuning_examples)
         logging.getLogger("smartmigrate.workflow").info(
             "TUNED_FR_SQL generated",
@@ -924,7 +924,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
     ) -> dict[str, Any]:
         """Persist a SQL conversion failure using the source status values."""
         failure_attempts = attempts or [{"attempt": 1, "stage": self._failure_stage(status), "status": status, "reason": message}]
-        if job.get("row_id"):
+        if self._has_sql_key(job):
             update_values = {
                 key: value
                 for key, value in (partial_values or {}).items()
@@ -939,7 +939,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             )
             self._update_row(
                 db_config,
-                str(job["row_id"]),
+                job,
                 update_values,
             )
             retry_count = self._retry_count(failure_attempts)
@@ -1002,7 +1002,6 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "component": "12C_sqlConversionOneJobPocExecutor",
             "job_route": payload.get("job_route") or "SQL_CONVERSION",
             "job_type": "SQL",
-            "row_id": job.get("row_id") or payload.get("row_id"),
             "space_nm": job.get("space_nm") or payload.get("space_nm"),
             "sql_id": job.get("sql_id") or payload.get("sql_id"),
             "ok": ok,
@@ -1018,12 +1017,13 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "remaining_count": max(total - completed, 0),
             "stages": stages,
             "generated_sql_list": self._generated_sql_list(payload, job, extra),
-            "db_status_updated": bool(job.get("row_id")),
+            "db_status_updated": self._has_sql_key(job),
         }
 
     def _generated_sql_list(self, payload: dict[str, Any], job: dict[str, Any], extra: dict[str, Any]) -> list[dict[str, Any]]:
         result = [dict(item) for item in payload.get("generated_sql_list") or [] if isinstance(item, dict)]
-        row_id = job.get("row_id") or payload.get("row_id")
+        sql_id = job.get("sql_id") or payload.get("sql_id")
+        space_nm = job.get("space_nm") or payload.get("space_nm")
         for key, column in (
             ("tuned_fr_sql", "TUNED_FR_SQL"),
             ("to_sql", "TO_SQL"),
@@ -1034,7 +1034,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 result.append(
                     {
                         "table": "NEXT_SQL_INFO",
-                        "row_id": row_id,
+                        "sql_id": sql_id,
+                        "space_nm": space_nm,
                         "column": column,
                         "source_component": "12C_sqlConversionOneJobPocExecutor",
                     }
@@ -1047,7 +1048,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         for item in values:
             key = (
                 str(item.get("table") or "").upper(),
-                str(item.get("row_id") or ""),
+                str(item.get("sql_id") or ""),
+                str(item.get("space_nm") or ""),
                 str(item.get("key_value") or ""),
                 str(item.get("column") or "").upper(),
             )
@@ -1111,9 +1113,9 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 continue
         return max(max_attempt - 1, 0)
 
-    # Load one NEXT_SQL_INFO row by ROWID or by SPACE_NM and SQL_ID.
+    # Load one NEXT_SQL_INFO row by SPACE_NM and SQL_ID.
     def _load_sql_job(self, db_config: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
-        """Load one NEXT_SQL_INFO row by ROWID or by SPACE_NM + SQL_ID."""
+        """Load one NEXT_SQL_INFO row by SPACE_NM + SQL_ID."""
         table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
         columns = self._table_columns(db_config, table)
         aliases = [
@@ -1138,18 +1140,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             ("PRIORITY", "priority", "NUMBER"),
             ("RETRY_COUNT", "retry_count", "NUMBER"),
         ]
-        select_sql = ",\n               ".join(["ROWIDTOCHAR(ROWID) AS row_id", *[self._select_expr(columns, col, alias, data_type) for col, alias, data_type in aliases]])
-        row_id = str(payload.get("row_id") or "").strip()
-        if row_id:
-            where_sql = "ROWID = CHARTOROWID(:rid)"
-            params = {"rid": row_id}
-        else:
-            space_nm = str(payload.get("space_nm") or "").strip()
-            sql_id = str(payload.get("sql_id") or "").strip()
-            if not space_nm or not sql_id:
-                raise ValueError("SQL job item requires row_id or space_nm+sql_id")
-            where_sql = "TO_CHAR(SPACE_NM) = :space_nm AND TO_CHAR(SQL_ID) = :sql_id"
-            params = {"space_nm": space_nm, "sql_id": sql_id}
+        select_sql = ",\n               ".join([self._select_expr(columns, col, alias, data_type) for col, alias, data_type in aliases])
+        where_sql, params = self._sql_key_where(payload)
         query = f"""
             SELECT {select_sql}
               FROM {table}
@@ -1162,17 +1154,17 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             row = cur.fetchone()
             if not row:
                 raise ValueError(f"NEXT_SQL_INFO row not found: space_nm={payload.get('space_nm')}, sql_id={payload.get('sql_id')}")
-            keys = ["row_id", *[alias for _, alias, _ in aliases]]
+            keys = [alias for _, alias, _ in aliases]
             loaded = {key: self._lob_to_str(row[index]) for index, key in enumerate(keys)}
         return {**payload, **loaded}
 
     # Update generated SQL/status columns that exist in NEXT_SQL_INFO.
-    def _update_row(self, db_config: dict[str, Any], row_id: str, values: dict[str, Any]) -> None:
+    def _update_row(self, db_config: dict[str, Any], job: dict[str, Any], values: dict[str, Any]) -> None:
         """Update only columns that exist in NEXT_SQL_INFO."""
         table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
         columns = self._table_columns(db_config, table)
         set_clauses: list[str] = []
-        params: dict[str, Any] = {"rid": row_id}
+        where_sql, params = self._sql_key_where(job)
         for index, (column, value) in enumerate(values.items(), start=1):
             if column not in columns:
                 continue
@@ -1186,7 +1178,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         query = f"""
             UPDATE {table}
                SET {", ".join(set_clauses)}
-             WHERE ROWID = CHARTOROWID(:rid)
+             WHERE {where_sql}
         """
         with self._connect(db_config) as conn:
             cur = conn.cursor()
@@ -1194,7 +1186,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             conn.commit()
 
     # Increment BATCH_CNT when this SQL conversion row starts execution.
-    def _increment_batch_count(self, db_config: dict[str, Any], row_id: str) -> None:
+    def _increment_batch_count(self, db_config: dict[str, Any], job: dict[str, Any]) -> None:
         """Increment NEXT_SQL_INFO.BATCH_CNT when a SQL conversion job starts."""
         table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
         columns = self._table_columns(db_config, table)
@@ -1203,29 +1195,40 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         set_clause = "BATCH_CNT = NVL(BATCH_CNT, 0) + 1"
         if "UPD_TS" in columns:
             set_clause += ", UPD_TS = CURRENT_TIMESTAMP"
+        where_sql, params = self._sql_key_where(job)
         with self._connect(db_config) as conn:
             cur = conn.cursor()
             cur.execute(
                 f"""
                 UPDATE {table}
                    SET {set_clause}
-                 WHERE ROWID = CHARTOROWID(:1)
+                 WHERE {where_sql}
                 """,
-                [row_id],
+                params,
             )
             conn.commit()
 
-    def _mark_running_status(self, db_config: dict[str, Any], row_id: str, status_column: str, status: str, message: str, retry_count: int = 0) -> None:
+    def _mark_running_status(self, db_config: dict[str, Any], job: dict[str, Any], status_column: str, status: str, message: str, retry_count: int = 0) -> None:
         """Persist a running SQL status while retry is still active."""
         self._update_row(
             db_config,
-            row_id,
+            job,
             {
                 status_column: status,
                 "LOG": f"RUNNING stage=SQL_CONVERSION status={status} message={message}",
                 "RETRY_COUNT": retry_count,
             },
         )
+
+    def _sql_key_where(self, job: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        space_nm = str(job.get("space_nm") or "").strip()
+        sql_id = str(job.get("sql_id") or "").strip()
+        if not space_nm or not sql_id:
+            raise ValueError("SQL job item requires space_nm+sql_id")
+        return "TO_CHAR(SPACE_NM) = :space_nm AND TO_CHAR(SQL_ID) = :sql_id", {"space_nm": space_nm, "sql_id": sql_id}
+
+    def _has_sql_key(self, job: dict[str, Any]) -> bool:
+        return bool(str(job.get("space_nm") or "").strip() and str(job.get("sql_id") or "").strip())
 
     # Pick EDIT_FR_SQL first and fall back to original FR_SQL.
     def _source_sql(self, job: dict[str, Any]) -> str:

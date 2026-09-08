@@ -400,7 +400,7 @@ class NewType00BSaveVectorDB(Component):
         if "EDIT_FR_SQL" in columns:
             where_sql = f"{where_sql} OR EDIT_FR_SQL IS NOT NULL"
         sql = f"""
-            SELECT ROWIDTOCHAR(ROWID), SPACE_NM, SQL_ID, FR_SQL, {edit_fr_expr}, {status_expr}, {user_edited_expr}, {tag_kind_expr},
+            SELECT SPACE_NM, SQL_ID, FR_SQL, {edit_fr_expr}, {status_expr}, {user_edited_expr}, {tag_kind_expr},
                    {target_table_expr}, {to_sql_expr}, {bind_sql_expr}, {test_sql_expr}, {updated_expr}
               FROM {table}
              WHERE {where_sql}
@@ -411,22 +411,23 @@ class NewType00BSaveVectorDB(Component):
             cur.execute(sql)
             rows = []
             for row in cur.fetchall():
-                row_id = self._lob_to_str(row[0]).strip()
-                space_nm = self._lob_to_str(row[1]).strip()
-                sql_id = self._lob_to_str(row[2]).strip()
-                fr_sql = self._lob_to_str(row[3]).strip()
-                edit_fr_sql = self._lob_to_str(row[4]).strip()
+                space_nm = self._lob_to_str(row[0]).strip()
+                sql_id = self._lob_to_str(row[1]).strip()
+                fr_sql = self._lob_to_str(row[2]).strip()
+                edit_fr_sql = self._lob_to_str(row[3]).strip()
                 source_sql = edit_fr_sql or fr_sql
-                to_sql = self._lob_to_str(row[9]).strip()
-                bind_sql = self._lob_to_str(row[10]).strip()
-                test_sql = self._lob_to_str(row[11]).strip()
-                status = self._lob_to_str(row[5]).strip().upper()
-                user_edited = self._lob_to_str(row[6]).strip().upper()
+                to_sql = self._lob_to_str(row[8]).strip()
+                bind_sql = self._lob_to_str(row[9]).strip()
+                test_sql = self._lob_to_str(row[10]).strip()
+                status = self._lob_to_str(row[4]).strip().upper()
+                user_edited = self._lob_to_str(row[5]).strip().upper()
                 # Only trusted, user-edited successful conversion rows are used
                 # as correct SQL hints. Failed or untouched rows are excluded so
                 # the RAG hint does not teach the model bad output.
                 is_active = bool(source_sql) and user_edited == "Y" and status in {"PASS", "PASS-CONVERSION"} and bool(to_sql or bind_sql or test_sql)
-                doc_key = f"{space_nm}:{sql_id}" if space_nm or sql_id else row_id
+                if not space_nm or not sql_id:
+                    continue
+                doc_key = f"{space_nm}:{sql_id}"
                 rows.append(
                     self._entity(
                         doc_id=f"SQL:{self._hash_text(doc_key)[:24]}",
@@ -434,8 +435,8 @@ class NewType00BSaveVectorDB(Component):
                         sql_id=sql_id,
                         status_conversion=status,
                         user_edited=user_edited,
-                        tag_kind=self._lob_to_str(row[7]),
-                        target_table=self._lob_to_str(row[8]),
+                        tag_kind=self._lob_to_str(row[6]),
+                        target_table=self._lob_to_str(row[7]),
                         source_sql=source_sql,
                         to_sql=to_sql,
                         bind_sql=bind_sql,

@@ -206,11 +206,9 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
             if str(job.get("map_id") or "").strip():
                 return
             raise ValueError(f"18A MIG job row {index} requires map_id")
-        if str(job.get("row_id") or "").strip():
-            return
         if str(job.get("space_nm") or "").strip() and str(job.get("sql_id") or "").strip():
             return
-        raise ValueError(f"18A {route} job row {index} requires row_id or space_nm+sql_id")
+        raise ValueError(f"18A {route} job row {index} requires space_nm+sql_id")
 
     def _sort_migration_jobs(self, jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         indexed = [(index, job) for index, job in enumerate(jobs)]

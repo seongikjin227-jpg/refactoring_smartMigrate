@@ -251,7 +251,6 @@ class NewType11BFailureCauseAnalyzer(Component):
                         "created_at": self._to_text(row[0]),
                         "space_nm": space_nm,
                         "sql_id": sql_id,
-                        "row_id": "",
                         "sql_kind": self._to_text(row[3]),
                         "status": self._to_text(row[4]),
                         "model_name": "",

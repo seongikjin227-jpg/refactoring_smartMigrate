@@ -216,11 +216,9 @@ class NewType18BFullWorkflowLoop(Component):
                 return
             raise ValueError(f"18B MIG item {index} requires map_id")
         if route in {"SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"}:
-            if str(payload.get("row_id") or "").strip():
-                return
             if str(payload.get("space_nm") or "").strip() and str(payload.get("sql_id") or "").strip():
                 return
-            raise ValueError(f"18B {route} item {index} requires row_id or space_nm+sql_id")
+            raise ValueError(f"18B {route} item {index} requires space_nm+sql_id")
         raise ValueError(f"18B item {index} has invalid job_route={route}")
 
     def _summary(self, results: list[dict[str, Any]], data_list: list[Any], skipped_plan_counts: dict[str, Any] | None = None) -> dict[str, Any]:

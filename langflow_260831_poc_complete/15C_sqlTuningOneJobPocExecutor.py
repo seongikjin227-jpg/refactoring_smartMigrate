@@ -183,8 +183,8 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                 self.status = result
                 return Data(data=result)
 
-            self._increment_batch_count(db_config, str(job["row_id"]))
-            self._mark_running_status(db_config, str(job["row_id"]), "RUNNING", "SQL tuning started")
+            self._increment_batch_count(db_config, job)
+            self._mark_running_status(db_config, job, "RUNNING", "SQL tuning started")
             result = self._run_tuning(merged, job, db_config, started)
             self.status = result
             return Data(data=result)
@@ -254,7 +254,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                 state["tuning_guides"] = tuning_examples
                 state["source_tables"] = sorted(source_tables)
                 state["matched_rule_ids"] = sorted({match["rule_id"] for block in tuning_examples for match in block.get("top_rule_matches", []) if match.get("rule_id")})
-                self._update_block_rag_content(state["db_config"], state["job"]["row_id"], tuning_examples)
+                self._update_block_rag_content(state["db_config"], state["job"], tuning_examples)
                 state["node_failed"] = False
                 state["attempts"].append({"attempt": state["attempt_no"], "stage": "LOAD_TUNING_RULES", "status": "PASS", "general_rules": len(general_rules), "matched_rule_ids": state["matched_rule_ids"]})
                 return state
@@ -304,7 +304,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                 state["tuned_result"] = tuned_result
                 state["tuning_guides"] = all_examples
                 state["node_failed"] = False
-                self._update_row(state["db_config"], state["job"]["row_id"], {"TUNED_TO_SQL": final_sql, "TUNED_RESULT": tuned_result})
+                self._update_row(state["db_config"], state["job"], {"TUNED_TO_SQL": final_sql, "TUNED_RESULT": tuned_result})
                 if not any(item.get("stage") == "APPLY_TUNING_RULES" and item.get("attempt") == state["attempt_no"] for item in state["attempts"]):
                     state["attempts"].append({"attempt": state["attempt_no"], "stage": "APPLY_TUNING_RULES", "status": TUNING_PASS, "result": tuned_result})
                 return state
@@ -349,7 +349,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         def retry_prepare_node(state: dict[str, Any]) -> dict[str, Any]:
             next_attempt = int(state["attempt_no"]) + 1
             running_status = f"RUNNING-{state.get('last_status') or FAIL_TUNED}"
-            self._mark_running_status(state["db_config"], str(state["job"]["row_id"]), running_status, state.get("last_message") or "", next_attempt - 1)
+            self._mark_running_status(state["db_config"], state["job"], running_status, state.get("last_message") or "", next_attempt - 1)
             retry_from = "GENERATE_TUNED_TEST_SQL" if state.get("last_status") == FAIL_TEST else "APPLY_TUNING_RULES"
             next_state = {
                 **state,
@@ -367,7 +367,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         def finalize_node(state: dict[str, Any]) -> dict[str, Any]:
             if state.get("status") == TUNING_PASS:
                 final_log = f"FINAL SUCCESS stage=SQL_TUNING status={TUNING_PASS} job={state['job'].get('space_nm')}.{state['job'].get('sql_id')} result={state.get('tuned_result') or ''}"
-                self._update_row(state["db_config"], state["job"]["row_id"], {"TUNED_TO_SQL": state.get("tuned_sql") or state.get("to_sql"), "TUNED_RESULT": state.get("tuned_result") or "NO TUNING", "STATUS_TUNING": TUNING_PASS, "LOG": final_log, "RETRY_COUNT": state["retry_count"]})
+                self._update_row(state["db_config"], state["job"], {"TUNED_TO_SQL": state.get("tuned_sql") or state.get("to_sql"), "TUNED_RESULT": state.get("tuned_result") or "NO TUNING", "STATUS_TUNING": TUNING_PASS, "LOG": final_log, "RETRY_COUNT": state["retry_count"]})
                 self._increment_rag_hits(state["db_config"], state.get("tuning_guides") or [])
                 state["result"] = self._result(
                     payload=state["payload"],
@@ -587,10 +587,10 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
 
     def _finish_failure(self, payload: dict[str, Any], job: dict[str, Any], db_config: dict[str, Any], started: float, status: str, message: str, attempts: list[dict[str, Any]] | None = None, partial_values: dict[str, Any] | None = None, tuning_guides: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         failure_attempts = attempts or [{"attempt": 1, "stage": self._failure_stage(status), "status": status, "reason": message}]
-        if db_config and job.get("row_id"):
+        if db_config and self._has_sql_key(job):
             update_values = {key: value for key, value in (partial_values or {}).items() if value not in (None, "")}
             update_values.update({"STATUS_TUNING": status, "TUNED_RESULT": str((partial_values or {}).get("TUNED_RESULT") or message)[:4000], "LOG": f"FINAL FAILURE stage=SQL_TUNING status={status} error={message}", "RETRY_COUNT": self._configured_retry_limit()})
-            self._update_row(db_config, str(job["row_id"]), update_values)
+            self._update_row(db_config, job, update_values)
             logging.getLogger("smartmigrate.workflow").error(message, extra={"workflow_log": [self._map_id(job), "SQL_TUNING", "SQL_TUNING", "ERROR", self._failure_stage(status), status, max(0, len(failure_attempts) - 1), update_values.get("TUNED_TO_SQL") or ""]})
         return self._result(
             payload=payload,
@@ -629,7 +629,6 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             "component": "15C_sqlTuningOneJobPocExecutor",
             "job_route": payload.get("job_route") or "SQL_TUNING",
             "job_type": "SQL",
-            "row_id": job.get("row_id") or payload.get("row_id"),
             "space_nm": job.get("space_nm") or payload.get("space_nm"),
             "sql_id": job.get("sql_id") or payload.get("sql_id"),
             "ok": ok,
@@ -644,21 +643,22 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             "remaining_count": max(total - completed, 0),
             "stages": stages,
             "generated_sql_list": self._generated_sql_list(payload, job, extra),
-            "db_status_updated": bool(job.get("row_id")) and not extra.get("tuning_skipped"),
+            "db_status_updated": self._has_sql_key(job) and not extra.get("tuning_skipped"),
         }
 
     def _generated_sql_list(self, payload: dict[str, Any], job: dict[str, Any], extra: dict[str, Any]) -> list[dict[str, Any]]:
         result = [dict(item) for item in payload.get("generated_sql_list") or [] if isinstance(item, dict)]
-        row_id = job.get("row_id") or payload.get("row_id")
+        sql_id = job.get("sql_id") or payload.get("sql_id")
+        space_nm = job.get("space_nm") or payload.get("space_nm")
         if str(extra.get("tuned_to_sql") or "").strip():
-            result.append({"table": "NEXT_SQL_INFO", "row_id": row_id, "column": "TUNED_TO_SQL", "source_component": "15C_sqlTuningOneJobPocExecutor"})
+            result.append({"table": "NEXT_SQL_INFO", "sql_id": sql_id, "space_nm": space_nm, "column": "TUNED_TO_SQL", "source_component": "15C_sqlTuningOneJobPocExecutor"})
         return self._dedupe_generated_sql_list(result)
 
     def _dedupe_generated_sql_list(self, values: list[dict[str, Any]]) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         seen: set[tuple[str, str, str, str]] = set()
         for item in values:
-            key = (str(item.get("table") or "").upper(), str(item.get("row_id") or ""), str(item.get("key_value") or ""), str(item.get("column") or "").upper())
+            key = (str(item.get("table") or "").upper(), str(item.get("sql_id") or ""), str(item.get("space_nm") or ""), str(item.get("key_value") or ""), str(item.get("column") or "").upper())
             if key in seen or not key[-1]:
                 continue
             seen.add(key)
@@ -683,19 +683,9 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             ("PRIORITY", "priority", "NUMBER"),
             ("RETRY_COUNT", "retry_count", "NUMBER"),
         ]
-        select_sql = ",\n               ".join(["ROWIDTOCHAR(ROWID) AS row_id", *[self._select_expr(columns, col, alias, data_type) for col, alias, data_type in aliases]])
-        row_id = str(payload.get("row_id") or "").strip()
-        if row_id:
-            where_sql = "ROWID = CHARTOROWID(:rid)"
-            params = {"rid": row_id}
-        else:
-            space_nm = str(payload.get("space_nm") or "").strip()
-            sql_id = str(payload.get("sql_id") or "").strip()
-            if not space_nm or not sql_id:
-                raise ValueError("SQL tuning item requires row_id or space_nm+sql_id")
-            where_sql = "TO_CHAR(SPACE_NM) = :space_nm AND TO_CHAR(SQL_ID) = :sql_id"
-            params = {"space_nm": space_nm, "sql_id": sql_id}
-        order_expr = "UPD_TS NULLS FIRST" if "UPD_TS" in columns else "ROWID"
+        select_sql = ",\n               ".join([self._select_expr(columns, col, alias, data_type) for col, alias, data_type in aliases])
+        where_sql, params = self._sql_key_where(payload)
+        order_expr = "UPD_TS NULLS FIRST" if "UPD_TS" in columns else "SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST"
         query = f"SELECT {select_sql} FROM {table} WHERE {where_sql} ORDER BY {order_expr}"
         with self._connect(db_config) as conn:
             cur = conn.cursor()
@@ -703,15 +693,15 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             row = cur.fetchone()
             if not row:
                 raise ValueError(f"NEXT_SQL_INFO row not found: space_nm={payload.get('space_nm')}, sql_id={payload.get('sql_id')}")
-            keys = ["row_id", *[alias for _, alias, _ in aliases]]
+            keys = [alias for _, alias, _ in aliases]
             loaded = {key: self._lob_to_str(row[index]) for index, key in enumerate(keys)}
         return {**payload, **loaded}
 
-    def _update_row(self, db_config: dict[str, Any], row_id: str, values: dict[str, Any]) -> None:
+    def _update_row(self, db_config: dict[str, Any], job: dict[str, Any], values: dict[str, Any]) -> None:
         table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
         columns = self._table_columns(db_config, table)
         set_clauses: list[str] = []
-        params: dict[str, Any] = {"rid": row_id}
+        where_sql, params = self._sql_key_where(job)
         for index, (column, value) in enumerate(values.items(), start=1):
             if column not in columns:
                 continue
@@ -724,15 +714,15 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             return
         with self._connect(db_config) as conn:
             cur = conn.cursor()
-            cur.execute(f"UPDATE {table} SET {', '.join(set_clauses)} WHERE ROWID = CHARTOROWID(:rid)", params)
+            cur.execute(f"UPDATE {table} SET {', '.join(set_clauses)} WHERE {where_sql}", params)
             conn.commit()
 
-    def _update_block_rag_content(self, db_config: dict[str, Any], row_id: str, tuning_examples: list[dict[str, Any]]) -> None:
+    def _update_block_rag_content(self, db_config: dict[str, Any], job: dict[str, Any], tuning_examples: list[dict[str, Any]]) -> None:
         table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
         if "BLOCK_RAG_CONTENT" in self._table_columns(db_config, table):
-            self._update_row(db_config, row_id, {"BLOCK_RAG_CONTENT": self._serialize_tuning_examples(tuning_examples)})
+            self._update_row(db_config, job, {"BLOCK_RAG_CONTENT": self._serialize_tuning_examples(tuning_examples)})
 
-    def _increment_batch_count(self, db_config: dict[str, Any], row_id: str) -> None:
+    def _increment_batch_count(self, db_config: dict[str, Any], job: dict[str, Any]) -> None:
         table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
         columns = self._table_columns(db_config, table)
         if "BATCH_CNT" not in columns:
@@ -740,13 +730,24 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         set_clause = "BATCH_CNT = NVL(BATCH_CNT, 0) + 1"
         if "UPD_TS" in columns:
             set_clause += ", UPD_TS = CURRENT_TIMESTAMP"
+        where_sql, params = self._sql_key_where(job)
         with self._connect(db_config) as conn:
             cur = conn.cursor()
-            cur.execute(f"UPDATE {table} SET {set_clause} WHERE ROWID = CHARTOROWID(:1)", [row_id])
+            cur.execute(f"UPDATE {table} SET {set_clause} WHERE {where_sql}", params)
             conn.commit()
 
-    def _mark_running_status(self, db_config: dict[str, Any], row_id: str, status: str, message: str, retry_count: int = 0) -> None:
-        self._update_row(db_config, row_id, {"STATUS_TUNING": status, "LOG": f"RUNNING stage=SQL_TUNING status={status} message={message}", "RETRY_COUNT": retry_count})
+    def _mark_running_status(self, db_config: dict[str, Any], job: dict[str, Any], status: str, message: str, retry_count: int = 0) -> None:
+        self._update_row(db_config, job, {"STATUS_TUNING": status, "LOG": f"RUNNING stage=SQL_TUNING status={status} message={message}", "RETRY_COUNT": retry_count})
+
+    def _sql_key_where(self, job: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        space_nm = str(job.get("space_nm") or "").strip()
+        sql_id = str(job.get("sql_id") or "").strip()
+        if not space_nm or not sql_id:
+            raise ValueError("SQL tuning item requires space_nm+sql_id")
+        return "TO_CHAR(SPACE_NM) = :space_nm AND TO_CHAR(SQL_ID) = :sql_id", {"space_nm": space_nm, "sql_id": sql_id}
+
+    def _has_sql_key(self, job: dict[str, Any]) -> bool:
+        return bool(str(job.get("space_nm") or "").strip() and str(job.get("sql_id") or "").strip())
 
     def _increment_rag_hits(self, db_config: dict[str, Any], examples: list[dict[str, Any]]) -> None:
         rule_ids = sorted({match["rule_id"] for block in examples for match in block.get("top_rule_matches", []) if match.get("rule_id")})
