@@ -407,12 +407,45 @@ class NewType04JobQaCommandTool(Component):
             for rule in rules
             if self._table_matches(str(rule.get("fr_table") or ""), source_scope_tables)
         ]
+
+        # Group by (MAP_ID, MAP_TYPE, FR_TABLE, TO_TABLE, DESCRIPTION, CONDITION)
+        # so table mappings are displayed once with all column mappings listed below.
+        grouped: dict[tuple, list[dict[str, Any]]] = {}
+        for rule in matched:
+            key = (
+                rule.get("map_id"),
+                rule.get("map_type"),
+                rule.get("fr_table"),
+                rule.get("to_table"),
+                rule.get("description"),
+                rule.get("condition"),
+            )
+            grouped.setdefault(key, []).append(rule)
+
+        # Format grouped rules: one table mapping with all its column mappings nested.
+        formatted_rules = []
+        for key, col_mappings in grouped.items():
+            map_id, map_type, fr_table, to_table, description, condition = key
+            base_rule = {
+                "map_id": map_id,
+                "map_type": map_type,
+                "fr_table": fr_table,
+                "to_table": to_table,
+                "description": description,
+                "condition": condition,
+                "column_mappings": [
+                    {"fr_col": m.get("fr_col"), "to_col": m.get("to_col")}
+                    for m in col_mappings
+                ]
+            }
+            formatted_rules.append(base_rule)
+
         return {
             "sql_targets": sql_targets,
             "source_scope_tables": sorted(source_scope_tables),
             "match_basis": "NEXT_SQL_INFO.TARGET_TABLE -> NEXT_MIG_INFO.FR_TABLE",
-            "rules": matched,
-            "message": "" if matched else "No PASS mapping rule matched the SQL FROM table scope.",
+            "rules": formatted_rules,
+            "message": "" if formatted_rules else "No PASS mapping rule matched the SQL FROM table scope.",
         }
 
     def _search_jobs(self, command: dict[str, Any]) -> dict[str, Any]:
