@@ -77,25 +77,30 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
     outputs = [Output(display_name="Job Result", name="job_result", method="run_job", types=["Data"])]
 
     def run_job(self) -> Data:
+        logging.getLogger("smartmigrate.workflow").info("before run_job", extra={"workflow_log": [0, "WORKFLOW", "17C_SQL_FORMAT", "INFO", "RUN_JOB", "START", 0]})
         started = time.perf_counter()
         payload: dict[str, Any] = {}
         job: dict[str, Any] = {}
         try:
             payload = self._parse_payload(getattr(self, "job_item", ""))
             prior_failure = self._prior_failure_status(payload)
-            if prior_failure:
-                result = self._component_pass_through(payload, started, f"SQL formatting skipped because prior stage failed: {prior_failure}")
-                result["status"] = prior_failure
-                result["formatting_skipped"] = True
-                self.status = result
-                return Data(data=result)
             generated_sql_list = self._formatting_candidates(payload)
             payload["generated_sql_list"] = generated_sql_list
             if generated_sql_list:
                 db_config = self._db_config(payload)
                 self._require_db_config(db_config)
                 result = self._run_batch_formatting(payload, db_config, started)
+                if prior_failure:
+                    result = self._preserve_prior_failure_after_formatting(result, payload, prior_failure)
                 self.status = result
+                logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "17C_SQL_FORMAT", "INFO", "RUN_JOB", "END", 0]})
+                return Data(data=result)
+            if prior_failure:
+                result = self._component_pass_through(payload, started, f"SQL formatting skipped because prior stage failed and no generated SQL exists: {prior_failure}")
+                result["status"] = prior_failure
+                result["formatting_skipped"] = True
+                self.status = result
+                logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "17C_SQL_FORMAT", "INFO", "RUN_JOB", "END", 0]})
                 return Data(data=result)
             if self._job_name(payload) == "formatting":
                 db_config = self._db_config(payload)
@@ -103,14 +108,40 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                 job = self._load_sql_job(db_config, payload)
                 result = self._run_single_sql_formatting({**payload, **job}, job, db_config, started)
                 self.status = result
+                logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "17C_SQL_FORMAT", "INFO", "RUN_JOB", "END", 0]})
                 return Data(data=result)
             result = self._run_batch_formatting(payload, {}, started)
             self.status = result
+            logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "17C_SQL_FORMAT", "INFO", "RUN_JOB", "END", 0]})
             return Data(data=result)
         except Exception as exc:
             result = self._finish_failure(payload, job, started, str(exc))
             self.status = result
+            logging.getLogger("smartmigrate.workflow").error(f"error run_job: {exc}", extra={"workflow_log": [0, "WORKFLOW", "17C_SQL_FORMAT", "ERROR", "RUN_JOB", "ERROR", 0]})
             return Data(data=result)
+
+    def _preserve_prior_failure_after_formatting(self, result: dict[str, Any], payload: dict[str, Any], prior_failure: str) -> dict[str, Any]:
+        """Keep the prior conversion/tuning failure as the row result while retaining formatting details."""
+        stages = dict(result.get("stages") or {})
+        formatting_stage = stages.get("formatting") or {
+            "ok": result.get("formatting_status") == FORMATTED,
+            "status": result.get("formatting_status"),
+            "message": result.get("message"),
+            "attempts": result.get("attempts") or [],
+        }
+        stages["formatting"] = formatting_stage
+        history = list(result.get("history") or payload.get("history") or [])
+        history.append({"step": "17C_format_after_prior_failure", "message": f"Formatted generated SQL while preserving prior failure status={prior_failure}"})
+        return {
+            **result,
+            "ok": False,
+            "status": prior_failure,
+            "prior_failure_status": prior_failure,
+            "formatting_after_prior_failure": True,
+            "formatting_skipped": False,
+            "stages": stages,
+            "history": history,
+        }
 
     def _run_batch_formatting(self, payload: dict[str, Any], db_config: dict[str, Any], started: float) -> dict[str, Any]:
         """Format generated SQL references with one DB load pass and one LLM batch call."""

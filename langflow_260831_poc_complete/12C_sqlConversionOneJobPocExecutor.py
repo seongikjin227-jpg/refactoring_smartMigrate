@@ -93,9 +93,15 @@ FROM SQL의 결과 의미를 보존하면서 매핑 규칙, SQL_CONVERSION RAG, 
 - FR_TABLE이나 FR_COL 이름을 타겟명처럼 참조하지 말고, 변환 대상은 오직 타겟 구조와 매핑 규칙을 기준으로 작성하십시오.
 - mapping rules는 테이블명과 컬럼명 변경의 우선 기준입니다.
 - 소스 테이블이나 컬럼이 매핑룰과 매칭되지 않아도 원본 테이블명 또는 컬럼명을 그대로 유지하십시오. 이는 명칭이 바뀌지 않은 것으로 판단합니다.
-- 가능한 한 원본 쿼리 구조, 필터 의도, 집계 의도, 조인 의도, alias, MyBatis 동적 태그, bind parameter 이름을 유지하십시오.
-- MyBatis 바인딩 파라미터 태그 #{{param}}, ${{param}}는 제거하거나 값으로 치환하지 마십시오. 기존 parameter 이름과 marker 형식을 유지하십시오.
-- 기존 MyBatis 동적 태그 <if>, <choose>, <when>, <otherwise>, <where>, <trim>, <foreach> 구조는 유지하고, 매핑룰상 필요한 테이블명, 컬럼명, 별칭, SQL 표현식만 변경하십시오.
+- 가능한 한 원본 쿼리 구조, 필터 의도, 집계 의도, 조인 의도, alias, MyBatis 동적 태그 구조를 유지하십시오.
+- MyBatis 바인딩 파라미터 태그 #{{param}}, ${{param}}는 제거하거나 값으로 치환하지 마십시오.
+- parameter marker 형식(#{{param}} 또는 ${{param}})은 유지하되, parameter 이름은 매핑된 target 컬럼/업무 의미에 맞게 변경할 수 있습니다.
+- 기존 parameter가 매핑 후 동일 의미로 유지되면 parameter 이름도 유지하십시오.
+- 기존 parameter가 매핑된 target 컬럼명 또는 target 의미와 직접 대응되면 TO-BE SQL에서는 target 기준 parameter 이름을 사용하십시오. 예: source column USER_NM이 target column MEMBER_NAME으로 바뀌면 #{{userNm}}를 #{{memberName}}처럼 변경할 수 있습니다.
+- 여러 source parameter가 하나의 target 의미로 통합되면 TO-BE SQL에서 하나의 target parameter로 합칠 수 있습니다. 예: #{{residentNo}}와 #{{name}} 조합이 target #{{memberId}}로 바뀌는 경우 하나의 #{{memberId}}를 사용할 수 있습니다.
+- 하나의 source parameter가 여러 target 조건으로 분리되어야 하면 target 의미에 맞는 여러 parameter로 나눌 수 있습니다.
+- parameter 이름을 변경, 통합, 분리한 경우 관련 <if>, <when>, <choose>의 test 표현식도 동일한 target parameter 이름 기준으로 함께 수정하십시오.
+- 기존 MyBatis 동적 태그 <if>, <choose>, <when>, <otherwise>, <where>, <trim>, <foreach> 구조는 가능한 한 유지하되, 매핑룰상 필요한 테이블명, 컬럼명, 별칭, SQL 표현식, parameter 이름은 target 의미 기준으로 변경하십시오.
 - TO-BE SQL에서 실제 타겟 물리 테이블은 반드시 target_schema.TABLE_NAME 형식으로 작성하십시오.
 - FROM SQL에 있던 모든 물리 테이블의 기존 스키마명은 제거하고 target_schema.TABLE_NAME 형식으로 교체하십시오.
 - DUAL, CTE 이름, inline view alias, subquery alias, table alias에는 schema를 붙이지 마십시오.
@@ -127,7 +133,11 @@ FROM SQL에서 MyBatis bind parameter 값을 검증용으로 추출할 수 있�
 {last_error}
 
 [규칙]
-- Bind parameter는 반드시 FROM SQL로부터 생성하십시오.
+- Bind parameter는 FROM SQL에서 직접 추출하십시오.
+- <if>, <when>, <choose>의 test 조건 안에만 등장하는 parameter도 반드시 포함하십시오.
+- BIND_SQL 생성 단계에서 parameter 추출과 parameter 값을 반환하는 row source 구성을 한 번에 처리하십시오.
+- 사전에 추출된 bind parameter 목록이 있다고 가정하지 마십시오.
+- Bind parameter와 실제 데이터 추출은 반드시 FROM SQL 기준으로만 수행하십시오.
 - Oracle 19c에서 바로 실행 가능한 SELECT 문 하나만 반환하십시오.
 - 생성된 Bind SQL에는 MyBatis 태그와 bind parameter가 없어야 합니다.
 - 설명, markdown, 구조화 wrapper object, PL/SQL block, 여러 SQL 문, SQL 끝 세미콜론을 출력하지 마십시오.
@@ -145,7 +155,7 @@ FROM SQL에서 MyBatis bind parameter 값을 검증용으로 추출할 수 있�
 - 동적 태그 밖의 모든 필수 parameter를 추출했는지 확인하십시오.
 - 원본 SQL의 논리적 구조상 값이 반드시 존재해야 하는 필수 parameter는 해당 컬럼이 NULL인 행을 제외하도록 WHERE 절에 IS NOT NULL 조건을 추가하십시오.
 - parameter와 관련된 테이블 간 join 조건과 filtering 조건은 유지하십시오.
-- asis_source_filter_conditions는 현재 source SQL에 매칭된 mapping rule의 NEXT_MIG_INFO.CONDITION 값입니다. 관련 있는 동일 FR_TABLE/source scope 후보 row source에 적용하십시오.
+- asis_source_filter_conditions는 mapping rule의 NEXT_MIG_INFO.CONDITION 값입니다. 각 항목의 FR_TABLE과 TO_TABLE을 함께 확인하고, FROM SQL의 source scope와 실제 관련 있는 source filter만 후보 row source에 적용하십시오.
 - FROM schema는 모든 물리 테이블에 붙이십시오. FROM SQL에 이미 schema가 붙어 있는 물리 테이블도 기존 schema를 제거하고 from_schema.TABLE_NAME 형식으로 다시 붙이십시오.
 - CTE 이름, inline view alias, subquery alias, table alias, DUAL에는 schema를 붙이지 마십시오.
 - <foreach> 태그만 포함된 block 또는 SYSDATE만 포함된 MyBatis 조건문 block은 선처리하여 제거하십시오.
@@ -153,7 +163,9 @@ FROM SQL에서 MyBatis bind parameter 값을 검증용으로 추출할 수 있�
 - 최종 Bind SQL에는 <if>, <choose>, <when>, <otherwise>, <where>, <trim>, <foreach> 태그가 남으면 안 됩니다.
 - 최종 Bind SQL에는 #{{param}}, ${{param}}, :param, ?, {{{{param}}}} 같은 미해결 parameter 표현이 남으면 안 됩니다.
 - <foreach> 태그 안에 있는 bind parameter는 추출하지 마십시오.
-- <choose>, <when>, <otherwise>는 첫 번째 <when> branch를 사용하는 것을 기본으로 하십시오.
+- <choose> 동적 태그는 반드시 첫 번째 <when> branch만 검증 대상으로 사용하십시오.
+- BIND_SQL은 첫 번째 <when> branch의 test 조건이 만족되도록 FROM SQL 기준 parameter 후보값을 추출하십시오.
+- 두 번째 이후 <when>과 <otherwise> branch를 위한 parameter 후보값은 만들지 마십시오.
 - #month parameter 관련 block은 parameter로 선정하지 마십시오.
 - ROWNUM 함수를 활용하여 #{{firstRow}}, #{{lastRow}} 등의 parameter를 입력받는 경우는 예: SELECT '1' AS "firstRow", '100' AS "lastRow" FROM DUAL 처럼 임의 숫자 문자열을 출력할 수 있습니다.
 - Correct SQL 힌트는 bind 추출 방식과 row source 구성 방식 참고용으로만 사용하고, 현재 FROM SQL과 맞지 않는 테이블/컬럼/조건은 그대로 복사하지 마십시오.
@@ -202,10 +214,14 @@ FROM SQL에서 MyBatis bind parameter 값을 검증용으로 추출할 수 있�
 - 이미 SELECT COUNT(*), SELECT COUNT(1), SELECT COUNT(column)처럼 단일 count 값을 반환하는 검증용 count query라면 다시 SELECT COUNT(*) FROM (<sql>)로 감싸지 마십시오.
 - FROM SQL, TO-BE SQL에 있는 <choose> 태그, <foreach> 태그, SYSDATE가 포함된 block은 선처리하여 제거하십시오.
 - bind set의 bind case 값을 사용해 FROM SQL, TO-BE SQL에 있는 MyBatis 바인딩 파라미터 태그를 Oracle literal로 치환하십시오.
+- FROM SQL의 parameter 자리에는 BIND_SET에서 추출한 parameter 값을 그대로 넣으십시오.
+- TO-BE SQL의 parameter 자리는 동일 parameter가 유지되면 같은 값을 넣고, TO-BE SQL에서 parameter 의미나 형태가 바뀌었으면 BIND_SET 값을 기준으로 필요한 범위에서 값을 분리, 조합, 형변환하여 적용하십시오.
+- TO-BE SQL 검증을 위해 추가 데이터 조회를 만들지 말고, BIND_SET의 FROM SQL 기준 parameter 값을 근거로 변환하십시오.
 - bind case 값을 기준으로 <if> 태그 조건을 평가하고 비활성화된 동적 태그 block은 제거하십시오.
 - <if test="param != null"> 형태의 조건에서 bind case 값이 NULL이면 해당 <if> block 전체를 비활성으로 처리하고 최종 SQL에서 제거하십시오.
 - <where>, <trim> 제거 후 WHERE/AND/OR 문법을 정리하십시오.
-- <choose>, <when>, <otherwise>는 첫 번째 <when> branch를 사용하는 것을 기본으로 하십시오.
+- <choose> 동적 태그는 반드시 첫 번째 <when> branch만 사용하고, 두 번째 이후 <when>과 <otherwise>는 TEST_SQL에서 제거하십시오.
+- 첫 번째 <when> branch의 test 조건은 BIND_SET 값을 기준으로 만족되는 것으로 처리하고, 필요한 경우 해당 조건을 만족하도록 literal 적용 방식을 조정하십시오.
 - bind parameter 자리에 숫자 데이터를 대입할 때는 작은따옴표로 감싸서 문자열 literal 형태로 대입하십시오.
 - 최종 SQL에는 #{{param}}, ${{param}}, :param, ?, {{{{param}}}} 같은 미해결 parameter 표현이 남으면 안 됩니다.
 - ORDER BY는 검증 SQL에서 제거하십시오. subquery, inline view, CTE 내부 ORDER BY도 제거하십시오.
@@ -787,6 +803,9 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         return sql
 
     # Generate executable BIND_SQL and convert its result rows into BIND_SET JSON.
+    # Bind discovery is intentionally handled by the LLM prompt. A regex pre-gate
+    # misses MyBatis dynamic-tag cases, especially values that only appear inside
+    # <if>/<when> test expressions.
     def _generate_bind_payload(
         self,
         job: dict[str, Any],
@@ -800,11 +819,6 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         correct_sql_hint_text: str | None = None,
     ) -> tuple[str, str | None]:
         map_id = f"{job.get('sql_id')} / {job.get('space_nm')}"[:100]
-        bind_param_names = self._bind_names(source_sql) or self._bind_names(to_sql)
-        logging.getLogger("smartmigrate.workflow").info(
-            "Bind parameters extracted",
-            extra={"workflow_log": [map_id, "SQL_CONVERSION", "BIND_PARAM", "INFO", "EXTRACT_BIND_PARAM", "PASS", retry_count, ", ".join(bind_param_names) if bind_param_names else "NO_BIND"]},
-        )
         if str(job.get("user_edited") or "").strip().upper() == "Y" and str(job.get("bind_sql") or "").strip():
             bind_sql = str(job["bind_sql"])
             reason = "USER_EDITED=Y; BIND_SQL is not null"
@@ -813,14 +827,6 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 extra={"workflow_log": [map_id, "SQL_CONVERSION", "BIND_SQL", "INFO", "USE_USER_EDITED_BIND_SQL", "SUCCESS", retry_count, f"{reason}\n\n{bind_sql}"]},
             )
         else:
-            # Existing logic checks both source SQL and generated TO_SQL. If neither contains MyBatis
-            # parameters or dynamic tags, bind execution is skipped and TEST_SQL receives [{}].
-            if not bind_param_names:
-                logging.getLogger("smartmigrate.workflow").info(
-                    "BIND_SQL skipped because no bind parameter exists",
-                    extra={"workflow_log": [map_id, "SQL_CONVERSION", "BIND_SQL", "INFO", "SKIP_BIND_SQL", "PASS", retry_count, "NO_BIND"]},
-                )
-                return "", None
             prompt = self._build_prompt(
                 "BIND_SQL",
                 from_sql=source_sql,
@@ -1237,30 +1243,6 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         return self._positive_int(os.getenv("TUNED_FR_SQL_PRETUNING_MIN_LENGTH"), TUNED_FR_SQL_PRETUNING_MIN_LENGTH_DEFAULT)
 
     # Extract MyBatis bind parameter names and dynamic tag variables.
-    def _bind_names(self, sql_text: str) -> list[str]:
-        """Extract MyBatis bind names while ignoring foreach-only parameters."""
-        names: list[str] = []
-        seen: set[str] = set()
-
-        # Append one normalized bind name while preserving first-seen order.
-        def add(token: str) -> None:
-            name = re.split(r"[,\s?:=!><+\-*/()\[]", str(token or "").strip(), maxsplit=1)[0].split(".")[-1]
-            if name and name not in seen:
-                names.append(name)
-                seen.add(name)
-
-        sql_without_foreach = str(sql_text or "")
-        for match in re.finditer(r"<foreach\b([^>]*)>.*?</\s*foreach\s*>", sql_without_foreach, flags=re.I | re.S):
-            sql_without_foreach = sql_without_foreach.replace(match.group(0), " ")
-        for match in re.finditer(r"[#$]\{\s*([^}]+?)\s*\}", sql_without_foreach):
-            add(match.group(1))
-        for match in re.finditer(r"<(?:if|when)\b[^>]*\btest\s*=\s*['\"]([^'\"]+)['\"][^>]*>", sql_without_foreach, flags=re.I | re.S):
-            condition = re.sub(r"'[^']*'|\"[^\"]*\"", " ", match.group(1))
-            for name in re.findall(r"\b([A-Za-z_][A-Za-z0-9_.]*)\b", condition):
-                if name.lower() not in {"and", "or", "not", "null", "true", "false", "eq", "ne", "gt", "ge", "lt", "le", "empty", "instanceof", "new", "in"}:
-                    add(name)
-        return names
-
     # ##############################
     # Mapping rules and RAG retrieval
     # ##############################
@@ -1295,7 +1277,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             ]
         if not target_tables:
             return rules
-        return [rule for rule in rules if self._table_matches(rule["fr_table"], target_tables)]
+        return [rule for rule in rules if self._table_matches(rule["to_table"], target_tables)]
 
     # Load GENERAL RAG guidance and skip it if the RAG table is not ready.
     def _load_rag_general_rules(self, db_config: dict[str, Any], category: str, source_tables: set[str], map_id: str) -> list[dict[str, Any]]:
@@ -1476,10 +1458,18 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         return "\n".join(lines)
 
     # Serialize AS-IS source filter conditions for BIND_SQL generation.
+    # Keep FR_TABLE and TO_TABLE together so the LLM can select the filter
+    # that belongs to the current source scope.
     def _source_filter_prompt_text(self, mapping_rules: list[dict[str, str]]) -> str:
         lines = ["[ASIS_SOURCE_FILTER_CONDITIONS]"]
-        conditions = sorted({(rule["fr_table"], rule["condition"]) for rule in mapping_rules if rule["condition"]})
-        lines.extend(f"- FR_TABLE={table} | CONDITION={condition}" for table, condition in conditions)
+        conditions = sorted(
+            {
+                (str(rule.get("fr_table") or ""), str(rule.get("to_table") or ""), str(rule.get("condition") or ""))
+                for rule in mapping_rules
+                if rule.get("condition")
+            }
+        )
+        lines.extend(f"- FR_TABLE={fr_table} | TO_TABLE={to_table} | CONDITION={condition}" for fr_table, to_table, condition in conditions)
         return "\n".join(lines) if conditions else "[ASIS_SOURCE_FILTER_CONDITIONS]\n- (empty)"
 
     # Normalize comma, whitespace, or list-like table values into uppercase table names.

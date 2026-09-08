@@ -1,175 +1,124 @@
-# Langflow newType Architecture
+# SmartMigrate Final Architecture Guide
 
-`langflow_260819_newType`의 현재 실행 구조를 정리한 문서입니다.
+이 문서는 `langflow_260831_poc_complete` 프로젝트의 최종 아키텍처 진입점이다.
+`multiToolVersion_forTest`는 실험/POC 폴더이므로 본 문서의 운영 기준에서 제외한다.
 
-## Core Principles
+## 문서 구성
 
-- `08 Job Execution Router`는 사용자의 실행 의도를 판단하고 실행 payload를 만든다.
-- 실제 실행 전에 항상 `20 Human Input`을 거친다.
-- `08H Confirmation Prompt Builder`는 사용자에게 보여줄 한국어 계획 메시지만 만든다.
-- 실행 Data는 화면에 출력하지 않고 `20 Human Input.execution_data`로만 전달한다.
-- `20 Human Input`에서 `Approve` 또는 `Fallback`이 선택된 경우에만 payload가 실행 시작 노드로 전달된다.
-- `Reject`는 `08R Confirmation Rejected`로만 연결하고 실행 노드로 연결하지 않는다.
-- Full Workflow는 `18A -> 18B -> 10C -> 12C -> 15C -> 17C -> 18D` 단일 chain을 사용한다.
+| 문서 | 목적 | 주요 독자 |
+|---|---|---|
+| `00_architecture.md` | 전체 구조, 핵심 흐름, 문서 목차 | 전체 |
+| `00_architecture_chapter1_overview.md` | 시스템 목적, 컴포넌트 맵, 데이터 저장소, 외부 의존성 | 신규 개발자, 운영자 |
+| `00_architecture_chapter2_chat_management.md` | 사용자 채팅 분류, 02/04 라우팅, Dashboard/Progress/Job QA/Reset/Correct SQL | 프론트/플로우 운영자 |
+| `00_architecture_chapter3_job_execution.md` | "전체 작업 진행해줘" 포함 실행 라우팅, 잔여 작업 산정, Loop 구성 | 백엔드/플로우 개발자 |
+| `00_architecture_chapter4_domain_executors.md` | 10C/12C/15C/17C 단일 작업 실행 로직, 상태 전이, RAG/LLM 처리 | 실행 엔진 개발자 |
+| `00_architecture_chapter5_logging_operations.md` | 로깅, `NEXT_MIG_LOG`, Job QA Tool, 장애 분석, 운영 Runbook | 운영자, 유지보수 담당 |
 
-## Overall Architecture Map
+## 시스템 한 줄 요약
+
+SmartMigrate는 사용자의 자연어 요청을 `GENERAL_CHAT`, `MANAGEMENT`, `JOB_EXECUTION`으로 분류하고, 실행 요청이면 Oracle DB의 잔여 작업을 조회한 뒤 DB Migration, SQL Conversion, SQL Tuning, SQL Formatting을 도메인별 또는 전체 Workflow로 수행한다. 모든 실행 이력은 `NEXT_MIG_LOG`에 기록되며, 관리성 질의는 Job QA Agent가 read-only DB Tool로 근거를 조회한 뒤 LLM 답변으로 반환한다.
+
+## 전체 Flowchart
 
 ```mermaid
 flowchart TD
-    IN["Chat Input"] --> C1["01 Request Classifier LLM"]
-    C1 --> R1{"02 Intent Conditional Router"}
+    U[User Chat Input] --> A00[00A Log Runtime Start]
+    A00 --> C01[01 Request Classifier Prompt + LLM]
+    C01 --> R02[02 Intent Conditional Router]
 
-    R1 -->|general_chat| G["03 LLM Response"]
-    R1 -->|management| MGR{"04 Management LLM Router"}
-    R1 -->|job_execution| REM["06 Get Remaining Jobs"]
+    R02 -->|GENERAL_CHAT| G03[03 LLM Response Prompt]
+    G03 --> OUT1[Chat Output]
 
-    G --> OUT["Chat Output"]
+    R02 -->|MANAGEMENT| M04[04 Management LLM Router]
+    M04 -->|DASHBOARD| D04[04 Dashboard]
+    M04 -->|CURRENT_PROGRESS| P04[04 Current Progress]
+    M04 -->|JOB_QA| QA_AGENT[04 Job QA Agent]
+    M04 -->|STATUS_CHANGE| S04[04 Status Change]
+    M04 -->|CORRECT_SQL_INPUT| C04[04 Correct SQL Input]
+    M04 -->|EXCEPTION| E04[Exception Message]
+    QA_AGENT --> TOOL04[04 Job QA Command Tool]
+    TOOL04 --> QA_AGENT
+    D04 --> OUT2[Chat Output]
+    P04 --> OUT2
+    QA_AGENT --> OUT2
+    S04 --> OUT2
+    C04 --> OUT2
+    E04 --> OUT2
 
-    MGR -->|dashboard| D4["04 Dashboard"]
-    MGR -->|status_change| S4["04 Status Change"]
-    MGR -->|correct_sql_input| C4["04 Correct SQL Input"]
-    MGR -->|exception| OUT
-    D4 --> OUT
-    S4 --> OUT
-    C4 --> OUT
+    R02 -->|JOB_EXECUTION| J06[06 Get Remaining Jobs]
+    J06 --> J08[08 Job Target Router]
+    J08 -->|MIG| A10[10A MIG Jobs To Loop Table]
+    J08 -->|SQL_CONVERSION| A12[12A SQL Conversion Jobs To Loop Table]
+    J08 -->|SQL_TUNING| A15[15A SQL Tuning Jobs To Loop Table]
+    J08 -->|SQL_FORMATTING| A17[17A SQL Formatting Jobs To Loop Table]
+    J08 -->|FULL_WORKFLOW| A18[18A Full Workflow Jobs To Loop Table]
+    J08 -->|NO_RUNNABLE_JOB / PREREQUISITE_REQUIRED| OUT3[Chat Output]
 
-    REM --> JR{"08 Job Execution Router"}
-    JR -->|prerequisite_required| OUT
-    JR -->|no_runnable_target| OUT
+    A10 --> B10[10B MIG Loop] --> C10[10C MIG One Job Executor] --> D10[10D MIG Iteration Dashboard] --> B10
+    B10 -->|Done| F11[11 Final Dashboard]
 
-    JR -->|execution_data| H20["20 Human Input"]
-    JR --> H08["08H Confirmation Prompt Builder"]
-    H08 -->|prompt_message| H20
+    A12 --> B12[12B SQL Conversion Loop] --> C12[12C SQL Conversion One Job Executor] --> D12[12D Iteration Dashboard] --> B12
+    B12 -->|Done| F11
 
-    H20 -->|Reject| REJ["08R Confirmation Rejected"]
-    REJ --> OUT
+    A15 --> B15[15B SQL Tuning Loop] --> C15[15C SQL Tuning One Job Executor] --> D15[15D Iteration Dashboard] --> B15
+    B15 -->|Done| F11
 
-    H20 -->|Approve| ROUTE{"Execution Start"}
-    H20 -->|Fallback| ROUTE
+    A17 --> B17[17B SQL Formatting Loop] --> C17[17C SQL Formatting One Job Executor] --> D17[17D Iteration Dashboard] --> B17
+    B17 -->|Done| F11
 
-    ROUTE -->|MIG| M10A["10A MIG Jobs To Loop Table"]
-    ROUTE -->|SQL Conversion| C12A["12A SQL Conversion Jobs To Loop Table"]
-    ROUTE -->|SQL Tuning| T15A["15A SQL Tuning Jobs To Loop Table"]
-    ROUTE -->|SQL Formatting| F17A["17A SQL Formatting Jobs To Loop Table"]
-    ROUTE -->|FULL_WORKFLOW| W18A["18A Full Workflow Jobs To Loop Table"]
+    A18 --> S18[18S Workflow Start Logger] --> B18[18B Full Workflow Loop]
+    B18 -->|Item| EXEC_DOMAIN[10C / 12C / 15C / 17C]
+    EXEC_DOMAIN --> D18[18D Full Workflow Dashboard] --> B18
+    B18 -->|Done| D18F[18D Final Summary]
 
-    M10A --> M10B{"10B MIG Loop"}
-    M10B -->|Item| M10C["10C MIG One Job POC Executor"]
-    M10C --> M10D["10D MIG Iteration Dashboard"]
-    M10D -->|Message| OUT
-    M10D -->|Loop Result| M10B
-    M10B -->|Done| FD["11 Final Dashboard"]
-
-    C12A --> C12B{"12B SQL Conversion Loop"}
-    C12B -->|Item| C12C["12C SQL Conversion One Job POC Executor"]
-    C12C --> T15C_FROM12["15C SQL Tuning One Job POC Executor"]
-    T15C_FROM12 --> F17C_FROM12["17C SQL Formatting One Job POC Executor"]
-    F17C_FROM12 --> C12D["12D SQL Conversion Iteration Dashboard"]
-    C12D -->|Message| OUT
-    C12D -->|Loop Result| C12B
-    C12B -->|Done| FD
-
-    T15A --> T15B{"15B SQL Tuning Loop"}
-    T15B -->|Item| T15C["15C SQL Tuning One Job POC Executor"]
-    T15C --> F17C_FROM15["17C SQL Formatting One Job POC Executor"]
-    F17C_FROM15 --> T15D["15D SQL Tuning Iteration Dashboard"]
-    T15D -->|Message| OUT
-    T15D -->|Loop Result| T15B
-    T15B -->|Done| FD
-
-    F17A --> F17B{"17B SQL Formatting Loop"}
-    F17B -->|Item| F17C["17C SQL Formatting One Job POC Executor"]
-    F17C --> F17D["17D SQL Formatting Iteration Dashboard"]
-    F17D -->|Message| OUT
-    F17D -->|Loop Result| F17B
-    F17B -->|Done| FD
-
-    W18A --> W18B{"18B Full Workflow Loop"}
-    W18B -->|Item| FW10C["10C"]
-    FW10C --> FW12C["12C"]
-    FW12C --> FW15C["15C"]
-    FW15C --> FW17C["17C"]
-    FW17C --> W18D["18D Full Workflow Dashboard"]
-    W18D -->|Message| OUT
-    W18D -->|Loop Result| W18B
-    W18B -->|Done| W18D
-
-    FD --> OUT
+    F11 --> F11B[11B Failure Cause Analyzer]
+    F11B --> OUT4[Chat Output]
+    D18F --> OUT4
 ```
 
-## Human Input Gate
+## 핵심 기능별 책임 경계
 
-```text
-08 Job Execution Router
-  -> 08H Confirmation Prompt Builder
-       -> 20 Human Input.prompt_message
+| 영역 | 담당 파일 | 핵심 책임 |
+|---|---|---|
+| 런타임 로깅 초기화 | `00A_logRuntimeStart.py` | `smartmigrate.workflow` logger에 DB handler 등록, 요청 pass-through |
+| RAG/Correct SQL Vector Sync | `00B_saveVectorDB.py` | Oracle 원천 데이터를 Milvus 컬렉션으로 one-shot sync |
+| 1차 의도 분류 | `01_requestClassifierPrompt.md` | 채팅을 일반 대화, 관리성 조회, 실행 요청으로 분류 |
+| 1차 라우팅 | `02_intentRouter.py` | 01 결과의 `intent_route`에 따라 branch 선택 |
+| 관리성 라우팅 | `04_managementRouter.py` | Dashboard, Current Progress, Job QA, Reset, Correct SQL 저장 분기 |
+| 잔여 작업 조회 | `06_getRemainingJobs.py` | 실행 가능 job count와 특정 target 상태 조회 |
+| 실행 라우팅 | `08_jobExecutionRouter.py` | MIG/SQL/FULL_WORKFLOW 실행 route와 run mode 결정 |
+| 도메인별 Loop | `10B`, `12B`, `15B`, `17B`, `18B` | 한 row씩 실행하고 loop 완료 신호 emit |
+| 단일 작업 실행 | `10C`, `12C`, `15C`, `17C` | DB update, LLM 호출, 검증, retry, status 저장 |
+| 결과 표시 | `10D`, `12D`, `15D`, `17D`, `18D`, `11` | 반복/최종 dashboard 메시지 생성 |
+| 장애 분석 | `11B_failureCauseAnalyzer.py`, `04_jobQaCommandTool.py` | 실행 후 run-scope 분석, 채팅 기반 read-only DB 질의 |
 
-08 Job Execution Router
-  -> 20 Human Input.execution_data
+## 핵심 요청 유형 요약
 
-20 Human Input
-  Approve/Fallback -> execution start
-  Reject -> 08R -> Chat Output
-```
+| 사용자 요청 예시 | 01 분류 | 04/08 세부 route | 결과 |
+|---|---|---|---|
+| "안녕", "이 시스템 뭐야?" | `GENERAL_CHAT` | 03 | LLM 일반 답변 |
+| "대시보드 보여줘" | `MANAGEMENT` | 04 `DASHBOARD` | 정해진 dashboard 메시지 |
+| "현재 진행 상황 어때?" | `MANAGEMENT` | 04 `CURRENT_PROGRESS` | running job + 최근 로그 |
+| "map id 101 왜 실패했어?" | `MANAGEMENT` | 04 `JOB_QA` | Agent가 DB Tool 조회 후 LLM 분석 답변 |
+| "전체 Fail 분석해줘" | `MANAGEMENT` | 04 `JOB_QA` | 최근 fail 로그 중심 분석 |
+| "map id 101 상태 초기화해줘" | `MANAGEMENT` | 04 `STATUS_CHANGE` | status NULL, retry 0, SQL 유지 |
+| "sql id A / space B의 TO_SQL을 이걸로 저장해줘 ..." | `MANAGEMENT` | 04 `CORRECT_SQL_INPUT` | SQL CLOB 저장, `USER_EDITED='Y'` |
+| "전체 작업 진행해줘" | `JOB_EXECUTION` | 08 `FULL_WORKFLOW` | MIG -> Conversion -> Tuning -> Formatting 실행 |
+| "SQL Tuning 남은 작업 진행해줘" | `JOB_EXECUTION` | 08 `SQL_TUNING` | 선행 조건 확인 후 tuning loop |
 
-`08H`는 화면에 보이는 계획 메시지만 만든다. Payload를 HTML 주석, base64, marker 문자열로 숨겨 넣지 않는다.
+## 핵심 운영 규칙
 
-`20 Human Input`은 `prompt_message`로 받은 메시지를 Human Input 화면에 보여주고, 실행 Data를 별도 `Data` 입력으로 받은 뒤 승인된 브랜치로만 내보낸다. 따라서 `Approve` 또는 `Fallback` 전에는 실행 시작 노드가 실행 Data를 받을 수 없다.
-
-## Full Workflow Flow
-
-`FULL_WORKFLOW` route는 사용자가 전체 잔여 작업 실행을 요청했을 때 사용한다.
-
-```text
-06 Get Remaining Jobs
-  -> 08 Job Execution Router
-  -> 08H + 20 Human Input
-  -> 18A Full Workflow Jobs To Loop Table
-  -> 18B Full Workflow Loop
-       Item -> 10C -> 12C -> 15C -> 17C -> 18D
-       Done -> 18D Full Workflow Dashboard
-```
-
-18A는 다음 순서로 하나의 ordered queue를 만든다.
-
-1. DB Migration
-2. SQL Conversion
-3. SQL Tuning
-4. SQL Formatting
-
-각 row는 `job_name`, `planned_job_route`, `phase_index`, route-level progress fields, DB config, `max_retry=2`를 가진다.
-
-`job_name`에 따른 실행 기준:
-
-- `migration`: `10C` 실행, `12C/15C/17C` pass-through
-- `conversion`: `10C` pass-through, `12C/15C/17C` 실행
-- `tuning`: `10C/12C` pass-through, `15C/17C` 실행
-- `formatting`: `10C/12C/15C` pass-through, `17C` 실행
-
-## Migration Failure Gate
-
-18B는 DB Migration phase가 끝난 뒤 SQL phase에 들어가기 전에 `NEXT_MIG_INFO`를 직접 조회한다.
-
-조건:
-
-- `USE_YN='Y' AND STATUS IS NULL` migration row가 더 이상 없고
-- `FAIL` 또는 `FAIL-*` migration row가 하나라도 있으면
-
-18B는 남은 SQL 작업을 하나씩 처리하지 않고, 남은 작업 수를 phase별 skipped count로 집계한 뒤 `Done` payload를 18D로 보낸다.
-
-이 gate는 10C/18D message payload에 의존하지 않는다. Chat Output 연결이 loop payload 전달을 가로막아도 migration failure 판단이 유지되도록 18B가 DB를 직접 조회한다.
-
-## Active Components
-
-| Component | Status |
+| 규칙 | 설명 |
 |---|---|
-| `08H Confirmation Prompt Builder` | Active, visible prompt only |
-| `20 Human Input` | Active, approval gate and payload passthrough |
-| `08R Confirmation Rejected` | Active, reject message |
-| `09 Execution Plan Summary` | Not used in approval flow |
-| `10A~10D` | Active DB Migration loop |
-| `12A~12D` | Active SQL Conversion loop |
-| `15A~15D` | Active SQL Tuning loop |
-| `17A~17D` | Active SQL Formatting loop |
-| `18A~18D` | Active Full Workflow loop |
-| `08I Confirmed Payload Loader` | Removed |
+| 로그는 `NEXT_MIG_LOG`만 사용 | SQL 계열 로그도 `NEXT_SQL_LOG`가 아니라 `NEXT_MIG_LOG`에 저장한다. |
+| chat 기반 fail 분석은 `JOB_QA` | `04_managementRouter.py`에는 `FAIL_ANALYSIS` output이 없다. |
+| `11B`는 실행 후 분석 | 사용자가 채팅으로 fail 분석을 요청할 때 직접 가는 route가 아니라, job execution 완료 뒤 final dashboard 흐름에서 사용한다. |
+| read-only 조회는 Job QA Tool | `04_jobQaCommandTool.py`는 SELECT 전용이다. |
+| CLOB 전체 출력은 명시 요청에서만 | 일반 진단/최근 로그는 1000자 preview, 특정 SQL 원문 요청은 full text action 사용. |
+| 전체 workflow는 선행 조건으로 막지 않음 | `FULL_WORKFLOW`는 MIG부터 Formatting까지 순서대로 처리하므로 prerequisite branch로 보내지 않는다. |
+
+## 추천 읽기 순서
+
+1. 신규 개발자는 `chapter1 -> chapter2 -> chapter3 -> chapter4 -> chapter5` 순서로 읽는다.
+2. 운영 장애 대응자는 `chapter5 -> chapter2(Job QA) -> chapter4(도메인 executor)` 순서가 빠르다.
+3. PPT/보고서 작성자는 이 파일의 전체 그림과 chapter별 Mermaid chart를 슬라이드 단위로 나누면 된다.

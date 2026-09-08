@@ -27,6 +27,7 @@ class NewType04JobQaCommandTool(Component):
                 "Read-only JSON command. Examples: "
                 '{"action":"get_migration_job","map_id":101}, '
                 '{"action":"get_sql_job","sql_id":"Q001","space_nm":"SALES"}, '
+                '{"action":"get_sql_text","sql_id":"Q001","space_nm":"SALES","columns":["TO_SQL","TUNED_TO_SQL"]}, '
                 '{"action":"search_logs","mig_kind":"SQL_CONVERSION","fail_only":true,"limit":10}, '
                 '{"action":"recent_domain_status","domain":"SQL_CONVERSION","limit":10}'
             ),
@@ -39,7 +40,8 @@ class NewType04JobQaCommandTool(Component):
         StrInput(name="system_schema", display_name="System Schema", required=False),
         IntInput(name="default_limit", display_name="Default Limit", value=10, required=False),
         IntInput(name="max_limit", display_name="Max Limit", value=100, required=False),
-        IntInput(name="max_text_chars", display_name="Max Text Chars", value=2000, required=False),
+        IntInput(name="max_text_chars", display_name="Max Text Chars", value=1000, required=False),
+        IntInput(name="full_text_row_limit", display_name="Full Text Row Limit", value=3, required=False),
         BoolInput(name="include_sql_text", display_name="Include SQL Text", value=True, required=False),
     ]
 
@@ -48,6 +50,47 @@ class NewType04JobQaCommandTool(Component):
     SQL_DOMAINS = {"SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"}
     ALL_MIG_KINDS = {"DB_MIGRATION", "DB_MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING", "WORKFLOW"}
     FAIL_STATUSES = {"FAIL", "FAILED", "ERROR"}
+    FULL_SQL_INFO_COLUMNS = {
+        "FR_SQL",
+        "EDIT_FR_SQL",
+        "TARGET_TABLE",
+        "TO_SQL",
+        "TUNED_TO_SQL",
+        "TUNED_RESULT",
+        "TUNED_FR_SQL",
+        "BIND_SQL",
+        "BIND_SET",
+        "TEST_SQL",
+        "FORMATTED_SQL",
+        "BLOCK_RAG_CONTENT",
+    }
+    FULL_MIG_INFO_COLUMNS = {"FR_TABLE", "TO_TABLE", "CONDITION", "MIG_SQL", "VERIFY_SQL"}
+    FULL_LOG_COLUMNS = {"GENERATE_SQL"}
+    SQL_TEXT_COLUMNS = {
+        "FR_TABLE",
+        "TO_TABLE",
+        "CONDITION",
+        "MIG_SQL",
+        "VERIFY_SQL",
+        "FR_COL",
+        "TO_COL",
+        "FR_SQL",
+        "EDIT_FR_SQL",
+        "TARGET_TABLE",
+        "TO_SQL",
+        "TUNED_TO_SQL",
+        "TUNED_RESULT",
+        "TUNED_FR_SQL",
+        "BIND_SQL",
+        "BIND_SET",
+        "TEST_SQL",
+        "FORMATTED_SQL",
+        "BLOCK_RAG_CONTENT",
+        "GENERATE_SQL",
+        "GUIDANCE_TEXT",
+        "SOURCE_SQL",
+        "TARGET_SQL",
+    }
 
     def run_command(self) -> Data:
         logging.getLogger("smartmigrate.workflow").info(
@@ -70,6 +113,12 @@ class NewType04JobQaCommandTool(Component):
             return self._get_migration_job(command)
         if action == "get_sql_job":
             return self._get_sql_job(command)
+        if action == "get_sql_text":
+            return self._get_sql_text(command)
+        if action == "get_migration_text":
+            return self._get_migration_text(command)
+        if action == "get_log_text":
+            return self._get_log_text(command)
         if action == "search_logs":
             return self._search_logs(command)
         if action == "recent_domain_status":
@@ -145,6 +194,115 @@ class NewType04JobQaCommandTool(Component):
             "action": "get_sql_job",
             "target": {"sql_id": sql_id, "space_nm": space_nm},
             "data": {"sql_info": sql_info, "logs": logs},
+        }
+
+    def _get_sql_text(self, command: dict[str, Any]) -> dict[str, Any]:
+        sql_id = self._required_text(command, "sql_id")
+        space_nm = str(command.get("space_nm") or "").strip()
+        columns = self._requested_columns(
+            command.get("columns"),
+            default=self._ordered_allowed_sql_text_columns(),
+            allowed=self.FULL_SQL_INFO_COLUMNS,
+            table_name="NEXT_SQL_INFO",
+        )
+        conditions = ["UPPER(TRIM(SQL_ID)) = UPPER(TRIM(:sql_id))"]
+        params: dict[str, Any] = {"sql_id": sql_id, "limit": self._full_text_limit(command.get("limit"))}
+        if space_nm:
+            conditions.append("UPPER(TRIM(SPACE_NM)) = UPPER(TRIM(:space_nm))")
+            params["space_nm"] = space_nm
+        select_columns = ["SPACE_NM", "SQL_ID", *columns]
+        rows = self._query_rows(
+            f"""
+            SELECT *
+              FROM (
+                    SELECT {', '.join(select_columns)}
+                      FROM {self._qualify('NEXT_SQL_INFO')}
+                     WHERE {" AND ".join(conditions)}
+                     ORDER BY UPD_TS DESC NULLS LAST, SPACE_NM, SQL_ID
+                   )
+             WHERE ROWNUM <= :limit
+            """,
+            params,
+        )
+        return {
+            "ok": True,
+            "component": "04_jobQaCommandTool",
+            "action": "get_sql_text",
+            "target": {"sql_id": sql_id, "space_nm": space_nm, "columns": columns},
+            "data": {"rows": rows},
+            "full_text": True,
+        }
+
+    def _get_migration_text(self, command: dict[str, Any]) -> dict[str, Any]:
+        map_id = self._required_text(command, "map_id")
+        columns = self._requested_columns(
+            command.get("columns"),
+            default=["FR_TABLE", "TO_TABLE", "CONDITION", "MIG_SQL", "VERIFY_SQL"],
+            allowed=self.FULL_MIG_INFO_COLUMNS,
+            table_name="NEXT_MIG_INFO",
+        )
+        rows = self._query_rows(
+            f"""
+            SELECT MAP_ID, {', '.join(columns)}
+              FROM {self._qualify('NEXT_MIG_INFO')}
+             WHERE TO_CHAR(MAP_ID) = :map_id
+            """,
+            {"map_id": map_id},
+        )
+        return {
+            "ok": True,
+            "component": "04_jobQaCommandTool",
+            "action": "get_migration_text",
+            "target": {"map_id": map_id, "columns": columns},
+            "data": {"rows": rows},
+            "full_text": True,
+        }
+
+    def _get_log_text(self, command: dict[str, Any]) -> dict[str, Any]:
+        log_id = str(command.get("log_id") or "").strip()
+        columns = self._requested_columns(
+            command.get("columns"),
+            default=["GENERATE_SQL"],
+            allowed=self.FULL_LOG_COLUMNS,
+            table_name="NEXT_MIG_LOG",
+        )
+        conditions = []
+        params: dict[str, Any] = {"limit": self._full_text_limit(command.get("limit"))}
+        if log_id:
+            conditions.append("TO_CHAR(LOG_ID) = :log_id")
+            params["log_id"] = log_id
+        if command.get("map_id_like"):
+            conditions.append("TO_CHAR(MAP_ID) LIKE :map_id_like")
+            params["map_id_like"] = str(command.get("map_id_like")).strip()
+        if command.get("mig_kind"):
+            conditions.append("UPPER(TRIM(MIG_KIND)) = :mig_kind")
+            params["mig_kind"] = self._normalize_domain(command.get("mig_kind"))
+        if command.get("status_like"):
+            conditions.append("UPPER(TRIM(STATUS)) LIKE :status_like")
+            params["status_like"] = str(command.get("status_like")).strip().upper()
+        if bool(command.get("fail_only", False)):
+            conditions.append(self._failure_status_condition("STATUS"))
+        where_clause = " AND ".join(conditions) if conditions else "1=0"
+        rows = self._query_rows(
+            f"""
+            SELECT *
+              FROM (
+                    SELECT LOG_ID, CREATED_AT, MAP_ID, MIG_KIND, LOG_TYPE, LOG_LEVEL, STEP_NAME, STATUS, MESSAGE, {', '.join(columns)}
+                      FROM {self._qualify('NEXT_MIG_LOG')}
+                     WHERE {where_clause}
+                     ORDER BY CREATED_AT DESC NULLS LAST, LOG_ID DESC NULLS LAST
+                   )
+             WHERE ROWNUM <= :limit
+            """,
+            params,
+        )
+        return {
+            "ok": True,
+            "component": "04_jobQaCommandTool",
+            "action": "get_log_text",
+            "target": {"log_id": log_id, "columns": columns},
+            "data": {"rows": rows},
+            "full_text": True,
         }
 
     def _search_logs(self, command: dict[str, Any]) -> dict[str, Any]:
@@ -267,24 +425,21 @@ class NewType04JobQaCommandTool(Component):
                     params[key] = kind
                 conditions.append(f"UPPER(TRIM(MIG_KIND)) IN ({', '.join(placeholders)})")
 
-        if command.get("map_id"):
-            conditions.append("TO_CHAR(MAP_ID) = :map_id")
-            params["map_id"] = str(command.get("map_id")).strip()
         if command.get("map_id_like"):
             conditions.append("TO_CHAR(MAP_ID) LIKE :map_id_like")
             params["map_id_like"] = str(command.get("map_id_like")).strip()
         if command.get("sql_id"):
-            conditions.append(self._like_any_condition(["MAP_ID", "MESSAGE", "GENERATE_SQL"], "sql_id_like", column_types))
+            conditions.append(self._like_any_condition(["MAP_ID", "MESSAGE"], "sql_id_like", column_types))
             params["sql_id_like"] = f"%{str(command.get('sql_id')).strip()}%"
         if command.get("space_nm"):
-            conditions.append(self._like_any_condition(["MAP_ID", "MESSAGE", "GENERATE_SQL"], "space_nm_like", column_types))
+            conditions.append(self._like_any_condition(["MAP_ID", "MESSAGE"], "space_nm_like", column_types))
             params["space_nm_like"] = f"%{str(command.get('space_nm')).strip()}%"
         if command.get("keyword"):
-            conditions.append(self._like_any_condition(["MAP_ID", "MIG_KIND", "LOG_TYPE", "LOG_LEVEL", "STEP_NAME", "STATUS", "MESSAGE", "GENERATE_SQL"], "keyword", column_types))
+            searchable_columns = ["MAP_ID", "MIG_KIND", "LOG_TYPE", "LOG_LEVEL", "STEP_NAME", "STATUS", "MESSAGE"]
+            if self._as_bool(command.get("include_generate_sql_search", False)):
+                searchable_columns.append("GENERATE_SQL")
+            conditions.append(self._like_any_condition(searchable_columns, "keyword", column_types))
             params["keyword"] = f"%{str(command.get('keyword')).strip()}%"
-        if command.get("status"):
-            conditions.append("UPPER(TRIM(STATUS)) = :status")
-            params["status"] = str(command.get("status")).strip().upper()
         if command.get("status_like"):
             conditions.append("UPPER(TRIM(STATUS)) LIKE :status_like")
             params["status_like"] = str(command.get("status_like")).strip().upper()
@@ -303,7 +458,10 @@ class NewType04JobQaCommandTool(Component):
             conditions.append("CREATED_AT >= TO_TIMESTAMP(:created_after, 'YYYY-MM-DD HH24:MI:SS')")
             params["created_after"] = str(command.get("created_after")).strip()
 
-        select_list = self._select_list("NEXT_MIG_LOG")
+        excluded_columns = set()
+        if not self._as_bool(command.get("include_generate_sql_preview", False)):
+            excluded_columns.add("GENERATE_SQL")
+        select_list = self._select_list("NEXT_MIG_LOG", excluded_columns=excluded_columns)
         rows = self._query_rows(
             f"""
             SELECT *
@@ -383,7 +541,7 @@ class NewType04JobQaCommandTool(Component):
             f"""
             SELECT *
               FROM (
-                    SELECT {self._select_list(table_name)}
+                    SELECT {self._select_list(table_name, include_text=False)}
                       FROM {self._qualify(table_name)}
                      ORDER BY {order_column} DESC NULLS LAST
                    )
@@ -428,25 +586,36 @@ class NewType04JobQaCommandTool(Component):
         _ = table_name
         return result
 
-    def _select_list(self, table_name: str) -> str:
+    def _select_list(
+        self,
+        table_name: str,
+        *,
+        include_text: bool | None = None,
+        excluded_columns: set[str] | None = None,
+    ) -> str:
         column_types = self._available_column_types(table_name)
         if not column_types:
             raise ValueError(f"Table is not available or has no readable columns: {table_name}")
         expressions = []
+        exclude = {self._clean_identifier(column) for column in (excluded_columns or set())}
         for column, data_type in column_types.items():
-            if not self._include_column(column):
+            if column in exclude:
+                continue
+            if not self._include_column(column, include_text=include_text):
                 continue
             if data_type in {"CLOB", "NCLOB"}:
-                length = min(self._positive_int(getattr(self, "max_text_chars", None), 2000), 4000)
+                length = min(self._positive_int(getattr(self, "max_text_chars", None), 1000), 1000)
                 expressions.append(f"DBMS_LOB.SUBSTR({column}, {length}, 1) AS {column}")
             else:
                 expressions.append(column)
         return ", ".join(expressions)
 
-    def _include_column(self, column: str) -> bool:
-        if self._as_bool(getattr(self, "include_sql_text", True)):
+    def _include_column(self, column: str, *, include_text: bool | None = None) -> bool:
+        if include_text is None:
+            include_text = self._as_bool(getattr(self, "include_sql_text", True))
+        if include_text:
             return True
-        return column not in {"MIG_SQL", "VERIFY_SQL", "FR_SQL", "EDIT_FR_SQL", "TO_SQL", "TUNED_TO_SQL", "BIND_SQL", "TEST_SQL", "FORMATTED_SQL", "GENERATE_SQL", "SOURCE_SQL", "TARGET_SQL"}
+        return column not in self.SQL_TEXT_COLUMNS
 
     def _like_any_condition(self, columns: list[str], param_name: str, available_columns: set[str] | dict[str, str]) -> str:
         column_types = available_columns if isinstance(available_columns, dict) else {}
@@ -457,7 +626,7 @@ class NewType04JobQaCommandTool(Component):
             if clean not in column_names:
                 continue
             if column_types.get(clean) in {"CLOB", "NCLOB"}:
-                clauses.append(f"UPPER(DBMS_LOB.SUBSTR({clean}, 4000, 1)) LIKE UPPER(:{param_name})")
+                clauses.append(f"UPPER(DBMS_LOB.SUBSTR({clean}, 1000, 1)) LIKE UPPER(:{param_name})")
             else:
                 clauses.append(f"UPPER(TO_CHAR({clean})) LIKE UPPER(:{param_name})")
         if not clauses:
@@ -566,6 +735,53 @@ class NewType04JobQaCommandTool(Component):
         max_limit = self._positive_int(getattr(self, "max_limit", None), 100)
         return max(1, min(self._positive_int(value, default), max_limit))
 
+    def _full_text_limit(self, value: Any) -> int:
+        default = self._positive_int(getattr(self, "full_text_row_limit", None), 3)
+        return max(1, min(self._positive_int(value, default), 10))
+
+    def _requested_columns(
+        self,
+        raw_columns: Any,
+        *,
+        default: list[str],
+        allowed: set[str],
+        table_name: str,
+    ) -> list[str]:
+        available = set(self._available_column_types(table_name))
+        if not raw_columns:
+            requested = [column for column in default if column in available]
+        elif isinstance(raw_columns, str):
+            requested = [raw_columns]
+        else:
+            requested = list(raw_columns)
+        columns = []
+        for column in requested:
+            clean = self._clean_identifier(str(column))
+            if clean not in allowed:
+                raise ValueError(f"Column is not allowed for full text lookup: {clean}")
+            if clean not in available:
+                raise ValueError(f"Column is not available in {table_name}: {clean}")
+            columns.append(clean)
+        if not columns:
+            raise ValueError("At least one column is required")
+        return columns
+
+    def _ordered_allowed_sql_text_columns(self) -> list[str]:
+        return [
+            "FR_SQL",
+            "EDIT_FR_SQL",
+            "TARGET_TABLE",
+            "TO_SQL",
+            "TUNED_TO_SQL",
+            "TUNED_RESULT",
+            "TUNED_FR_SQL",
+            "BIND_SQL",
+            "BIND_SET",
+            "TEST_SQL",
+            "FORMATTED_SQL",
+            "BLOCK_RAG_CONTENT",
+        ]
+
     def _positive_int(self, value: Any, default: int) -> int:
         try:
             parsed = int(value or 0)
@@ -598,18 +814,18 @@ class NewType04JobQaCommandTool(Component):
         allowed = [
             "mig_kind",
             "mig_kinds",
-            "map_id",
             "map_id_like",
             "sql_id",
             "space_nm",
             "keyword",
-            "status",
             "status_like",
             "log_level",
             "log_type",
             "step_name_like",
             "fail_only",
             "created_after",
+            "include_generate_sql_preview",
+            "include_generate_sql_search",
             "limit",
         ]
         return {key: command.get(key) for key in allowed if key in command}
@@ -618,7 +834,10 @@ class NewType04JobQaCommandTool(Component):
         return [
             {"action": "get_migration_job", "required": ["map_id"], "optional": ["limit", "fail_only", "map_id_like"]},
             {"action": "get_sql_job", "required": ["sql_id"], "optional": ["space_nm", "mig_kind", "limit", "fail_only"]},
-            {"action": "search_logs", "optional": ["mig_kind", "map_id_like", "sql_id", "space_nm", "keyword", "status_like", "log_level", "log_type", "step_name_like", "fail_only", "created_after", "limit"]},
+            {"action": "get_sql_text", "required": ["sql_id"], "optional": ["space_nm", "columns", "limit"]},
+            {"action": "get_migration_text", "required": ["map_id"], "optional": ["columns"]},
+            {"action": "get_log_text", "optional": ["log_id", "map_id_like", "mig_kind", "status_like", "fail_only", "columns", "limit"]},
+            {"action": "search_logs", "optional": ["mig_kind", "map_id_like", "sql_id", "space_nm", "keyword", "status_like", "log_level", "log_type", "step_name_like", "fail_only", "created_after", "include_generate_sql_preview", "include_generate_sql_search", "limit"]},
             {"action": "recent_domain_status", "optional": ["domain", "limit", "fail_only"]},
             {"action": "search_jobs", "optional": ["domain", "keyword", "fail_only", "limit"]},
             {"action": "query_rag_info", "optional": ["category", "keyword", "use_yn", "limit"]},
