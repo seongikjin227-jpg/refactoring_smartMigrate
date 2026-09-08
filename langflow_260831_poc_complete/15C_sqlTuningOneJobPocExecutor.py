@@ -600,7 +600,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             elapsed=time.perf_counter() - started,
             attempts=failure_attempts,
             message=message,
-            extra={"status_tuning": status, "tuning_status": status, "tuned_to_sql": (partial_values or {}).get("TUNED_TO_SQL"), "tuned_result": (partial_values or {}).get("TUNED_RESULT") or message, "tuning_guides": list(tuning_guides or []), "next_node": self._dashboard_node(payload)},
+            extra={"status_tuning": status, "tuning_status": status, "tuned_to_sql": (partial_values or {}).get("tuned_to_sql") or (partial_values or {}).get("TUNED_TO_SQL"), "tuned_result": (partial_values or {}).get("TUNED_RESULT") or message, "tuning_guides": list(tuning_guides or []), "next_node": self._dashboard_node(payload)},
         )
 
     def _pass_through(self, *, payload: dict[str, Any], job: dict[str, Any], started: float, status: str, message: str) -> dict[str, Any]:
@@ -650,7 +650,10 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         result = [dict(item) for item in payload.get("generated_sql_list") or [] if isinstance(item, dict)]
         sql_id = job.get("sql_id") or payload.get("sql_id")
         space_nm = job.get("space_nm") or payload.get("space_nm")
-        if str(extra.get("tuned_to_sql") or "").strip():
+        # Check both state (lowercase) and DB-loaded (uppercase) keys to capture generated SQL,
+        # including those that failed validation but were still generated and need formatting.
+        tuned_to_sql = extra.get("tuned_to_sql") or extra.get("TUNED_TO_SQL")
+        if str(tuned_to_sql or "").strip():
             result.append({"table": "NEXT_SQL_INFO", "sql_id": sql_id, "space_nm": space_nm, "column": "TUNED_TO_SQL", "source_component": "15C_sqlTuningOneJobPocExecutor"})
         return self._dedupe_generated_sql_list(result)
 

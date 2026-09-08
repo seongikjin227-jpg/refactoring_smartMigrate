@@ -971,10 +971,10 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             extra={
                 "status_conversion": status,
                 "conversion_status": status,
-                "to_sql": (partial_values or {}).get("TO_SQL"),
-                "bind_sql": (partial_values or {}).get("BIND_SQL"),
-                "bind_set": (partial_values or {}).get("BIND_SET"),
-                "test_sql": (partial_values or {}).get("TEST_SQL"),
+                "to_sql": (partial_values or {}).get("to_sql") or (partial_values or {}).get("TO_SQL"),
+                "bind_sql": (partial_values or {}).get("bind_sql") or (partial_values or {}).get("BIND_SQL"),
+                "bind_set": (partial_values or {}).get("bind_set") or (partial_values or {}).get("BIND_SET"),
+                "test_sql": (partial_values or {}).get("test_sql") or (partial_values or {}).get("TEST_SQL"),
                 "next_node": "15C_sqlTuningOneJobPocExecutor" if payload.get("full_workflow") else "12D_sqlConversionIterationDashboard",
             },
         )
@@ -1032,7 +1032,10 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             ("bind_sql", "BIND_SQL"),
             ("test_sql", "TEST_SQL"),
         ):
-            if str(extra.get(key) or "").strip():
+            # Check both state (lowercase) and DB-loaded (uppercase) keys to capture all generated SQL,
+            # including those that failed validation but were still generated and need formatting.
+            sql_value = extra.get(key) or extra.get(key.upper())
+            if str(sql_value or "").strip():
                 result.append(
                     {
                         "table": "NEXT_SQL_INFO",

@@ -695,11 +695,12 @@ class NewType10CMigOneJobPocExecutor(Component):
             # For verification retry, keep migration_sql and regenerate only verification_sql.
             # The same preservation rule is used when user-edited MIG_SQL only needs verification_sql.
             mode_title = "Verification retry mode" if is_verify_retry else "Verification-only mode"
+            existing_mig_sql = str(context.get('current_migration_sql') or context.get('migration_sql') or '')
             prompt += (
                 f"\n\n[{mode_title}]\n"
-                "- Keep the existing migration_sql unchanged.\n"
-                "- Regenerate verification_sql so it correctly validates the migration result.\n"
-                f"- Existing migration_sql:\n{str(context.get('current_migration_sql') or context.get('migration_sql') or '')}\n"
+                "- Existing migration_sql을 JSON response의 migration_sql 값으로 그대로 반환하십시오.\n"
+                "- Verification SQL만 재생성하십시오.\n"
+                f"- Existing migration_sql:\n{existing_mig_sql}\n"
             )
         if last_error:
             prompt += prompt_template["error_suffix"].format(last_sql=last_sql, last_error=last_error)
