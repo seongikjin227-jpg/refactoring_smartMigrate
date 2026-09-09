@@ -135,8 +135,8 @@ DB 상태를 변경하지 않습니다.
 7. 실패 분석 요청은 analyze_failure를 사용합니다.
 8. 사용자가 직접 수정한 SQL 저장은 confirm=true가 명시된 경우에만 save_user_sql을 사용합니다.
 9. reset은 사용자가 명시적으로 요청한 경우에만 reset_job을 사용합니다.
-10. source_schema는 SFAMIG, target_schema는 SFAADM 기준입니다.
-11. system_schema는 SFAADM 기준입니다.
+10. source_schema와 target_schema는 입력값이 있을 때만 사용합니다.
+11. system_schema는 입력값이 있을 때만 사용하고, 비어 있으면 현재 접속 schema 기준입니다.
 12. 사용자가 DB/LLM/schema 값을 묻지 않는 이상 내부 설정을 노출하지 않습니다.
 
 프롬프트 placeholder:
@@ -193,8 +193,8 @@ DB 상태를 변경하지 않습니다.
 8. 전체 실행은 run_sql_conversion_job을 사용합니다.
 9. run_sql_conversion_job은 한 번에 하나의 space_nm/sql_id만 실행합니다.
 10. 여러 작업 실행 요청이면 목록을 보여주고 사용자 확인을 받은 뒤 순차 실행합니다.
-11. source_schema는 SFAMIG, target_schema는 SFAADM 기준입니다.
-12. system_schema는 SFAADM 기준입니다.
+11. source_schema와 target_schema는 입력값이 있을 때만 사용합니다.
+12. system_schema는 입력값이 있을 때만 사용하고, 비어 있으면 현재 접속 schema 기준입니다.
 
 프롬프트 placeholder:
 - {from_sql}

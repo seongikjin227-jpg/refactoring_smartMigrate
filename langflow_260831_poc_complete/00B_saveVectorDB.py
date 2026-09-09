@@ -56,7 +56,7 @@ class NewType00BSaveVectorDB(Component):
         StrInput(name="db_service_name", display_name="DB Service Name", required=False),
         StrInput(name="db_username", display_name="DB Username", required=False),
         SecretStrInput(name="db_password", display_name="DB Password", required=False),
-        StrInput(name="system_schema", display_name="System Schema", value="SFAADM", required=False),
+        StrInput(name="system_schema", display_name="System Schema", required=False),
         StrInput(name="milvus_uri", display_name="Milvus URI", required=True),
         StrInput(name="milvus_username", display_name="Milvus Username", required=True),
         SecretStrInput(name="milvus_password", display_name="Milvus Password", required=True),
@@ -633,7 +633,7 @@ class NewType00BSaveVectorDB(Component):
             "db_service_name": str(getattr(self, "db_service_name", "") or "").strip(),
             "db_username": str(getattr(self, "db_username", "") or "").strip(),
             "db_password": self._secret_to_str(getattr(self, "db_password", None)),
-            "system_schema": str(getattr(self, "system_schema", "") or "SFAADM").strip(),
+            "system_schema": str(getattr(self, "system_schema", "") or "").strip(),
         }
 
     def _milvus_config(self) -> dict[str, Any]:

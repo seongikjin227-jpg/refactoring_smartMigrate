@@ -8,7 +8,7 @@
 flowchart LR
     COMP[Component logger.info/error] --> PYLOG[smartmigrate.workflow]
     PYLOG --> H[SmartMigrateDBHandler]
-    H --> DB[(SFAADM.NEXT_MIG_LOG)]
+    H --> DB[(NEXT_MIG_LOG)]
     DB --> DASH[Dashboard / Current Progress]
     DB --> QA[Job QA Tool]
     DB --> F11B[11B Failure Cause Analyzer]
@@ -140,7 +140,7 @@ flowchart TD
 
 ```sql
 SELECT COUNT(*)
-  FROM SFAADM.NEXT_MIG_INFO
+  FROM NEXT_MIG_INFO
  WHERE UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
    AND (STATUS IS NULL OR (UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y'
    AND UPPER(TRIM(NVL(STATUS, 'NULL'))) LIKE 'FAIL-%'));

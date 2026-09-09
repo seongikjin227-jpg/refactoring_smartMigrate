@@ -2,7 +2,8 @@
 ########################################################################################################
 # 00A_logRuntimeStart.py registers the SmartMigrate DB logging handler.
 # Components only write Python logging events.
-# SmartMigrateDBHandler writes each event to SFAADM.NEXT_MIG_LOG.
+# SmartMigrateDBHandler writes each event to system_schema.NEXT_MIG_LOG
+# when system_schema is configured, otherwise to the current Oracle schema.
 # The optional 8th workflow_log value is written to GENERATE_SQL; omit it for NULL.
 
 import logging

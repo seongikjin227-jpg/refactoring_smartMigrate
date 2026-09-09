@@ -1,0 +1,669 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SmartMigrate Developer Guidebook</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --ink: #1d2430;
+      --muted: #657184;
+      --line: #d9dee7;
+      --brand: #1d6f8f;
+      --brand-2: #0f9f7a;
+      --accent: #f2b84b;
+      --code-bg: #111827;
+      --code-ink: #e5edf7;
+      --shadow: 0 14px 40px rgba(31, 41, 55, 0.12);
+      --radius: 8px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Malgun Gothic", Arial, sans-serif;
+      color: var(--ink);
+      background:
+        linear-gradient(90deg, rgba(29, 111, 143, 0.05) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(29, 111, 143, 0.05) 1px, transparent 1px),
+        var(--bg);
+      background-size: 28px 28px;
+      letter-spacing: 0;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 320px minmax(0, 1fr);
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow: auto;
+      border-right: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.94);
+      backdrop-filter: blur(12px);
+      padding: 22px 18px;
+    }
+
+    .brand {
+      display: grid;
+      gap: 10px;
+      padding: 8px 8px 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .brand-mark {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      border-radius: var(--radius);
+      background: var(--ink);
+      color: #fff;
+      font-weight: 800;
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.15;
+    }
+
+    .brand p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .search {
+      width: 100%;
+      margin: 18px 0 12px;
+      padding: 11px 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      color: var(--ink);
+      font-size: 14px;
+      outline: none;
+    }
+
+    .search:focus {
+      border-color: var(--brand);
+      box-shadow: 0 0 0 3px rgba(29, 111, 143, 0.14);
+    }
+
+    .nav {
+      display: grid;
+      gap: 6px;
+      margin-top: 10px;
+    }
+
+    .nav button {
+      width: 100%;
+      border: 1px solid transparent;
+      border-radius: var(--radius);
+      background: transparent;
+      color: var(--ink);
+      text-align: left;
+      padding: 10px 10px;
+      cursor: pointer;
+      display: grid;
+      gap: 4px;
+      font: inherit;
+    }
+
+    .nav button:hover {
+      border-color: var(--line);
+      background: #f8fafc;
+    }
+
+    .nav button.active {
+      border-color: rgba(29, 111, 143, 0.35);
+      background: rgba(29, 111, 143, 0.09);
+    }
+
+    .nav strong {
+      font-size: 14px;
+      line-height: 1.25;
+    }
+
+    .nav span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.3;
+    }
+
+    .main {
+      min-width: 0;
+      padding: 26px clamp(18px, 4vw, 56px) 52px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+
+    .crumb {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .icon-button {
+      width: 38px;
+      height: 38px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      cursor: pointer;
+      color: var(--ink);
+      display: grid;
+      place-items: center;
+    }
+
+    .icon-button:hover {
+      border-color: var(--brand);
+      color: var(--brand);
+    }
+
+    .hero {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background:
+        linear-gradient(135deg, rgba(29, 111, 143, 0.92), rgba(15, 159, 122, 0.86)),
+        repeating-linear-gradient(90deg, rgba(255,255,255,0.20) 0 1px, transparent 1px 48px);
+      color: #fff;
+      min-height: 180px;
+      padding: clamp(24px, 4vw, 42px);
+      display: grid;
+      align-content: end;
+      box-shadow: var(--shadow);
+      margin-bottom: 22px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: auto 0 0 0;
+      height: 9px;
+      background: linear-gradient(90deg, var(--accent), #ffffff, var(--brand-2));
+      opacity: 0.78;
+    }
+
+    .hero h2 {
+      margin: 0;
+      font-size: clamp(30px, 5vw, 56px);
+      line-height: 1;
+      letter-spacing: 0;
+    }
+
+    .hero p {
+      max-width: 760px;
+      margin: 12px 0 0;
+      font-size: 16px;
+      line-height: 1.55;
+      color: rgba(255, 255, 255, 0.9);
+    }
+
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin: 0 0 20px;
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      padding: 13px 14px;
+    }
+
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 5px;
+    }
+
+    .metric strong {
+      display: block;
+      font-size: 20px;
+      line-height: 1.2;
+    }
+
+    .content {
+      max-width: 1040px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.97);
+      padding: clamp(22px, 4vw, 42px);
+      box-shadow: 0 10px 28px rgba(31, 41, 55, 0.08);
+    }
+
+    .content h1,
+    .content h2,
+    .content h3 {
+      color: var(--ink);
+      letter-spacing: 0;
+      scroll-margin-top: 16px;
+    }
+
+    .content h1 {
+      margin: 0 0 18px;
+      font-size: clamp(28px, 4vw, 42px);
+      line-height: 1.1;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .content h2 {
+      margin: 34px 0 12px;
+      font-size: 24px;
+      line-height: 1.25;
+    }
+
+    .content h3 {
+      margin: 26px 0 10px;
+      font-size: 18px;
+    }
+
+    .content p,
+    .content li {
+      color: #334155;
+      line-height: 1.72;
+      font-size: 15px;
+    }
+
+    .content a {
+      color: var(--brand);
+      text-decoration: none;
+      border-bottom: 1px solid rgba(29, 111, 143, 0.3);
+    }
+
+    .content table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0 24px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      display: block;
+      overflow-x: auto;
+      background: #fff;
+    }
+
+    .content th,
+    .content td {
+      border-bottom: 1px solid var(--line);
+      padding: 10px 12px;
+      text-align: left;
+      vertical-align: top;
+      min-width: 130px;
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    .content th {
+      background: #eef3f7;
+      color: #243447;
+      font-weight: 700;
+    }
+
+    .content code {
+      border: 1px solid #d7dde6;
+      border-radius: 6px;
+      background: #f3f6fa;
+      padding: 1px 5px;
+      font-family: Consolas, "Cascadia Code", monospace;
+      font-size: 0.92em;
+    }
+
+    .content pre {
+      background: var(--code-bg);
+      color: var(--code-ink);
+      border-radius: var(--radius);
+      padding: 16px;
+      overflow: auto;
+      border: 1px solid #1f2937;
+      line-height: 1.55;
+    }
+
+    .content pre code {
+      border: 0;
+      border-radius: 0;
+      padding: 0;
+      background: transparent;
+      color: inherit;
+      font-size: 13px;
+    }
+
+    .content blockquote {
+      margin: 18px 0;
+      border-left: 4px solid var(--brand-2);
+      padding: 8px 16px;
+      background: #f3faf8;
+      color: #25423c;
+    }
+
+    .mermaid {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      padding: 18px;
+      overflow: auto;
+      margin: 16px 0 24px;
+    }
+
+    .empty {
+      color: var(--muted);
+      padding: 28px;
+      border: 1px dashed var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+    }
+
+    @media (max-width: 900px) {
+      .app { grid-template-columns: 1fr; }
+      .sidebar {
+        position: relative;
+        height: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .nav {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 560px) {
+      .nav { grid-template-columns: 1fr; }
+      .meta-grid { grid-template-columns: 1fr; }
+      .topbar { align-items: flex-start; flex-direction: column; }
+      .actions { width: 100%; }
+      .icon-button { flex: 1; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">SM</div>
+        <div>
+          <h1>SmartMigrate Guidebook</h1>
+          <p>Langflow POC architecture, operation flow, executor logic, and runbook documentation.</p>
+        </div>
+      </div>
+      <input id="search" class="search" type="search" placeholder="문서 검색">
+      <nav id="nav" class="nav" aria-label="Guide chapters"></nav>
+    </aside>
+
+    <main class="main">
+      <div class="topbar">
+        <div class="crumb" id="crumb">Guidebook / Loading</div>
+        <div class="actions">
+          <button class="icon-button" id="toggleRaw" title="Markdown 보기" aria-label="Markdown 보기">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z" stroke="currentColor" stroke-width="2"/><path d="M6 15V9l3 3 3-3v6M17 9v6m0 0-2-2m2 2 2-2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button class="icon-button" id="print" title="인쇄" aria-label="인쇄">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <section class="hero">
+        <h2>Developer Guidebook</h2>
+        <p>Read the 00-series SmartMigrate architecture notes as a navigable, searchable guide.</p>
+      </section>
+
+      <section class="meta-grid" aria-label="Guide metrics">
+        <div class="metric"><span>Documents</span><strong id="docCount">0</strong></div>
+        <div class="metric"><span>Current</span><strong id="currentDoc">-</strong></div>
+        <div class="metric"><span>Sections</span><strong id="sectionCount">0</strong></div>
+        <div class="metric"><span>Mode</span><strong id="mode">HTML</strong></div>
+      </section>
+
+      <article id="content" class="content">
+        <div class="empty">문서를 불러오는 중입니다.</div>
+      </article>
+    </main>
+  </div>
+
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+
+    const docs = [
+      { file: "00_architecture.md", title: "Final Architecture", desc: "전체 구조와 최종 아키텍처" },
+      { file: "00_architecture_chapter1_overview.md", title: "Chapter 1. Overview", desc: "목적, 컴포넌트 맵, 저장소" },
+      { file: "00_architecture_chapter2_chat_management.md", title: "Chapter 2. Chat Management", desc: "관리 라우팅, Job QA, 교정 입력" },
+      { file: "00_architecture_chapter3_job_execution.md", title: "Chapter 3. Job Execution", desc: "잔여 작업 조회와 실행 라우팅" },
+      { file: "00_architecture_chapter4_domain_executors.md", title: "Chapter 4. Domain Executors", desc: "10C/12C/15C/17C 실행 로직" },
+      { file: "00_architecture_chapter5_logging_operations.md", title: "Chapter 5. Logging Operations", desc: "로그 정책과 운영 Runbook" },
+      { file: "00_job_execution_payload_plan.md", title: "Execution Payload Plan", desc: "실행 payload 설계" },
+      { file: "00_main_logic_components.md", title: "Main Logic Components", desc: "핵심 executor 읽기 가이드" }
+    ];
+
+    const state = {
+      selected: docs[0].file,
+      raw: false,
+      texts: new Map()
+    };
+
+    const nav = document.querySelector("#nav");
+    const search = document.querySelector("#search");
+    const content = document.querySelector("#content");
+    const crumb = document.querySelector("#crumb");
+    const docCount = document.querySelector("#docCount");
+    const currentDoc = document.querySelector("#currentDoc");
+    const sectionCount = document.querySelector("#sectionCount");
+    const mode = document.querySelector("#mode");
+
+    mermaid.initialize({ startOnLoad: false, theme: "base", securityLevel: "loose" });
+    docCount.textContent = String(docs.length);
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function inlineMarkdown(value) {
+      let text = escapeHtml(value);
+      text = text.replace(/`([^`]+)`/g, "<code>$1</code>");
+      text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+      text = text.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+      text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+      return text;
+    }
+
+    function parseBlocks(markdown) {
+      const blocks = [];
+      const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+      let index = 0;
+      while (index < lines.length) {
+        const line = lines[index];
+        const fence = line.match(/^```(\w+)?\s*$/);
+        if (fence) {
+          const lang = fence[1] || "";
+          const body = [];
+          index += 1;
+          while (index < lines.length && !/^```\s*$/.test(lines[index])) {
+            body.push(lines[index]);
+            index += 1;
+          }
+          blocks.push({ type: lang.toLowerCase() === "mermaid" ? "mermaid" : "code", lang, text: body.join("\n") });
+          index += 1;
+          continue;
+        }
+
+        if (/^\|.+\|\s*$/.test(line) && index + 1 < lines.length && /^\|[\s:|-]+\|\s*$/.test(lines[index + 1])) {
+          const rows = [line, lines[index + 1]];
+          index += 2;
+          while (index < lines.length && /^\|.+\|\s*$/.test(lines[index])) {
+            rows.push(lines[index]);
+            index += 1;
+          }
+          blocks.push({ type: "table", rows });
+          continue;
+        }
+
+        blocks.push({ type: "line", text: line });
+        index += 1;
+      }
+      return blocks;
+    }
+
+    function renderTable(rows) {
+      const cells = rows.map(row => row.trim().replace(/^\||\|$/g, "").split("|").map(cell => inlineMarkdown(cell.trim())));
+      const head = cells[0] || [];
+      const body = cells.slice(2);
+      return `<table><thead><tr>${head.map(cell => `<th>${cell}</th>`).join("")}</tr></thead><tbody>${body.map(row => `<tr>${row.map(cell => `<td>${cell}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+    }
+
+    function renderMarkdown(markdown) {
+      const blocks = parseBlocks(markdown);
+      const html = [];
+      let paragraph = [];
+      let list = [];
+
+      const flushParagraph = () => {
+        if (paragraph.length) {
+          html.push(`<p>${inlineMarkdown(paragraph.join(" "))}</p>`);
+          paragraph = [];
+        }
+      };
+      const flushList = () => {
+        if (list.length) {
+          html.push(`<ul>${list.map(item => `<li>${inlineMarkdown(item)}</li>`).join("")}</ul>`);
+          list = [];
+        }
+      };
+
+      for (const block of blocks) {
+        if (block.type === "code") {
+          flushParagraph();
+          flushList();
+          html.push(`<pre><code>${escapeHtml(block.text)}</code></pre>`);
+          continue;
+        }
+        if (block.type === "mermaid") {
+          flushParagraph();
+          flushList();
+          html.push(`<div class="mermaid">${escapeHtml(block.text)}</div>`);
+          continue;
+        }
+        if (block.type === "table") {
+          flushParagraph();
+          flushList();
+          html.push(renderTable(block.rows));
+          continue;
+        }
+
+        const line = block.text;
+        if (!line.trim()) {
+          flushParagraph();
+          flushList();
+          continue;
+        }
+        const heading = line.match(/^(#{1,4})\s+(.+)$/);
+        if (heading) {
+          flushParagraph();
+          flushList();
+          const level = Math.min(heading[1].length, 3);
+          html.push(`<h${level}>${inlineMarkdown(heading[2])}</h${level}>`);
+          continue;
+        }
+        const bullet = line.match(/^\s*[-*]\s+(.+)$/);
+        if (bullet) {
+          flushParagraph();
+          list.push(bullet[1]);
+          continue;
+        }
+        paragraph.push(line.trim());
+      }
+      flushParagraph();
+      flushList();
+      return html.join("\n");
+    }
+
+    async function loadDoc(file) {
+      if (state.texts.has(file)) return state.texts.get(file);
+      const response = await fetch(file, { cache: "no-store" });
+      if (!response.ok) throw new Error(`${file} ${response.status}`);
+      const text = await response.text();
+      state.texts.set(file, text);
+      return text;
+    }
+
+    function renderNav(items = docs) {
+      nav.innerHTML = items.map(doc => `
+        <button type="button" class="${doc.file === state.selected ? "active" : ""}" data-file="${doc.file}">
+          <strong>${escapeHtml(doc.title)}</strong>
+          <span>${escapeHtml(doc.desc)}</span>
+        </button>
+      `).join("");
+    }
+
+    async function selectDoc(file) {
+      state.selected = file;
+      renderNav(filteredDocs());
+      const doc = docs.find(item => item.file === file) || docs[0];
+      crumb.textContent = `Guidebook / ${doc.title}`;
+      currentDoc.textContent = doc.title.replace(/^Chapter\s+\d+\.\s+/, "");
+      content.innerHTML = `<div class="empty">문서를 불러오는 중입니다.</div>`;
+      try {
+        const markdown = await loadDoc(file);
+        sectionCount.textContent = String((markdown.match(/^#{1,3}\s+/gm) || []).length);
+        mode.textContent = state.raw ? "Markdown" : "HTML";
+        content.innerHTML = state.raw ? `<pre><code>${escapeHtml(markdown)}</code></pre>` : renderMarkdown(markdown);
+        if (!state.raw) await mermaid.run({ nodes: content.querySelectorAll(".mermaid") });
+      } catch (error) {
+        content.innerHTML = `<div class="empty">문서를 불러오지 못했습니다. 로컬 파일 직접 열기 대신 이 폴더에서 간단한 HTTP 서버로 열어주세요.<br><br><code>python -m http.server 8765</code><br><br>${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    function filteredDocs() {
+      const q = search.value.trim().toLowerCase();
+      if (!q) return docs;
+      return docs.filter(doc => `${doc.title} ${doc.desc} ${doc.file}`.toLowerCase().includes(q));
+    }
+
+    nav.addEventListener("click", event => {
+      const button = event.target.closest("button[data-file]");
+      if (button) selectDoc(button.dataset.file);
+    });
+
+    search.addEventListener("input", () => renderNav(filteredDocs()));
+    document.querySelector("#toggleRaw").addEventListener("click", () => {
+      state.raw = !state.raw;
+      selectDoc(state.selected);
+    });
+    document.querySelector("#print").addEventListener("click", () => window.print());
+
+    renderNav();
+    selectDoc(state.selected);
+  </script>
+</body>
+</html>

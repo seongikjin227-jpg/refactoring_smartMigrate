@@ -40,8 +40,9 @@ MIGRATION_PROMPT_TEMPLATE: dict[str, str] = {
    - LIMIT 같은 비 Oracle 문법을 사용하지 마십시오.
 4. Schema 규칙:
    - 아래에 제공된 schema-qualified Source table과 Target table 값을 그대로 사용하십시오.
-   - Source/from 물리 테이블은 SFAMIG schema로 qualify되어야 합니다.
-   - Target/to 물리 테이블은 SFAADM schema로 qualify되어야 합니다.
+   - source_schema가 제공되면 Source/from 물리 테이블은 source_schema.TABLE_NAME 형식으로 qualify되어야 합니다.
+   - target_schema가 제공되면 Target/to 물리 테이블은 target_schema.TABLE_NAME 형식으로 qualify되어야 합니다.
+   - schema 값이 비어 있으면 물리 테이블에 schema prefix를 임의로 붙이지 마십시오.
    - 물리 AS-IS 또는 TO-BE 테이블의 schema prefix를 제거하지 마십시오.
    - DUAL, CTE 이름, inline view alias, table alias, subquery alias에는 schema prefix를 붙이지 마십시오.
 5. 출력:
@@ -1751,8 +1752,8 @@ class NewType10CMigOneJobPocExecutor(Component):
             "db_username": str(item_config.get("db_username") or "").strip(),
             "db_password": str(item_config.get("db_password") or ""),
             "system_schema": str(item_config.get("system_schema") or "").strip(),
-            "source_schema": str(getattr(self, "source_schema", "") or item_config.get("source_schema") or os.getenv("ORACLE_SCHEMA_SRC") or "SFAMIG").strip(),
-            "target_schema": str(getattr(self, "target_schema", "") or item_config.get("target_schema") or os.getenv("ORACLE_SCHEMA_TGT") or "SFAADM").strip(),
+            "source_schema": str(getattr(self, "source_schema", "") or item_config.get("source_schema") or os.getenv("ORACLE_SCHEMA_SRC") or "").strip(),
+            "target_schema": str(getattr(self, "target_schema", "") or item_config.get("target_schema") or os.getenv("ORACLE_SCHEMA_TGT") or "").strip(),
         }
 
     def _llm_config(self, job: dict[str, Any]) -> dict[str, Any]:
@@ -1856,11 +1857,11 @@ class NewType10CMigOneJobPocExecutor(Component):
 
     def _qualify_fr_table(self, table_name: str, db_config: dict[str, Any]) -> str:
         """Return source schema-qualified physical table name."""
-        return self._qualify_domain_table(table_name, db_config.get("source_schema") or "SFAMIG")
+        return self._qualify_domain_table(table_name, db_config.get("source_schema") or "")
 
     def _qualify_to_table(self, table_name: str, db_config: dict[str, Any]) -> str:
         """Return target schema-qualified physical table name."""
-        return self._qualify_domain_table(table_name, db_config.get("target_schema") or "SFAADM")
+        return self._qualify_domain_table(table_name, db_config.get("target_schema") or "")
 
     def _qualify_domain_table(self, table_name: str, schema: Any) -> str:
         value = str(table_name or "").strip()
@@ -1869,7 +1870,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         return self._qualify(value, schema)
 
     def _qualify_source_tables_in_sql(self, sql_text: str, db_config: dict[str, Any]) -> str:
-        schema = str(db_config.get("source_schema") or "SFAMIG").strip().upper()
+        schema = str(db_config.get("source_schema") or "").strip().upper()
         if not schema:
             return sql_text
         clean_schema = self._clean_identifier(schema)

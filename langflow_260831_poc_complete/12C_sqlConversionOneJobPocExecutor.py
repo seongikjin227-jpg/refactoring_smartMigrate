@@ -102,8 +102,9 @@ FROM SQL의 결과 의미를 보존하면서 매핑 규칙, SQL_CONVERSION RAG, 
 - 하나의 source parameter가 여러 target 조건으로 분리되어야 하면 target 의미에 맞는 여러 parameter로 나눌 수 있습니다.
 - parameter 이름을 변경, 통합, 분리한 경우 관련 <if>, <when>, <choose>의 test 표현식도 동일한 target parameter 이름 기준으로 함께 수정하십시오.
 - 기존 MyBatis 동적 태그 <if>, <choose>, <when>, <otherwise>, <where>, <trim>, <foreach> 구조는 가능한 한 유지하되, 매핑룰상 필요한 테이블명, 컬럼명, 별칭, SQL 표현식, parameter 이름은 target 의미 기준으로 변경하십시오.
-- TO-BE SQL에서 실제 타겟 물리 테이블은 반드시 target_schema.TABLE_NAME 형식으로 작성하십시오.
-- FROM SQL에 있던 모든 물리 테이블의 기존 스키마명은 제거하고 target_schema.TABLE_NAME 형식으로 교체하십시오.
+- target_schema가 제공되면 TO-BE SQL의 실제 타겟 물리 테이블은 target_schema.TABLE_NAME 형식으로 작성하십시오.
+- target_schema가 비어 있으면 TO-BE SQL의 실제 타겟 물리 테이블에 schema prefix를 임의로 붙이지 마십시오.
+- FROM SQL에 있던 모든 물리 테이블의 기존 스키마명은 제거하되, target_schema가 제공된 경우에만 target_schema.TABLE_NAME 형식으로 교체하십시오.
 - DUAL, CTE 이름, inline view alias, subquery alias, table alias에는 schema를 붙이지 마십시오.
 - 동적 분기를 여러 SQL 문으로 분리하지 마십시오. 기존 MyBatis 동적 태그 구조 안에 그대로 유지하십시오.
 - SQL_CONVERSION RAG 예시는 변환 패턴 힌트로만 사용하십시오. 매핑 규칙, 현재 FROM SQL, target_schema, last_error와 충돌하면 현재 입력을 우선하십시오.
@@ -2031,8 +2032,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "db_username": str(item_config.get("db_username") or "").strip(),
             "db_password": str(item_config.get("db_password") or ""),
             "system_schema": str(item_config.get("system_schema") or "").strip(),
-            "source_schema": str(getattr(self, "source_schema", "") or item_config.get("source_schema") or os.getenv("ORACLE_SCHEMA_SRC") or "SFAMIG").strip().upper(),
-            "target_schema": str(getattr(self, "target_schema", "") or item_config.get("target_schema") or os.getenv("ORACLE_SCHEMA_TGT") or "SFAADM").strip().upper(),
+            "source_schema": str(getattr(self, "source_schema", "") or item_config.get("source_schema") or os.getenv("ORACLE_SCHEMA_SRC") or "").strip().upper(),
+            "target_schema": str(getattr(self, "target_schema", "") or item_config.get("target_schema") or os.getenv("ORACLE_SCHEMA_TGT") or "").strip().upper(),
         }
 
     # Extract LLM settings from Langflow inputs and payload fallback values.

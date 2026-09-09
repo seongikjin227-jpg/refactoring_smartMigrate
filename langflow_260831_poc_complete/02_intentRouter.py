@@ -11,6 +11,23 @@ from lfx.schema.data import Data
 from lfx.schema.message import Message
 
 
+# =============================================================================
+# 02 Intent Conditional Router
+# =============================================================================
+# 01 Request Classifier가 만든 JSON payload를 받아 Langflow graph의 세 갈래 중
+# 정확히 하나만 통과시키는 조건부 라우터다.
+#
+# route 계약:
+# - GENERAL_CHAT: 일반 대화 응답 프롬프트(03)로 이동
+# - MANAGEMENT: 대시보드/진행 조회/상태 초기화/교정 입력/Job QA(04)로 이동
+# - JOB_EXECUTION: 잔여 작업 조회 후 실제 batch 실행 라우터(06 -> 08)로 이동
+#
+# 중요한 운영 규칙:
+# - 선택되지 않은 output은 반드시 self.stop(output_name)으로 중지한다.
+# - 이 컴포넌트는 route만 결정하며, SQL 생성/DB update/실패 분석을 하지 않는다.
+# - payload 원문은 보존하고 component, selected_output, next_node 같은 추적용
+#   metadata만 덧붙인다.
+# =============================================================================
 class NewType02IntentRouter(Component):
 
     display_name = "02 Intent Conditional Router"
@@ -36,7 +53,11 @@ class NewType02IntentRouter(Component):
         return self._route_output("JOB_EXECUTION", "job_execution")
 
     def _route_output(self, expected_route: str, output_name: str) -> Data:
-        # Build a routed payload for the active output branch.
+        # 활성 output branch에 전달할 routed payload를 만든다.
+        #
+        # Langflow group output은 각 output method가 개별적으로 호출될 수 있다.
+        # 그래서 expected_route와 실제 route가 다르면 해당 output을 stop 처리해야
+        # 뒤쪽 컴포넌트가 잘못 실행되지 않는다.
         try:
             if not getattr(self, "_router_started", False):
                 logging.getLogger("smartmigrate.workflow").info("02 Intent Router started", extra={"workflow_log": [0, "WORKFLOW", "02_INTENT_ROUTER", "INFO", "ROUTE", "START", 0]})
@@ -67,7 +88,9 @@ class NewType02IntentRouter(Component):
             return Data(data=result)
 
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
-        # Parse classifier output from Langflow Data, Message, dict, or JSON text.
+        # 01 classifier 결과는 Langflow 연결 방식에 따라 Data, Message, dict,
+        # JSON 문자열 중 하나로 들어올 수 있다. 라우터 뒤쪽 컴포넌트가 동일한
+        # 구조를 기대하므로 여기서 dict로 통일한다.
         if isinstance(raw, Data):
             return dict(raw.data or {})
         if isinstance(raw, dict):

@@ -468,13 +468,21 @@ class NewType04JobQaCommandTool(Component):
 
     def _query_rag_info(self, command: dict[str, Any]) -> dict[str, Any]:
         limit = self._limit(command.get("limit"))
+        rag_id = str(command.get("rag_id") or "").strip()
         category = str(command.get("category") or "").strip().upper()
+        rule_type = str(command.get("rule_type") or "").strip().upper()
         keyword = str(command.get("keyword") or "").strip()
         conditions = ["1=1"]
         params: dict[str, Any] = {}
+        if rag_id:
+            conditions.append("RAG_ID = :rag_id")
+            params["rag_id"] = int(rag_id)
         if category:
             conditions.append("UPPER(TRIM(CATEGORY)) = :category")
             params["category"] = category
+        if rule_type:
+            conditions.append("UPPER(TRIM(RULE_TYPE)) = :rule_type")
+            params["rule_type"] = rule_type
         if "use_yn" in command:
             conditions.append("UPPER(TRIM(USE_YN)) = :use_yn")
             params["use_yn"] = str(command.get("use_yn") or "").strip().upper()
@@ -491,7 +499,7 @@ class NewType04JobQaCommandTool(Component):
             f"""
             SELECT *
               FROM (
-                    SELECT {self._select_list('NEXT_MIG_RAG_INFO')}
+                    SELECT {self._select_list('NEXT_MIG_RAG_INFO', include_text=True)}
                       FROM {self._qualify('NEXT_MIG_RAG_INFO')}
                      WHERE {" AND ".join(conditions)}
                      ORDER BY UPDATED_AT DESC NULLS LAST, RAG_ID DESC
@@ -505,7 +513,7 @@ class NewType04JobQaCommandTool(Component):
             "ok": True,
             "component": "04_jobQaCommandTool",
             "action": "query_rag_info",
-            "target": {"category": category, "keyword": keyword, "limit": limit},
+            "target": {"rag_id": rag_id, "category": category, "rule_type": rule_type, "keyword": keyword, "limit": limit},
             "data": {"rules": rows},
         }
 
@@ -971,6 +979,6 @@ class NewType04JobQaCommandTool(Component):
             {"action": "search_logs", "optional": ["mig_kind", "map_id_like", "sql_id", "space_nm", "keyword", "status_like", "log_level", "log_type", "step_name_like", "fail_only", "created_after", "include_generate_sql_preview", "include_generate_sql_search", "limit"]},
             {"action": "recent_domain_status", "optional": ["domain", "limit", "fail_only"]},
             {"action": "search_jobs", "optional": ["domain", "keyword", "fail_only", "limit"]},
-            {"action": "query_rag_info", "optional": ["category", "keyword", "use_yn", "limit"]},
+            {"action": "query_rag_info", "optional": ["rag_id", "category", "rule_type", "keyword", "use_yn", "limit"]},
             {"action": "table_columns", "optional": ["tables"]},
         ]

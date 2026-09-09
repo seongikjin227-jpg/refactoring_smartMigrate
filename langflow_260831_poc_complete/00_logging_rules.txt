@@ -10,7 +10,7 @@
 - SmartMigrate workflow 로그는 `logging.getLogger("smartmigrate.workflow")` 전용 logger만 사용한다.
 - `00A Log Runtime Start`에서 `SmartMigrateDBHandler`를 등록한다.
 - `SmartMigrateDBHandler`는 workflow 시작 시 DB connection을 한 번 만들고 보유한다.
-- 각 컴포넌트의 `logger.info/error(...)` 호출마다 handler가 같은 connection으로 `SFAADM.NEXT_MIG_LOG`에 즉시 insert한다.
+- 각 컴포넌트의 `logger.info/error(...)` 호출마다 handler가 같은 connection으로 `system_schema.NEXT_MIG_LOG` 또는 현재 접속 schema의 `NEXT_MIG_LOG`에 즉시 insert한다.
 - 이전 방식이었던 batch read/save/Result Table 역할은 제거한다.
 - 별도 종료 logging 컴포넌트는 두지 않는다.
 - 다음 workflow 시작 시 `00A`가 기존 handler를 제거하고 `handler.close()`를 호출해 이전 DB connection을 닫는다.
@@ -177,7 +177,7 @@ SELECT LOG_ID,
        STATUS,
        MESSAGE,
        RETRY_COUNT
-  FROM SFAADM.NEXT_MIG_LOG
+  FROM NEXT_MIG_LOG
  WHERE MAP_ID = 0
  ORDER BY LOG_ID;
 ```
