@@ -32,7 +32,7 @@ SQL_OUTPUT_FORMATTING_GUIDE = "\nSQL만 반환하십시오. 최종 공백/들여
 
 
 class _PromptValues(dict):
-    # Keep unknown prompt placeholders visible instead of raising KeyError.
+    # 프롬프트 placeholder가 누락되어도 KeyError 대신 원문 placeholder를 남긴다.
     def __missing__(self, key: str) -> str:
         return "{" + key + "}"
 
@@ -273,10 +273,11 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
     ]
 
     # ##############################
-    # Entry point
+    # 진입점
     # ##############################
 
-    # Langflow output method: validate inputs, load one SQL job, and start the conversion graph.
+    # Langflow output method에서 입력을 검증하고 SQL 작업 한 건을 로드한 뒤 conversion graph를 시작한다.
+    # Langflow output에서 SQL Conversion 작업 한 건을 검증하고 변환 graph를 시작한다.
     def run_job(self) -> Data:
         logger = logging.getLogger("smartmigrate.workflow")
         logger.info("before run_job", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "INFO", "RUN_JOB", "START", 0]})
@@ -284,11 +285,11 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             started = time.perf_counter()
 
             # ##############################
-            # Preflight checks
+            # 실행 전 필수 조건 확인
             # ##############################
-            # This section only validates route, DB settings, prerequisites, and target row state.
-            # It does not generate SQL and only prepares the one NEXT_SQL_INFO row that will be processed.
-            # The actual SQL conversion work starts at _run_conversion().
+            # 이 구간은 route, DB 설정, 선행 단계 상태, 대상 row 상태만 검증한다.
+            # SQL 생성은 하지 않고 이번에 처리할 NEXT_SQL_INFO 한 건만 확정한다.
+            # 실제 SQL 변환 알고리즘은 _run_conversion() 이후 LangGraph에서 시작된다.
             payload = self._parse_payload(getattr(self, "job_item", ""))
             self._payload_max_retry = payload.get("max_retry") if isinstance(payload, dict) else None
             if self._job_name(payload) != "conversion":
@@ -313,11 +314,11 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 self._mark_running_status(db_config, job, "STATUS_CONVERSION", "RUNNING", "SQL conversion started")
 
                 # ##############################
-                # Actual conversion execution
+                # 실제 SQL 변환 실행
                 # ##############################
-                # From here, the component runs the implemented SQL conversion flow:
-                # source SQL preparation, RAG retrieval, prompt assembly, LLM calls, bind/test SQL, and DB status update.
-                # _run_conversion() builds the LangGraph state and invokes the graph.
+                # 여기부터 source SQL 준비, RAG 조회, 프롬프트 조립, LLM 호출,
+                # BIND/TEST SQL 생성, DB 상태 저장까지 한 번의 변환 흐름을 수행한다.
+                # _run_conversion()이 LangGraph state를 구성하고 graph를 실행한다.
                 result = self._run_conversion(payload, job, db_config, started)
             except Exception as exc:
                 result = self._finish_failure(payload, job, db_config, started, FAIL_TOBE, str(exc))
@@ -329,7 +330,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             logger.error(f"error run_job: {exc}", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "ERROR", "RUN_JOB", "ERROR", 0]})
             raise
 
-    # Build the output payload when DB Migration is not complete enough to run SQL Conversion.
+    # DB Migration이 아직 충분히 성공하지 못해 SQL Conversion을 실행할 수 없을 때의 결과 payload를 만든다.
+    # DB Migration 선행 조건이 부족할 때 SQL Conversion을 중단하는 표준 결과를 만든다.
     def _prerequisite_blocked(self, payload: dict[str, Any], started: float, prereq: dict[str, Any]) -> dict[str, Any]:
         elapsed = time.perf_counter() - started
         total = int(payload.get("total_jobs") or 1)
@@ -360,7 +362,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "next_node": "12D_sqlConversionIterationDashboard",
         }
 
-    # Resolve the current loop item route into the local job name used by 12C.
+    # 현재 loop item의 route를 12C 내부 job_name으로 해석한다.
+    # loop payload의 route/job_name 값을 12C 내부 conversion 작업명으로 정규화한다.
     def _job_name(self, payload: dict[str, Any]) -> str:
         value = str(payload.get("job_name") or "").strip().lower()
         if value:
@@ -373,7 +376,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "SQL_FORMATTING": "formatting",
         }.get(route, "")
 
-    # Return the payload unchanged when this component is not responsible for the current job.
+    # 현재 작업이 12C 담당이 아니면 payload를 그대로 다음 컴포넌트로 넘긴다.
+    # 현재 item이 12C 담당이 아닐 때 원본 payload를 유지한 채 다음 노드로 넘긴다. 10C와 같은 패턴이다.
     def _pass_through(self, payload: dict[str, Any], started: float, message: str) -> dict[str, Any]:
         elapsed = time.perf_counter() - started
         total = int(payload.get("total_jobs") or 1)
@@ -401,7 +405,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         result["history"] = history
         return result
 
-    # Prepare conversion state and invoke the LangGraph workflow.
+    # 변환 상태 객체를 만들고 LangGraph workflow를 실행한다.
+    # NEXT_SQL_INFO 한 건의 변환 상태를 만들고 LangGraph conversion workflow를 호출한다.
     def _run_conversion(
         self,
         payload: dict[str, Any],
@@ -409,12 +414,12 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         db_config: dict[str, Any],
         started: float,
     ) -> dict[str, Any]:
-        """Run TO-BE generation, bind extraction, and SELECT validation for one SQL job."""
+        """SQL 작업 한 건에 대해 TO-BE 생성, bind 추출, SELECT 검증을 수행한다."""
         # ##############################
-        # Conversion input setup
+        # 변환 입력 구성
         # ##############################
-        # Source SQL priority follows the existing flow: EDIT_FR_SQL first, then FR_SQL.
-        # NEXT_SQL_INFO.TARGET_TABLE is the AS-IS/FROM table scope used to find FR_TABLE mapping rules and RAG rules.
+        # source SQL은 사용자가 보정한 EDIT_FR_SQL을 우선 쓰고, 없으면 원본 FR_SQL을 사용한다.
+        # NEXT_SQL_INFO.TARGET_TABLE은 FR_TABLE 매핑 규칙과 RAG 규칙을 찾는 AS-IS 테이블 범위다.
         source_sql = self._source_sql(job)
         if not source_sql.strip():
             return self._finish_failure(payload, job, db_config, started, FAIL_TOBE, "FR_SQL/EDIT_FR_SQL is empty")
@@ -445,10 +450,10 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         logger = logging.getLogger("smartmigrate.workflow")
 
         # ##############################
-        # LangGraph execution
+        # LangGraph 실행
         # ##############################
-        # The graph owns retry routing. Each node updates state, and route callbacks decide
-        # whether the next node should continue, retry, or finalize.
+        # 각 노드는 state를 갱신하고, route callback이 다음 노드 진행/재시도/종료를 결정한다.
+        # 그래서 retry 판단은 개별 함수가 아니라 graph 상태 전이에 모인다.
         initial_state = {
             "payload": payload, "job": job, "db_config": db_config, "started": started,
             "source_sql": source_sql, "source_for_conversion": source_sql, "target_table": target_table,
@@ -462,7 +467,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "bind_sql": str(job.get("bind_sql") or "").strip(),
             "bind_set": str(job.get("bind_set") or "") or None,
             "test_sql": str(job.get("test_sql") or "").strip(),
-            # Capture the user-owned SQL before this run writes any generated values.
+            # 이번 실행이 생성 값을 덮기 전에 사용자가 직접 입력한 SQL을 먼저 보존한다.
             "initial_user_edited_columns": self._initial_user_edited_columns(job),
             "tuned_fr_sql": str(job.get("tuned_fr_sql") or "").strip() or None,
             "sql_length": self._sql_length_kind(source_sql),
@@ -476,20 +481,21 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         return self._finish_failure(payload, job, db_config, started, final_state.get("last_status") or FAIL_TOBE, final_state.get("last_message") or "SQL conversion failed", final_state.get("attempts") or [], partial_values=final_state)
 
     # ##############################
-    # LangGraph retry callbacks
+    # LangGraph 재시도 callback
     # ##############################
 
-    # Build LangGraph nodes and route retry/finalize decisions from state.
+    # LangGraph 노드와 state 기반 재시도/종료 라우팅을 정의한다.
+    # SQL 준비, TO_SQL, BIND_SQL, TEST_SQL, retry/finalize 노드를 연결한다.
     def _run_conversion_graph(self, context: dict[str, Any]) -> dict[str, Any]:
-        """Build and execute the SQL conversion graph for one NEXT_SQL_INFO row."""
+        """NEXT_SQL_INFO 한 건의 SQL conversion graph를 구성하고 실행한다."""
         from langgraph.graph import END, StateGraph
 
         logger = logging.getLogger("smartmigrate.workflow")
 
-        # Node 1: choose original SQL or final-attempt pre-tuned FROM SQL.
+        # 1번 노드: 원본 SQL을 쓸지, 마지막 시도에서 pre-tuned FROM SQL을 만들지 결정한다.
         def prepare_source_node(state: dict[str, Any]) -> dict[str, Any]:
-            # Pre-tuning is intentionally delayed until the final attempt.
-            # Earlier attempts use the original source SQL so normal conversion gets a chance first.
+            # pre-tuning은 일반 변환이 모두 실패한 마지막 시도에서만 수행한다.
+            # 초기 시도는 원본 SQL로 변환해 기본 경로가 먼저 성공할 기회를 둔다.
             allow_pre_tuning = int(state["attempt_no"]) >= int(state["max_retry"]) and state.get("resume_stage") == "GENERATE_TOBE_SQL"
             before_tuned = state.get("tuned_fr_sql")
             try:
@@ -508,7 +514,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 logger.error(str(exc), extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "TUNED_FR_SQL", "ERROR", "TUNE_FR_SQL", FAIL_TOBE, state["retry_count"]]})
                 return state
 
-        # Node 2: generate or reuse TO_SQL and persist it to NEXT_SQL_INFO.
+        # 2번 노드: TO_SQL을 생성하거나 재사용하고 NEXT_SQL_INFO에 저장한다.
         def generate_tobe_node(state: dict[str, Any]) -> dict[str, Any]:
             if state.get("resume_stage") != "GENERATE_TOBE_SQL" and state.get("to_sql"):
                 reason = self._stage_reuse_reason(state, "TOBE_SQL")
@@ -548,7 +554,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 logger.error(str(exc), extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "TOBE_SQL", "ERROR", "GENERATE_TOBE_SQL", FAIL_TOBE, state["retry_count"]]})
                 return state
 
-        # Node 3: for SELECT jobs, build bind candidate SQL and BIND_SET.
+        # 3번 노드: SELECT 작업이면 bind 후보 SQL과 BIND_SET을 만든다.
         def generate_bind_node(state: dict[str, Any]) -> dict[str, Any]:
             if state["tag_kind"] != "SELECT":
                 state["node_failed"] = False
@@ -584,7 +590,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 logger.error(str(exc), extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "BIND_SQL", "ERROR", "GENERATE_BIND_SQL", FAIL_BIND, state["retry_count"], state.get("bind_sql") or ""]})
                 return state
 
-        # Node 4: for SELECT jobs, generate and execute row-count validation SQL.
+        # 4번 노드: SELECT 작업이면 row-count 검증 TEST_SQL을 만들고 실행한다.
         def generate_test_node(state: dict[str, Any]) -> dict[str, Any]:
             if state["tag_kind"] != "SELECT":
                 state["node_failed"] = False
@@ -615,7 +621,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 logger.error(str(exc), extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "TEST_SQL", "ERROR", "VALIDATE_TEST_SQL", FAIL_TEST, state["retry_count"], state.get("test_sql") or ""]})
                 return state
 
-        # Retry node: advance attempt counters and carry the previous error into the next prompt.
+        # 재시도 노드: 시도 횟수를 올리고 이전 오류를 다음 프롬프트 맥락으로 넘긴다.
         def retry_prepare_node(state: dict[str, Any]) -> dict[str, Any]:
             next_attempt = int(state["attempt_no"]) + 1
             final_retry_mode = "ON" if next_attempt >= int(state["max_retry"]) else "OFF"
@@ -642,7 +648,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 next_state = self._reset_unprotected_user_edited_sql(next_state)
             return next_state
 
-        # Final node: persist the final NEXT_SQL_INFO status and build the Langflow result payload.
+        # 종료 노드: 최종 NEXT_SQL_INFO 상태를 저장하고 Langflow 결과 payload를 만든다.
         def finalize_node(state: dict[str, Any]) -> dict[str, Any]:
             if state.get("status") == CONVERSION_PASS:
                 final_log = f"FINAL SUCCESS stage=SQL_CONVERSION status={CONVERSION_PASS} job={state['job'].get('space_nm')}.{state['job'].get('sql_id')} reason=TAG_KIND:{state['tag_kind'] or 'UNKNOWN'}"
@@ -665,7 +671,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             )
             return state
 
-        # Router: continue retries only while a node failed and retry budget remains.
+        # 라우터: 노드가 실패했고 재시도 예산이 남았을 때만 retry_prepare로 보낸다.
         def route_after_stage(state: dict[str, Any]) -> str:
             if state.get("status") == CONVERSION_PASS:
                 return "finalize"
@@ -689,6 +695,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         workflow.add_edge("finalize", END)
         return workflow.compile().invoke(context)
 
+    # 사용자가 이미 보정한 SQL 컬럼을 찾아 재시도 중 보호할 컬럼 집합을 만든다.
     def _initial_user_edited_columns(self, job: dict[str, Any]) -> set[str]:
         if str(job.get("user_edited") or "").strip().upper() != "Y":
             return set()
@@ -698,6 +705,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             if str(job.get(key) or "").strip()
         }
 
+    # 사용자가 직접 보정하지 않은 이전 생성 SQL은 새 실행 전에 비워 재생성되게 한다.
     def _reset_unprotected_user_edited_sql(self, state: dict[str, Any]) -> dict[str, Any]:
         protected = set(state.get("initial_user_edited_columns") or [])
         if "TO_SQL" not in protected:
@@ -708,9 +716,10 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             return {**state, "test_sql": "", "resume_stage": "GENERATE_TEST_SQL"}
         return state
 
-    # Choose the source SQL used by TO_SQL generation and optionally create TUNED_FR_SQL.
+    # TO_SQL 생성에 사용할 source SQL을 고르고, 필요하면 TUNED_FR_SQL을 만든다.
+    # 변환에 사용할 source SQL을 확정하고 필요하면 마지막 시도용 TUNED_FR_SQL을 생성한다.
     def _prepare_conversion_source(self, job: dict[str, Any], db_config: dict[str, Any], llm_config: dict[str, Any], rag_config: dict[str, Any], source_sql: str, target_table: str, map_id: str, allow_generate: bool = True) -> tuple[str, str | None, str]:
-        """Use saved TUNED_FR_SQL or generate it for long source SQL before conversion."""
+        """저장된 TUNED_FR_SQL을 쓰거나 긴 source SQL 변환 전에 새로 생성한다."""
         saved_tuned_fr_sql = str(job.get("tuned_fr_sql") or "").strip()
         if saved_tuned_fr_sql:
             return saved_tuned_fr_sql, saved_tuned_fr_sql, self._sql_length_kind(source_sql)
@@ -721,9 +730,9 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         if not allow_generate or not pretuning_enabled or len(source_sql) < pretuning_min_length:
             return source_sql, None, sql_length
 
-        # Long SQL pre-tuning uses SQL_TUNING RAG only on the final graph attempt.
-        # GENERAL rules are loaded as direct guidance. SEARCH rules are ranked by Milvus dense_vector
-        # inside _retrieve_rag_examples(), then serialized into the embedded TUNED_FR_SQL prompt.
+        # 긴 SQL pre-tuning은 마지막 graph 시도에서만 SQL_TUNING RAG를 사용한다.
+        # GENERAL 규칙은 직접 guide로 넣고, SEARCH 규칙은 Milvus dense_vector 유사도로 정렬한다.
+        # 정렬된 예시는 TUNED_FR_SQL 내장 프롬프트에 직렬화된다.
         source_tables = self._source_tables(target_table)
         tuning_rules = self._load_rag_general_rules(db_config, "SQL_TUNING", source_tables, map_id)
         tuning_examples = self._retrieve_rag_examples(db_config, rag_config, "SQL_TUNING", source_sql, source_tables, map_id)
@@ -748,7 +757,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         )
         return tuned_fr_sql, tuned_fr_sql, sql_length
 
-    # Generate TO_SQL from mapping rules, SQL_CONVERSION RAG, and retry context.
+    # mapping rule, SQL_CONVERSION RAG, 재시도 오류 맥락을 합쳐 TO_SQL을 생성한다.
+    # 매핑/RAG/힌트를 조합해 TO_SQL을 생성하고 DB에 저장한다.
     def _generate_tobe_sql(
         self,
         job: dict[str, Any],
@@ -780,9 +790,9 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         if not mapping_rules:
             raise ValueError(f"Mapping rules not found for FROM table scope TARGET_TABLE={target_table}")
 
-        # TO_SQL prompt context is assembled in this order:
-        # migration table/column mapping rules, SQL_CONVERSION GENERAL RAG guidance,
-        # and SQL_CONVERSION SEARCH examples ranked by vector similarity per SQL block.
+        # TO_SQL 프롬프트 맥락은 다음 순서로 조립한다.
+        # migration 테이블/컬럼 매핑 규칙, SQL_CONVERSION GENERAL guide,
+        # SQL block별 vector 유사도 순서로 뽑은 SQL_CONVERSION SEARCH 예시를 차례로 넣는다.
         if general_rules is None or examples is None:
             source_tables = self._source_tables(target_table)
             general_rules = self._load_rag_general_rules(db_config, "SQL_CONVERSION", source_tables, map_id)
@@ -805,10 +815,11 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         self._increment_rag_hits(db_config, examples)
         return sql
 
-    # Generate executable BIND_SQL and convert its result rows into BIND_SET JSON.
-    # Bind discovery is intentionally handled by the LLM prompt. A regex pre-gate
-    # misses MyBatis dynamic-tag cases, especially values that only appear inside
-    # <if>/<when> test expressions.
+    # 실행 가능한 BIND_SQL을 만들고 결과 row를 BIND_SET JSON으로 변환한다.
+    # bind 추출은 정규식 사전 차단이 아니라 LLM 프롬프트에서 처리한다.
+    # MyBatis 동적 태그 안에서만 나타나는 값은 정규식으로 놓치기 쉽기 때문이다.
+    # <if>/<when> test expression 안에만 있는 변수까지 잡기 위한 처리다.
+    # SELECT 변환 검증에 필요한 BIND_SQL과 BIND_SET을 생성한다.
     def _generate_bind_payload(
         self,
         job: dict[str, Any],
@@ -839,7 +850,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 last_error=last_error or "None",
             )
             if "FINAL_RETRY_MODE=ON" in str(last_error or "").upper():
-                # Final retry keeps the normal bind prompt and appends stronger recovery rules.
+                # 마지막 재시도는 기본 bind 프롬프트에 더 강한 복구 규칙만 덧붙인다.
                 prompt += (
                     "\n\n[최종 재시도 모드]\n"
                     "- 이전 Bind SQL 실행 오류를 우선 해결하십시오.\n"
@@ -865,7 +876,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         )
         return bind_sql, bind_set
 
-    # Generate validation TEST_SQL that compares FROM SQL and TO_SQL row counts.
+    # FROM SQL과 TO_SQL의 row count를 비교하는 검증 TEST_SQL을 생성한다.
+    # FROM/TO row count를 비교하는 TEST_SQL을 생성하고 실행한다.
     def _generate_test_sql(
         self,
         job: dict[str, Any],
@@ -886,7 +898,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 extra={"workflow_log": [map_id, "SQL_CONVERSION", "TEST_SQL", "INFO", "USE_USER_EDITED_TEST_SQL", "SUCCESS", retry_count, f"{reason}\n\n{str(job['test_sql'])}"]},
             )
             return str(job["test_sql"])
-        # TEST_SQL compares the original AS-IS SQL with TO_SQL using bind cases from BIND_SET.
+        # TEST_SQL은 BIND_SET의 bind case를 사용해 원본 AS-IS SQL과 TO_SQL 결과 건수를 비교한다.
         prompt = self._build_prompt(
             "TEST_SQL",
             from_sql=source_sql,
@@ -898,7 +910,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             last_error=last_error or "None",
         )
         if retry_count >= self._configured_retry_limit():
-            # Final retry keeps the normal test prompt and appends stricter validation recovery rules.
+            # 마지막 재시도는 기본 test 프롬프트에 더 엄격한 검증 복구 규칙을 덧붙인다.
             prompt += (
                 "\n\n[최종 재시도 모드]\n"
                 "- 이전 TEST_SQL 실행 오류 또는 count mismatch 오류를 우선 해결하십시오.\n"
@@ -913,7 +925,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             raise ValueError("TEST_SQL generation returned empty SQL")
         return test_sql
 
-    # Persist failure state to NEXT_SQL_INFO and return the standard failure payload.
+    # 실패 상태를 NEXT_SQL_INFO에 저장하고 표준 실패 payload를 반환한다.
+    # 실패 상태를 NEXT_SQL_INFO에 저장하고 표준 실패 payload를 만든다.
     def _finish_failure(
         self,
         payload: dict[str, Any],
@@ -925,7 +938,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         attempts: list[dict[str, Any]] | None = None,
         partial_values: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Persist a SQL conversion failure using the source status values."""
+        """source status 값을 기준으로 SQL conversion 실패를 저장한다."""
         failure_attempts = attempts or [{"attempt": 1, "stage": self._failure_stage(status), "status": status, "reason": message}]
         if self._has_sql_key(job):
             update_values = {
@@ -980,7 +993,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             },
         )
 
-    # Build the standard Langflow result payload passed to the next component.
+    # 다음 컴포넌트로 넘길 표준 Langflow 결과 payload를 만든다.
+    # 12C 실행 결과를 dashboard/후속 단계가 읽는 표준 payload로 만든다.
     def _result(
         self,
         *,
@@ -993,7 +1007,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         message: str,
         extra: dict[str, Any],
     ) -> dict[str, Any]:
-        """Build the standard Loop result payload."""
+        """표준 Loop 결과 payload를 만든다."""
         total = int(payload.get("total_jobs") or 1)
         index = int(payload.get("job_index") or 1)
         completed = min(index, total)
@@ -1023,6 +1037,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "db_status_updated": self._has_sql_key(job),
         }
 
+    # 후속 formatting 단계가 볼 수 있도록 생성 SQL 목록을 표준 구조로 만든다.
     def _generated_sql_list(self, payload: dict[str, Any], job: dict[str, Any], extra: dict[str, Any]) -> list[dict[str, Any]]:
         result = [dict(item) for item in payload.get("generated_sql_list") or [] if isinstance(item, dict)]
         sql_id = job.get("sql_id") or payload.get("sql_id")
@@ -1033,8 +1048,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             ("bind_sql", "BIND_SQL"),
             ("test_sql", "TEST_SQL"),
         ):
-            # Check both state (lowercase) and DB-loaded (uppercase) keys to capture all generated SQL,
-            # including those that failed validation but were still generated and need formatting.
+            # state의 소문자 key와 DB에서 읽은 대문자 key를 모두 확인해 생성 SQL을 놓치지 않는다.
+            # 검증 실패 후에도 생성된 SQL은 formatting 단계에서 확인할 수 있어야 한다.
             sql_value = extra.get(key) or extra.get(key.upper())
             if str(sql_value or "").strip():
                 result.append(
@@ -1048,6 +1063,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 )
         return self._dedupe_generated_sql_list(result)
 
+    # 같은 SQL 항목이 payload에 중복되지 않게 정리한다. 10C에도 같은 목적의 헬퍼가 있다.
     def _dedupe_generated_sql_list(self, values: list[dict[str, Any]]) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         seen: set[tuple[str, str, str, str]] = set()
@@ -1065,18 +1081,20 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             result.append(item)
         return result
 
-    # Map final failure status to the stage name that should be shown in logs.
+    # 최종 실패 status를 로그에 표시할 단계명으로 매핑한다.
+    # 최종 status를 사람이 읽을 수 있는 실패 단계명으로 매핑한다.
     def _failure_stage(self, status: str) -> str:
-        """Return the conversion stage represented by a failure status."""
+        """failure status가 의미하는 conversion stage를 반환한다."""
         if status == FAIL_BIND:
             return "GENERATE_BIND_SQL"
         if status == FAIL_TEST:
             return "GENERATE_TEST_SQL"
         return "GENERATE_TOBE_SQL"
 
-    # Decide where to resume when a user-edited failed row already has partial SQL.
+    # 사용자가 실패 row를 보정했고 일부 SQL이 남아 있을 때 재개 지점을 결정한다.
+    # 사용자 보정 실패 row가 어느 생성 단계부터 재개해야 하는지 결정한다.
     def _initial_resume_stage(self, job: dict[str, Any], tag_kind: str, to_sql: str, bind_sql: str) -> str:
-        """Resume user-corrected failed SQL rows from the next useful stage."""
+        """사용자가 보정한 실패 SQL row를 다음 유효 단계부터 재개한다."""
         if str(job.get("user_edited") or "").strip().upper() != "Y":
             return "GENERATE_TOBE_SQL"
         if not str(to_sql or "").strip():
@@ -1091,8 +1109,9 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             return "GENERATE_BIND_SQL"
         return "GENERATE_TOBE_SQL"
 
+    # 기존 SQL을 재사용하는 이유를 로그/status 메시지로 만든다.
     def _stage_reuse_reason(self, state: dict[str, Any], sql_name: str) -> str:
-        """Explain why an already generated SQL was reused in this attempt."""
+        """이미 생성된 SQL을 이번 attempt에서 재사용한 이유를 설명한다."""
         resume_stage = str(state.get("resume_stage") or "").strip() or "UNKNOWN"
         last_status = str(state.get("last_status") or "").strip()
         user_edited = str((state.get("job") or {}).get("user_edited") or "").strip().upper()
@@ -1108,9 +1127,10 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             parts.append("next_stage=GENERATE_TEST_SQL")
         return "; ".join(parts)
 
-    # Derive retry count from recorded attempt history.
+    # 기록된 attempt 이력에서 재시도 횟수를 계산한다.
+    # attempt history 기준으로 retry count를 계산한다.
     def _retry_count(self, attempts: list[dict[str, Any]]) -> int:
-        """Return retries from attempt history."""
+        """attempt history에서 retry 횟수를 반환한다."""
         max_attempt = 1
         for attempt in attempts:
             try:
@@ -1119,11 +1139,11 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 continue
         return max(max_attempt - 1, 0)
 
-    # Load one NEXT_SQL_INFO row by SPACE_NM and SQL_ID.
+    # SPACE_NM과 SQL_ID로 NEXT_SQL_INFO 한 건을 로드한다.
+    # SPACE_NM/SQL_ID 기준으로 NEXT_SQL_INFO 한 건을 로드한다.
     def _load_sql_job(self, db_config: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
-        """Load one NEXT_SQL_INFO row by SPACE_NM + SQL_ID."""
+        """SPACE_NM과 SQL_ID로 NEXT_SQL_INFO 한 건을 로드한다."""
         table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
-        columns = self._table_columns(db_config, table)
         aliases = [
             ("TAG_KIND", "tag_kind", "VARCHAR2(100)"),
             ("SPACE_NM", "space_nm", "VARCHAR2(4000)"),
@@ -1146,7 +1166,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             ("PRIORITY", "priority", "NUMBER"),
             ("RETRY_COUNT", "retry_count", "NUMBER"),
         ]
-        select_sql = ",\n               ".join([self._select_expr(columns, col, alias, data_type) for col, alias, data_type in aliases])
+        select_sql = ",\n               ".join([f"{col} AS {alias}" for col, alias, _ in aliases])
         where_sql, params = self._sql_key_where(payload)
         query = f"""
             SELECT {select_sql}
@@ -1164,21 +1184,18 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             loaded = {key: self._lob_to_str(row[index]) for index, key in enumerate(keys)}
         return {**payload, **loaded}
 
-    # Update generated SQL/status columns that exist in NEXT_SQL_INFO.
+    # 생성된 SQL과 상태 컬럼을 NEXT_SQL_INFO에 저장한다.
+    # NEXT_SQL_INFO의 생성 SQL/status 컬럼을 명시적으로 업데이트한다.
     def _update_row(self, db_config: dict[str, Any], job: dict[str, Any], values: dict[str, Any]) -> None:
-        """Update only columns that exist in NEXT_SQL_INFO."""
+        """NEXT_SQL_INFO의 생성 SQL/status 컬럼을 업데이트한다."""
         table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
-        columns = self._table_columns(db_config, table)
         set_clauses: list[str] = []
         where_sql, params = self._sql_key_where(job)
         for index, (column, value) in enumerate(values.items(), start=1):
-            if column not in columns:
-                continue
             name = f"p{index}"
             set_clauses.append(f"{column} = :{name}")
             params[name] = value
-        if "UPD_TS" in columns:
-            set_clauses.append("UPD_TS = CURRENT_TIMESTAMP")
+        set_clauses.append("UPD_TS = CURRENT_TIMESTAMP")
         if not set_clauses:
             return
         query = f"""
@@ -1191,16 +1208,12 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             cur.execute(query, params)
             conn.commit()
 
-    # Increment BATCH_CNT when this SQL conversion row starts execution.
+    # 이 SQL 변환 row가 실행을 시작할 때 BATCH_CNT를 증가시킨다.
+    # SQL Conversion 실행 시작 시 BATCH_CNT를 증가시킨다.
     def _increment_batch_count(self, db_config: dict[str, Any], job: dict[str, Any]) -> None:
-        """Increment NEXT_SQL_INFO.BATCH_CNT when a SQL conversion job starts."""
+        """SQL conversion 작업 시작 시 NEXT_SQL_INFO.BATCH_CNT를 증가시킨다."""
         table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
-        columns = self._table_columns(db_config, table)
-        if "BATCH_CNT" not in columns:
-            return
-        set_clause = "BATCH_CNT = NVL(BATCH_CNT, 0) + 1"
-        if "UPD_TS" in columns:
-            set_clause += ", UPD_TS = CURRENT_TIMESTAMP"
+        set_clause = "BATCH_CNT = NVL(BATCH_CNT, 0) + 1, UPD_TS = CURRENT_TIMESTAMP"
         where_sql, params = self._sql_key_where(job)
         with self._connect(db_config) as conn:
             cur = conn.cursor()
@@ -1214,8 +1227,9 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             )
             conn.commit()
 
+    # 현재 변환 단계 status와 로그 메시지를 NEXT_SQL_INFO에 저장한다.
     def _mark_running_status(self, db_config: dict[str, Any], job: dict[str, Any], status_column: str, status: str, message: str, retry_count: int = 0) -> None:
-        """Persist a running SQL status while retry is still active."""
+        """retry가 남아 있는 동안 진행 중 SQL status를 저장한다."""
         self._update_row(
             db_config,
             job,
@@ -1226,6 +1240,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             },
         )
 
+    # SPACE_NM/SQL_ID 기반 UPDATE/SELECT where 절과 bind 값을 만든다.
     def _sql_key_where(self, job: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         space_nm = str(job.get("space_nm") or "").strip()
         sql_id = str(job.get("sql_id") or "").strip()
@@ -1233,39 +1248,41 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             raise ValueError("SQL job item requires space_nm+sql_id")
         return "TO_CHAR(SPACE_NM) = :space_nm AND TO_CHAR(SQL_ID) = :sql_id", {"space_nm": space_nm, "sql_id": sql_id}
 
+    # payload/job에 SQL row를 특정할 key가 있는지 확인한다.
     def _has_sql_key(self, job: dict[str, Any]) -> bool:
         return bool(str(job.get("space_nm") or "").strip() and str(job.get("sql_id") or "").strip())
 
-    # Pick EDIT_FR_SQL first and fall back to original FR_SQL.
+    # EDIT_FR_SQL을 먼저 사용하고 없으면 원본 FR_SQL을 사용한다.
+    # EDIT_FR_SQL 우선, 없으면 FR_SQL 기준으로 변환 source SQL을 선택한다.
     def _source_sql(self, job: dict[str, Any]) -> str:
-        """Return EDIT_FR_SQL first, otherwise FR_SQL."""
+        """EDIT_FR_SQL을 우선 반환하고 없으면 FR_SQL을 반환한다."""
         edited = str(job.get("edit_fr_sql") or "").strip()
         return edited if edited else str(job.get("fr_sql") or "")
 
-    # Classify SQL length using the same threshold that gates TUNED_FR_SQL pre-tuning.
+    # TUNED_FR_SQL pre-tuning 여부와 같은 기준으로 SQL 길이를 분류한다.
+    # 긴 SQL 여부를 분류해 pre-tuning 필요성을 판단한다.
     def _sql_length_kind(self, sql_text: str, threshold: int | None = None) -> str:
-        """Classify runtime SQL length using TUNED_FR_SQL_PRETUNING_MIN_LENGTH."""
+        """TUNED_FR_SQL_PRETUNING_MIN_LENGTH 기준으로 runtime SQL 길이를 분류한다."""
         limit = threshold if threshold is not None else self._tuned_fr_sql_pretuning_min_length()
         return "LONG" if len(str(sql_text or "")) >= limit else "SHORT"
 
+    # TUNED_FR_SQL pre-tuning을 시작할 최소 SQL 길이를 반환한다.
     def _tuned_fr_sql_pretuning_min_length(self) -> int:
         return self._positive_int(os.getenv("TUNED_FR_SQL_PRETUNING_MIN_LENGTH"), TUNED_FR_SQL_PRETUNING_MIN_LENGTH_DEFAULT)
 
-    # Extract MyBatis bind parameter names and dynamic tag variables.
+    # MyBatis bind parameter와 동적 태그 변수를 추출한다.
     # ##############################
-    # Mapping rules and RAG retrieval
+    # 매핑 규칙 및 RAG 조회
     # ##############################
 
-    # Load PASS migration mapping rules scoped by NEXT_SQL_INFO.TARGET_TABLE against NEXT_MIG_INFO.FR_TABLE.
+    # NEXT_SQL_INFO.TARGET_TABLE을 NEXT_MIG_INFO.FR_TABLE과 맞춰 PASS migration 매핑 규칙을 조회한다.
+    # TARGET_TABLE 범위에 맞는 PASS migration 매핑 규칙을 조회한다.
     def _load_mapping_rules(self, db_config: dict[str, Any], target_table: str) -> list[dict[str, str]]:
         map_table = self._qualify(os.getenv("MAPPING_RULE_TABLE", "NEXT_MIG_INFO"), db_config.get("system_schema"))
         detail_table = self._qualify(os.getenv("MAPPING_RULE_DETAIL_TABLE", "NEXT_MIG_INFO_DTL"), db_config.get("system_schema"))
-        columns = self._table_columns(db_config, map_table)
-        description_expr = "M.DESCRIPTION" if "DESCRIPTION" in columns else "CAST(NULL AS VARCHAR2(4000))"
-        condition_expr = "M.CONDITION" if "CONDITION" in columns else "CAST(NULL AS VARCHAR2(4000))"
         query = f"""
             SELECT M.MAP_TYPE, M.FR_TABLE, D.FR_COL, M.TO_TABLE, D.TO_COL,
-                   {description_expr}, {condition_expr}
+                   M.DESCRIPTION, M.CONDITION
               FROM {map_table} M
               JOIN {detail_table} D ON M.MAP_ID = D.MAP_ID
              WHERE UPPER(TRIM(M.STATUS)) = 'PASS'
@@ -1288,34 +1305,30 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             return rules
         return [rule for rule in rules if self._table_matches(rule["fr_table"], source_scope_tables)]
 
-    # Load GENERAL RAG guidance and skip it if the RAG table is not ready.
+    # GENERAL RAG는 SQL 변환 프롬프트의 기준 규칙이다.
+    # RAG 테이블/스키마 문제가 있으면 빈 규칙으로 우회하지 않고 즉시 오류를 노출한다.
+    # SQL Conversion GENERAL RAG 규칙을 조회하고 오류는 숨기지 않는다.
     def _load_rag_general_rules(self, db_config: dict[str, Any], category: str, source_tables: set[str], map_id: str) -> list[dict[str, Any]]:
-        try:
-            return self._load_rag_rules(db_config, category, RAG_GENERAL, source_tables, map_id)
-        except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").warning(
-                f"RAG GENERAL rule load skipped: {type(exc).__name__}: {exc}",
-                extra={"workflow_log": [map_id, "SQL_CONVERSION", "RAG_RETRIEVE", "WARN", "RAG_GENERAL", "SKIP", 0]},
-            )
-            return []
+        return self._load_rag_rules(db_config, category, RAG_GENERAL, source_tables, map_id)
 
     # -------------------------------------------------------------------------
-    # Milvus RAG SEARCH retrieval
+    # Milvus RAG SEARCH 조회
     # -------------------------------------------------------------------------
-    # 12C no longer builds an in-memory FAISS index from all Oracle RAG rows.
-    # Runtime retrieval is:
-    # 1. take the current SQL text that 12C is processing,
-    # 2. normalize it to a stable SQL shape,
-    # 3. call the embedding API once per SQL/block,
-    # 4. send that query vector to Milvus,
-    # 5. search against SM_RAG_RULES.dense_vector with COSINE metric.
+    # 12C는 더 이상 Oracle RAG 전체 row로 메모리 FAISS index를 만들지 않는다.
+    # 실행 중 검색 흐름:
+    # 1. 12C가 처리 중인 현재 SQL 텍스트를 가져온다.
+    # 2. embedding 비교가 흔들리지 않도록 SQL 구조를 정규화한다.
+    # 3. SQL/block마다 embedding API를 한 번 호출한다.
+    # 4. 생성된 query vector를 Milvus로 보낸다.
+    # 5. COSINE 기준으로 SM_RAG_RULES.dense_vector를 검색한다.
     #
-    # The dense_vector values in SM_RAG_RULES are created by 00B from
-    # NEXT_MIG_RAG_INFO.SOURCE_SQL. Therefore this search means:
-    # "current FROM SQL/block" vs "stored RAG SOURCE_SQL examples".
+    # SM_RAG_RULES.dense_vector는 00B가 NEXT_MIG_RAG_INFO.SOURCE_SQL에서 생성한다.
+    # 따라서 이 검색은 현재 SQL과 저장된 SOURCE_SQL 예시의 유사도 비교다.
+    # 비교 의미는 "현재 FROM SQL/block" 대 "저장된 RAG SOURCE_SQL 예시"다.
     #
-    # Returned guidance_text/source_sql/target_sql are prompt metadata. They are
-    # not used for distance math here; only dense_vector is used for similarity.
+    # 반환된 guidance_text/source_sql/target_sql은 프롬프트 metadata다.
+    # 유사도 계산에는 dense_vector만 사용한다.
+    # Milvus dense_vector로 SQL block별 SEARCH RAG 예시를 찾는다. 15C 튜닝도 같은 검색 구조다.
     def _retrieve_rag_examples(self, db_config: dict[str, Any], rag_config: dict[str, Any], category: str, sql_text: str, source_tables: set[str], map_id: str) -> list[dict[str, Any]]:
         if category == "SQL_TUNING":
             blocks = self._split_sql_blocks(sql_text)
@@ -1335,40 +1348,29 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         top_k = self._positive_int(getattr(self, "rag_top_k", None), 3)
         fetch_k = max(top_k * 5, top_k)
         matches_by_block: list[list[tuple[dict[str, Any], float]]] = []
-        try:
-            # Embed the current SQL/block once, then search that query vector
-            # against Milvus dense_vector. This is a remote Milvus vector search,
-            # not a local FAISS search or an Oracle full-table embedding pass.
-            vectors = self._embed_texts([block["normalized_sql"] for block in blocks], rag_config)
-            method = "milvus_dense_vector"
-            search_result = client.search(
-                collection_name=config["rag_collection"],
-                data=vectors,
-                anns_field="dense_vector",
-                filter=filter_expr,
-                limit=fetch_k,
-                output_fields=output_fields,
-                # Milvus calculates vector similarity with COSINE distance.
-                # This matches the dense embedding use case better than lexical
-                # equality and replaces the old local-vector-search approach.
-                search_params={"metric_type": "COSINE"},
-            )
-            for hits in search_result:
-                matches = []
-                for hit in hits:
-                    rule = self._milvus_rag_entity(hit)
-                    if not self._source_tables_match(rule.get("source_tables") or [], source_tables):
-                        continue
-                    matches.append((rule, self._milvus_score(hit)))
-                    if len(matches) >= top_k:
-                        break
-                matches_by_block.append(matches)
-        except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").warning(
-                f"Milvus RAG search skipped: {type(exc).__name__}: {exc}",
-                extra={"workflow_log": [map_id, "SQL_CONVERSION", "RAG_RETRIEVE", "WARN", "RAG_SEARCH", "SKIP", 0]},
-            )
-            return []
+        # 현재 SQL/block을 embedding한 뒤 Milvus dense_vector에서 유사 사례를 찾는다.
+        # Milvus 또는 embedding 오류는 변환 품질에 직접 영향을 주므로 숨기지 않는다.
+        vectors = self._embed_texts([block["normalized_sql"] for block in blocks], rag_config)
+        method = "milvus_dense_vector"
+        search_result = client.search(
+            collection_name=config["rag_collection"],
+            data=vectors,
+            anns_field="dense_vector",
+            filter=filter_expr,
+            limit=fetch_k,
+            output_fields=output_fields,
+            search_params={"metric_type": "COSINE"},
+        )
+        for hits in search_result:
+            matches = []
+            for hit in hits:
+                rule = self._milvus_rag_entity(hit)
+                if not self._source_tables_match(rule.get("source_tables") or [], source_tables):
+                    continue
+                matches.append((rule, self._milvus_score(hit)))
+                if len(matches) >= top_k:
+                    break
+            matches_by_block.append(matches)
         if category != "SQL_TUNING":
             top_matches = sorted([item for matches in matches_by_block for item in matches], key=lambda item: item[1], reverse=True)[:top_k]
             matches_by_block = [top_matches]
@@ -1384,9 +1386,10 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         search_mode = f"block_top{top_k}" if category == "SQL_TUNING" else f"full_sql_top{top_k}"
         return payloads
 
-    # Load GENERAL RAG guidance from Milvus with scalar filters only.
-    # GENERAL rules are not similarity-ranked; they are selected by category,
-    # rule_type, is_active, and source table applicability.
+    # GENERAL RAG guide는 Milvus scalar filter만으로 조회한다.
+    # GENERAL 규칙은 유사도 정렬 대상이 아니며 category, rule_type,
+    # is_active, source table 적용 가능성으로만 선택한다.
+    # GENERAL RAG rule을 category/rule_type/source table 조건으로 조회한다.
     def _load_rag_rules(self, db_config: dict[str, Any], category: str, rule_type: str, source_tables: set[str], map_id: str) -> list[dict[str, Any]]:
         config = self._milvus_config()
         rows = self._milvus_client().query(
@@ -1402,6 +1405,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 result.append(rule)
         return result
 
+    # 프롬프트에 들어간 GENERAL/SEARCH RAG 요약을 workflow 로그에 남긴다.
     def _log_rag_context(self, map_id: str, category: str, general_rules: list[dict[str, Any]], examples: list[dict[str, Any]], retry_count: int) -> None:
         match_count = sum(len(block.get("top_rule_matches") or []) for block in examples)
         general_ids = ",".join(str(rule.get("rule_id") or "") for rule in general_rules[:20])
@@ -1427,10 +1431,11 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             },
         )
 
-    # Serialize mapping rules and RAG examples into the TO_SQL prompt context.
+    # 매핑 규칙과 RAG 예시를 TO_SQL 프롬프트 맥락으로 직렬화한다.
+    # 매핑 규칙과 RAG 예시를 TO_SQL 프롬프트용 텍스트로 직렬화한다.
     def _mapping_prompt_text(self, mapping_rules: list[dict[str, str]], general_rules: list[dict[str, Any]], examples: list[dict[str, Any]], db_config: dict[str, Any]) -> str:
-        # This text is inserted into the embedded TOBE_SQL prompt as mapping_schema_text.
-        # Group by FR_TABLE/TO_TABLE so a COMPLEX source query is printed once and column mappings stay readable.
+        # 이 텍스트는 내장 TOBE_SQL 프롬프트의 mapping_schema_text로 삽입된다.
+        # FR_TABLE/TO_TABLE 단위로 묶어 복잡한 원천 쿼리는 한 번만 보이고 컬럼 매핑은 읽기 쉽게 유지한다.
         source_schema, target_schema = db_config["source_schema"], db_config["target_schema"]
         grouped: dict[tuple[str, str, str, str, str], set[tuple[str, str]]] = {}
         for rule in mapping_rules:
@@ -1466,9 +1471,10 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         lines.extend(["", "[SQL_CONVERSION_SEARCH_RAG_TOP_3_BY_FULL_SQL]", self._serialize_conversion_examples(examples)])
         return "\n".join(lines)
 
-    # Serialize AS-IS source filter conditions for BIND_SQL generation.
-    # Keep FR_TABLE and TO_TABLE together so the LLM can select the filter
-    # that belongs to the current source scope.
+    # BIND_SQL 생성을 위해 AS-IS 원천 filter 조건을 직렬화한다.
+    # LLM이 현재 source scope에 맞는 filter를 고를 수 있도록 FR_TABLE과 TO_TABLE을 함께 제공한다.
+    # 현재 변환 범위와 맞지 않는 조건을 쓰지 않게 하기 위한 맥락이다.
+    # BIND_SQL 생성을 위해 source filter 조건을 프롬프트 텍스트로 만든다.
     def _source_filter_prompt_text(self, mapping_rules: list[dict[str, str]]) -> str:
         lines = ["[ASIS_SOURCE_FILTER_CONDITIONS]"]
         conditions = sorted(
@@ -1481,7 +1487,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         lines.extend(f"- FR_TABLE={fr_table} | TO_TABLE={to_table} | CONDITION={condition}" for fr_table, to_table, condition in conditions)
         return "\n".join(lines) if conditions else "[ASIS_SOURCE_FILTER_CONDITIONS]\n- (empty)"
 
-    # Normalize comma, whitespace, or list-like table values into uppercase table names.
+    # 쉼표/공백/list 형태의 테이블 값을 대문자 테이블명 집합으로 정규화한다.
+    # 쉼표/공백/list 형태의 table 값을 대문자 table set으로 정규화한다. 10C/QA에도 같은 계열이 있다.
     def _source_tables(self, value: str) -> set[str]:
         text = str(value or "").strip()
         if text.startswith("["):
@@ -1493,19 +1500,22 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 pass
         return {token.split(".")[-1].strip().strip('"').upper() for token in re.split(r"[,;|\s]+", text) if token.strip()}
 
-    # Check whether a mapping table token belongs to the current target table set.
+    # mapping table token이 현재 target table 집합에 속하는지 확인한다.
+    # mapping/RAG rule의 table 범위가 현재 작업 table과 맞는지 확인한다.
     def _table_matches(self, table_name: str, candidates: set[str]) -> bool:
         normalized = str(table_name or "").upper()
         return any(re.search(rf"(?<![A-Z0-9_$#]){re.escape(table)}(?![A-Z0-9_$#])", normalized) for table in candidates)
 
-    # Add schema to a physical mapping table name when it is not already qualified.
+    # 물리 테이블명이 schema-qualified가 아니면 system_schema를 붙인다.
+    # 매핑 rule에 나온 물리 테이블명에 필요한 schema prefix를 붙인다.
     def _qualify_mapping_table(self, table_name: str, schema: str) -> str:
         table = str(table_name or "").strip()
         if not table or "." in table:
             return table
         return f"{schema}.{table}"
 
-    # Split SQL into MAIN_SQL and SUBQUERY blocks so RAG can search each block separately.
+    # RAG가 각 부분을 따로 검색할 수 있도록 SQL을 MAIN_SQL/SUBQUERY 블록으로 나눈다.
+    # RAG 검색 단위를 MAIN_SQL/SUBQUERY block으로 나눈다. 15C도 같은 아이디어를 사용한다.
     def _split_sql_blocks(self, sql_text: str) -> list[dict[str, str]]:
         source = str(sql_text or "").strip().rstrip(";").strip()
         if not source:
@@ -1531,7 +1541,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             *[{"block_id": placeholder, "block_type": "SUBQUERY", "sql": inner, "normalized_sql": self._normalize_sql_shape(inner)} for _, _, placeholder, inner in replacements],
         ]
 
-    # Normalize SQL text before embedding or lexical similarity scoring.
+    # embedding 또는 lexical similarity 계산 전에 SQL 텍스트를 정규화한다.
+    # embedding 비교 전에 literal/숫자/공백을 줄여 SQL 구조 중심으로 정규화한다.
     def _normalize_sql_shape(self, sql_text: str) -> str:
         text = re.sub(r"/\*.*?\*/|--[^\n]*", " ", str(sql_text or ""), flags=re.S)
         text = re.sub(r"'(?:''|[^'])*'", " STR ", text)
@@ -1539,7 +1550,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         text = re.sub(r"\bSUBQUERY_\d+\b", "SUBQUERY", text, flags=re.I)
         return re.sub(r"\s+", " ", text).strip().upper()
 
-    # Call the embedding endpoint for Milvus dense_vector search queries.
+    # Milvus dense_vector 검색 query를 만들기 위해 embedding endpoint를 호출한다.
+    # RAG 검색 query를 embedding vector 목록으로 변환한다. 10C/15C도 같은 계열이다.
     def _embed_texts(self, texts: list[str], rag_config: dict[str, Any]) -> list[list[float]]:
         endpoint = str(rag_config["rag_embed_base_url"]).strip().rstrip("/")
         if not endpoint:
@@ -1569,11 +1581,13 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             raise ValueError("embedding response count does not match request count")
         return vectors
 
-    # Build the text embedded for each RAG rule.
+    # 각 RAG rule에서 embedding에 사용할 텍스트를 만든다.
+    # RAG rule에서 embedding 기준이 될 SOURCE_SQL 중심 텍스트를 만든다.
     def _rule_embedding_text(self, rule: dict[str, Any]) -> str:
         return "\n".join([str(rule.get("normalized_source_sql") or ""), str(rule.get("source_sql") or "")]).strip()
 
-    # Build a compact block -> RAG_ID(score) summary for DB logs.
+    # DB 로그용으로 block -> RAG_ID(score) 요약 문자열을 만든다.
+    # block별 RAG_ID/score 요약을 로그용 문자열로 만든다.
     def _rag_match_summary(self, blocks: list[dict[str, str]], matches_by_block: list[list[tuple[dict[str, Any], float]]]) -> str:
         parts: list[str] = []
         for block, matches in zip(blocks, matches_by_block):
@@ -1584,8 +1598,9 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             parts.append(f"{block.get('block_id')}:{matched}")
         return "; ".join(parts)[:3500]
 
-    # Store the exact SQL pair used for each vector-search match.  The message
-    # keeps RAG_ID searchable; the SQL CLOB keeps both full comparison inputs.
+    # vector 검색 match에 사용된 SQL pair를 그대로 로그에 남긴다.
+    # message에는 RAG_ID를 남기고 SQL CLOB에는 비교 입력 전체를 보관한다.
+    # vector 검색에 사용된 현재 SQL과 match된 RAG SQL을 감사 로그로 남긴다.
     def _log_rag_comparisons(self, map_id: str, category: str, blocks: list[dict[str, str]], matches_by_block: list[list[tuple[dict[str, Any], float]]]) -> None:
         logger = logging.getLogger("smartmigrate.workflow")
         for block, matches in zip(blocks, matches_by_block):
@@ -1605,13 +1620,15 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                     extra={"workflow_log": [map_id, "SQL_CONVERSION", "RAG_COMPARE", "INFO", f"{category}_COMPARE", "PASS", 0, comparison_sql]},
                 )
 
-    # Score two normalized SQL strings when vector search cannot run.
+    # vector 검색을 쓰지 못할 때 정규화된 SQL 문자열끼리 점수를 계산한다.
+    # 필요 시 정규화 SQL 문자열 간 단순 유사도를 계산한다.
     def _lexical_similarity(self, left: str, right: str) -> float:
         left_tokens = set(re.findall(r"[A-Z_]+|\d+", left.upper()))
         right_tokens = set(re.findall(r"[A-Z_]+|\d+", right.upper()))
         return len(left_tokens & right_tokens) / len(left_tokens | right_tokens) if left_tokens and right_tokens else 0.0
 
-    # Render SQL_CONVERSION SEARCH matches for the TO_SQL prompt.
+    # TO_SQL 프롬프트에 넣을 SQL_CONVERSION SEARCH match를 렌더링한다.
+    # TO_SQL 프롬프트에 넣을 SQL_CONVERSION SEARCH 예시를 렌더링한다.
     def _serialize_conversion_examples(self, examples: list[dict[str, Any]]) -> str:
         lines = []
         for block in examples:
@@ -1623,7 +1640,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 lines.append(f"  TARGET_SQL: {match.get('target_sql') or ''}")
         return "\n".join(lines) if lines else "- (empty)"
 
-    # Render SQL_TUNING SEARCH matches for the final-attempt TUNED_FR_SQL prompt.
+    # 마지막 시도 TUNED_FR_SQL 프롬프트에 넣을 SQL_TUNING SEARCH match를 렌더링한다.
+    # TUNED_FR_SQL 프롬프트에 넣을 SQL_TUNING SEARCH 예시를 렌더링한다.
     def _serialize_tuning_examples(self, examples: list[dict[str, Any]]) -> str:
         lines = []
         for block in examples:
@@ -1635,7 +1653,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 lines.append(f"  TUNED_SQL: {match.get('target_sql') or ''}")
         return "\n".join(lines) if lines else "- (empty)"
 
-    # Render GENERAL RAG guidance lines for embedded prompts.
+    # 내장 프롬프트에 넣을 GENERAL RAG guide 줄을 렌더링한다.
+    # GENERAL RAG guide 목록을 프롬프트에 넣을 줄 단위 텍스트로 만든다.
     def _serialize_general_rules(self, rules: list[dict[str, Any]]) -> str:
         lines = []
         for rule in rules:
@@ -1644,23 +1663,24 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         return "\n".join(lines) if lines else "- (empty)"
 
     # -------------------------------------------------------------------------
-    # Milvus Correct SQL hint retrieval
+    # Milvus Correct SQL 힌트 조회
     # -------------------------------------------------------------------------
-    # This searches SM_CORRECT_SQL_CONVERSION, which 00B builds from NEXT_SQL_INFO.
-    # dense_vector is generated from EDIT_FR_SQL first, otherwise FR_SQL.
+    # 00B가 NEXT_SQL_INFO에서 만든 SM_CORRECT_SQL_CONVERSION을 검색한다.
+    # dense_vector는 EDIT_FR_SQL을 우선 사용하고 없으면 FR_SQL로 생성된다.
     #
-    # Runtime meaning:
-    # "current FROM SQL" vs "previously corrected FROM SQL".
+    # 실행 시 의미:
+    # 비교 의미는 "현재 FROM SQL" 대 "이전에 사용자가 보정한 FROM SQL"이다.
     #
-    # If a similar user-edited PASS row exists, its TO_SQL/BIND_SQL/TEST_SQL is
-    # injected as a hint into the corresponding generation prompt.
+    # 유사한 user-edited PASS row가 있으면 그 row의 TO_SQL/BIND_SQL/TEST_SQL을
+    # 각 생성 프롬프트의 힌트로 주입한다.
+    # 이전 user-edited PASS SQL을 검색해 TO/BIND/TEST 생성 힌트 묶음을 만든다.
     def _correct_sql_hints_text(self, db_config: dict[str, Any], source_sql: str, current_sql_id: str | None, current_space_nm: str | None, map_id: str, retry_count: int, tag_kind: Any = "") -> dict[str, str]:
         hints = {column: "- (empty)" for column in ("TO_SQL", "BIND_SQL", "TEST_SQL")}
         config = self._milvus_config()
         try:
-            # Correct SQL hint compares the current FROM SQL embedding with
-            # SM_CORRECT_SQL_CONVERSION.dense_vector once, then reuses the same
-            # ranked hits for TO_SQL/BIND_SQL/TEST_SQL hints.
+            # Correct SQL 힌트는 현재 FROM SQL embedding을
+            # SM_CORRECT_SQL_CONVERSION.dense_vector와 한 번 비교한 뒤,
+            # 같은 ranking 결과를 TO_SQL/BIND_SQL/TEST_SQL 힌트에 재사용한다.
             query_vector = self._embed_texts([self._normalize_sql_shape(source_sql)], self._rag_config())[0]
             filter_expr = 'user_edited == "Y" and is_active == true'
             tag_kind_value = str(tag_kind or "").strip().upper()
@@ -1717,12 +1737,14 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         )
         return hints
 
+    # 특정 SQL 컬럼 하나에 대한 Correct SQL 힌트 텍스트를 만든다.
     def _correct_sql_hint_text(self, db_config: dict[str, Any], source_sql: str, current_sql_id: str | None, current_space_nm: str | None, map_id: str, retry_count: int, hint_column: str, tag_kind: Any = "") -> str:
         hint_column = str(hint_column or "").strip().upper()
         if hint_column not in {"TO_SQL", "BIND_SQL", "TEST_SQL"}:
             return "- (empty)"
         return self._correct_sql_hints_text(db_config, source_sql, current_sql_id, current_space_nm, map_id, retry_count, tag_kind).get(hint_column, "- (empty)")
 
+    # 검색된 Correct SQL row를 프롬프트에 넣을 readable block으로 포맷한다.
     def _format_correct_sql_hint(self, hint_column: str, score: float, hint: dict[str, Any], hint_sql: str) -> str:
         lines = [
             f"- SCORE={round(score, 6)} | METHOD=milvus_dense_vector | SPACE_NM={hint.get('space_nm') or ''} | SQL_ID={hint.get('sql_id') or ''}",
@@ -1731,41 +1753,39 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         ]
         return "\n".join(lines)
 
-    # Increment SEARCH RAG HIT_CNT after a prompt uses retrieved examples.
+    # 조회된 SEARCH RAG 예시가 프롬프트에 사용되면 HIT_CNT를 증가시킨다.
+    # 프롬프트에 사용된 SEARCH RAG rule의 HIT_CNT를 증가시킨다.
     def _increment_rag_hits(self, db_config: dict[str, Any], examples: list[dict[str, Any]]) -> None:
         rule_ids = sorted({match["rule_id"] for block in examples for match in block["top_rule_matches"] if match.get("rule_id")})
         if not rule_ids:
             return
         table = self._qualify(os.getenv("RAG_INFO_TABLE", "NEXT_MIG_RAG_INFO"), db_config.get("system_schema"))
-        try:
-            with self._connect(db_config) as conn:
-                cur = conn.cursor()
-                cur.executemany(
-                    f"UPDATE {table} SET HIT_CNT = NVL(HIT_CNT, 0) + 1, UPDATED_AT = SYSTIMESTAMP WHERE TO_CHAR(RAG_ID) = :rule_id AND UPPER(TRIM(RULE_TYPE)) = 'SEARCH'",
-                    [{"rule_id": rule_id} for rule_id in rule_ids],
-                )
-                conn.commit()
-        except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").warning(
-                f"RAG HIT_CNT update skipped: {type(exc).__name__}: {exc}",
-                extra={"workflow_log": [0, "SQL_CONVERSION", "RAG_HIT", "WARN", "HIT_CNT", "SKIP", 0]},
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.executemany(
+                f"UPDATE {table} SET HIT_CNT = NVL(HIT_CNT, 0) + 1, UPDATED_AT = SYSTIMESTAMP WHERE TO_CHAR(RAG_ID) = :rule_id AND UPPER(TRIM(RULE_TYPE)) = 'SEARCH'",
+                [{"rule_id": rule_id} for rule_id in rule_ids],
             )
+            conn.commit()
 
     # ##############################
-    # Prompt generation and LLM client
+    # 프롬프트 생성 및 LLM 호출
     # ##############################
 
-    # Render an embedded prompt template without reading external prompt files.
+    # 외부 prompt 파일을 읽지 않고 내장 template을 렌더링한다.
+    # 내장 prompt template에 현재 context 값을 채워 최종 프롬프트를 만든다.
     def _build_prompt(self, template_name: str, **values: str) -> str:
         return SQL_PROMPT_TEMPLATES[template_name].format_map(_PromptValues(values)) + SQL_OUTPUT_FORMATTING_GUIDE
 
-    # Store the final LLM prompt text through the SmartMigrate workflow logger.
+    # 최종 LLM prompt 전문을 SmartMigrate workflow logger에 저장한다.
+    # LLM에 전달한 최종 prompt 전문을 workflow 로그에 저장한다.
     def _log_prompt(self, map_id: str, step_name: str, prompt: str, retry_count: int) -> None:
         logging.getLogger("smartmigrate.workflow").info(
             f"{step_name} assembled", extra={"workflow_log": [map_id, "SQL_CONVERSION", "PROMPT_BUILD", "INFO", step_name, "PASS", retry_count, prompt]}
         )
 
-    # Call the configured LLM with fallback models and return raw text.
+    # 설정된 LLM을 fallback model 순서로 호출하고 원문 응답을 반환한다.
+    # 설정된 LLM/fallback model 순서로 호출하고 raw text를 반환한다.
     def _call_llm_text(self, prompt: str, config: dict[str, Any]) -> tuple[str, str]:
         api_key = str(config.get("llm_api_key") or os.getenv("LLM_API_KEY") or os.getenv("OPEN_API_KEY") or "").strip()
         base_url = str(config.get("llm_base_url") or os.getenv("LLM_BASE_URL") or "").strip()
@@ -1816,10 +1836,11 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                     raise
         raise ValueError("LLM call failed")
 
-    # Remove markdown, wrappers, and trailing terminators from generated SQL.
+    # 생성 SQL에서 markdown, wrapper, 끝 구분자를 제거한다.
+    # LLM 응답에서 markdown/wrapper를 제거하고 실행 가능한 SQL 본문만 남긴다.
     def _clean_generated_sql(self, value: str) -> str:
-        # LLM responses sometimes include markdown fences, short explanations, or <script>/<select> wrappers.
-        # Runtime execution and DB storage should keep only the executable Oracle/MyBatis SQL body.
+        # LLM 응답에는 markdown fence, 짧은 설명, <script>/<select> wrapper가 섞일 수 있다.
+        # 실행과 DB 저장에는 실제 Oracle/MyBatis SQL 본문만 남겨야 한다.
         sql = str(value or "").strip()
         code_block = re.search(r"```(?:sql)?\s*(.*?)```", sql, flags=re.I | re.S)
         if code_block:
@@ -1842,10 +1863,11 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         return sql.rstrip(";").strip()
 
     # ##############################
-    # Bind and test SQL execution
+    # Bind 및 test SQL 실행
     # ##############################
 
-    # Execute BIND_SQL and return raw candidate rows.
+    # BIND_SQL을 실행하고 원본 후보 row를 반환한다.
+    # BIND_SQL을 Oracle에서 실행해 bind 후보 row를 읽는다.
     def _execute_binding_query(self, db_config: dict[str, Any], sql: str) -> list[dict[str, Any]]:
         clean_sql = self._runtime_sql(sql, "EXECUTE_BIND_SQL")
         with self._connect(db_config) as conn:
@@ -1854,7 +1876,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             columns = [item[0] for item in cur.description] if cur.description else []
             return [{column: self._lob_to_str(value) for column, value in zip(columns, row)} for row in cur.fetchmany(50)]
 
-    # Execute TEST_SQL and return validation rows.
+    # TEST_SQL을 실행하고 검증 row를 반환한다.
+    # TEST_SQL을 Oracle에서 실행해 검증 row를 읽는다.
     def _execute_test_query(self, db_config: dict[str, Any], sql: str) -> list[dict[str, Any]]:
         clean_sql = self._runtime_sql(sql, "EXECUTE_TEST_SQL")
         with self._connect(db_config) as conn:
@@ -1863,7 +1886,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             columns = [item[0] for item in cur.description] if cur.description else []
             return [{column: self._lob_to_str(value) for column, value in zip(columns, row)} for row in cur.fetchall()]
 
-    # Prepare generated SQL for direct Oracle execution.
+    # 생성 SQL을 Oracle에서 직접 실행 가능한 형태로 정리한다.
+    # 생성 SQL을 stage별 Oracle 실행용 SQL로 정리한다.
     def _runtime_sql(self, sql: str, stage: str) -> str:
         clean_sql = str(sql or "").strip().rstrip(";").strip()
         if not clean_sql:
@@ -1883,7 +1907,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             raise ValueError(f"{stage} SQL contains unresolved MyBatis tags or bind markers")
         return clean_sql
 
-    # Convert BIND_SQL result rows into up to three unique bind cases.
+    # BIND_SQL 결과 row를 최대 3개의 중복 없는 bind case로 변환한다.
+    # BIND_SQL 결과 row를 최대 3개의 중복 없는 bind case로 만든다.
     def _build_bind_sets(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         selected: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -1899,6 +1924,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 break
         return selected or [{}]
 
+    # 저장된 BIND_SET을 다음 prompt에 넣기 좋은 JSON 텍스트로 만든다.
     def _bind_set_prompt_text(self, bind_set: Any) -> str:
         if isinstance(bind_set, str):
             try:
@@ -1913,7 +1939,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             parsed = [{}]
         return json.dumps(parsed[:3], ensure_ascii=False, default=str)
 
-    # Validate TEST_SQL output columns and row-count equality.
+    # TEST_SQL 출력 컬럼과 row-count 일치 여부를 검증한다.
+    # TEST_SQL 결과 컬럼과 row count 비교값을 검증해 PASS/FAIL 사유를 만든다.
     def _evaluate_test_rows(self, rows: list[dict[str, Any]]) -> str:
         if not rows:
             raise ValueError("TEST_SQL returned no rows")
@@ -1929,68 +1956,43 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 raise ValueError(f"TEST_SQL row count mismatch: {row}")
         return "PASS"
 
-    # Convert configured retry count into total graph attempts.
+    # 설정된 retry count를 전체 graph attempt 수로 변환한다.
+    # LangGraph에서 허용할 전체 attempt 수를 계산한다.
     def _max_retry(self) -> int:
-        """Return bounded total attempts for the conversion loop."""
+        """conversion loop에서 허용할 전체 attempt 수를 반환한다."""
         if getattr(self, "_payload_max_retry", None) is not None:
             return max(1, min(11, int(getattr(self, "_payload_max_retry") or 0) + 1))
         return max(1, min(11, int(getattr(self, "max_retry", None) or 2) + 1))
 
-    # Return the retry count configured by Langflow or the loop payload.
+    # Langflow 입력 또는 loop payload에 설정된 retry count를 반환한다.
+    # Langflow 또는 payload에 설정된 retry limit을 읽는다.
     def _configured_retry_limit(self) -> int:
-        """Return the configured retry limit, not including the first attempt."""
+        """최초 실행을 제외한 설정 retry limit을 반환한다."""
         if getattr(self, "_payload_max_retry", None) is not None:
             return max(0, min(10, int(getattr(self, "_payload_max_retry") or 0)))
         return max(0, min(10, int(getattr(self, "max_retry", None) or 2)))
 
-    # Build a SELECT expression that tolerates optional NEXT_SQL_INFO columns.
-    def _select_expr(self, columns: set[str], column: str, alias: str, data_type: str) -> str:
-        """Return a safe SELECT expression for optional NEXT_SQL_INFO columns."""
-        if column in columns:
-            return f"{column} AS {alias}"
-        if data_type.upper() == "CLOB":
-            return f"TO_CLOB(NULL) AS {alias}"
-        return f"CAST(NULL AS {data_type}) AS {alias}"
-
-    # Read table metadata from Oracle for optional-column handling.
-    def _table_columns(self, db_config: dict[str, Any], table: str) -> set[str]:
-        """Return available upper-case column names for a table."""
-        owner, table_name = self._split_table_owner_and_name(table)
-        if owner:
-            sql = "SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS WHERE OWNER = :1 AND TABLE_NAME = :2"
-            params = [owner, table_name]
-        else:
-            sql = "SELECT COLUMN_NAME FROM USER_TAB_COLUMNS WHERE TABLE_NAME = :1"
-            params = [table_name]
-        with self._connect(db_config) as conn:
-            cur = conn.cursor()
-            cur.execute(sql, params)
-            return {str(row[0]).upper() for row in cur.fetchall()}
-
-    # Check DB Migration completion before SQL Conversion starts.
+    # SQL Conversion 시작 전에 DB Migration 완료 조건을 확인한다.
+    # SQL Conversion 전에 DB Migration 성공/실패/대기 상태를 집계한다.
     def _migration_prerequisite_status(self, db_config: dict[str, Any]) -> dict[str, Any]:
-        """Block SQL Conversion while any active DB Migration row is pending or failed."""
+        """active DB Migration row가 대기/실패 상태이면 SQL Conversion을 막는다."""
         table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
-        columns = self._table_columns(db_config, table)
-        user_edited_expr = "USER_EDITED" if "USER_EDITED" in columns else "'N'"
-        status_expr = "STATUS" if "STATUS" in columns else "NULL"
-        use_expr = "USE_YN" if "USE_YN" in columns else "'Y'"
         with self._connect(db_config) as conn:
             cur = conn.cursor()
             cur.execute(
                 f"""
                 SELECT
-                       SUM(CASE WHEN {status_expr} IS NULL THEN 1 ELSE 0 END) AS PENDING_COUNT,
-                       SUM(CASE WHEN UPPER(TRIM(NVL({status_expr}, ''))) LIKE 'FAIL-%' THEN 1 ELSE 0 END) AS FAIL_COUNT,
+                       SUM(CASE WHEN STATUS IS NULL THEN 1 ELSE 0 END) AS PENDING_COUNT,
+                       SUM(CASE WHEN UPPER(TRIM(NVL(STATUS, ''))) LIKE 'FAIL-%' THEN 1 ELSE 0 END) AS FAIL_COUNT,
                        SUM(
                            CASE
-                               WHEN UPPER(TRIM(NVL({user_edited_expr}, 'N'))) = 'Y'
-                                AND UPPER(TRIM(NVL({status_expr}, ''))) LIKE 'FAIL-%'
+                               WHEN UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y'
+                                AND UPPER(TRIM(NVL(STATUS, ''))) LIKE 'FAIL-%'
                                THEN 1 ELSE 0
                            END
                        ) AS USER_EDITED_FAIL_COUNT
                   FROM {table}
-                 WHERE UPPER(TRIM(NVL({use_expr}, 'N'))) = 'Y'
+                 WHERE UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
                 """
             )
             row = cur.fetchone() or (0, 0, 0)
@@ -2005,9 +2007,10 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         }
 
     @contextmanager
-    # Open one short-lived Oracle connection for NEXT_SQL_INFO operations.
+    # NEXT_SQL_INFO 작업용 Oracle 연결을 짧게 열고 닫는다.
+    # Oracle 연결을 열고 사용 후 닫는 context manager다. 10C와 같은 패턴이다.
     def _connect(self, db_config: dict[str, Any]):
-        """Open and close an Oracle database connection."""
+        """Oracle DB 연결을 열고 닫는다."""
         import oracledb
 
         dsn = oracledb.makedsn(
@@ -2021,9 +2024,10 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         finally:
             conn.close()
 
-    # Extract Oracle connection and schema settings from the loop payload and inputs.
+    # loop payload와 컴포넌트 입력에서 Oracle 접속 및 schema 설정을 추출한다.
+    # payload와 Langflow 입력에서 Oracle 접속/schema 설정을 모은다.
     def _db_config(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Extract Oracle connection settings from the Loop item."""
+        """Loop item에서 Oracle 접속 설정을 추출한다."""
         item_config = dict(payload.get("db_config") or {})
         return {
             "db_host": str(item_config.get("db_host") or "").strip(),
@@ -2036,7 +2040,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "target_schema": str(getattr(self, "target_schema", "") or item_config.get("target_schema") or os.getenv("ORACLE_SCHEMA_TGT") or "").strip().upper(),
         }
 
-    # Extract LLM settings from Langflow inputs and payload fallback values.
+    # Langflow 입력과 payload fallback에서 LLM 설정을 추출한다.
+    # payload와 Langflow 입력에서 LLM 호출 설정을 모은다.
     def _llm_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         item_config = dict(payload.get("llm_config") or {})
         return {
@@ -2049,7 +2054,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "llm_timeout_seconds": self._positive_int(getattr(self, "llm_timeout_seconds", None) or item_config.get("llm_timeout_seconds"), 900),
         }
 
-    # Extract RAG embedding settings from Langflow inputs or environment variables.
+    # Langflow 입력 또는 환경변수에서 RAG embedding 설정을 읽는다.
+    # RAG embedding API 호출 설정을 모은다.
     def _rag_config(self) -> dict[str, Any]:
         return {
             "rag_embed_base_url": str(getattr(self, "rag_embed_base_url", "") or os.getenv("RAG_EMBED_BASE_URL") or "").strip(),
@@ -2058,6 +2064,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "rag_embed_timeout_seconds": self._positive_int(getattr(self, "rag_embed_timeout_seconds", None) or os.getenv("RAG_EMBED_TIMEOUT_SEC"), 30),
         }
 
+    # Milvus 접속 및 collection 설정을 모은다.
     def _milvus_config(self) -> dict[str, Any]:
         return {
             "uri": str(getattr(self, "milvus_uri", "") or os.getenv("MILVUS_URI") or "").strip(),
@@ -2068,9 +2075,10 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "correct_sql_collection": self._clean_collection_name(getattr(self, "correct_sql_collection_name", "") or os.getenv("MILVUS_CORRECT_SQL_CONVERSION_COLLECTION") or "SM_CORRECT_SQL_CONVERSION"),
         }
 
+    # RAG/Correct SQL 검색에 사용할 Milvus client를 생성한다.
     def _milvus_client(self) -> Any:
-        # Milvus 2.6.5 SDK connection. The URI is passed exactly as entered in
-        # Langflow/env; do not split host/port or rewrite it before calling SDK.
+        # Milvus 2.6.5 SDK 연결은 입력된 URI를 그대로 사용한다.
+        # SDK 호출 전에 host/port를 분리하거나 URI를 재작성하지 않는다.
         from pymilvus import MilvusClient
 
         config = self._milvus_config()
@@ -2085,6 +2093,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             timeout=10,
         )
 
+    # Milvus RAG 검색 hit에서 rule payload를 dict로 추출한다.
     def _milvus_rag_entity(self, hit: Any) -> dict[str, Any]:
         entity = self._milvus_entity(hit)
         source_tables = self._source_tables(entity.get("source_tables") or "")
@@ -2099,6 +2108,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "normalized_source_sql": self._normalize_sql_shape(entity.get("source_sql") or ""),
         }
 
+    # Milvus hit 객체의 entity/fields를 dict로 정규화한다. 10C/15C도 같은 계열이다.
     def _milvus_entity(self, hit: Any) -> dict[str, Any]:
         if isinstance(hit, dict):
             entity = hit.get("entity") or hit.get("fields") or hit
@@ -2112,6 +2122,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             return dict(entity) if isinstance(entity, dict) else {}
         return {}
 
+    # Milvus hit의 distance/score 값을 float로 통일한다. 10C/15C도 같은 점수 처리다.
     def _milvus_score(self, hit: Any) -> float:
         if isinstance(hit, dict):
             value = hit.get("distance", hit.get("score", 0.0))
@@ -2122,82 +2133,97 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         except (TypeError, ValueError):
             return 0.0
 
+    # RAG rule의 source table 범위와 현재 작업 범위가 겹치는지 판단한다.
     def _source_tables_match(self, rule_tables: list[str] | set[str], source_tables: set[str]) -> bool:
         rule_set = set(rule_tables)
         return not rule_set or not source_tables or bool(rule_set & source_tables)
 
+    # DB status 값을 비교하기 쉬운 대문자 문자열로 정규화한다.
     def _status(self, value: Any) -> str:
         return str(value or "").strip().upper()
 
+    # Milvus scalar field 값을 안전한 문자열로 변환한다.
     def _milvus_string(self, value: Any) -> str:
         return json.dumps(str(value or ""), ensure_ascii=False)
 
+    # Milvus collection 이름을 공백 없는 유효 문자열로 정리한다. 10C에도 같은 헬퍼가 있다.
     def _clean_collection_name(self, value: Any) -> str:
         clean = str(value or "").strip()
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", clean):
             raise ValueError(f"Invalid Milvus collection name: {clean}")
         return clean
 
-    # Normalize Langflow secret inputs to plain strings for client libraries.
+    # Langflow Secret 입력을 client library가 쓸 수 있는 일반 문자열로 정규화한다.
+    # Langflow Secret 입력을 일반 문자열로 꺼낸다. 10C/15C/17C와 같은 처리다.
     def _secret_to_str(self, value: Any) -> str:
         return str(value.get_secret_value()) if hasattr(value, "get_secret_value") else str(value or "")
 
-    # Parse a positive integer while keeping a simple default fallback.
+    # 양의 정수를 파싱하고, 값이 비어 있으면 호출자가 지정한 기본값을 사용한다.
+    # 숫자 입력을 양의 정수로 변환하고 실패하면 기본값을 사용한다. 10C에도 같은 유틸이 있다.
     def _positive_int(self, value: Any, default: int) -> int:
         try:
             return int(value) if int(value) > 0 else default
         except (TypeError, ValueError):
             return default
 
-    # Fail fast when mandatory Oracle connection fields are missing.
+    # 필수 Oracle 접속 값이 없으면 DB 연결 전에 즉시 실패시킨다.
+    # 필수 Oracle 접속 값 누락을 DB 연결 전에 명확히 실패시킨다.
     def _require_db_config(self, db_config: dict[str, Any]) -> None:
-        """Fail early when the Loop item does not include database settings."""
+        """Loop item에 DB 설정이 없으면 초기에 실패시킨다."""
         missing = [key for key in ("db_host", "db_service_name", "db_username") if not str(db_config.get(key) or "").strip()]
         if missing:
             raise ValueError(f"12C SQL Conversion is not connected to database settings: missing {', '.join(missing)}")
 
-    # Qualify a database table name with the configured system schema.
+    # 설정된 system_schema로 DB 테이블명을 schema-qualified 형태로 만든다.
+    # system_schema가 명시된 테이블명을 schema-qualified 이름으로 만든다. 10C와 같은 원칙이다.
     def _qualify(self, table_name: str, schema: Any) -> str:
-        """Return a validated schema-qualified table name."""
+        """검증된 schema-qualified table 이름을 반환한다."""
         clean_table = self._clean_identifier(table_name)
         clean_schema = str(schema or "").strip().upper()
-        return f"{self._clean_identifier(clean_schema)}.{clean_table}" if clean_schema else clean_table
+        if not clean_schema:
+            raise ValueError("System Schema를 입력해야 합니다.")
+        return f"{self._clean_identifier(clean_schema)}.{clean_table}"
 
-    # Keep only safe Oracle identifier characters for dynamic table names.
+    # 동적 테이블명에는 Oracle identifier로 안전한 문자만 허용한다.
+    # 동적 SQL identifier에 안전한 Oracle 문자만 허용한다.
     def _clean_identifier(self, value: str) -> str:
-        """Validate and normalize an Oracle identifier."""
+        """Oracle identifier를 검증하고 정규화한다."""
         clean = str(value or "").strip().upper()
         if not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", clean):
             raise ValueError(f"Invalid identifier: {clean}")
         return clean
 
-    # Split OWNER.TABLE into metadata lookup parts.
+    # OWNER.TABLE 형식을 metadata 조회용 owner/table_name으로 나눈다.
+    # OWNER.TABLE 문자열을 metadata 조회용 owner/table_name으로 나눈다.
     def _split_table_owner_and_name(self, table: str) -> tuple[str | None, str]:
-        """Split an optional owner-qualified table identifier."""
+        """owner가 붙을 수 있는 table identifier를 owner/table로 나눈다."""
         value = str(table or "").strip().upper()
         if "." in value:
             owner, name = value.split(".", 1)
             return owner, name
         return None, value
 
-    # Read Oracle LOB values before storing them in payload dictionaries.
+    # payload dict에 넣기 전에 Oracle LOB 값을 문자열로 읽는다.
+    # Oracle LOB 값을 연결 종료 전에 문자열로 읽는다. 10C/15C/17C도 같은 이유로 사용한다.
     def _lob_to_str(self, value: Any) -> str:
-        """Convert Oracle LOB and nullable values to strings."""
+        """Oracle LOB 및 nullable 값을 문자열로 변환한다."""
         if value is not None and hasattr(value, "read"):
             return str(value.read())
         return "" if value is None else str(value)
 
-    # Convert Oracle aggregate values to integers.
+    # Oracle aggregate 결과를 정수로 변환한다.
+    # Oracle 숫자/문자 aggregate 결과를 int로 변환한다.
     def _num(self, value: Any) -> int:
-        """Convert nullable DB aggregate values to int."""
+        """nullable DB aggregate 값을 int로 변환한다."""
         try:
             return int(value or 0)
         except (TypeError, ValueError):
             return 0
 
-    # Parse the incoming Langflow job item into a dictionary.
+    # Langflow에서 들어온 job item을 dict로 파싱한다.
+    # Langflow 입력이 Data/Message/dict/JSON 문자열 중 무엇이든 dict로 통일한다. 10C와 같은 패턴이다.
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
-        """Parse a Langflow Data, Message, dict, or JSON string payload."""
+        """Langflow Data, Message, dict, JSON 문자열 payload를 dict로 파싱한다."""
         if isinstance(raw, Data):
             return dict(raw.data or {})
         if isinstance(raw, Message):

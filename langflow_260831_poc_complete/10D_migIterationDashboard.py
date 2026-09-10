@@ -29,6 +29,7 @@ class NewType10DMigIterationDashboard(Component):
         Output(display_name="Loop Result", name="loop_result", method="build_loop_result", types=["Data"]),
     ]
 
+    # Langflow output 진입점에서 입력을 검증하고 이 컴포넌트의 주요 실행 흐름을 시작한다.
     def build_message(self) -> Message:
         logging.getLogger("smartmigrate.workflow").info("before build_message", extra={"workflow_log": [0, "WORKFLOW", "10D_MIG_DASH", "INFO", "BUILD_MESSAGE", "START", 0]})
         try:
@@ -41,6 +42,7 @@ class NewType10DMigIterationDashboard(Component):
             logging.getLogger("smartmigrate.workflow").error(f"error build_message: {exc}", extra={"workflow_log": [0, "WORKFLOW", "10D_MIG_DASH", "ERROR", "BUILD_MESSAGE", "ERROR", 0]})
             raise
 
+    # iteration dashboard가 사용할 loop 결과 payload를 Data로 반환한다.
     def build_loop_result(self) -> Data:
         logging.getLogger("smartmigrate.workflow").info("before build_loop_result", extra={"workflow_log": [0, "WORKFLOW", "10D_MIG_DASH", "INFO", "BUILD_LOOP_RESULT", "START", 0]})
         try:
@@ -53,6 +55,7 @@ class NewType10DMigIterationDashboard(Component):
             logging.getLogger("smartmigrate.workflow").error(f"error build_loop_result: {exc}", extra={"workflow_log": [0, "WORKFLOW", "10D_MIG_DASH", "ERROR", "BUILD_LOOP_RESULT", "ERROR", 0]})
             raise
 
+    # 현재 result payload를 dashboard 표시와 후속 노드용 구조로 재구성한다.
     def _build(self) -> dict[str, Any]:
         cached = getattr(self, "_cached_payload", None)
         if cached is not None:
@@ -87,6 +90,7 @@ class NewType10DMigIterationDashboard(Component):
         self._cached_payload = payload
         return payload
 
+    # 조회/실행 결과를 사용자가 읽을 Markdown 메시지로 만든다.
     def _answer(self, result: dict[str, Any]) -> str:
         index = int(result.get("job_index") or 1)
         total = int(result.get("total_jobs") or 1)
@@ -142,12 +146,14 @@ class NewType10DMigIterationDashboard(Component):
             )
         return "\n".join(lines)
 
+    # dashboard 표시용 숫자/텍스트를 짧고 안전한 문자열로 변환한다.
     def _bar(self, value: int, total: int, width: int = 20) -> str:
         clamped = max(0, min(value, total))
         filled = round(clamped / total * width) if total > 0 else 0
         percent = (clamped / total * 100) if total > 0 else 0.0
         return f"{'#' * filled}{'-' * (width - filled)} `{percent:.1f}%`"
 
+    # iteration dashboard에 표시할 현재 작업 status를 payload에서 결정한다.
     def _current_status(self, result: dict[str, Any]) -> str:
         """Prefer failed stage status over wrapper statuses such as FORMATTED."""
         stages = result.get("stages") or {}
@@ -161,6 +167,7 @@ class NewType10DMigIterationDashboard(Component):
                 return status
         return str(result.get("status") or result.get("formatting_status") or "").strip()
 
+    # Langflow 입력이 Data/Message/dict/JSON 문자열 중 무엇이든 dict로 통일한다.
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):
             return dict(raw.data or {})

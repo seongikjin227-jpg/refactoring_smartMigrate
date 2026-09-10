@@ -26,23 +26,23 @@ TEXT_MAX = 65535
 
 
 # =============================================================================
-# 00B Sync Milvus Vector DB
+# 00B Milvus Vector DB 동기화
 # =============================================================================
-# This component is intentionally a one-shot migration/sync utility.
+# 이 컴포넌트는 런타임 검색기가 아니라 운영자가 수동으로 실행하는 일회성 동기화 도구다.
 #
-# Runtime components such as 12C and 15C should only search Milvus. They should
-# not repeatedly load all Oracle rows and re-embed them. 00B is the separate
-# maintenance step that reads Oracle source tables, embeds the searchable SQL
-# text once, and upserts the resulting vectors into Milvus.
+# 12C/15C 같은 런타임 컴포넌트는 Milvus 검색만 수행하고,
+# Oracle 원천 테이블 전체를 반복 조회하거나 매번 임베딩하지 않는다. 00B가 별도
+# 유지보수 단계에서 Oracle row를 읽고 검색 대상 SQL을 임베딩한 뒤
+# 결과 vector와 metadata를 Milvus에 upsert한다.
 #
-# Data ownership:
+# 데이터 소유 기준:
 # - NEXT_MIG_RAG_INFO  -> SM_RAG_RULES
 # - NEXT_SQL_INFO      -> SM_CORRECT_SQL_CONVERSION
 #
-# Vector ownership:
-# - dense_vector is generated from SOURCE SQL only.
-# - guidance_text / target_sql / to_sql / bind_sql / test_sql are metadata used
-#   after retrieval when building prompts; they are not the semantic vector key.
+# 벡터 소유 기준:
+# - dense_vector는 SOURCE SQL만 기준으로 생성한다.
+# - guidance_text / target_sql / to_sql / bind_sql / test_sql은 검색 후
+#   프롬프트 구성에 쓰는 metadata이며 semantic vector key가 아니다.
 #
 class NewType00BSaveVectorDB(Component):
     display_name = "00B Sync Milvus Vector DB"
@@ -51,12 +51,12 @@ class NewType00BSaveVectorDB(Component):
     icon = "Database"
 
     inputs = [
-        StrInput(name="db_host", display_name="DB Host", required=False),
+        StrInput(name="db_host", display_name="DB Host", required=True),
         IntInput(name="db_port", display_name="DB Port", value=1521, required=False),
-        StrInput(name="db_service_name", display_name="DB Service Name", required=False),
-        StrInput(name="db_username", display_name="DB Username", required=False),
-        SecretStrInput(name="db_password", display_name="DB Password", required=False),
-        StrInput(name="system_schema", display_name="System Schema", required=False),
+        StrInput(name="db_service_name", display_name="DB Service Name", required=True),
+        StrInput(name="db_username", display_name="DB Username", required=True),
+        SecretStrInput(name="db_password", display_name="DB Password", required=True),
+        StrInput(name="system_schema", display_name="System Schema", required=True),
         StrInput(name="milvus_uri", display_name="Milvus URI", required=True),
         StrInput(name="milvus_username", display_name="Milvus Username", required=True),
         SecretStrInput(name="milvus_password", display_name="Milvus Password", required=True),
@@ -72,15 +72,16 @@ class NewType00BSaveVectorDB(Component):
 
     outputs = [Output(display_name="Result", name="result", method="run", types=["Data"])]
 
+    # Langflow output 진입점에서 입력을 검증하고 이 컴포넌트의 주요 실행 흐름을 시작한다.
     def run(self) -> Data:
         # ---------------------------------------------------------------------
-        # Main orchestration
+        # 전체 동기화 오케스트레이션
         # ---------------------------------------------------------------------
-        # 1. Read Langflow inputs / environment fallback.
-        # 2. Load Oracle rows from the two source tables.
-        # 3. Detect embedding vector dimension from the first real text.
-        # 4. Ensure both Milvus collections exist.
-        # 5. Upsert changed active rows and deactivate stale Milvus documents.
+        # 1. Langflow 입력과 환경변수 fallback 값을 읽는다.
+        # 2. Oracle 원천 테이블에서 RAG/Correct SQL row를 조회한다.
+        # 3. 첫 실제 텍스트로 embedding vector dimension을 확인한다.
+        # 4. 필요한 Milvus collection이 존재하는지 확인하고 없으면 생성한다.
+        # 5. 변경된 active row는 upsert하고, 더 이상 유효하지 않은 문서는 비활성화한다.
         started = time.perf_counter()
         db_config = self._db_config()
         milvus_config = self._milvus_config()
@@ -130,17 +131,18 @@ class NewType00BSaveVectorDB(Component):
         self.status = result
         return Data(data=result)
 
+    # Milvus collection 존재 여부를 확인하고 없으면 schema에 맞춰 생성한다.
     def _ensure_collection(self, client: Any, collection_name: str, vector_dim: int, schema_kind: str) -> bool:
         # ---------------------------------------------------------------------
-        # Milvus collection bootstrap
+        # Milvus collection 초기화
         # ---------------------------------------------------------------------
-        # If the collection already exists, this component never recreates it.
-        # Existing schemas are respected because production collections may have
-        # been created manually by the platform team.
+        # collection이 이미 있으면 재생성하지 않는다.
+        # 운영 collection은 플랫폼에서 미리 만든 schema일 수 있으므로 기존 구조를 존중한다.
+        
         #
-        # If the collection is missing, create it using the expected schema. BM25
-        # sparse search is attempted first, then the code falls back to a dense-
-        # only collection for Milvus setups that do not allow analyzer/functions.
+        # collection이 없을 때만 표준 schema로 생성한다. BM25 sparse 검색을 먼저 시도하고,
+        # Milvus 환경이 analyzer/functions를 허용하지 않으면 dense-only collection으로 생성한다.
+        
         if client.has_collection(collection_name):
             client.load_collection(collection_name=collection_name)
             return False
@@ -151,19 +153,20 @@ class NewType00BSaveVectorDB(Component):
         client.load_collection(collection_name=collection_name)
         return True
 
+    # RAG/Correct SQL 용도에 맞는 Milvus collection schema와 index를 생성한다.
     def _create_collection(self, client: Any, collection_name: str, vector_dim: int, schema_kind: str, with_bm25: bool) -> None:
         # ---------------------------------------------------------------------
-        # Milvus schema definition
+        # Milvus schema 정의
         # ---------------------------------------------------------------------
-        # doc_id is the stable primary key, generated from the Oracle row identity.
-        # content_hash is the change detector used by _sync_collection().
-        # content is the exact text sent to the embedding API.
-        # dense_vector is the embedding generated from content.
+        # doc_id는 Oracle row 식별자에서 만든 안정적인 primary key다.
+        # content_hash는 _sync_collection()에서 변경 여부를 판단하는 값이다.
+        # content는 embedding API에 실제로 전달되는 텍스트다.
+        # dense_vector는 content에서 생성된 embedding 결과다.
         #
-        # sparse_vector is optional. It is generated by Milvus BM25 from content
-        # when with_bm25=True. Current 12C/15C retrieval uses dense_vector only,
-        # but keeping sparse_vector available lets us add hybrid search later
-        # without changing the Oracle sync logic.
+        # sparse_vector는 선택 필드이며, BM25 사용 시 Milvus가 content에서 생성한다.
+        # 현재 12C/15C 검색은 dense_vector만 사용하지만,
+        # sparse_vector를 남겨두면 나중에 Oracle 동기화 로직을 바꾸지 않고 hybrid search를 붙일 수 있다.
+        
         from pymilvus import DataType, MilvusClient
 
         schema = MilvusClient.create_schema(auto_id=False, enable_dynamic_field=False)
@@ -207,8 +210,8 @@ class NewType00BSaveVectorDB(Component):
         if with_bm25:
             from pymilvus import Function, FunctionType
 
-            # BM25 sparse vector is derived inside Milvus from the content field.
-            # No embedding API call is made for sparse_vector.
+            # BM25 sparse vector는 content 필드에서 Milvus 내부가 계산한다.
+            # sparse_vector를 만들기 위해 embedding API를 별도로 호출하지 않는다.
             schema.add_field("sparse_vector", DataType.SPARSE_FLOAT_VECTOR)
             schema.add_function(Function(name="content_bm25", input_field_names=["content"], output_field_names=["sparse_vector"], function_type=FunctionType.BM25))
 
@@ -218,21 +221,22 @@ class NewType00BSaveVectorDB(Component):
             index_params.add_index(field_name="sparse_vector", index_type="SPARSE_INVERTED_INDEX", metric_type="BM25", params={"inverted_index_algo": "DAAT_MAXSCORE", "bm25_k1": 1.2, "bm25_b": 0.75})
         client.create_collection(collection_name=collection_name, schema=schema, index_params=index_params, consistency_level="Bounded")
 
+    # Oracle snapshot과 Milvus 문서를 비교해 변경분 upsert와 stale 비활성화를 수행한다.
     def _sync_collection(self, client: Any, collection_name: str, rows: list[dict[str, Any]], embed_config: dict[str, Any]) -> dict[str, Any]:
         # ---------------------------------------------------------------------
-        # Changed-row sync
+        # 변경 row 동기화
         # ---------------------------------------------------------------------
-        # The expensive operation is embedding generation, so this function avoids
-        # embedding unchanged rows.
+        # 비용이 큰 작업은 embedding 생성이므로, 변경되지 않은 row는 다시 임베딩하지 않는다.
+        
         #
-        # Existing Milvus active doc_id -> content_hash is queried first.
-        # A row is embedded/upserted only when:
-        # - it is active in the current Oracle snapshot, and
-        # - its content_hash differs from the active Milvus copy.
+        # 먼저 Milvus의 활성 doc_id와 content_hash를 조회한다.
+        # 다음 조건에 해당하는 row만 embedding/upsert 대상이 된다:
+        # - 현재 Oracle snapshot에서 active 상태이고,
+        # - content_hash가 Milvus의 active 복사본과 다를 때만 upsert한다.
         #
-        # Rows that used to exist in Milvus but are no longer active in Oracle are
-        # not blindly deleted first. We mark them inactive when possible so old
-        # records are kept out of search while preserving traceability.
+        # 예전에는 Milvus에 있었지만 현재 Oracle 기준으로 비활성인 row는
+        # 즉시 삭제하지 않고 가능하면 inactive로 표시한다.
+        # 이렇게 하면 검색에서는 제외하면서도 추적 이력은 유지할 수 있다.
         active_doc_ids = {row["doc_id"] for row in rows if row.get("is_active")}
         existing = self._query_existing_docs(client, collection_name)
         to_upsert = [row for row in rows if row.get("is_active") and existing.get(row["doc_id"]) != row["content_hash"]]
@@ -241,9 +245,9 @@ class NewType00BSaveVectorDB(Component):
         upserted = 0
         for batch in self._chunks(to_upsert, BATCH_SIZE):
             try:
-                # Only this line calls the embedding API for the batch.
-                # The returned vectors are attached as dense_vector and then
-                # written to Milvus with the rest of the metadata fields.
+                # 이 줄에서만 현재 batch의 embedding API를 호출한다.
+                # 반환된 vector는 dense_vector로 붙이고,
+                # 나머지 metadata 필드와 함께 Milvus에 기록한다.
                 vectors = self._embed_texts([row["content"] for row in batch], embed_config)
                 entities = [{**row, "dense_vector": vector} for row, vector in zip(batch, vectors)]
                 client.upsert(collection_name=collection_name, data=entities)
@@ -262,10 +266,11 @@ class NewType00BSaveVectorDB(Component):
             "failures": failures[:10],
         }
 
+    # 조회 조건을 조립해 DB에서 요청된 정보를 가져온다.
     def _query_existing_docs(self, client: Any, collection_name: str) -> dict[str, str]:
-        # Read only active documents for this Oracle source table.
-        # The result is deliberately small: doc_id and content_hash are enough to
-        # decide whether a row must be re-embedded.
+        # 현재 Oracle 원천 테이블에 대응하는 활성 문서만 읽는다.
+        # 변경 여부 판단에는 doc_id와 content_hash만 있으면 충분하므로 결과를 작게 유지한다.
+        
         result: dict[str, str] = {}
         try:
             rows = client.query(collection_name=collection_name, filter='doc_id != ""', output_fields=["doc_id", "content_hash", "is_active"], limit=16384)
@@ -276,10 +281,11 @@ class NewType00BSaveVectorDB(Component):
                 result[str(row.get("doc_id"))] = str(row.get("content_hash") or "")
         return result
 
+    # Oracle snapshot에서 사라진 문서를 Milvus에서 물리 삭제하지 않고 inactive로 바꾼다.
     def _deactivate_missing_docs(self, client: Any, collection_name: str, existing: dict[str, str], active_doc_ids: set[str]) -> int:
-        # A stale document is active in Milvus but not active in the latest Oracle
-        # snapshot. This usually means USE_YN changed, status changed, or the row
-        # no longer satisfies the active criteria.
+        # stale 문서는 Milvus에는 active로 남아 있지만 최신 Oracle snapshot에서는 active가 아닌 문서다.
+        # 보통 USE_YN, status, active 조건이 바뀐 경우다.
+        
         stale_doc_ids = sorted(set(existing) - active_doc_ids)
         if not stale_doc_ids:
             return 0
@@ -294,10 +300,11 @@ class NewType00BSaveVectorDB(Component):
             count += len(batch)
         return count
 
+    # 첫 active 문서 embedding으로 Milvus FLOAT_VECTOR dimension을 결정한다.
     def _detect_vector_dim(self, rows: list[dict[str, Any]], embed_config: dict[str, Any]) -> int:
-        # Milvus FLOAT_VECTOR fields require a fixed dimension at collection
-        # creation time. The embedding endpoint is the source of truth, so detect
-        # the dimension by embedding the first non-empty sync content.
+        # Milvus FLOAT_VECTOR는 collection 생성 시 고정 dimension이 필요하다.
+        # 실제 dimension은 embedding endpoint 응답을 기준으로 삼는다.
+        # 첫 번째 비어 있지 않은 동기화 content를 임베딩해서 dimension을 확인한다.
         for row in rows:
             content = str(row.get("content") or "").strip()
             if content:
@@ -305,32 +312,31 @@ class NewType00BSaveVectorDB(Component):
                 return len(vector)
         raise ValueError("No active source rows found for Milvus vector sync")
 
+    # DB 또는 payload에서 이 단계에 필요한 입력 데이터를 로드한다.
     def _load_rag_rows(self, db_config: dict[str, Any]) -> list[dict[str, Any]]:
         # ---------------------------------------------------------------------
-        # Oracle -> SM_RAG_RULES row mapping
+        # Oracle NEXT_MIG_RAG_INFO -> SM_RAG_RULES row 변환
         # ---------------------------------------------------------------------
-        # SEARCH rows become vector-searchable examples when SOURCE_SQL exists.
-        # GENERAL rows are stored too, but 12C/15C load them by scalar query as
-        # guidance, not by vector similarity.
+        # SEARCH row는 SOURCE_SQL이 있을 때 vector 검색 가능한 예시가 된다.
+        # GENERAL row도 저장하지만 12C/15C에서는 vector 유사도가 아니라
+        # category/rule_type 조건 조회로 guide 문맥에 넣는다.
         #
-        # For vector search, SOURCE_SQL is the only semantic key. The guidance and
-        # target SQL columns are still copied into Milvus because the retrieved
-        # rows need to explain what rule/example should be applied in the prompt.
+        # vector 검색의 의미 기준은 SOURCE_SQL이다.
+        # GUIDANCE_TEXT와 TARGET_SQL은 검색 결과가 프롬프트에서 설명력을 갖도록 metadata로 함께 복사한다.
+        
         table = self._qualify(RAG_TABLE, db_config.get("system_schema"))
-        columns = self._table_columns(db_config, table)
-        required = {"RAG_ID", "CATEGORY", "RULE_TYPE", "USE_YN"}
-        if not required.issubset(columns):
-            raise ValueError("NEXT_MIG_RAG_INFO requires RAG_ID, CATEGORY, RULE_TYPE, USE_YN")
-        guidance_expr = "GUIDANCE_TEXT" if "GUIDANCE_TEXT" in columns else "CAST(NULL AS VARCHAR2(4000))"
-        source_sql_expr = "SOURCE_SQL" if "SOURCE_SQL" in columns else "TO_CLOB(NULL)"
-        target_sql_expr = "TARGET_SQL" if "TARGET_SQL" in columns else "TO_CLOB(NULL)"
-        source_tables_expr = "SOURCE_TABLES" if "SOURCE_TABLES" in columns else "CAST(NULL AS VARCHAR2(4000))"
-        updated_expr = "TO_CHAR(UPDATED_AT, 'YYYY-MM-DD HH24:MI:SS')" if "UPDATED_AT" in columns else "TO_CHAR(SYSDATE, 'YYYY-MM-DD HH24:MI:SS')"
-        order_expr = "UPDATED_AT DESC NULLS LAST" if "UPDATED_AT" in columns else "RAG_ID"
         sql = f"""
-            SELECT RAG_ID, CATEGORY, RULE_TYPE, USE_YN, {source_tables_expr}, {guidance_expr}, {source_sql_expr}, {target_sql_expr}, {updated_expr}
+            SELECT RAG_ID,
+                   CATEGORY,
+                   RULE_TYPE,
+                   USE_YN,
+                   SOURCE_TABLES,
+                   GUIDANCE_TEXT,
+                   SOURCE_SQL,
+                   TARGET_SQL,
+                   TO_CHAR(UPDATED_AT, 'YYYY-MM-DD HH24:MI:SS')
               FROM {table}
-             ORDER BY {order_expr}
+             ORDER BY UPDATED_AT DESC NULLS LAST, RAG_ID DESC
         """
         with self._connect(db_config) as conn:
             cur = conn.cursor()
@@ -344,11 +350,11 @@ class NewType00BSaveVectorDB(Component):
                 source_sql = self._lob_to_str(row[6]).strip()
                 target_sql = self._lob_to_str(row[7]).strip()
                 guidance = self._lob_to_str(row[5]).strip()
-                # dense_vector is generated from SOURCE_SQL only; guidance/target_sql stay as prompt metadata.
+                # dense_vector는 SOURCE_SQL만으로 만들고, guidance/target_sql은 프롬프트 metadata로만 둔다.
                 content = self._rag_content(category, rule_type, guidance, source_sql, target_sql)
-                # Active rows are the only rows searched at runtime.
-                # Inactive/unsupported rows can still be represented in the sync
-                # snapshot, but they will be skipped or deactivated in Milvus.
+                # 런타임 검색에는 active row만 노출된다.
+                # 비활성/미지원 row는 동기화 snapshot에는 남을 수 있지만,
+                # Milvus에서는 검색 대상에서 제외되거나 inactive 처리된다.
                 is_supported = category in {"SQL_CONVERSION", "SQL_TUNING"} and rule_type in {RAG_GENERAL, RAG_SEARCH}
                 has_rule_body = bool(source_sql) if rule_type == RAG_SEARCH else bool(guidance or source_sql or target_sql)
                 is_active = use_yn == "Y" and is_supported and has_rule_body
@@ -370,41 +376,38 @@ class NewType00BSaveVectorDB(Component):
                 )
             return rows
 
+    # DB 또는 payload에서 이 단계에 필요한 입력 데이터를 로드한다.
     def _load_correct_sql_rows(self, db_config: dict[str, Any]) -> list[dict[str, Any]]:
         # ---------------------------------------------------------------------
-        # Oracle -> SM_CORRECT_SQL_CONVERSION row mapping
+        # Oracle NEXT_SQL_INFO -> SM_CORRECT_SQL_CONVERSION row 변환
         # ---------------------------------------------------------------------
-        # This collection stores previously corrected SQL pairs. 12C uses it as
-        # a hint source when generating TO_SQL/BIND_SQL/TEST_SQL.
+        # 이 collection은 이전에 사람이 보정한 SQL 쌍을 저장한다.
+        # 12C는 TO_SQL/BIND_SQL/TEST_SQL 생성 시 이 값을 힌트로 사용한다.
         #
-        # The searchable side is the original FROM SQL:
-        # - EDIT_FR_SQL wins when a user corrected the source SQL.
-        # - FR_SQL is used as the fallback.
+        # 검색 기준은 원본 FROM SQL이다:
+        # - 사용자가 source SQL을 보정했으면 EDIT_FR_SQL을 우선한다.
+        # - 보정본이 없을 때만 FR_SQL을 사용한다.
         #
-        # The generated SQL columns are metadata returned after vector retrieval;
-        # they are not embedded into dense_vector.
+        # 생성 SQL 컬럼은 vector 검색 후 함께 반환되는 metadata다.
+        # dense_vector에는 포함하지 않는다.
         table = self._qualify(SQL_TABLE, db_config.get("system_schema"))
-        columns = self._table_columns(db_config, table)
-        if "FR_SQL" not in columns:
-            return []
-        edit_fr_expr = "EDIT_FR_SQL" if "EDIT_FR_SQL" in columns else "TO_CLOB(NULL)"
-        status_expr = "STATUS_CONVERSION" if "STATUS_CONVERSION" in columns else "CAST(NULL AS VARCHAR2(100))"
-        user_edited_expr = "USER_EDITED" if "USER_EDITED" in columns else "CAST(NULL AS VARCHAR2(8))"
-        tag_kind_expr = "TAG_KIND" if "TAG_KIND" in columns else "CAST(NULL AS VARCHAR2(100))"
-        target_table_expr = "TARGET_TABLE" if "TARGET_TABLE" in columns else "CAST(NULL AS VARCHAR2(2048))"
-        to_sql_expr = "TO_SQL" if "TO_SQL" in columns else "TO_CLOB(NULL)"
-        bind_sql_expr = "BIND_SQL" if "BIND_SQL" in columns else "TO_CLOB(NULL)"
-        test_sql_expr = "TEST_SQL" if "TEST_SQL" in columns else "TO_CLOB(NULL)"
-        updated_expr = "TO_CHAR(UPD_TS, 'YYYY-MM-DD HH24:MI:SS')" if "UPD_TS" in columns else "TO_CHAR(SYSDATE, 'YYYY-MM-DD HH24:MI:SS')"
-        where_sql = "FR_SQL IS NOT NULL"
-        if "EDIT_FR_SQL" in columns:
-            where_sql = f"{where_sql} OR EDIT_FR_SQL IS NOT NULL"
         sql = f"""
-            SELECT SPACE_NM, SQL_ID, FR_SQL, {edit_fr_expr}, {status_expr}, {user_edited_expr}, {tag_kind_expr},
-                   {target_table_expr}, {to_sql_expr}, {bind_sql_expr}, {test_sql_expr}, {updated_expr}
+            SELECT SPACE_NM,
+                   SQL_ID,
+                   FR_SQL,
+                   EDIT_FR_SQL,
+                   STATUS_CONVERSION,
+                   USER_EDITED,
+                   TAG_KIND,
+                   TARGET_TABLE,
+                   TO_SQL,
+                   BIND_SQL,
+                   TEST_SQL,
+                   TO_CHAR(UPD_TS, 'YYYY-MM-DD HH24:MI:SS')
               FROM {table}
-             WHERE {where_sql}
-             ORDER BY {updated_expr} DESC
+             WHERE FR_SQL IS NOT NULL
+                OR EDIT_FR_SQL IS NOT NULL
+             ORDER BY UPD_TS DESC NULLS LAST
         """
         with self._connect(db_config) as conn:
             cur = conn.cursor()
@@ -421,9 +424,9 @@ class NewType00BSaveVectorDB(Component):
                 test_sql = self._lob_to_str(row[10]).strip()
                 status = self._lob_to_str(row[4]).strip().upper()
                 user_edited = self._lob_to_str(row[5]).strip().upper()
-                # Only trusted, user-edited successful conversion rows are used
-                # as correct SQL hints. Failed or untouched rows are excluded so
-                # the RAG hint does not teach the model bad output.
+                # 사람이 보정했고 성공한 conversion row만 correct SQL 힌트로 사용한다.
+                # 실패 row나 손대지 않은 row는 모델에 나쁜 예시를 주지 않도록 제외한다.
+                
                 is_active = bool(source_sql) and user_edited == "Y" and status in {"PASS", "PASS-CONVERSION"} and bool(to_sql or bind_sql or test_sql)
                 if not space_nm or not sql_id:
                     continue
@@ -441,7 +444,7 @@ class NewType00BSaveVectorDB(Component):
                         to_sql=to_sql,
                         bind_sql=bind_sql,
                         test_sql=test_sql,
-                        # dense_vector is generated from EDIT_FR_SQL first, otherwise FR_SQL, for correct SQL hint retrieval.
+                        # correct SQL 힌트 검색용 dense_vector는 EDIT_FR_SQL을 우선 사용하고, 없으면 FR_SQL을 사용한다.
                         content=self._sql_content(source_sql),
                         is_active=is_active,
                         updated_at=self._lob_to_str(row[12]),
@@ -449,24 +452,24 @@ class NewType00BSaveVectorDB(Component):
                 )
             return rows
 
+    # DB 또는 payload에서 이 단계에 필요한 입력 데이터를 로드한다.
     def _load_correct_migration_rows(self, db_config: dict[str, Any]) -> list[dict[str, Any]]:
         """Load user-confirmed migration SQL examples for SM_CORRECT_SQL_MIGRATION."""
         table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
-        columns = self._table_columns(db_config, table)
-        required = {"MAP_ID", "MIG_SQL", "VERIFY_SQL", "USER_EDITED", "STATUS"}
-        if not required.issubset(columns):
-            return []
-        fr_table_expr = "FR_TABLE" if "FR_TABLE" in columns else "CAST(NULL AS VARCHAR2(4000))"
-        to_table_expr = "TO_TABLE" if "TO_TABLE" in columns else "CAST(NULL AS VARCHAR2(4000))"
-        condition_expr = "CONDITION" if "CONDITION" in columns else "TO_CLOB(NULL)"
-        verify_expr = "VERIFY_SQL" if "VERIFY_SQL" in columns else "TO_CLOB(NULL)"
-        updated_expr = "TO_CHAR(UPD_TS, 'YYYY-MM-DD HH24:MI:SS')" if "UPD_TS" in columns else "TO_CHAR(SYSDATE, 'YYYY-MM-DD HH24:MI:SS')"
         sql = f"""
-            SELECT MAP_ID, {fr_table_expr}, {to_table_expr}, {condition_expr}, MIG_SQL, {verify_expr}, USER_EDITED, STATUS, {updated_expr}
+            SELECT MAP_ID,
+                   FR_TABLE,
+                   TO_TABLE,
+                   CONDITION,
+                   MIG_SQL,
+                   VERIFY_SQL,
+                   USER_EDITED,
+                   STATUS,
+                   TO_CHAR(UPD_TS, 'YYYY-MM-DD HH24:MI:SS')
               FROM {table}
              WHERE MIG_SQL IS NOT NULL
                AND VERIFY_SQL IS NOT NULL
-             ORDER BY {updated_expr} DESC
+             ORDER BY UPD_TS DESC NULLS LAST
         """
         with self._connect(db_config) as conn:
             cur = conn.cursor()
@@ -481,8 +484,8 @@ class NewType00BSaveVectorDB(Component):
                 verify_sql = self._lob_to_str(row[5]).strip()
                 user_edited = self._lob_to_str(row[6]).strip().upper()
                 status = self._lob_to_str(row[7]).strip().upper()
-                # Retrieval needs the same business context used to create a migration:
-                # source/target table, filter condition, and confirmed MIG/VERIFY SQL.
+                # Migration SQL 검색은 생성 당시와 같은 업무 문맥이 필요하다:
+                # source/target table, filter condition, 확정된 MIG/VERIFY SQL을 함께 저장한다.
                 search_content = "\n".join(
                     part for part in (f"FR_TABLE: {fr_table}", f"TO_TABLE: {to_table}", f"CONDITION: {condition}", f"MIG_SQL: {mig_sql}") if part.strip()
                 )
@@ -504,10 +507,11 @@ class NewType00BSaveVectorDB(Component):
                 )
             return rows
 
+    # Milvus에 저장할 공통 entity 구조를 만들고 metadata/hash를 함께 채운다.
     def _entity(self, **values: Any) -> dict[str, Any]:
-        # Each collection passes only its own schema fields. Dynamic fields are
-        # disabled in Milvus, so a RAG rule can never add SQL-job columns and
-        # vice versa.
+        # 각 collection에는 자기 schema에 정의된 필드만 전달한다.
+        # Milvus dynamic field를 꺼두었기 때문에 RAG rule row가 SQL job 컬럼을 섞어 넣을 수 없다.
+        
         entity = dict(values)
         for key in ("source_sql", "target_sql", "to_sql", "bind_sql", "test_sql", "mig_sql", "verify_sql", "content"):
             if key in entity:
@@ -518,22 +522,23 @@ class NewType00BSaveVectorDB(Component):
         for key in ("source_tables", "target_table", "fr_table", "to_table"):
             if key in entity:
                 entity[key] = self._truncate(entity.get(key), 2048)
-        # content_hash includes metadata as well as content. This intentionally
-        # causes an upsert when prompt metadata changes, even if SOURCE_SQL stays
-        # the same. In that case the dense_vector may be numerically unchanged,
-        # but Milvus still receives the updated guidance/output fields.
+        # content_hash에는 content뿐 아니라 metadata도 포함한다.
+        # SOURCE_SQL이 같아도 프롬프트 metadata가 바뀌면 upsert가 발생하게 하기 위해서다.
+        # 이 경우 dense_vector 값은 그대로일 수 있지만,
+        # Milvus에는 갱신된 guidance/output 필드가 반영된다.
         entity["content_hash"] = self._hash_text(json.dumps({key: entity.get(key) for key in sorted(entity) if key not in {"dense_vector", "content_hash"}}, ensure_ascii=False, sort_keys=True))
         return entity
 
+    # RAG rule에서 embedding 대상이 될 content 문자열을 만든다.
     def _rag_content(self, category: str, rule_type: str, guidance: str, source_sql: str, target_sql: str) -> str:
-        # content is what gets embedded.
+        # content가 실제 embedding 대상이다.
         #
-        # SEARCH RAG rows must be searched by SOURCE_SQL similarity, so SOURCE_SQL
-        # is the preferred and normal path.
+        # SEARCH RAG row는 SOURCE_SQL 유사도로 검색되어야 하므로 SOURCE_SQL을 우선 사용한다.
+        
         #
-        # GENERAL rows are not vector-searched by 12C/15C. A small fallback content
-        # value lets the row fit the common schema if it is active, but GENERAL
-        # guidance is loaded by category/rule_type scalar filters.
+        # GENERAL row는 12C/15C에서 vector 검색하지 않는다. 다만 active row가 공통 schema에 들어가도록
+        # 최소 content를 만들어 둔다. 실제 GENERAL guide는
+        # category/rule_type 조건 조회로 로드된다.
         source = source_sql.strip()
         if source:
             return self._sql_content(source)
@@ -541,25 +546,27 @@ class NewType00BSaveVectorDB(Component):
             return guidance.strip() or target_sql.strip() or category
         return ""
 
+    # Correct SQL 검색에서 source SQL 구조와 원문을 함께 담은 embedding 입력을 만든다.
     def _sql_content(self, source_sql: str) -> str:
-        # Embed two views of the same SQL:
-        # 1. normalized SQL shape: comments/literals/numbers reduced, useful for
-        #    matching structurally similar statements
-        # 2. original SQL text: preserves functions, table names, joins, clauses
+        # 같은 SQL을 두 가지 관점으로 묶어 embedding한다:
+        # 1. 정규화된 SQL 구조: 주석/literal/숫자를 줄여 구조 유사도에 집중한다.
+        #    구조가 비슷한 SQL을 가깝게 찾기 위한 입력이다.
+        # 2. 원본 SQL 텍스트: 함수, 테이블명, join, clause를 그대로 보존한다.
         #
-        # This is still "source SQL only"; it does not include guidance or target
-        # SQL. The normalization just gives the embedding model a stable pattern
-        # before the raw SQL.
+        # 여기서도 embedding 대상은 source SQL뿐이며 guidance나 target SQL은 넣지 않는다.
+        # 정규화 SQL을 앞에 붙여 literal 차이보다 구조가 더 잘 반영되게 한다.
+        
         source = source_sql.strip()
         return "\n".join([self._normalize_sql_shape(source), source]).strip()
 
+    # embedding API에 텍스트 묶음을 보내 dense vector 목록을 받아온다.
     def _embed_texts(self, texts: list[str], config: dict[str, Any]) -> list[list[float]]:
         # ---------------------------------------------------------------------
-        # Embedding API call
+        # Embedding API 호출
         # ---------------------------------------------------------------------
-        # This uses an OpenAI-compatible /v1/embeddings endpoint. The component
-        # does not assume a specific vendor as long as the response contains
-        # embedding vectors in one of the supported shapes below.
+        # OpenAI 호환 /v1/embeddings endpoint를 호출한다.
+        # 응답에 지원 형식의 embedding vector만 있으면 특정 vendor를 가정하지 않는다.
+        
         endpoint = self._embedding_endpoint(config["base_url"])
         headers = {"Content-Type": "application/json"}
         if config["api_key"]:
@@ -572,8 +579,9 @@ class NewType00BSaveVectorDB(Component):
             raise ValueError(f"embedding response count mismatch: expected={len(texts)}, actual={len(vectors)}")
         return vectors
 
+    # 문자열이나 payload에서 후속 로직에 필요한 값을 추출한다.
     def _extract_embedding_vectors(self, body: Any) -> list[list[float]]:
-        # Support common embedding response formats:
+        # 자주 쓰는 embedding 응답 형식을 모두 수용한다:
         # - {"data": [{"embedding": [...]}]}
         # - {"embeddings": [[...]]}
         # - {"embedding": [...]}
@@ -587,8 +595,9 @@ class NewType00BSaveVectorDB(Component):
                 return [[float(value) for value in body["embedding"]]]
         return []
 
+    # 입력된 embedding base URL을 /v1/embeddings endpoint로 정규화한다.
     def _embedding_endpoint(self, base_url: str) -> str:
-        # Accept either a service root, /v1, or /v1/embeddings URL from Langflow.
+        # Langflow에는 service root, /v1, /v1/embeddings URL 중 아무 형태나 입력할 수 있다.
         normalized = str(base_url or "").strip().rstrip("/")
         if normalized.endswith("/embeddings"):
             return normalized
@@ -596,10 +605,11 @@ class NewType00BSaveVectorDB(Component):
             return f"{normalized}/embeddings"
         return f"{normalized}/v1/embeddings"
 
+    # 비교와 검색이 안정적으로 동작하도록 입력 값을 정규화한다.
     def _normalize_sql_shape(self, sql_text: str) -> str:
-        # Keep SQL structure, remove noisy values.
-        # This helps similar SQLs stay close even when literals or numeric
-        # constants differ between jobs.
+        # SQL 구조는 유지하고 literal 같은 잡음을 제거한다.
+        # literal이나 숫자 상수가 달라도 비슷한 SQL이 가까운 vector가 되도록 한다.
+        
         text = re.sub(r"/\*.*?\*/", " ", sql_text or "", flags=re.DOTALL)
         text = re.sub(r"--[^\n]*", " ", text)
         text = re.sub(r"'(?:''|[^'])*'", " STR ", text)
@@ -607,13 +617,14 @@ class NewType00BSaveVectorDB(Component):
         text = re.sub(r"\bSUBQUERY_\d+\b", "SUBQUERY", text, flags=re.IGNORECASE)
         return re.sub(r"\s+", " ", text).strip().upper()
 
+    # RAG/Correct SQL 검색에 사용할 Milvus client를 생성한다.
     def _milvus_client(self, config: dict[str, Any]) -> Any:
         # ---------------------------------------------------------------------
-        # Milvus connection
+        # Milvus 연결
         # ---------------------------------------------------------------------
-        # Pass uri exactly as entered. Do not split host/port, do not append a
-        # default port, and do not convert username/password into token form.
-        # This matches the connection style that worked in the user's environment.
+        # Milvus URI는 입력값 그대로 전달한다. host/port를 쪼개거나 기본 port를 붙이지 않는다.
+        # username/password도 token 형태로 바꾸지 않는다.
+        # 현재 사용 환경에서 동작 확인된 연결 방식을 그대로 따른다.
         from pymilvus import MilvusClient
 
         return MilvusClient(
@@ -624,9 +635,10 @@ class NewType00BSaveVectorDB(Component):
             timeout=10,
         )
 
+    # payload와 Langflow 입력에서 Oracle 접속 및 schema 설정을 모은다.
     def _db_config(self) -> dict[str, Any]:
-        # Langflow DB inputs are explicit. Unlike Milvus/embedding config, these
-        # do not currently use environment fallback except for defaults.
+        # DB 접속 정보는 Langflow 입력을 명시적으로 받는다.
+        # port 같은 기본값 외에는 환경변수 fallback을 사용하지 않는다.
         return {
             "db_host": str(getattr(self, "db_host", "") or "").strip(),
             "db_port": int(getattr(self, "db_port", None) or 1521),
@@ -636,10 +648,11 @@ class NewType00BSaveVectorDB(Component):
             "system_schema": str(getattr(self, "system_schema", "") or "").strip(),
         }
 
+    # Milvus 접속 및 collection 설정을 모은다.
     def _milvus_config(self) -> dict[str, Any]:
-        # Milvus values can be supplied directly in the component or through env
-        # vars, which is useful when the same Langflow graph is moved between
-        # environments.
+        # Milvus 값은 컴포넌트 입력 또는 환경변수로 받을 수 있다.
+        # 같은 Langflow graph를 환경 간 이동할 때 설정 재사용을 쉽게 하기 위해서다.
+        
         return {
             "uri": str(getattr(self, "milvus_uri", "") or os.getenv("MILVUS_URI") or "").strip(),
             "username": str(getattr(self, "milvus_username", "") or os.getenv("MILVUS_USERNAME") or "").strip(),
@@ -650,9 +663,10 @@ class NewType00BSaveVectorDB(Component):
             "correct_sql_migration_collection": self._clean_collection_name(getattr(self, "correct_sql_migration_collection_name", "") or os.getenv("MILVUS_CORRECT_SQL_MIGRATION_COLLECTION") or CORRECT_SQL_MIGRATION_COLLECTION),
         }
 
+    # embedding endpoint/model/timeout 설정을 모아 검증에 넘긴다.
     def _embed_config(self) -> dict[str, Any]:
-        # Embedding config is shared by collection creation dimension detection
-        # and the changed-row batch upsert step.
+        # embedding 설정은 collection 생성 시 dimension 확인과
+        # 변경 row batch upsert 단계에서 함께 사용된다.
         return {
             "base_url": str(getattr(self, "rag_embed_base_url", "") or os.getenv("RAG_EMBED_BASE_URL") or "").strip(),
             "api_key": self._secret_to_str(getattr(self, "rag_embed_api_key", None)) or str(os.getenv("RAG_EMBED_API_KEY") or "").strip(),
@@ -660,30 +674,34 @@ class NewType00BSaveVectorDB(Component):
             "timeout_seconds": self._positive_int(getattr(self, "rag_embed_timeout_seconds", None) or os.getenv("RAG_EMBED_TIMEOUT_SEC"), 60),
         }
 
+    # 필수 DB 접속 값이 없으면 DB 작업 전에 명확히 실패시킨다.
     def _require_db_config(self, db_config: dict[str, Any]) -> None:
-        # Fail early before opening Oracle if required connection fields are empty.
+        # Oracle 연결 전에 필수 접속 값 누락을 먼저 명확히 실패시킨다.
         missing = [key for key in ("db_host", "db_service_name", "db_username") if not str(db_config.get(key) or "").strip()]
         if missing:
             raise ValueError(f"missing DB config: {', '.join(missing)}")
 
+    # Milvus 접속 필수 값 누락을 collection 작업 전에 명확히 실패시킨다.
     def _require_milvus_config(self, config: dict[str, Any]) -> None:
-        # Milvus 2.6.5 connection in this environment uses username/password.
+        # 현재 Milvus 2.6.5 연결은 username/password 방식을 사용한다.
         missing = [key for key in ("uri", "username", "password", "db_name") if not str(config.get(key) or "").strip()]
         if missing:
             raise ValueError(f"missing Milvus config: {', '.join(missing)}")
 
+    # embedding 호출 필수 값 누락을 vector 생성 전에 명확히 실패시킨다.
     def _require_embed_config(self, config: dict[str, Any]) -> None:
-        # The embedding API key may be blank for internal gateways, but endpoint
-        # and model are always required.
+        # 내부 gateway에서는 embedding API key가 비어 있을 수 있지만,
+        # endpoint와 model은 항상 필요하다.
         if not config["base_url"]:
             raise ValueError("rag_embed_base_url is required")
         if not config["model"]:
             raise ValueError("rag_embed_model is required")
 
     @contextmanager
+    # Oracle 연결을 열고 호출 구간이 끝나면 닫는 context manager다.
     def _connect(self, db_config: dict[str, Any]):
-        # Oracle 11g-compatible access path. Vector math is intentionally not
-        # delegated to Oracle; Oracle is only the source of rule/correct-SQL rows.
+        # Oracle 11g 호환 접속 경로다. vector 연산은 Oracle에 맡기지 않는다.
+        # Oracle은 rule/correct SQL row의 원천 저장소 역할만 한다.
         import oracledb
 
         dsn = oracledb.makedsn(str(db_config.get("db_host") or "").strip(), int(db_config.get("db_port") or 1521), service_name=str(db_config.get("db_service_name") or "").strip())
@@ -693,6 +711,7 @@ class NewType00BSaveVectorDB(Component):
         finally:
             conn.close()
 
+    # system_schema가 명시된 테이블명을 schema-qualified 이름으로 만든다.
     def _qualify(self, table_name: str, schema: Any) -> str:
         value = str(table_name or "").strip().upper()
         if "." in value:
@@ -700,49 +719,37 @@ class NewType00BSaveVectorDB(Component):
             return f"{self._clean_identifier(owner)}.{self._clean_identifier(name)}"
         clean_table = self._clean_identifier(value)
         clean_schema = str(schema or "").strip().upper()
-        return f"{self._clean_identifier(clean_schema)}.{clean_table}" if clean_schema else clean_table
+        if not clean_schema:
+            raise ValueError("System Schema를 입력해야 합니다.")
+        return f"{self._clean_identifier(clean_schema)}.{clean_table}"
 
+    # 동적 SQL identifier에 안전한 Oracle 문자만 허용한다.
     def _clean_identifier(self, value: str) -> str:
         clean = str(value or "").strip().upper()
         if not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", clean):
             raise ValueError(f"Invalid identifier: {clean}")
         return clean
 
+    # LLM 응답이나 사용자 입력에서 실행/저장에 불필요한 문자를 제거한다.
     def _clean_collection_name(self, value: Any) -> str:
         clean = str(value or "").strip()
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", clean):
             raise ValueError(f"Invalid Milvus collection name: {clean}")
         return clean
 
-
-
-    def _table_columns(self, db_config: dict[str, Any], table: str) -> set[str]:
-        owner, table_name = self._split_owner_table(table)
-        with self._connect(db_config) as conn:
-            cur = conn.cursor()
-            if owner:
-                cur.execute("SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS WHERE OWNER = :owner AND TABLE_NAME = :table_name", {"owner": owner, "table_name": table_name})
-            else:
-                cur.execute("SELECT COLUMN_NAME FROM USER_TAB_COLUMNS WHERE TABLE_NAME = :table_name", {"table_name": table_name})
-            return {str(row[0]).upper() for row in cur.fetchall()}
-
-    def _split_owner_table(self, table: str) -> tuple[str | None, str]:
-        value = str(table or "").strip().upper()
-        if "." not in value:
-            return None, self._clean_identifier(value)
-        owner, table_name = value.split(".", 1)
-        return self._clean_identifier(owner), self._clean_identifier(table_name)
-
+    # Oracle LOB 값을 연결 종료 전에 문자열로 읽는다.
     def _lob_to_str(self, value: Any) -> str:
         if value is not None and hasattr(value, "read"):
             return str(value.read())
         return "" if value is None else str(value)
 
+    # Langflow Secret 입력을 일반 문자열로 꺼내 client library 설정에 사용한다.
     def _secret_to_str(self, value: Any) -> str:
         if hasattr(value, "get_secret_value"):
             return str(value.get_secret_value() or "")
         return str(value or "")
 
+    # 숫자 입력을 양의 정수로 변환하고 실패하면 기본값을 사용한다.
     def _positive_int(self, value: Any, default: int) -> int:
         try:
             parsed = int(value)
@@ -750,9 +757,11 @@ class NewType00BSaveVectorDB(Component):
         except (TypeError, ValueError):
             return default
 
+    # content와 metadata 변경을 감지할 SHA-256 hash를 만든다.
     def _hash_text(self, value: Any) -> str:
         return hashlib.sha256(str(value or "").encode("utf-8", errors="ignore")).hexdigest()
 
+    # Milvus scalar field 길이 제한에 맞춰 긴 문자열을 자른다.
     def _truncate(self, value: Any, max_len: int) -> str:
         text = str(value or "")
         encoded = text.encode("utf-8", errors="ignore")
@@ -760,6 +769,7 @@ class NewType00BSaveVectorDB(Component):
             return text
         return encoded[:max_len].decode("utf-8", errors="ignore")
 
+    # 대량 upsert 입력을 Milvus insert 단위로 나눈다.
     def _chunks(self, values: list[Any], size: int):
         for index in range(0, len(values), size):
             yield values[index:index + size]

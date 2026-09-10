@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import logging
@@ -49,9 +49,19 @@ RAG_GUIDE_MANAGEMENT 규칙:
 - 사용자가 튜닝 가이드, SQL Conversion RAG 가이드, 변환 규칙, 튜닝 규칙, NEXT_MIG_RAG_INFO row를 조회/추가/수정/삭제/비활성화하려고 하면 이 route를 선택하세요.
 - rag_action은 query, add, update, upsert, disable, delete 중 하나로 채우세요.
 - delete라고 해도 실제 물리 삭제가 아니라 USE_YN='N' 비활성화 작업입니다.
-- rag에는 확인 가능한 값만 채우세요: rag_id, category, rule_type, source_tables, use_yn, guidance_text, source_sql, target_sql.
-- category는 SQL_CONVERSION 또는 SQL_TUNING만 허용됩니다.
-- rule_type은 GENERAL, SEARCH, PATTERN, GUIDE만 허용됩니다.
+- rag에는 확인 가능한 값만 채우세요: rag_id, category, rule_type, source_tables, use_yn, keyword, limit, full_text, guidance_text, source_sql, target_sql.
+- RAG_ID는 DB identity 컬럼이 자동 생성합니다. 신규 추가(add/create/insert)에서는 사용자가 명시하지 않는 한 rag_id를 채우지 마세요.
+- category는 사용자 요청을 보고 SQL_CONVERSION 또는 SQL_TUNING 중 하나로 분류하세요.
+- SQL 변환/Conversion RAG/변환 예시/AS-IS SQL과 TO-BE SQL 매핑 규칙은 category=SQL_CONVERSION입니다.
+- SQL 튜닝/튜닝 가이드/성능 개선/힌트/실행계획 개선 규칙은 category=SQL_TUNING입니다.
+- rule_type은 사용자 요청을 보고 GENERAL 또는 SEARCH 중 하나로 분류하세요.
+- 전체 공통 원칙, 작성 지침, 금지 규칙처럼 특정 SQL 예시 검색이 필요 없는 내용은 rule_type=GENERAL입니다.
+- SOURCE_SQL/TARGET_SQL 예시를 기반으로 유사 SQL을 검색해 적용할 내용은 rule_type=SEARCH입니다.
+- SQL_CONVERSION + SEARCH는 source_tables가 필수입니다. 사용자가 대상 테이블을 말하지 않았으면 EXCEPTION으로 보내세요.
+- SEARCH rule을 추가할 때는 source_sql과 target_sql을 모두 요구하세요. 둘 중 하나만 있으면 EXCEPTION으로 보내세요.
+- GENERAL rule은 guidance_text 중심으로 저장하세요. source_sql/target_sql은 사용자가 명시한 경우에만 넣으세요.
+- 조회 요청이면 사용자가 찾고 싶은 테이블명, 업무명, SQL 조각, 규칙 키워드를 rag.keyword에 넣으세요.
+- 조회 요청에서 "전체 내용", "전문", "원문까지"처럼 말하면 rag.full_text=true로 설정하세요.
 - 사용자가 가이드 내용 자체를 주지 않았으면 guidance_text, source_sql, target_sql을 지어내지 마세요.
 
 JOB_QA와 CURRENT_PROGRESS 선택 규칙:
@@ -67,7 +77,7 @@ JOB_QA와 CURRENT_PROGRESS 선택 규칙:
 - 예: "RAG Guide 수정/삭제에는 RAG_ID가 필요합니다. 먼저 조회해서 대상 RAG_ID를 확인해주세요."
 
 JSON schema:
-{"management_route":"DASHBOARD|CURRENT_PROGRESS|JOB_QA|STATUS_CHANGE|CORRECT_SQL_INPUT|RAG_GUIDE_MANAGEMENT|EXCEPTION","target":{"work_type":"","map_id":"","sql_id":"","space_nm":"","sql_column":"","priority":5},"correct_sql":"","rag_action":"","rag":{"rag_id":"","category":"","rule_type":"","source_tables":"","use_yn":"Y","guidance_text":"","source_sql":"","target_sql":""},"exception_message":"","reason":""}"""
+{"management_route":"DASHBOARD|CURRENT_PROGRESS|JOB_QA|STATUS_CHANGE|CORRECT_SQL_INPUT|RAG_GUIDE_MANAGEMENT|EXCEPTION","target":{"work_type":"","map_id":"","sql_id":"","space_nm":"","sql_column":"","priority":5},"correct_sql":"","rag_action":"","rag":{"rag_id":"","category":"","rule_type":"","source_tables":"","use_yn":"Y","keyword":"","limit":"","full_text":false,"guidance_text":"","source_sql":"","target_sql":""},"exception_message":"","reason":""}"""
 
 EXCEPTION_MESSAGE = "Management 요청을 처리할 수 없습니다. 작업 종류와 필요한 식별자를 다시 알려주세요."
 
@@ -95,24 +105,31 @@ class NewType04ManagementRouter(Component):
         Output(display_name="Exception Message", name="exception", method="exception_response", group_outputs=True, types=["Message"]),
     ]
 
+    # Langflow group output별로 현재 route가 맞을 때만 payload를 반환한다.
     def dashboard_response(self) -> Data:
         return self._route_output("DASHBOARD", "dashboard")
 
+    # Langflow group output별로 현재 route가 맞을 때만 payload를 반환한다.
     def current_progress_response(self) -> Data:
         return self._route_output("CURRENT_PROGRESS", "current_progress")
 
+    # Langflow group output별로 현재 route가 맞을 때만 payload를 반환한다.
     def job_qa_response(self) -> Data:
         return self._route_output("JOB_QA", "job_qa")
 
+    # Langflow group output별로 현재 route가 맞을 때만 payload를 반환한다.
     def status_change_response(self) -> Data:
         return self._route_output("STATUS_CHANGE", "status_change")
 
+    # Langflow group output별로 현재 route가 맞을 때만 payload를 반환한다.
     def correct_sql_input_response(self) -> Data:
         return self._route_output("CORRECT_SQL_INPUT", "correct_sql_input")
 
+    # Langflow group output별로 현재 route가 맞을 때만 payload를 반환한다.
     def rag_guide_manager_response(self) -> Data:
         return self._route_output("RAG_GUIDE_MANAGEMENT", "rag_guide_manager")
 
+    # Langflow group output별로 현재 route가 맞을 때만 payload를 반환한다.
     def exception_response(self) -> Message:
         routed = self._get_routed_payload()
         if routed.get("management_route") != "EXCEPTION":
@@ -122,6 +139,7 @@ class NewType04ManagementRouter(Component):
         self.status = {**routed, "selected_output": "exception", "answer_text": answer, "final": True}
         return Message(text=answer)
 
+    # 예상 route와 실제 route를 비교해 해당 output 실행 여부를 결정한다.
     def _route_output(self, expected_route: str, output_name: str) -> Data:
         routed = self._get_routed_payload()
         if routed.get("management_route") != expected_route:
@@ -131,6 +149,7 @@ class NewType04ManagementRouter(Component):
         self.status = routed
         return Data(data=routed)
 
+    # payload나 graph 설정에서 필요한 값을 꺼내 표준 형태로 반환한다.
     def _get_routed_payload(self) -> dict[str, Any]:
         cached = getattr(self, "_cached_routed_payload", None)
         if cached is not None:
@@ -146,6 +165,7 @@ class NewType04ManagementRouter(Component):
         self._cached_routed_payload = routed
         return routed
 
+    # 관리 자연어 요청을 LLM에 보내 route/action/target 구조로 분류한다.
     def _route_with_llm(self, payload: dict[str, Any]) -> dict[str, Any]:
         api_key = self._secret_to_str(getattr(self, "llm_api_key", None)).strip()
         model = str(getattr(self, "llm_model", "") or "").strip()
@@ -162,12 +182,14 @@ class NewType04ManagementRouter(Component):
             raise ValueError(f"04 Management Router LLM HTTP {exc.code}: {exc.read().decode('utf-8', errors='ignore')[:1000]}") from exc
         return self._parse_json_object((((raw.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip())
 
+    # 비교와 검색이 안정적으로 동작하도록 입력 값을 정규화한다.
     def _normalize_decision(self, decision: dict[str, Any]) -> dict[str, Any]:
         route = str(decision.get("management_route") or "").upper()
         if route not in {"DASHBOARD", "CURRENT_PROGRESS", "JOB_QA", "STATUS_CHANGE", "CORRECT_SQL_INPUT", "RAG_GUIDE_MANAGEMENT", "EXCEPTION"}:
             raise ValueError(f"Invalid management_route: {route}")
         return {"management_route": route, "target": dict(decision.get("target") or {}), "correct_sql": str(decision.get("correct_sql") or ""), "rag_action": str(decision.get("rag_action") or ""), "rag": dict(decision.get("rag") or {}), "exception_message": str(decision.get("exception_message") or ""), "reason": str(decision.get("reason") or "")}
 
+    # 입력 payload나 job item이 실행 가능한 구조인지 검증한다.
     def _validate_management_request(self, decision: dict[str, Any]) -> dict[str, Any]:
         # LLM router가 이미 구조화된 JSON을 반환하더라도 그대로 믿지 않는다.
         # DB update로 이어지는 route는 여기서 한 번 더 필수값과 allow-list를 검증한다.
@@ -201,6 +223,7 @@ class NewType04ManagementRouter(Component):
             target["sql_column"] = column
         return {**decision, "target": target}
 
+    # 입력 payload나 job item이 실행 가능한 구조인지 검증한다.
     def _validate_rag_guide_request(self, decision: dict[str, Any]) -> dict[str, Any]:
         # RAG guide 변경은 NEXT_MIG_RAG_INFO에 직접 영향을 주므로 별도 검증한다.
         # delete 요청도 실제 삭제가 아니라 04_ragGuideManager에서 USE_YN='N'으로 처리된다.
@@ -214,21 +237,36 @@ class NewType04ManagementRouter(Component):
             category = str(rule.get("category") or "").strip().upper()
             if category not in {"SQL_CONVERSION", "SQL_TUNING"}:
                 return self._exception(decision, "RAG Guide 추가에는 category(SQL_CONVERSION 또는 SQL_TUNING)가 필요합니다.")
-            if not any(str(rule.get(key) or "").strip() for key in ("guidance_text", "source_sql", "target_sql")):
-                return self._exception(decision, "RAG Guide 추가에는 GUIDANCE_TEXT, SOURCE_SQL, TARGET_SQL 중 최소 1개 내용이 필요합니다.")
+            rule_type = str(rule.get("rule_type") or "").strip().upper()
+            if rule_type not in {"GENERAL", "SEARCH"}:
+                return self._exception(decision, "RAG Guide 추가에는 rule_type(GENERAL 또는 SEARCH)이 필요합니다.")
+            source_tables = str(rule.get("source_tables") or "").strip()
+            source_sql = str(rule.get("source_sql") or "").strip()
+            target_sql = str(rule.get("target_sql") or "").strip()
+            guidance_text = str(rule.get("guidance_text") or "").strip()
+            if category == "SQL_CONVERSION" and rule_type == "SEARCH" and not source_tables:
+                return self._exception(decision, "SQL_CONVERSION SEARCH RAG Guide 추가에는 SOURCE_TABLES가 필요합니다.")
+            if rule_type == "SEARCH" and (not source_sql or not target_sql):
+                return self._exception(decision, "SEARCH RAG Guide 추가에는 SOURCE_SQL과 TARGET_SQL을 모두 입력해야 합니다.")
+            if rule_type == "GENERAL" and not guidance_text:
+                return self._exception(decision, "GENERAL RAG Guide 추가에는 GUIDANCE_TEXT가 필요합니다.")
         return {**decision, "rag_action": action, "rag": rule}
 
+    # 관리 라우팅 실패를 표준 exception payload와 사용자 메시지로 만든다.
     def _exception(self, decision: dict[str, Any], message: str) -> dict[str, Any]:
         return {**decision, "management_route": "EXCEPTION", "exception_message": message}
 
+    # 사용자에게 보여줄 관리 작업명을 route/work_type 기준으로 만든다.
     def _operation_label(self, route: str, work_type: str) -> str:
         if route == "CORRECT_SQL_INPUT":
             return "DB Migration Correct SQL 입력" if work_type == "DB_MIGRATION" else "Correct SQL 입력"
         return "Status Change(Reset)"
 
+    # 관리 route에 연결된 다음 Langflow node 이름을 반환한다.
     def _next_node(self, route: str) -> str:
         return {"DASHBOARD": "04_dashboard", "CURRENT_PROGRESS": "04_currentProgress", "JOB_QA": "04_jobQaAgent", "STATUS_CHANGE": "04_statusChange", "CORRECT_SQL_INPUT": "04_correctSqlInput", "RAG_GUIDE_MANAGEMENT": "04_ragGuideManager", "EXCEPTION": "04_managementRouter"}.get(route, "04_dashboard")
 
+    # Langflow 입력이 Data/Message/dict/JSON 문자열 중 무엇이든 dict로 통일한다.
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):
             return dict(raw.data or {})
@@ -236,6 +274,7 @@ class NewType04ManagementRouter(Component):
             return dict(raw)
         return self._parse_json_object(str(raw or "").strip()) if str(raw or "").strip() else {}
 
+    # 문자열 입력에서 JSON 객체를 파싱해 후속 로직이 쓰는 dict로 만든다.
     def _parse_json_object(self, text: str) -> dict[str, Any]:
         clean = re.sub(r"^```(?:json)?\s*|\s*```$", "", str(text or "").strip(), flags=re.I)
         match = re.search(r"\{.*\}", clean, flags=re.S)
@@ -244,6 +283,7 @@ class NewType04ManagementRouter(Component):
             raise ValueError("LLM must return a JSON object")
         return parsed
 
+    # Langflow Secret 입력을 일반 문자열로 꺼내 client library 설정에 사용한다.
     def _secret_to_str(self, value: Any) -> str:
         return str(value.get_secret_value()) if hasattr(value, "get_secret_value") else str(value or "")
 

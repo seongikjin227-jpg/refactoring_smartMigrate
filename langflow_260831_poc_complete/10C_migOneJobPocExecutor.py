@@ -196,11 +196,12 @@ class NewType10CMigOneJobPocExecutor(Component):
     outputs = [Output(display_name="Job Result", name="job_result", method="run_job", types=["Data"])]
 
     # ##############################
-    # Entry point
+    # 진입점
     # ##############################
 
+    # Langflow output에서 migration 작업 한 건을 검증하고 전체 DB Migration 실행 흐름을 시작한다.
     def run_job(self) -> Data:
-        """Run one migration job and return the final job result payload."""
+        """migration 작업 한 건을 실행하고 최종 결과 payload를 반환한다."""
         logger = logging.getLogger("smartmigrate.workflow")
         logger.info("before run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "START", 0]})
         try:
@@ -220,7 +221,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             attempts: list[dict[str, Any]] = []
 
             try:
-                # 1. Check prior migration dependency before this job touches DDL or target data.
+                # 1. 대상 DDL/데이터를 건드리기 전에 선행 migration 의존성을 확인한다.
                 dep_status = self._dependency_status(db_config, map_id, job.get("prior_map_id"))
                 if dep_status != "READY":
                     elapsed = int(time.perf_counter() - started)
@@ -247,7 +248,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                     logger.info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "END", 0]})
                     return __log_result
 
-                # 2. Mark the job running and load DDL/mapping metadata for prompt generation.
+                # 2. 작업을 RUNNING으로 바꾸고 프롬프트 생성에 필요한 DDL/매핑 metadata를 읽는다.
                 self._mark_running(db_config, map_id)
                 base_context = {"job": job, "map_id": map_id, "attempt": 1, "llm_config": self._llm_config(job)}
                 fetch_step = self._node_fetch_ddl(base_context)
@@ -258,7 +259,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                     extra={"workflow_log": [map_id, "DB_MIGRATION", "FETCH_DDL", "INFO", "FETCH_DDL", "PASS", 0]},
                 )
 
-                # 3. Retry graph starts here: GENERATE_SQL -> EXECUTE_SQL -> VERIFY.
+                # 3. GENERATE_SQL -> EXECUTE_SQL -> VERIFY 순서의 재시도 graph를 실행한다.
                 pipeline_context = {**base_context, **(fetch_step.get("outputs") or {})}
                 graph_result = self._run_migration_graph(pipeline_context, db_config, max_retry)
                 attempts = list(graph_result.get("attempts") or [])
@@ -269,14 +270,14 @@ class NewType10CMigOneJobPocExecutor(Component):
 
                 elapsed = int(time.perf_counter() - started)
                 if final_ok:
-                    # 4. Persist final PASS and log the verification SQL that proved the migration.
+                    # 4. 최종 PASS를 저장하고 migration 성공을 증명한 검증 SQL을 로그에 남긴다.
                     self._update_job(db_config, map_id, "PASS", elapsed, retry_count)
                     logger.info(
                         message,
                         extra={"workflow_log": [map_id, "DB_MIGRATION", "VERIFY_SQL", "INFO", "VERIFY", "PASS", retry_count, graph_result.get("verification_sql", "")]},
                     )
                 else:
-                    # 4. Persist final failure after retry exhaustion and keep the SQL that failed.
+                    # 4. 재시도를 모두 소진하면 최종 실패 상태와 실패 SQL을 함께 저장한다.
                     self._update_job(db_config, map_id, final_status, elapsed, retry_count)
                     logger.error(
                         message,
@@ -310,9 +311,16 @@ class NewType10CMigOneJobPocExecutor(Component):
                 elapsed = int(time.perf_counter() - started)
                 try:
                     self._update_job(db_config, map_id, "FAIL-INSERT", elapsed, max(0, len(attempts) - 1))
-                    logger.error(f"System error: {exc}", extra={"workflow_log": [map_id, "DB_MIGRATION", "JOB_FAIL", "ERROR", "FINAL", "FAIL-INSERT", max(0, len(attempts) - 1)]})
+                    logger.error(
+                        message,
+                        extra={"workflow_log": [map_id, "DB_MIGRATION", "JOB_FAIL", "ERROR", "FINAL", final_status, retry_count, graph_result.get("stage_sql", "")]},
+                    )
                 except Exception:
-                    pass
+                    logger.warning(
+                        "DB status update failed while recording migration executor failure; original error is preserved.",
+                        extra={"workflow_log": [map_id, "DB_MIGRATION", "JOB_FAIL", "WARN", "FINAL", final_status, retry_count, str(exc)]},
+                        exc_info=True,
+                    )
                 result = self._result(job, ok=False, status="FAIL-INSERT", elapsed=elapsed, attempts=attempts)
                 result.update({"error_type": "SYSTEM_ERROR", "error": str(exc), "message": f"migration executor error: {exc}"})
                 self.status = result
@@ -324,9 +332,10 @@ class NewType10CMigOneJobPocExecutor(Component):
             raise
 
     # ##############################
-    # Runtime flow
+    # 런타임 실행 흐름
     # ##############################
 
+    # loop payload의 route/job_name 값을 10C가 처리할 migration 작업명으로 정규화한다.
     def _job_name(self, payload: dict[str, Any]) -> str:
         value = str(payload.get("job_name") or "").strip().lower()
         if value:
@@ -339,6 +348,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             "SQL_FORMATTING": "formatting",
         }.get(route, "")
 
+    # 현재 item이 10C 담당이 아닐 때 원본 payload를 유지한 채 다음 노드로 넘긴다. 12C도 같은 패턴을 사용한다.
     def _pass_through(self, job: dict[str, Any], started: float, message: str) -> dict[str, Any]:
         elapsed = int(time.perf_counter() - started)
         total = int(job.get("total_jobs") or 1)
@@ -366,11 +376,12 @@ class NewType10CMigOneJobPocExecutor(Component):
         return result
 
     # ##############################
-    # Graph nodes
+    # LangGraph 노드
     # ##############################
 
+    # LangGraph 첫 단계에서 대상 row, DDL, 매핑 정보를 읽어 프롬프트 입력 context를 만든다.
     def _node_fetch_ddl(self, context: dict[str, Any]) -> dict[str, Any]:
-        """Load mapping metadata and source/target DDL for SQL generation."""
+        """SQL 생성을 위한 매핑 metadata와 source/target DDL을 로드한다."""
         map_id = self._to_int(context.get("map_id"))
         db_config = self._db_config(context["job"])
         metadata = self._load_mig_metadata(db_config, map_id)
@@ -389,8 +400,9 @@ class NewType10CMigOneJobPocExecutor(Component):
             },
         }
 
+    # 현재 attempt의 오류 맥락과 metadata를 바탕으로 MIG_SQL/VERIFY_SQL을 생성한다.
     def _node_generate_sql(self, context: dict[str, Any]) -> dict[str, Any]:
-        """Generate migration and verification SQL with the configured LLM."""
+        """설정된 LLM으로 migration SQL과 verification SQL을 생성한다."""
         job = context["job"]
         try:
             user_edited = str(context.get("user_edited") or "").strip().upper() == "Y"
@@ -449,8 +461,9 @@ class NewType10CMigOneJobPocExecutor(Component):
                 },
             }
 
+    # 생성된 MIG_SQL을 Oracle에 실행하고 실행 건수 또는 오류를 state에 기록한다.
     def _node_execute_sql(self, context: dict[str, Any]) -> dict[str, Any]:
-        """Run target truncate and migration SQL against Oracle."""
+        """Oracle target truncate와 migration SQL 실행을 수행한다."""
         db_config = dict(context.get("db_config") or {})
         target_table = str(context.get("to_table") or "").strip()
         try:
@@ -476,8 +489,9 @@ class NewType10CMigOneJobPocExecutor(Component):
                 "outputs": {"affected_rows": 0},
             }
 
+    # VERIFY_SQL을 실행해 migration 결과가 기대 조건을 만족하는지 판단한다.
     def _node_verify(self, context: dict[str, Any]) -> dict[str, Any]:
-        """Run verification SQL and require every returned value to be zero."""
+        """verification SQL을 실행하고 모든 반환 값이 0인지 검증한다."""
         db_config = dict(context.get("db_config") or {})
         try:
             ok, message, rows = self._execute_verification(db_config, str(context.get("current_v_sql") or context.get("verification_sql") or ""))
@@ -503,18 +517,20 @@ class NewType10CMigOneJobPocExecutor(Component):
             }
 
     # ##############################
-    # LangGraph retry callbacks
+    # LangGraph 재시도 callback
     # ##############################
 
+    # migration 재시도 graph를 구성하고 GENERATE/EXECUTE/VERIFY 상태 전이를 실행한다.
     def _run_migration_graph(self, context: dict[str, Any], db_config: dict[str, Any], max_retry: int) -> dict[str, Any]:
-        """Build and execute the retry graph for one migration job."""
+        """migration 작업 한 건의 retry graph를 구성하고 실행한다."""
         from langgraph.graph import END, StateGraph
 
-        # These callbacks are registered with LangGraph. The real work lives in the _node_* methods above.
+        # callback은 LangGraph 연결용이고, 실제 작업은 위쪽 _node_* 메서드에서 수행한다.
         def generate_node(state: dict[str, Any]) -> dict[str, Any]:
             step = self._node_generate_sql(state)
             return self._apply_step(state, step)
 
+        # migration graph에서 MIG_SQL을 실행하고 실패 시 retry 판단에 필요한 state를 남긴다.
         def execute_node(state: dict[str, Any]) -> dict[str, Any]:
             step = self._node_execute_sql(state)
             next_state = self._apply_step(state, step)
@@ -522,11 +538,12 @@ class NewType10CMigOneJobPocExecutor(Component):
                 next_state.update({"status": "EXECUTED", "error_type": "", "failure_status": ""})
             return next_state
 
+        # migration graph에서 VERIFY_SQL을 실행하고 검증 결과를 state에 반영한다.
         def verify_node(state: dict[str, Any]) -> dict[str, Any]:
             step = self._node_verify(state)
             return self._apply_step(state, step)
 
-        # Save the failed attempt and prepare the next retry attempt state.
+        # 실패한 시도 정보를 저장하고 다음 재시도 state를 준비한다.
         def retry_prepare_node(state: dict[str, Any]) -> dict[str, Any]:
             attempt = self._attempt_result_from_state(state, ok=False)
             retry_count = int(state.get("db_attempts") or 1)
@@ -558,6 +575,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                 "failure_status": attempt["status"],
             }
 
+        # graph 최종 상태를 DB와 Langflow payload에 반영하는 종료 노드다.
         def finalize_node(state: dict[str, Any]) -> dict[str, Any]:
             attempts = list(state.get("attempts") or [])
             if state.get("current_steps"):
@@ -571,7 +589,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                 "stage_sql": self._stage_sql_from_state(state, final_status),
             }
 
-        # Route to the next LangGraph node based on current state and retry budget.
+        # 현재 state와 남은 retry 횟수를 기준으로 다음 노드를 결정한다.
         def should_continue(state: dict[str, Any]) -> str:
             if state.get("status") == "PASS":
                 return "finalize"
@@ -583,6 +601,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                 return "generate"
             return "execute"
 
+        # retry 준비 후 다음 attempt에서 SQL 생성 단계로 돌아갈지 결정한다.
         def after_retry_prepare(state: dict[str, Any]) -> str:
             return "execute" if state.get("failure_status") == "FAIL-TRUNCATE" else "generate"
 
@@ -603,7 +622,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             **context,
             "db_attempts": 1,
             "db_config": db_config,
-            # max_retry counts retries after the first run, so max attempts is max_retry + 1.
+            # max_retry는 최초 실행 이후의 재시도 횟수이므로 전체 시도 횟수는 max_retry + 1이다.
             "max_attempts": max_retry + 1,
             "current_steps": [],
             "attempts": [],
@@ -617,8 +636,9 @@ class NewType10CMigOneJobPocExecutor(Component):
         }
         return dict(graph.invoke(initial_state))
 
+    # 각 graph node 결과를 공통 state 구조에 병합한다. 12C도 유사한 state 누적 패턴을 쓴다.
     def _apply_step(self, state: dict[str, Any], step: dict[str, Any]) -> dict[str, Any]:
-        """Merge one LangGraph node result into state and write its workflow log."""
+        """LangGraph node 결과를 state에 병합하고 workflow 로그를 남긴다."""
         outputs = dict(step.get("outputs") or {})
         next_state = {
             **state,
@@ -668,9 +688,10 @@ class NewType10CMigOneJobPocExecutor(Component):
         return next_state
 
     # ##############################
-    # SQL prompt generation
+    # SQL 프롬프트 생성
     # ##############################
 
+    # DDL/매핑/RAG 힌트/재시도 오류를 합쳐 LLM이 migration SQL 쌍을 만들도록 호출한다.
     def _generate_migration_sqls(self, context: dict[str, Any], *, verify_only: bool) -> tuple[str, str, str]:
         prompt_template = MIGRATION_PROMPT_TEMPLATE
         from_table = self._source_table_prompt_value(context)
@@ -693,8 +714,8 @@ class NewType10CMigOneJobPocExecutor(Component):
         last_sql = str(context.get("last_sql") or "").strip()
         is_verify_retry = context.get("failure_status") == "FAIL-TEST"
         if verify_only:
-            # For verification retry, keep migration_sql and regenerate only verification_sql.
-            # The same preservation rule is used when user-edited MIG_SQL only needs verification_sql.
+            # 검증 SQL만 실패한 재시도에서는 MIG_SQL은 유지하고 VERIFY_SQL만 다시 생성한다.
+            # 사용자가 MIG_SQL만 보정한 경우에도 같은 기준으로 VERIFY_SQL만 생성한다.
             mode_title = "Verification retry mode" if is_verify_retry else "Verification-only mode"
             existing_mig_sql = str(context.get('current_migration_sql') or context.get('migration_sql') or '')
             prompt += (
@@ -729,6 +750,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             used_model,
         )
 
+    # FR_TABLE 값이 물리 테이블인지 복합 SELECT인지 판단해 프롬프트용 source 표현으로 만든다.
     def _source_table_prompt_value(self, context: dict[str, Any]) -> str:
         raw_from = str(context.get("fr_table") or "").strip()
         map_type = str(context.get("map_type") or "").strip().upper()
@@ -741,56 +763,42 @@ class NewType10CMigOneJobPocExecutor(Component):
             return f"({self._qualify_source_tables_in_sql(stripped, dict(context.get('db_config') or {}))})"
         return self._qualify_source_tables_in_sql(stripped, dict(context.get("db_config") or {}))
 
+    # Milvus에서 이전에 확정된 migration Correct SQL 예시를 찾아 현재 프롬프트 힌트로 만든다.
     def _migration_correct_sql_hints(self, metadata: dict[str, Any], map_id: int) -> str:
-        """Return at most Correct SQL Top K confirmed migration examples; retrieval failure is non-fatal."""
-        try:
-            fr_table = str(metadata.get("fr_table") or "").strip()
-            to_table = str(metadata.get("to_table") or "").strip()
-            condition = str(metadata.get("condition") or "").strip()
-            mig_sql = str(metadata.get("saved_migration_sql") or "").strip()
-            query_text = "\n".join((f"FR_TABLE: {fr_table}", f"TO_TABLE: {to_table}", f"CONDITION: {condition}", f"MIG_SQL: {mig_sql}"))
-            vector = self._embed_rag_text(query_text)
-            rows = self._migration_milvus_client().search(
-                collection_name=self._migration_rag_config()["collection"],
-                data=[vector],
-                anns_field="dense_vector",
-                filter='is_active == true and mig_sql != "" and verify_sql != ""',
-                limit=self._positive_int(getattr(self, "correct_sql_top_k", None), 1),
-                output_fields=["map_id", "fr_table", "to_table", "condition", "mig_sql", "verify_sql", "user_edited", "status"],
-                search_params={"metric_type": "COSINE"},
-            )
-            lines: list[str] = []
-            for hit in (rows[0] if rows else []):
-                entity = self._milvus_entity(hit)
-                score = self._milvus_score(hit)
-                reference_map_id = str(entity.get("map_id") or "-")
-                comparison_sql = "\n".join(
-                    [
-                        "[작업 대상 SQL]",
-                        query_text,
-                        "",
-                        "[검색된 참고 SQL]",
-                        str(entity.get("mig_sql") or ""),
-                    ]
-                )
-                lines.extend((
-                    f"- REFERENCE_MAP_ID={reference_map_id} | SCORE={round(score, 6)} | FR_TABLE={entity.get('fr_table') or ''} | TO_TABLE={entity.get('to_table') or ''}",
-                    f"  CONDITION: {entity.get('condition') or ''}",
-                    f"  MIG_SQL: {entity.get('mig_sql') or ''}",
-                    f"  VERIFY_SQL: {entity.get('verify_sql') or ''}",
-                ))
-                logging.getLogger("smartmigrate.workflow").info(
-                    "Migration Correct SQL hint loaded",
-                    extra={"workflow_log": [map_id, "DB_MIGRATION", "CORRECT_SQL_HINT", "INFO", "LOAD_MIGRATION_HINT", "PASS", 0, f"collection={self._migration_rag_config()['collection']}, reference_map_id={reference_map_id}, score={round(score, 6)}"]},
-                )
-            return "\n".join(lines) if lines else "- (no matching user-edited migration SQL)"
-        except Exception as exc:
+        """확정된 migration Correct SQL 예시를 Top K만 조회한다."""
+        fr_table = str(metadata.get("fr_table") or "").strip()
+        to_table = str(metadata.get("to_table") or "").strip()
+        condition = str(metadata.get("condition") or "").strip()
+        mig_sql = str(metadata.get("saved_migration_sql") or "").strip()
+        query_text = "\n".join((f"FR_TABLE: {fr_table}", f"TO_TABLE: {to_table}", f"CONDITION: {condition}", f"MIG_SQL: {mig_sql}"))
+        vector = self._embed_rag_text(query_text)
+        rows = self._migration_milvus_client().search(
+            collection_name=self._migration_rag_config()["collection"],
+            data=[vector],
+            anns_field="dense_vector",
+            filter='is_active == true and mig_sql != "" and verify_sql != ""',
+            limit=self._positive_int(getattr(self, "correct_sql_top_k", None), 1),
+            output_fields=["map_id", "fr_table", "to_table", "condition", "mig_sql", "verify_sql", "user_edited", "status"],
+            search_params={"metric_type": "COSINE"},
+        )
+        lines: list[str] = []
+        for hit in (rows[0] if rows else []):
+            entity = self._milvus_entity(hit)
+            score = self._milvus_score(hit)
+            reference_map_id = str(entity.get("map_id") or "-")
+            lines.extend((
+                f"- REFERENCE_MAP_ID={reference_map_id} | SCORE={round(score, 6)} | FR_TABLE={entity.get('fr_table') or ''} | TO_TABLE={entity.get('to_table') or ''}",
+                f"  CONDITION: {entity.get('condition') or ''}",
+                f"  MIG_SQL: {entity.get('mig_sql') or ''}",
+                f"  VERIFY_SQL: {entity.get('verify_sql') or ''}",
+            ))
             logging.getLogger("smartmigrate.workflow").info(
-                f"Migration Correct SQL hint skipped: {type(exc).__name__}: {exc}",
-                extra={"workflow_log": [map_id, "DB_MIGRATION", "CORRECT_SQL_HINT", "INFO", "LOAD_MIGRATION_HINT", "SKIP", 0]},
+                "Migration Correct SQL hint loaded",
+                extra={"workflow_log": [map_id, "DB_MIGRATION", "CORRECT_SQL_HINT", "INFO", "LOAD_MIGRATION_HINT", "PASS", 0, f"collection={self._migration_rag_config()['collection']}, reference_map_id={reference_map_id}, score={round(score, 6)}"]},
             )
-            return "- (no matching user-edited migration SQL)"
+        return "\n".join(lines) if lines else "- (no matching user-edited migration SQL)"
 
+    # migration Correct SQL 검색에 필요한 embedding/Milvus 설정을 모은다. 12C의 RAG 설정 헬퍼와 구조가 같다.
     def _migration_rag_config(self) -> dict[str, str | int]:
         return {
             "base_url": str(getattr(self, "rag_embed_base_url", "") or os.getenv("RAG_EMBED_BASE_URL") or "").strip(),
@@ -800,6 +808,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             "collection": self._clean_collection_name(getattr(self, "correct_sql_migration_collection_name", "") or os.getenv("MILVUS_CORRECT_SQL_MIGRATION_COLLECTION") or "SM_CORRECT_SQL_MIGRATION"),
         }
 
+    # Correct SQL 힌트 검색용 query text를 embedding vector로 변환한다. 12C도 embedding 기반 검색을 사용한다.
     def _embed_rag_text(self, text: str) -> list[float]:
         config = self._migration_rag_config()
         base_url = str(config["base_url"]).rstrip("/")
@@ -817,6 +826,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             raise ValueError("invalid embedding response")
         return [float(value) for value in values]
 
+    # migration Correct SQL collection에 접근할 Milvus client를 생성한다.
     def _migration_milvus_client(self) -> Any:
         from pymilvus import MilvusClient
         config = self._migration_rag_config()
@@ -828,11 +838,13 @@ class NewType10CMigOneJobPocExecutor(Component):
             raise ValueError("Milvus migration Correct SQL settings are incomplete")
         return MilvusClient(uri=uri, user=username, password=password, db_name=db_name, timeout=10)
 
+    # Milvus hit 객체에서 payload/entity dict를 추출한다. 12C/15C의 Milvus hit 처리와 같은 계열이다.
     def _milvus_entity(self, hit: Any) -> dict[str, Any]:
         if isinstance(hit, dict):
             return dict(hit.get("entity") or hit.get("fields") or hit)
         return dict(getattr(hit, "entity", None) or getattr(hit, "fields", None) or {})
 
+    # Milvus hit의 distance/score 값을 float로 통일한다. 12C/15C도 같은 점수 정규화를 사용한다.
     def _milvus_score(self, hit: Any) -> float:
         value = hit.get("distance", hit.get("score", 0.0)) if isinstance(hit, dict) else getattr(hit, "distance", getattr(hit, "score", 0.0))
         try:
@@ -840,12 +852,14 @@ class NewType10CMigOneJobPocExecutor(Component):
         except (TypeError, ValueError):
             return 0.0
 
+    # Milvus collection 이름을 공백 없는 유효 문자열로 정리한다. 12C도 동일한 목적의 헬퍼가 있다.
     def _clean_collection_name(self, value: Any) -> str:
         clean = str(value or "").strip()
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", clean):
             raise ValueError(f"Invalid Milvus collection name: {clean}")
         return clean
 
+    # 컬럼 매핑 목록을 migration 프롬프트에 넣을 사람이 읽기 쉬운 텍스트로 바꾼다.
     def _mapping_info(self, details: list[dict[str, Any]]) -> str:
         lines = []
         for item in details:
@@ -855,6 +869,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                 lines.append(f"  - {fr_col} -> {to_col}")
         return "\n".join(lines) if lines else "  (no column mappings found)"
 
+    # source/target DDL 정보를 한 프롬프트 블록으로 묶어 LLM이 구조 차이를 볼 수 있게 한다.
     def _ddl_info_block(self, context: dict[str, Any], from_table: str, to_table: str) -> str:
         parts: list[str] = []
         source_ddl = context.get("source_ddl") or []
@@ -890,6 +905,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             )
         return "\n\n".join(parts)
 
+    # Oracle metadata row를 컬럼명/타입/nullable 형식의 DDL 요약 텍스트로 렌더링한다.
     def _format_ddl_rows(self, rows: list[dict[str, Any]]) -> str:
         if not rows:
             return "  (no DDL rows found)"
@@ -908,6 +924,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             lines.append(f"{str(row.get('column_name') or ''):<30} {type_text:<25} {str(row.get('nullable') or '')}")
         return "\n".join(lines)
 
+    # 같은 target table의 PASS 이력이 있는지 확인해 최초 적재인지 append 검증인지 판단한다.
     def _is_first_target_run(self, context: dict[str, Any]) -> bool:
         db_config = dict(context.get("db_config") or {})
         map_id = self._to_int(context.get("map_id"))
@@ -933,11 +950,12 @@ class NewType10CMigOneJobPocExecutor(Component):
         return int(row[0] if row else 0) == 0
 
     # ##############################
-    # Workflow logging
+    # Workflow 로그 기록
     # ##############################
 
+    # graph node 실행 결과를 workflow 로그에 남긴다.
     def _log_step(self, state: dict[str, Any], step: dict[str, Any]) -> None:
-        """Write one graph step to NEXT_MIG_LOG through the workflow logger."""
+        """graph step 하나를 workflow logger를 통해 NEXT_MIG_LOG에 남긴다."""
         map_id = self._to_int(state.get("map_id"))
         if map_id is None:
             return
@@ -962,8 +980,9 @@ class NewType10CMigOneJobPocExecutor(Component):
             extra={"workflow_log": [map_id, "DB_MIGRATION", log_type, log_level, stage, status, retry_count, stage_sql]},
         )
 
+    # 실패/성공 단계별로 로그에 함께 저장할 SQL 본문을 고른다.
     def _log_sql_for_step(self, state: dict[str, Any], step: dict[str, Any]) -> str:
-        """Choose the SQL snippet that matches the step being logged."""
+        """로그를 남기는 step에 맞는 SQL 본문을 선택한다."""
         stage = str(step.get("stage") or "")
         if stage == "VERIFY":
             return str(state.get("current_v_sql") or "")
@@ -971,8 +990,9 @@ class NewType10CMigOneJobPocExecutor(Component):
             return str(state.get("current_v_sql") or "")
         return self._stage_sql_from_state(state, str(step.get("status") or ""))
 
+    # retry router가 왜 다음 경로를 선택했는지 status 메시지로 설명한다.
     def _route_note(self, state: dict[str, Any], step: dict[str, Any]) -> str:
-        """Describe the graph route selected after a step result."""
+        """step 결과 이후 선택된 graph route를 설명한다."""
         if step.get("stage") == "GENERATE_SQL" and state.get("status") == "EXECUTED":
             return "; route=verify_retry_generate_only,next=VERIFY"
         if step.get("stage") == "GENERATE_SQL" and step.get("status") == "PASS":
@@ -989,8 +1009,9 @@ class NewType10CMigOneJobPocExecutor(Component):
             return "; route=finalize"
         return ""
 
+    # 현재 state를 attempt history에 저장할 표준 dict로 변환한다. 12C도 attempt 누적 구조를 사용한다.
     def _attempt_result_from_state(self, state: dict[str, Any], *, ok: bool) -> dict[str, Any]:
-        """Create the public attempt record from the current graph state."""
+        """현재 graph state에서 외부에 노출할 attempt 기록을 만든다."""
         steps = list(state.get("current_steps") or [])
         failed_step = next((step for step in reversed(steps) if step.get("status") != "PASS"), None)
         status = "PASS" if ok else self._failure_status_from_state(state)
@@ -1013,8 +1034,9 @@ class NewType10CMigOneJobPocExecutor(Component):
             "steps": steps,
         }
 
+    # 실패한 단계에 맞춰 NEXT_MIG_INFO에 저장할 최종 status를 결정한다.
     def _failure_status_from_state(self, state: dict[str, Any]) -> str:
-        """Resolve the final business failure status for a graph state."""
+        """graph state에 맞는 최종 업무 실패 status를 결정한다."""
         explicit = str(state.get("failure_status") or "").strip()
         if explicit:
             return explicit
@@ -1024,19 +1046,21 @@ class NewType10CMigOneJobPocExecutor(Component):
         failed_step = next((step for step in reversed(steps) if step.get("status") != "PASS"), None)
         return str((failed_step or {}).get("status") or "FAIL-INSERT")
 
+    # 최종 실패 단계와 연결된 SQL을 찾아 로그/결과 payload에 싣는다.
     def _stage_sql_from_state(self, state: dict[str, Any], failure_status: str | None = None) -> str:
-        """Return the SQL text most relevant to the given failure status."""
+        """실패 status와 가장 관련 있는 SQL 본문을 반환한다."""
         status = failure_status or self._failure_status_from_state(state)
         if status == "FAIL-TEST":
             return str(state.get("current_v_sql") or "")
         return str(state.get("current_migration_sql") or state.get("last_sql") or "")
 
     # ##############################
-    # Migration DB state
+    # DB Migration 상태 저장
     # ##############################
 
+    # PRIOR_MAP_ID가 있으면 선행 migration 상태를 확인해 실행 가능 여부를 반환한다.
     def _dependency_status(self, db_config: dict[str, Any], map_id: int, prior_map_id: Any) -> str:
-        """Return READY only when the prior migration job has passed."""
+        """선행 migration 작업이 PASS일 때만 READY를 반환한다."""
         prior = self._to_int(prior_map_id)
         if prior is None or prior <= 0:
             return "READY"
@@ -1050,13 +1074,15 @@ class NewType10CMigOneJobPocExecutor(Component):
         status = str(row[0] or "").strip().upper()
         return "READY" if status == "PASS" else (status or "PENDING")
 
+    # 선행 작업 status가 후속 작업을 SKIP 처리해야 하는 실패 계열인지 판단한다.
     def _is_dependency_failure_status(self, status: str) -> bool:
-        """Return True when a prior job has reached a terminal failure/skip status."""
+        """선행 작업이 종료성 실패/skip 상태인지 판단한다."""
         value = str(status or "").strip().upper()
         return value.startswith("FAIL-") or value.startswith("SKIP-")
 
+    # migration row를 RUNNING으로 표시하고 실행 시작 상태를 DB에 반영한다.
     def _mark_running(self, db_config: dict[str, Any], map_id: int) -> None:
-        """Mark a migration job as running in NEXT_MIG_INFO."""
+        """NEXT_MIG_INFO의 migration 작업을 RUNNING으로 표시한다."""
         table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
         with self._connect(db_config) as conn:
             cur = conn.cursor()
@@ -1072,8 +1098,9 @@ class NewType10CMigOneJobPocExecutor(Component):
             )
             conn.commit()
 
+    # migration 최종 상태, 소요 시간, retry count를 NEXT_MIG_INFO에 저장한다.
     def _update_job(self, db_config: dict[str, Any], map_id: int, status: str, elapsed: int, retry_count: int) -> None:
-        """Persist the current job status, elapsed time, and retry count."""
+        """현재 작업 status, elapsed time, retry count를 저장한다."""
         table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
         with self._connect(db_config) as conn:
             cur = conn.cursor()
@@ -1090,19 +1117,19 @@ class NewType10CMigOneJobPocExecutor(Component):
             )
             conn.commit()
 
+    # 생성된 MIG_SQL/VERIFY_SQL을 NEXT_MIG_INFO에 저장한다.
     def _save_generated_sql(self, db_config: dict[str, Any], map_id: int, migration_sql: str, verification_sql: str) -> None:
-        """Persist generated MIG_SQL and VERIFY_SQL immediately after generation."""
+        """생성 직후 MIG_SQL과 VERIFY_SQL을 저장한다."""
         table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
-        columns = self._table_columns(db_config, table)
         set_clauses: list[str] = []
         params: dict[str, Any] = {"map_id": map_id}
-        if "MIG_SQL" in columns and str(migration_sql or "").strip():
+        if str(migration_sql or "").strip():
             params["mig_sql"] = migration_sql
             set_clauses.append("MIG_SQL = :mig_sql")
-        if "VERIFY_SQL" in columns and str(verification_sql or "").strip():
+        if str(verification_sql or "").strip():
             params["verify_sql"] = verification_sql
             set_clauses.append("VERIFY_SQL = :verify_sql")
-        if "UPD_TS" in columns and set_clauses:
+        if set_clauses:
             set_clauses.append("UPD_TS = CURRENT_TIMESTAMP")
         if not set_clauses:
             return
@@ -1118,8 +1145,9 @@ class NewType10CMigOneJobPocExecutor(Component):
             )
             conn.commit()
 
+    # MAP_ID 기준으로 migration row와 관련 컬럼 매핑/DDL 입력 데이터를 로드한다.
     def _load_mig_metadata(self, db_config: dict[str, Any], map_id: int | None) -> dict[str, Any]:
-        """Load NEXT_MIG_INFO and NEXT_MIG_INFO_DTL metadata for one map id."""
+        """MAP_ID 한 건의 NEXT_MIG_INFO와 NEXT_MIG_INFO_DTL metadata를 로드한다."""
         if map_id is None:
             raise ValueError("FETCH_DDL requires map_id")
         info_table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
@@ -1181,8 +1209,8 @@ class NewType10CMigOneJobPocExecutor(Component):
             "saved_migration_sql": saved_migration_sql,
             "saved_verification_sql": saved_verification_sql,
             "user_edited": user_edited,
-            # Only these values are user-owned across retries. SQL generated during
-            # this run must be regenerated on the next retry instead of reused.
+            # 재시도 사이에서 사용자가 직접 보정한 값만 유지한다.
+            # 이번 실행 중 생성된 SQL은 다음 재시도에서 새 오류 맥락을 반영해 다시 생성한다.
             "initial_user_edited_migration_sql": saved_migration_sql if str(user_edited or "").strip().upper() == "Y" else "",
             "initial_user_edited_verification_sql": saved_verification_sql if str(user_edited or "").strip().upper() == "Y" else "",
             "mapping_details": details,
@@ -1190,8 +1218,9 @@ class NewType10CMigOneJobPocExecutor(Component):
             "target_ddl": self._fetch_table_columns(db_config, self._qualify_to_table(to_table, db_config)) if self._looks_like_table(to_table) else [],
         }
 
+    # FR_TABLE 또는 복합 SELECT에서 source DDL prompt 재료를 수집한다.
     def _source_ddl_for_prompt(self, db_config: dict[str, Any], map_type: str, fr_table: str) -> dict[str, list[dict[str, Any]]] | list[dict[str, Any]]:
-        """Return source DDL in the same shape as src for simple and COMPLEX mappings."""
+        """simple/COMPLEX 매핑에 맞춰 source DDL을 prompt 입력 구조로 반환한다."""
         source_tables = self._source_tables_for_ddl(map_type, fr_table)
         if not source_tables:
             return []
@@ -1207,8 +1236,9 @@ class NewType10CMigOneJobPocExecutor(Component):
                 source_ddl[source_table] = rows
         return source_ddl
 
+    # 복합 SQL에서 DDL 조회가 필요한 물리 source table 목록을 추출한다.
     def _source_tables_for_ddl(self, map_type: str, fr_table: str) -> list[str]:
-        """Return source physical tables used for DDL lookup."""
+        """DDL 조회에 사용할 source 물리 테이블 목록을 반환한다."""
         text = str(fr_table or "").strip()
         if not text:
             return []
@@ -1216,8 +1246,9 @@ class NewType10CMigOneJobPocExecutor(Component):
             return self._extract_query_table_names(text)
         return [text]
 
+    # SELECT/WITH 문에서 FROM/JOIN 뒤의 테이블명을 프롬프트 DDL 조회용으로 뽑는다.
     def _extract_query_table_names(self, sql_text: str) -> list[str]:
-        """Extract physical table names from a COMPLEX FR_TABLE SQL expression."""
+        """COMPLEX FR_TABLE SQL 표현식에서 물리 테이블명을 추출한다."""
         text = re.sub(r"/\*.*?\*/", " ", sql_text or "", flags=re.DOTALL)
         text = re.sub(r"--[^\n]*", " ", text)
         tables: list[str] = []
@@ -1236,8 +1267,9 @@ class NewType10CMigOneJobPocExecutor(Component):
                 tables.append(table_name)
         return tables
 
+    # Oracle metadata에서 실제 테이블 컬럼 정보를 조회해 LLM prompt DDL로 사용한다.
     def _fetch_table_columns(self, db_config: dict[str, Any], table: str) -> list[dict[str, Any]]:
-        """Read Oracle column metadata for a source or target table."""
+        """source 또는 target table의 Oracle 컬럼 metadata를 조회한다."""
         owner, table_name = self._split_table_owner_and_name(table)
         if owner:
             sql = """
@@ -1272,9 +1304,10 @@ class NewType10CMigOneJobPocExecutor(Component):
             ]
 
     # ##############################
-    # SQL execution
+    # SQL 실행
     # ##############################
 
+    # migration 실행 전 target table을 비우기 위한 TRUNCATE를 수행한다.
     def _truncate_table(self, db_config: dict[str, Any], table_name: str) -> None:
         if not self._looks_like_table(table_name):
             raise ValueError(f"TRUNCATE target is not a safe table identifier: {table_name}")
@@ -1286,6 +1319,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         except Exception as exc:
             raise ValueError(f"TRUNCATE failed: {exc}") from exc
 
+    # 여러 문장으로 된 MIG_SQL script를 분리해 순서대로 실행한다.
     def _execute_sql_script(self, db_config: dict[str, Any], sql_script: str) -> int:
         statements = self._split_sql_script(sql_script)
         if not statements:
@@ -1307,6 +1341,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             conn.commit()
         return total_rowcount
 
+    # VERIFY_SQL 결과를 실행하고 첫 컬럼 값 기준으로 성공 여부와 상세 row를 반환한다.
     def _execute_verification(self, db_config: dict[str, Any], sql_script: str) -> tuple[bool, str, list[list[Any]]]:
         statements = self._split_sql_script(sql_script)
         if not statements:
@@ -1330,15 +1365,18 @@ class NewType10CMigOneJobPocExecutor(Component):
                     return False, f"Mismatch found: {self._json_safe_value(row)}", json_rows
         return True, "All Verification Passed", json_rows
 
+    # 세미콜론과 PL/SQL 블록 경계를 고려해 SQL script를 실행 단위로 나눈다.
     def _split_sql_script(self, script: str) -> list[str]:
         if not script:
             return []
         return [part.strip() for part in re.split(r"^\s*/\s*$", script, flags=re.M) if part.strip()]
 
+    # 실행 전 SQL 문장의 wrapper/불필요한 구분자를 제거한다.
     def _clean_sql_statement(self, statement: str) -> str:
         cleaned = self._strip_sql_comments(str(statement or "").strip())
         return re.sub(r"[;/]\s*$", "", cleaned).strip()
 
+    # SQL 실행/분리 전에 주석을 제거해 parser 오판을 줄인다. 12C의 SQL 정리 계열과 목적이 같다.
     def _strip_sql_comments(self, sql: str) -> str:
         """Remove SQL comments before sending statements to Oracle.
 
@@ -1382,6 +1420,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             index += 1
         return "\n".join(line.rstrip() for line in "".join(out).splitlines()).strip()
 
+    # 검증 결과 값이 숫자 0인지 안전하게 판단한다.
     def _is_zero(self, value: Any) -> bool:
         value = self._lob_to_str(value)
         if value == "":
@@ -1392,9 +1431,10 @@ class NewType10CMigOneJobPocExecutor(Component):
             return str(value).strip() == "0"
 
     # ##############################
-    # LLM client
+    # LLM 호출
     # ##############################
 
+    # 설정된 provider/model 후보로 LLM을 호출하고 JSON 응답을 반환한다.
     def _call_llm_json(self, *, system_anthropic: str, system_openai: str, prompt: str, config: dict[str, Any] | None = None) -> tuple[str, str]:
         self._load_env_files()
         llm_config = dict(config or {})
@@ -1448,6 +1488,7 @@ class NewType10CMigOneJobPocExecutor(Component):
 
         raise ValueError(f"LLM call failed for all model candidates: {last_error}")
 
+    # OpenAI 호환 HTTP API로 chat completion을 호출한다. 12C/15C/17C와 같은 호출 방식이다.
     def _call_openai_compatible_http(
         self,
         *,
@@ -1506,6 +1547,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             raise ValueError(f"LLM returned empty message content. url={url} model={model} response_preview={preview}")
         return content
 
+    # base_url/model 힌트로 사용할 LLM provider를 결정한다.
     def _resolve_llm_provider(self, llm_config: dict[str, Any], base_url: str | None, model: str) -> str:
         provider = str(llm_config.get("llm_provider") or os.getenv("LLM_PROVIDER") or "").strip().lower()
         if provider:
@@ -1518,6 +1560,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             return "anthropic"
         return "openai"
 
+    # primary model과 fallback model 문자열을 순서 있는 후보 목록으로 만든다.
     def _model_candidates(self, primary_model: str, llm_config: dict[str, Any]) -> list[str]:
         fallback_raw = str(
             llm_config.get("llm_fallback_models")
@@ -1535,6 +1578,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                 seen.add(key)
         return deduped
 
+    # 다음 fallback model로 넘어가도 되는 LLM 오류인지 판단한다.
     def _is_model_fallback_error(self, message: str) -> bool:
         text = str(message or "").lower()
         patterns = (
@@ -1572,6 +1616,7 @@ class NewType10CMigOneJobPocExecutor(Component):
         )
         return any(pattern in text for pattern in patterns)
 
+    # Anthropic 응답 객체에서 텍스트 content만 추출한다.
     def _extract_anthropic_text(self, response: Any) -> str:
         chunks: list[str] = []
         for item in getattr(response, "content", []) or []:
@@ -1580,6 +1625,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                 chunks.append(str(text))
         return "".join(chunks).strip()
 
+    # 작업 디렉터리 주변의 .env 파일을 읽어 누락된 환경변수를 보강한다.
     def _load_env_files(self) -> None:
         for path in (Path.cwd() / ".env", Path.cwd() / "src" / ".env"):
             if not path.exists():
@@ -1593,6 +1639,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                 if key and key not in os.environ:
                     os.environ[key] = value.strip().strip('"').strip("'")
 
+    # LLM 응답에서 JSON 객체 본문만 찾아 dict로 파싱한다. 12C도 같은 패턴을 사용한다.
     def _extract_json_object(self, text: str) -> dict[str, Any]:
         raw = str(text or "").strip()
         if not raw:
@@ -1613,15 +1660,17 @@ class NewType10CMigOneJobPocExecutor(Component):
             raise ValueError("LLM response JSON must be an object")
         return parsed
 
+    # LLM이 문자열/list/dict로 돌려준 SQL 값을 하나의 SQL 텍스트로 합친다.
     def _merge_sql_value(self, value: Any) -> str:
         if isinstance(value, list):
             return "\n/\n".join(str(item.get("sql") if isinstance(item, dict) else item) for item in value)
         return str(value or "").strip()
 
     # ##############################
-    # Result payloads
+    # 결과 payload 구성
     # ##############################
 
+    # Langflow/DataFrame payload에 넣을 수 있도록 값을 JSON 안전 형태로 바꾼다.
     def _json_safe_value(self, value: Any) -> Any:
         if isinstance(value, tuple):
             return [self._json_safe_value(item) for item in value]
@@ -1634,8 +1683,9 @@ class NewType10CMigOneJobPocExecutor(Component):
             except (TypeError, ValueError):
                 return text
 
+    # 현재 graph context에서 결과 payload에 노출할 SQL 산출물만 모은다.
     def _attempt_outputs(self, context: dict[str, Any]) -> dict[str, Any]:
-        """Collect the key output values recorded for one attempt."""
+        """attempt 한 번에 기록할 주요 output 값을 모은다."""
         return {
             "migration_sql": context.get("migration_sql", ""),
             "verification_sql": context.get("verification_sql", ""),
@@ -1643,6 +1693,7 @@ class NewType10CMigOneJobPocExecutor(Component):
             "diff_count": context.get("diff_count", 0),
         }
 
+    # migration 결과에 포함할 generated_sqls 목록을 표준 구조로 만든다.
     def _generated_sql_list(self, existing: Any, map_id: Any, migration_sql: Any, verification_sql: Any) -> list[dict[str, Any]]:
         result = [dict(item) for item in existing or [] if isinstance(item, dict)]
         for column, value in (("MIG_SQL", migration_sql), ("VERIFY_SQL", verification_sql)):
@@ -1658,6 +1709,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                 )
         return self._dedupe_generated_sql_list(result)
 
+    # 같은 stage/name의 generated SQL 항목이 중복되지 않게 정리한다. 12C에도 같은 목적의 헬퍼가 있다.
     def _dedupe_generated_sql_list(self, values: list[dict[str, Any]]) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         seen: set[tuple[str, str, str, str]] = set()
@@ -1674,8 +1726,9 @@ class NewType10CMigOneJobPocExecutor(Component):
             result.append(item)
         return result
 
+    # 10C 실행 결과를 dashboard/후속 노드가 읽는 표준 payload로 만든다.
     def _result(self, job: dict[str, Any], *, ok: bool, status: str, elapsed: int, attempts: list[dict[str, Any]]) -> dict[str, Any]:
-        """Build the Langflow output payload for the current job."""
+        """현재 작업의 Langflow output payload를 만든다."""
         total = int(job.get("total_jobs") or 1)
         index = int(job.get("job_index") or 1)
         should_abort_full_workflow = bool(job.get("full_workflow")) and self._job_name(job) == "migration" and not ok
@@ -1699,11 +1752,12 @@ class NewType10CMigOneJobPocExecutor(Component):
         }
 
     # ##############################
-    # Configuration and parsing
+    # 설정 및 입력 파싱
     # ##############################
 
+    # Langflow 입력이 Data/Message/dict/JSON 문자열 중 무엇이든 dict로 통일한다. 12C도 같은 입력 정규화를 사용한다.
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
-        """Parse a Langflow Data, Message, dict, or JSON string payload."""
+        """Langflow Data, Message, dict, JSON 문자열 payload를 dict로 파싱한다."""
         if isinstance(raw, Data):
             return dict(raw.data or {})
         if isinstance(raw, Message):
@@ -1719,31 +1773,35 @@ class NewType10CMigOneJobPocExecutor(Component):
             raise ValueError("job_item must be a JSON object")
         return parsed
 
+    # 숫자 입력을 양의 정수로 변환하고 실패하면 기본값을 사용한다. 12C도 같은 유틸을 둔다.
     def _positive_int(self, value: Any, default: int) -> int:
-        """Convert a value to a positive int, or return default."""
+        """값을 양의 정수로 변환하고 실패하면 기본값을 반환한다."""
         try:
             parsed = int(value)
             return parsed if parsed > 0 else default
         except (TypeError, ValueError):
             return default
 
+    # Langflow Secret 입력을 일반 문자열로 꺼낸다. 12C/15C/17C도 같은 처리 흐름을 쓴다.
     def _secret_to_str(self, value: Any) -> str:
-        """Convert a Langflow secret value into plain text."""
+        """Langflow Secret 값을 일반 문자열로 변환한다."""
         if value is None:
             return ""
         if hasattr(value, "get_secret_value"):
             return str(value.get_secret_value())
         return str(value)
 
+    # MAP_ID처럼 정수여야 하는 값을 int 또는 None으로 변환한다.
     def _to_int(self, value: Any) -> int | None:
-        """Convert a value to int, returning None for invalid input."""
+        """값을 int로 변환하고 유효하지 않으면 None을 반환한다."""
         try:
             return int(value)
         except (TypeError, ValueError):
             return None
 
+    # payload와 Langflow 입력에서 Oracle 접속/schema 설정을 모은다.
     def _db_config(self, job: dict[str, Any]) -> dict[str, Any]:
-        """Extract the Oracle connection settings from the job payload."""
+        """job payload에서 Oracle 접속 설정을 추출한다."""
         item_config = dict(job.get("db_config") or {})
         return {
             "db_host": str(item_config.get("db_host") or "").strip(),
@@ -1756,8 +1814,9 @@ class NewType10CMigOneJobPocExecutor(Component):
             "target_schema": str(getattr(self, "target_schema", "") or item_config.get("target_schema") or os.getenv("ORACLE_SCHEMA_TGT") or "").strip(),
         }
 
+    # payload와 Langflow 입력에서 LLM 호출 설정을 모은다.
     def _llm_config(self, job: dict[str, Any]) -> dict[str, Any]:
-        """Extract LLM settings from Langflow inputs, falling back to the job payload."""
+        """Langflow 입력을 우선하고 job payload를 fallback으로 사용해 LLM 설정을 추출한다."""
         item_config = dict(job.get("llm_config") or {})
         return {
             "llm_base_url": str(getattr(self, "llm_base_url", "") or item_config.get("llm_base_url") or "").strip(),
@@ -1770,11 +1829,12 @@ class NewType10CMigOneJobPocExecutor(Component):
         }
 
     # ##############################
-    # DB and identifier helpers
+    # DB 및 identifier helper
     # ##############################
 
+    # 값이 Oracle 물리 테이블명 형태인지 간단히 판단한다.
     def _looks_like_table(self, value: Any) -> bool:
-        """Return True when a value is a plain Oracle table identifier."""
+        """값이 단순 Oracle table identifier이면 True를 반환한다."""
         text = str(value or "").strip()
         if not text:
             return False
@@ -1783,14 +1843,16 @@ class NewType10CMigOneJobPocExecutor(Component):
         parts = text.split(".")
         return all(re.fullmatch(r"[A-Za-z][A-Za-z0-9_$#]*", part.strip()) for part in parts)
 
+    # Oracle LOB 값을 연결 종료 전에 문자열로 읽는다. 12C/15C/17C도 같은 이유로 사용한다.
     def _lob_to_str(self, value: Any) -> str:
-        """Convert Oracle LOB and nullable values to strings."""
+        """Oracle LOB 및 nullable 값을 문자열로 변환한다."""
         if value is not None and hasattr(value, "read"):
             return str(value.read())
         return "" if value is None else str(value)
 
+    # Oracle metadata에서 컬럼명 set을 조회한다. 저장 우회가 아니라 실행/DDL 판단용이다.
     def _table_columns(self, db_config: dict[str, Any], table: str) -> set[str]:
-        """Return the upper-case column names available on a table."""
+        """테이블의 컬럼명을 대문자 set으로 반환한다."""
         owner, table_name = self._split_table_owner_and_name(table)
         if owner:
             sql = "SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS WHERE OWNER = :1 AND TABLE_NAME = :2"
@@ -1803,8 +1865,9 @@ class NewType10CMigOneJobPocExecutor(Component):
             cur.execute(sql, params)
             return {str(row[0]).upper() for row in cur.fetchall()}
 
+    # Oracle metadata에서 컬럼 타입을 조회해 CLOB 처리나 비교식을 결정한다.
     def _table_column_types(self, db_config: dict[str, Any], table: str) -> dict[str, str]:
-        """Return available upper-case column names and Oracle data types."""
+        """테이블의 대문자 컬럼명과 Oracle data type을 반환한다."""
         owner, table_name = self._split_table_owner_and_name(table)
         if owner:
             sql = "SELECT COLUMN_NAME, DATA_TYPE FROM ALL_TAB_COLUMNS WHERE OWNER = :1 AND TABLE_NAME = :2"
@@ -1818,8 +1881,9 @@ class NewType10CMigOneJobPocExecutor(Component):
             return {str(row[0]).upper(): str(row[1]).upper() for row in cur.fetchall()}
 
     @contextmanager
+    # Oracle 연결을 열고 사용 후 정리하는 context manager다. 12C 계열 실행기와 같은 패턴이다.
     def _connect(self, db_config: dict[str, Any]):
-        """Open and close an Oracle database connection."""
+        """Oracle DB 연결을 열고 닫는다."""
         import oracledb
 
         dsn = oracledb.makedsn(
@@ -1843,63 +1907,15 @@ class NewType10CMigOneJobPocExecutor(Component):
         finally:
             conn.close()
 
+    # system_schema가 명시된 테이블명을 schema-qualified 이름으로 만든다.
     def _qualify(self, table_name: str, schema: Any) -> str:
-        """Return a validated schema-qualified Oracle table name."""
+        """검증된 schema-qualified Oracle table 이름을 반환한다."""
         value = str(table_name or "").strip().upper()
         if "." in value:
             return value
         clean_table = self._clean_identifier(value)
         clean_schema = str(schema or "").strip().upper()
-        if clean_schema:
-            clean_schema = self._clean_identifier(clean_schema)
-            return f"{clean_schema}.{clean_table}"
-        return clean_table
-
-    def _qualify_fr_table(self, table_name: str, db_config: dict[str, Any]) -> str:
-        """Return source schema-qualified physical table name."""
-        return self._qualify_domain_table(table_name, db_config.get("source_schema") or "")
-
-    def _qualify_to_table(self, table_name: str, db_config: dict[str, Any]) -> str:
-        """Return target schema-qualified physical table name."""
-        return self._qualify_domain_table(table_name, db_config.get("target_schema") or "")
-
-    def _qualify_domain_table(self, table_name: str, schema: Any) -> str:
-        value = str(table_name or "").strip()
-        if not value or "." in value or not self._looks_like_table(value):
-            return value
-        return self._qualify(value, schema)
-
-    def _qualify_source_tables_in_sql(self, sql_text: str, db_config: dict[str, Any]) -> str:
-        schema = str(db_config.get("source_schema") or "").strip().upper()
-        if not schema:
-            return sql_text
-        clean_schema = self._clean_identifier(schema)
-
-        def replace(match: re.Match[str]) -> str:
-            keyword = match.group(1)
-            table_name = match.group(2)
-            if "." in table_name or not self._looks_like_table(table_name):
-                return match.group(0)
-            return f"{keyword} {clean_schema}.{self._clean_identifier(table_name)}"
-
-        return re.sub(
-            r"\b(FROM|JOIN)\s+([A-Z_][A-Z0-9_$#]*)\b",
-            replace,
-            sql_text,
-            flags=re.I,
-        )
-
-    def _clean_identifier(self, value: str) -> str:
-        """Validate and normalize an Oracle identifier."""
-        clean = str(value or "").strip().upper()
-        if not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", clean):
-            raise ValueError(f"Invalid identifier: {clean}")
-        return clean
-
-    def _split_table_owner_and_name(self, table: str) -> tuple[str | None, str]:
-        """Split an optional owner-qualified table identifier."""
-        value = str(table or "").strip().upper()
-        if "." in value:
-            owner, name = value.split(".", 1)
-            return owner, name
-        return None, value
+        if not clean_schema:
+            raise ValueError("System Schema를 입력해야 합니다.")
+        clean_schema = self._clean_identifier(clean_schema)
+        return f"{clean_schema}.{clean_table}"

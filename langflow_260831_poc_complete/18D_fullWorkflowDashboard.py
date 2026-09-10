@@ -38,6 +38,7 @@ class NewType18DFullWorkflowDashboard(Component):
         Output(display_name="Loop Result", name="loop_result", method="build_loop_result", types=["Data"]),
     ]
 
+    # Langflow output 진입점에서 입력을 검증하고 이 컴포넌트의 주요 실행 흐름을 시작한다.
     def build_message(self) -> Message:
         logging.getLogger("smartmigrate.workflow").info("before build_message", extra={"workflow_log": [0, "WORKFLOW", "18D_FULL_DASH", "INFO", "BUILD_MESSAGE", "START", 0]})
         try:
@@ -50,6 +51,7 @@ class NewType18DFullWorkflowDashboard(Component):
             logging.getLogger("smartmigrate.workflow").error(f"error build_message: {exc}", extra={"workflow_log": [0, "WORKFLOW", "18D_FULL_DASH", "ERROR", "BUILD_MESSAGE", "ERROR", 0]})
             raise
 
+    # iteration dashboard가 사용할 loop 결과 payload를 Data로 반환한다.
     def build_loop_result(self) -> Data:
         logging.getLogger("smartmigrate.workflow").info("before build_loop_result", extra={"workflow_log": [0, "WORKFLOW", "18D_FULL_DASH", "INFO", "BUILD_LOOP_RESULT", "START", 0]})
         try:
@@ -62,6 +64,7 @@ class NewType18DFullWorkflowDashboard(Component):
             logging.getLogger("smartmigrate.workflow").error(f"error build_loop_result: {exc}", extra={"workflow_log": [0, "WORKFLOW", "18D_FULL_DASH", "ERROR", "BUILD_LOOP_RESULT", "ERROR", 0]})
             raise
 
+    # 현재 result payload를 dashboard 표시와 후속 노드용 구조로 재구성한다.
     def _build(self) -> dict[str, Any]:
         cached = getattr(self, "_cached_payload", None)
         if cached is not None:
@@ -74,6 +77,7 @@ class NewType18DFullWorkflowDashboard(Component):
         self._cached_payload = payload
         return payload
 
+    # 후속 dashboard와 loop가 읽는 표준 결과 payload를 만든다.
     def _iteration_payload(self, result: dict[str, Any]) -> dict[str, Any]:
         route = str(result.get("planned_job_route") or result.get("job_route") or "").upper()
         loop_result = {
@@ -93,6 +97,7 @@ class NewType18DFullWorkflowDashboard(Component):
         }
         return payload
 
+    # 후속 dashboard와 loop가 읽는 표준 결과 payload를 만든다.
     def _final_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         results = [self._data_dict(item) for item in payload.get("aggregated_results") or []]
         summary = payload.get("workflow_summary") or self._summary(results, payload.get("workflow_plan_counts") or {})
@@ -106,6 +111,7 @@ class NewType18DFullWorkflowDashboard(Component):
             "final": True,
         }
 
+    # 조회/실행 결과를 사용자가 읽을 Markdown 메시지로 만든다.
     def _iteration_message_v2(self, result: dict[str, Any], route: str) -> str:
         label = ROUTE_LABELS.get(route, route or "Unknown")
         index = int(result.get("job_index") or 1)
@@ -137,6 +143,7 @@ class NewType18DFullWorkflowDashboard(Component):
             lines.extend(["", f"메시지: {message}"])
         return "\n".join(lines)
 
+    # 조회/실행 결과를 사용자가 읽을 Markdown 메시지로 만든다.
     def _iteration_message(self, result: dict[str, Any], route: str) -> str:
         label = ROUTE_LABELS.get(route, route or "Unknown")
         index = int(result.get("job_index") or 1)
@@ -167,6 +174,7 @@ class NewType18DFullWorkflowDashboard(Component):
             lines.extend(["", f"메시지: {message}"])
         return "\n".join(lines)
 
+    # 조회/실행 결과를 사용자가 읽을 Markdown 메시지로 만든다.
     def _iteration_message_v3(self, result: dict[str, Any], route: str) -> str:
         label = ROUTE_LABELS.get(route, route or "Unknown")
         index = int(result.get("job_index") or 1)
@@ -185,6 +193,7 @@ class NewType18DFullWorkflowDashboard(Component):
             lines.extend(["", f"- 최종 오류 로그: {self._cell(error_log)}"])
         return "\n".join(lines)
 
+    # 조회/실행 결과를 사용자가 읽을 Markdown 메시지로 만든다.
     def _final_message(self, summary: dict[str, Any], results: list[dict[str, Any]], payload: dict[str, Any]) -> str:
         total = sum(int((summary.get(route) or {}).get("planned") or 0) for route in ROUTE_ORDER)
         completed = sum(int((summary.get(route) or {}).get("completed") or 0) for route in ROUTE_ORDER)
@@ -237,6 +246,7 @@ class NewType18DFullWorkflowDashboard(Component):
         lines.extend(["", "전체 작업 루프가 완료되었습니다."])
         return "\n".join(lines)
 
+    # 단계별 실행 결과를 dashboard용 집계 구조로 요약한다.
     def _stage_activity(self, results: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
         activity = {
             "db_migration": {"executed": 0, "pass": 0, "fail": 0, "skipped": 0},
@@ -256,6 +266,7 @@ class NewType18DFullWorkflowDashboard(Component):
                 self._add_activity(activity[stage_name], bool(stage.get("ok")), self._is_stage_skipped(stage, result, stage_name))
         return activity
 
+    # full workflow 결과 집계 bucket에 실행/성공/실패/skip count를 반영한다.
     def _add_activity(self, bucket: dict[str, int], ok: bool, skipped: bool) -> None:
         bucket["executed"] += 1
         if skipped:
@@ -265,6 +276,7 @@ class NewType18DFullWorkflowDashboard(Component):
         else:
             bucket["fail"] += 1
 
+    # 상태나 값이 특정 조건에 해당하는지 boolean으로 판단한다.
     def _is_stage_skipped(self, stage: dict[str, Any], result: dict[str, Any], stage_name: str) -> bool:
         if stage.get("skipped"):
             return True
@@ -274,6 +286,7 @@ class NewType18DFullWorkflowDashboard(Component):
             return True
         return False
 
+    # 단계별 실행 결과를 dashboard용 집계 구조로 요약한다.
     def _summary(self, results: list[dict[str, Any]], plan_counts: dict[str, Any]) -> dict[str, Any]:
         summary: dict[str, dict[str, int]] = {
             route: {"planned": self._num(plan_counts.get(route)), "completed": 0, "pass": 0, "fail": 0, "skipped": 0}
@@ -294,6 +307,7 @@ class NewType18DFullWorkflowDashboard(Component):
                 summary[route]["fail"] += 1
         return summary
 
+    # 상태나 값이 특정 조건에 해당하는지 boolean으로 판단한다.
     def _is_success(self, route: str, result: dict[str, Any]) -> bool:
         stages = result.get("stages") or {}
         status = str(result.get("status") or "").upper()
@@ -310,13 +324,16 @@ class NewType18DFullWorkflowDashboard(Component):
             return bool(stage.get("ok")) or status == "FORMATTED"
         return bool(result.get("ok"))
 
+    # 상태나 값이 특정 조건에 해당하는지 boolean으로 판단한다.
     def _is_failure_status(self, status: Any) -> bool:
         value = str(status or "").strip().upper()
         return value.startswith("FAIL-")
 
+    # 상태나 값이 특정 조건에 해당하는지 boolean으로 판단한다.
     def _is_skipped(self, result: dict[str, Any]) -> bool:
         return bool(result.get("workflow_blocked") or result.get("not_runnable") or result.get("skipped") or result.get("tuning_skipped") or result.get("formatting_skipped"))
 
+    # route별 결과 payload에서 한 줄 요약 문구를 만든다.
     def _result_summary(self, result: dict[str, Any], route: str) -> str:
         if route == "MIG" or str(result.get("job_name") or "").strip().lower() == "migration":
             return self._status_phrase("DB Migration", result.get("status"), result.get("ok"), self._is_skipped(result))
@@ -339,6 +356,7 @@ class NewType18DFullWorkflowDashboard(Component):
             return " -> ".join(parts)
         return self._status_phrase(ROUTE_LABELS.get(route, route or "Unknown"), result.get("status"), result.get("ok"), self._is_skipped(result))
 
+    # status/ok/skip 값을 사람이 읽는 상태 문장으로 변환한다.
     def _status_phrase(self, label: str, status: Any, ok: Any, skipped: bool = False) -> str:
         if skipped:
             return f"{label} 건너뜀"
@@ -353,6 +371,7 @@ class NewType18DFullWorkflowDashboard(Component):
             return f"{label} {value}"
         return f"{label} 결과 없음"
 
+    # 최종 dashboard에 표시할 실패 로그/메시지 요약을 추출한다.
     def _final_error_log(self, result: dict[str, Any]) -> str:
         if not self._has_failure(result):
             return ""
@@ -368,6 +387,7 @@ class NewType18DFullWorkflowDashboard(Component):
                     return f"{stage} {status}: {value}"
         return str(result.get("message") or result.get("error") or result.get("status") or "").strip()
 
+    # 결과 payload에 실패로 판단할 status나 attempt가 있는지 확인한다.
     def _has_failure(self, result: dict[str, Any]) -> bool:
         if self._is_failure_status(result.get("status")) or result.get("error"):
             return True
@@ -376,6 +396,7 @@ class NewType18DFullWorkflowDashboard(Component):
                 return True
         return False
 
+    # 단계별 payload에 흩어진 attempt 목록을 하나로 모은다.
     def _all_attempts(self, result: dict[str, Any]) -> list[dict[str, Any]]:
         attempts = [item for item in list(result.get("attempts") or []) if isinstance(item, dict)]
         for stage in (result.get("stages") or {}).values():
@@ -383,15 +404,18 @@ class NewType18DFullWorkflowDashboard(Component):
                 attempts.extend(item for item in list(stage.get("attempts") or []) if isinstance(item, dict))
         return attempts
 
+    # attempt 기록이 실패 상태인지 판단한다.
     def _attempt_failed(self, attempt: dict[str, Any]) -> bool:
         status = str(attempt.get("status") or attempt.get("failed_stage_status") or "").strip().upper()
         return self._is_failure_status(status) or bool(attempt.get("error"))
 
+    # dashboard에 표시할 작업/단계 label을 route와 status 기준으로 만든다.
     def _job_label(self, result: dict[str, Any]) -> str:
         route = str(result.get("planned_job_route") or result.get("job_route") or "").upper()
         label = self._job_type_label(result, route)
         return f"{label} {self._job_identifier(result, route)}"
 
+    # dashboard에서 작업 한 건을 구분할 MAP_ID 또는 SPACE_NM/SQL_ID 표시값을 만든다.
     def _job_identifier(self, result: dict[str, Any], route: str) -> str:
         map_id = self._first_value(result, "map_id", "MAP_ID")
         space_nm = self._first_value(result, "space_nm", "SPACE_NM", "spaceName")
@@ -404,6 +428,7 @@ class NewType18DFullWorkflowDashboard(Component):
         ]
         return ", ".join(parts)
 
+    # 여러 후보 key 중 먼저 채워진 값을 찾아 반환한다.
     def _first_value(self, data: dict[str, Any], *keys: str) -> Any:
         candidates = [data]
         for nested_key in ("payload", "job", "job_item", "input", "source", "original", "loop_result"):
@@ -417,12 +442,14 @@ class NewType18DFullWorkflowDashboard(Component):
                     return value
         return None
 
+    # 상태나 값이 특정 조건에 해당하는지 boolean으로 판단한다.
     def _is_blank_value(self, value: Any) -> bool:
         if value is None:
             return True
         text = str(value).strip()
         return text == "" or text.lower() in {"nan", "none", "null", "nat"}
 
+    # dashboard에 표시할 작업/단계 label을 route와 status 기준으로 만든다.
     def _job_type_label(self, result: dict[str, Any], route: str) -> str:
         job_name = str(result.get("job_name") or "").strip().lower()
         if job_name == "migration":
@@ -435,6 +462,7 @@ class NewType18DFullWorkflowDashboard(Component):
             return "SQL Formatting"
         return ROUTE_LABELS.get(route, route or "Unknown")
 
+    # dashboard에 표시할 작업/단계 label을 route와 status 기준으로 만든다.
     def _stage_label(self, stage: str) -> str:
         return {
             "db_migration": "DB Migration",
@@ -443,6 +471,7 @@ class NewType18DFullWorkflowDashboard(Component):
             "formatting": "SQL Formatting",
         }.get(str(stage or ""), str(stage or "-"))
 
+    # result payload나 attempt history에서 표시할 retry 횟수를 계산한다.
     def _retry_count(self, result: dict[str, Any]) -> int:
         max_attempt = 1
         attempts = list(result.get("attempts") or [])
@@ -455,24 +484,29 @@ class NewType18DFullWorkflowDashboard(Component):
                 continue
         return max(max_attempt - 1, 0)
 
+    # dashboard 표시용 숫자/텍스트를 짧고 안전한 문자열로 변환한다.
     def _bar(self, value: int, total: int, width: int = 20) -> str:
         clamped = max(0, min(value, total))
         filled = round(clamped / total * width) if total > 0 else 0
         percent = (clamped / total * 100) if total > 0 else 0.0
         return f"{'■' * filled}{'□' * (width - filled)} `{percent:.1f}%`"
 
+    # dashboard 표시용 숫자/텍스트를 짧고 안전한 문자열로 변환한다.
     def _pct(self, value: int, total: int) -> str:
         return f"{(value / total * 100):.1f}%" if total else "-"
 
+    # dashboard 표시용 숫자/텍스트를 짧고 안전한 문자열로 변환한다.
     def _cell(self, value: Any) -> str:
         return str(value or "-").replace("|", "/")
 
+    # 문자/숫자/NULL 값을 정수로 변환하고 실패하면 안전한 기본값을 반환한다.
     def _num(self, value: Any) -> int:
         try:
             return int(value or 0)
         except (TypeError, ValueError):
             return 0
 
+    # Loop item/Data/Message 값을 dict로 변환해 공통 처리한다.
     def _data_dict(self, item: Any) -> dict[str, Any]:
         if isinstance(item, Data):
             return dict(item.data or {})
@@ -485,6 +519,7 @@ class NewType18DFullWorkflowDashboard(Component):
             return dict(item)
         return {"value": item}
 
+    # Langflow 입력이 Data/Message/dict/JSON 문자열 중 무엇이든 dict로 통일한다.
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):
             return dict(raw.data or {})
@@ -498,6 +533,7 @@ class NewType18DFullWorkflowDashboard(Component):
             raise ValueError("payload_json must be a JSON object")
         return parsed
 
+    # 문자열 입력에서 JSON 객체를 파싱해 후속 로직이 쓰는 dict로 만든다.
     def _parse_json_text(self, text: Any) -> dict[str, Any] | None:
         value = str(text or "").strip()
         if value.startswith("```"):

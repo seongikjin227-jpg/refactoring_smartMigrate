@@ -36,6 +36,7 @@ class NewType18SWorkflowStartLogger(Component):
 
     outputs = [Output(display_name="Jobs Table", name="jobs_table", method="build_jobs_table")]
 
+    # Langflow output 진입점에서 입력을 검증하고 이 컴포넌트의 주요 실행 흐름을 시작한다.
     def build_jobs_table(self) -> DataFrame:
         logging.getLogger("smartmigrate.workflow").info("before build_jobs_table", extra={"workflow_log": [0, "WORKFLOW", "18S_START_LOG", "INFO", "BUILD_JOBS_TABLE", "START", 0]})
         try:
@@ -73,10 +74,12 @@ class NewType18SWorkflowStartLogger(Component):
             logging.getLogger("smartmigrate.workflow").error(f"error build_jobs_table: {exc}", extra={"workflow_log": [0, "WORKFLOW", "18S_START_LOG", "ERROR", "BUILD_JOBS_TABLE", "ERROR", 0]})
             raise
 
+    # workflow 시작 marker 로그를 route별로 남긴다.
     def _insert_start_markers(self, message: str, plan_counts: dict[str, int]) -> list[str]:
         logging.getLogger("smartmigrate.workflow").info(message, extra={"workflow_log": [0, "WORKFLOW", "18S_START_LOG", "INFO", "WORKFLOW_START", "RUNNING", 0]})
         return []
 
+    # full workflow 시작 시점과 예정 작업 수를 사용자 메시지로 만든다.
     def _start_message(self, started_at: str, total_jobs: int, plan_counts: dict[str, int]) -> str:
         return (
             "Full Workflow start marker; "
@@ -84,6 +87,7 @@ class NewType18SWorkflowStartLogger(Component):
             f"plan_counts={json.dumps(plan_counts, ensure_ascii=False, sort_keys=True)}"
         )
 
+    # loop 입력 목록을 route별 예정 작업 수로 집계한다.
     def _plan_counts(self, rows: list[dict[str, Any]]) -> dict[str, int]:
         counts = {route: 0 for route in ROUTE_ORDER}
         for row in rows:
@@ -92,6 +96,7 @@ class NewType18SWorkflowStartLogger(Component):
                 counts[route] += 1
         return counts
 
+    # 입력 payload나 job item이 실행 가능한 구조인지 검증한다.
     def _validate_data(self, data: Any) -> list[Data]:
         if isinstance(data, Message):
             data = convert_to_data(data, auto_parse=False)
@@ -107,6 +112,7 @@ class NewType18SWorkflowStartLogger(Component):
             data = normalized
         return validate_data_input(data)
 
+    # Loop item/Data/Message 값을 dict로 변환해 공통 처리한다.
     def _data_dict(self, item: Any) -> dict[str, Any]:
         if isinstance(item, Data):
             return dict(item.data or {})
@@ -114,5 +120,6 @@ class NewType18SWorkflowStartLogger(Component):
             return dict(item)
         return {"value": item}
 
+    # dashboard 표시용 숫자/텍스트를 짧고 안전한 문자열로 변환한다.
     def _fit_text(self, value: Any, limit: int) -> str:
         return str(value or "")[:limit]

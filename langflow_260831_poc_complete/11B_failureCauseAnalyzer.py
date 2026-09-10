@@ -29,12 +29,12 @@ class NewType11BFailureCauseAnalyzer(Component):
 
     inputs = [
         DataInput(name="loop_done", display_name="Loop Done", required=True),
-        StrInput(name="db_host", display_name="DB Host", required=False),
+        StrInput(name="db_host", display_name="DB Host", required=True),
         IntInput(name="db_port", display_name="DB Port", value=1521, required=False),
-        StrInput(name="db_service_name", display_name="DB Service Name", required=False),
-        StrInput(name="db_username", display_name="DB Username", required=False),
-        SecretStrInput(name="db_password", display_name="DB Password", required=False),
-        StrInput(name="system_schema", display_name="System Schema", required=False),
+        StrInput(name="db_service_name", display_name="DB Service Name", required=True),
+        StrInput(name="db_username", display_name="DB Username", required=True),
+        SecretStrInput(name="db_password", display_name="DB Password", required=True),
+        StrInput(name="system_schema", display_name="System Schema", required=True),
         StrInput(name="llm_base_url", display_name="LLM Base URL", required=False),
         SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=False),
         StrInput(name="llm_model", display_name="LLM Model", value="GLM-5.1", required=False),
@@ -48,6 +48,7 @@ class NewType11BFailureCauseAnalyzer(Component):
     SUCCESS_STATUSES = {"PASS", "SUCCESS", "PASS-CONVERSION", "PASS-TUNING", "SUCCESS-TEST", "FORMATTED"}
     SKIP_STATUSES = {"PASS-THROUGH", "SKIP", "SKIPPED", "PREREQUISITE_REQUIRED"}
 
+    # workflow 로그와 최종 상태를 모아 실패 원인 분석 메시지를 생성한다.
     def build_analysis(self) -> Message:
         logging.getLogger("smartmigrate.workflow").info("before build_analysis", extra={"workflow_log": [0, "WORKFLOW", "11B_FAIL_CAUSE", "INFO", "BUILD_ANALYSIS", "START", 0]})
         try:
@@ -83,6 +84,7 @@ class NewType11BFailureCauseAnalyzer(Component):
             logging.getLogger("smartmigrate.workflow").error(f"error build_analysis: {exc}", extra={"workflow_log": [0, "WORKFLOW", "11B_FAIL_CAUSE", "ERROR", "BUILD_ANALYSIS", "ERROR", 0]})
             raise
 
+    # 최근 workflow 실행 기준으로 실패/skip 로그와 최종 status를 모아 분석 근거를 만든다.
     def _collect_failure_evidence(self, payload: dict[str, Any]) -> dict[str, Any]:
         mig_started_at = self._latest_mig_start_at()
         sql_started_at = self._latest_sql_start_at()
@@ -108,12 +110,9 @@ class NewType11BFailureCauseAnalyzer(Component):
             "skipped_due_to_prior_fail": [self._llm_failure_item(item) for item in current_skipped],
         }
 
+    # 최근 workflow routing 시작 시각을 찾아 로그 분석 범위의 시작점으로 사용한다.
     def _latest_mig_start_at(self) -> Any:
         table = self._qualify("NEXT_MIG_LOG")
-        column_types = self._available_column_types("NEXT_MIG_LOG")
-        columns = set(column_types)
-        if not {"CREATED_AT", "LOG_TYPE", "STEP_NAME"}.issubset(columns):
-            return None
         with self._connect() as conn:
             cur = conn.cursor()
             cur.execute(
@@ -129,16 +128,13 @@ class NewType11BFailureCauseAnalyzer(Component):
             row = cur.fetchone()
         return row[0] if row else None
 
+    # SQL 단계 로그 분석도 같은 workflow 시작 시각을 기준으로 맞춘다.
     def _latest_sql_start_at(self) -> Any:
         return self._latest_mig_start_at()
 
+    # 조회 조건을 조립해 DB에서 요청된 정보를 가져온다.
     def _query_mig_logs(self, started_at: Any, *, fail_only: bool = False, skip_only: bool = False) -> list[dict[str, Any]]:
         if started_at is None:
-            return []
-        column_types = self._available_column_types("NEXT_MIG_LOG")
-        columns = set(column_types)
-        required = {"CREATED_AT", "STATUS", "MIG_KIND"}
-        if not required.issubset(columns):
             return []
         table = self._qualify("NEXT_MIG_LOG")
         conditions = ["UPPER(TRIM(NVL(MIG_KIND, ''))) = 'DB_MIGRATION'"]
@@ -152,14 +148,14 @@ class NewType11BFailureCauseAnalyzer(Component):
             conditions.append("UPPER(TRIM(NVL(STATUS, ''))) LIKE 'SKIP-%'")
         select_sql = f"""
             SELECT
-                {self._select_expr(columns, "CREATED_AT")},
-                {self._select_expr(columns, "MAP_ID")},
-                {self._select_expr(columns, "STATUS")},
-                {self._select_expr(columns, "LOG_TYPE")},
-                {self._select_expr(columns, "LOG_LEVEL")},
-                {self._select_expr(columns, "STEP_NAME")},
-                {self._text_preview_expr(column_types, "MESSAGE", 100)},
-                {self._select_expr(columns, "RETRY_COUNT")}
+                CREATED_AT,
+                MAP_ID,
+                STATUS,
+                LOG_TYPE,
+                LOG_LEVEL,
+                STEP_NAME,
+                DBMS_LOB.SUBSTR(MESSAGE, 100, 1) AS MESSAGE,
+                RETRY_COUNT
               FROM {table}
              WHERE {" AND ".join(conditions)}
              ORDER BY CREATED_AT DESC
@@ -186,6 +182,7 @@ class NewType11BFailureCauseAnalyzer(Component):
                 )
         return logs
 
+    # LLM 분석 prompt에 넣을 실패 로그 항목을 간결한 dict로 변환한다.
     def _llm_failure_item(self, item: dict[str, Any]) -> dict[str, Any]:
         out: dict[str, Any] = {
             "domain": item.get("domain") or "",
@@ -203,13 +200,9 @@ class NewType11BFailureCauseAnalyzer(Component):
             out["sql_id"] = item.get("sql_id") or ""
         return out
 
+    # 조회 조건을 조립해 DB에서 요청된 정보를 가져온다.
     def _query_sql_logs(self, started_at: Any, *, fail_only: bool = False, skip_only: bool = False) -> list[dict[str, Any]]:
         if started_at is None:
-            return []
-        column_types = self._available_column_types("NEXT_MIG_LOG")
-        columns = set(column_types)
-        required = {"CREATED_AT", "STATUS", "MIG_KIND"}
-        if not required.issubset(columns):
             return []
         table = self._qualify("NEXT_MIG_LOG")
         conditions = ["UPPER(TRIM(NVL(MIG_KIND, ''))) IN ('SQL_CONVERSION', 'SQL_TUNING', 'SQL_FORMATTING')"]
@@ -223,15 +216,15 @@ class NewType11BFailureCauseAnalyzer(Component):
             conditions.append("UPPER(TRIM(NVL(STATUS, ''))) LIKE 'SKIP-%'")
         select_sql = f"""
             SELECT
-                {self._select_expr(columns, "CREATED_AT")},
-                {self._select_expr(columns, "MAP_ID")},
-                {self._select_expr(columns, "MIG_KIND")},
-                {self._select_expr(columns, "LOG_TYPE")},
-                {self._select_expr(columns, "STATUS")},
-                {self._select_expr(columns, "LOG_LEVEL")},
-                {self._select_expr(columns, "RETRY_COUNT")},
-                {self._select_expr(columns, "STEP_NAME")},
-                {self._text_preview_expr(column_types, "MESSAGE", 100)}
+                CREATED_AT,
+                MAP_ID,
+                MIG_KIND,
+                LOG_TYPE,
+                STATUS,
+                LOG_LEVEL,
+                RETRY_COUNT,
+                STEP_NAME,
+                DBMS_LOB.SUBSTR(MESSAGE, 100, 1) AS MESSAGE
               FROM {table}
              WHERE {" AND ".join(conditions)}
              ORDER BY CREATED_AT DESC
@@ -262,6 +255,7 @@ class NewType11BFailureCauseAnalyzer(Component):
                 )
         return logs
 
+    # SQL 로그의 복합 식별자에서 SPACE_NM과 SQL_ID를 분리한다.
     def _split_sql_map_id(self, value: Any) -> tuple[str, str]:
         text = self._to_text(value)
         if " / " not in text:
@@ -269,6 +263,7 @@ class NewType11BFailureCauseAnalyzer(Component):
         sql_id, space_nm = text.split(" / ", 1)
         return sql_id.strip(), space_nm.strip()
 
+    # 동일 작업의 여러 로그 중 retry와 시각 기준으로 가장 최신 이벤트만 남긴다.
     def _latest_per_job(self, logs: list[dict[str, Any]], retry_field: str) -> list[dict[str, Any]]:
         selected: dict[str, dict[str, Any]] = {}
         for log in logs:
@@ -280,6 +275,7 @@ class NewType11BFailureCauseAnalyzer(Component):
                 selected[key] = log
         return sorted(selected.values(), key=lambda item: (str(item.get("domain") or ""), str(item.get("job_key") or "")))
 
+    # 상태나 값이 특정 조건에 해당하는지 boolean으로 판단한다.
     def _is_newer_retry(self, left: dict[str, Any], right: dict[str, Any], retry_field: str) -> bool:
         left_retry = self._num(left.get(retry_field))
         right_retry = self._num(right.get(retry_field))
@@ -287,6 +283,7 @@ class NewType11BFailureCauseAnalyzer(Component):
             return left_retry > right_retry
         return str(left.get("created_at") or "") > str(right.get("created_at") or "")
 
+    # SQL 로그의 kind/stage 값을 conversion/tuning/formatting domain으로 분류한다.
     def _sql_domain(self, sql_kind: Any, stage_name: Any) -> str:
         text = f"{sql_kind or ''} {stage_name or ''}".upper()
         if "FORMAT" in text:
@@ -295,27 +292,23 @@ class NewType11BFailureCauseAnalyzer(Component):
             return "SQL_TUNING"
         return "SQL_CONVERSION"
 
+    # 관리 테이블의 현재 최종 status를 모아 로그상 실패가 아직 유효한지 판단한다.
     def _collect_final_statuses(self) -> dict[str, dict[str, Any]]:
         statuses: dict[str, dict[str, Any]] = {}
         statuses.update(self._query_mig_final_statuses())
         statuses.update(self._query_sql_final_statuses())
         return statuses
 
+    # 조회 조건을 조립해 DB에서 요청된 정보를 가져온다.
     def _query_mig_final_statuses(self) -> dict[str, dict[str, Any]]:
-        column_types = self._available_column_types("NEXT_MIG_INFO")
-        columns = set(column_types)
-        if "STATUS" not in columns:
-            return {}
         table = self._qualify("NEXT_MIG_INFO")
-        map_expr = "MAP_ID" if "MAP_ID" in columns else "CAST(NULL AS VARCHAR2(100)) AS MAP_ID"
-        use_expr = "USE_YN" if "USE_YN" in columns else "'Y'"
         with self._connect() as conn:
             cur = conn.cursor()
             cur.execute(
                 f"""
-                SELECT {map_expr}, STATUS
+                SELECT MAP_ID, STATUS
                   FROM {table}
-                 WHERE UPPER(TRIM(NVL({use_expr}, 'Y'))) = 'Y'
+                 WHERE UPPER(TRIM(NVL(USE_YN, 'Y'))) = 'Y'
                 """
             )
             rows = cur.fetchall()
@@ -331,24 +324,21 @@ class NewType11BFailureCauseAnalyzer(Component):
             }
         return statuses
 
+    # 조회 조건을 조립해 DB에서 요청된 정보를 가져온다.
     def _query_sql_final_statuses(self) -> dict[str, dict[str, Any]]:
-        column_types = self._available_column_types("NEXT_SQL_INFO")
-        columns = set(column_types)
-        if not columns:
-            return {}
         table = self._qualify("NEXT_SQL_INFO")
-        select_sql = ", ".join(
-            [
-                self._select_expr(columns, "SPACE_NM"),
-                self._select_expr(columns, "SQL_ID"),
-                self._select_expr(columns, "STATUS_CONVERSION"),
-                self._select_expr(columns, "STATUS_TUNING"),
-                self._formatted_status_expr(columns),
-            ]
-        )
         with self._connect() as conn:
             cur = conn.cursor()
-            cur.execute(f"SELECT {select_sql} FROM {table}")
+            cur.execute(
+                f"""
+                SELECT SPACE_NM,
+                       SQL_ID,
+                       STATUS_CONVERSION,
+                       STATUS_TUNING,
+                       CASE WHEN FORMATTED_SQL IS NOT NULL THEN 'FORMATTED' ELSE NULL END AS STATUS_FORMATTING
+                  FROM {table}
+                """
+            )
             rows = cur.fetchall()
         statuses: dict[str, dict[str, Any]] = {}
         for row in rows:
@@ -372,6 +362,7 @@ class NewType11BFailureCauseAnalyzer(Component):
                 }
         return statuses
 
+    # 현재 최종 상태가 실패/skip이 아닌 과거 로그는 분석 대상에서 제외한다.
     def _filter_by_current_final_status(
         self,
         logs: list[dict[str, Any]],
@@ -392,6 +383,7 @@ class NewType11BFailureCauseAnalyzer(Component):
             filtered.append(enriched)
         return filtered
 
+    # 현재 최종 status 목록을 성공/실패/대기/skip 개수로 요약한다.
     def _final_status_summary(self, final_statuses: dict[str, dict[str, Any]]) -> dict[str, int]:
         summary = {"total": len(final_statuses), "success": 0, "fail": 0, "pending": 0, "skipped": 0, "unknown": 0}
         for item in final_statuses.values():
@@ -399,16 +391,13 @@ class NewType11BFailureCauseAnalyzer(Component):
             summary[cls] = summary.get(cls, 0) + 1
         return summary
 
-    def _formatted_status_expr(self, columns: set[str]) -> str:
-        if "FORMATTED_SQL" in columns:
-            return "CASE WHEN FORMATTED_SQL IS NOT NULL THEN 'FORMATTED' ELSE NULL END AS STATUS_FORMATTING"
-        return "CAST(NULL AS VARCHAR2(20)) AS STATUS_FORMATTING"
-
+    # FAIL 계열 status를 찾는 SQL 조건식을 만든다.
     def _failure_status_condition(self, column: str) -> str:
         clean = self._clean_identifier(column)
         normalized = f"UPPER(TRIM(NVL({clean}, '')))"
         return f"({normalized} IN ('FAIL', 'FAILED') OR {normalized} LIKE 'FAIL-%')"
 
+    # status 문자열을 success/fail/pending/skip/unknown 집계 class로 분류한다.
     def _status_class(self, status: Any) -> str:
         value = self._status(status)
         if not value:
@@ -421,6 +410,7 @@ class NewType11BFailureCauseAnalyzer(Component):
             return "skipped"
         return "unknown"
 
+    # 수집된 실패 근거를 LLM에 보내 원인 분석 답변을 생성한다.
     def _call_llm(self, evidence: dict[str, Any]) -> str:
         api_key = self._secret_to_str(getattr(self, "llm_api_key", None)).strip() or os.getenv("LLM_API_KEY") or os.getenv("OPEN_API_KEY") or ""
         model = str(getattr(self, "llm_model", "") or os.getenv("LLM_MODEL") or "GLM-5.1").strip()
@@ -459,6 +449,7 @@ class NewType11BFailureCauseAnalyzer(Component):
         answer = (((raw.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
         return answer or self._fallback_answer(evidence, "LLM returned an empty response.")
 
+    # 현재 workflow 기준으로 실패 근거가 없을 때의 완료 메시지를 만든다.
     def _no_failure_answer(self, evidence: dict[str, Any]) -> str:
         return self._render_no_failure_answer(evidence)
         summary = evidence.get("final_status_summary") or {}
@@ -478,6 +469,7 @@ class NewType11BFailureCauseAnalyzer(Component):
             f"- Workflow aborted: {evidence.get('workflow_aborted')}"
         )
 
+    # LLM 호출이 불가능할 때 로그 근거만으로 기본 실패 분석 답변을 만든다.
     def _fallback_answer(self, evidence: dict[str, Any], reason: str) -> str:
         lines = ["## Fail 원인 분석", "", f"LLM 분석을 생성하지 못했습니다: {reason}", ""]
         lines.append(f"- FAIL 작업 수: {len(evidence.get('failures') or [])}")
@@ -491,6 +483,7 @@ class NewType11BFailureCauseAnalyzer(Component):
             lines.append(f"- {item.get('domain')} {ident}: {item.get('status')} / {item.get('stage')} / {item.get('message')}")
         return "\n".join(lines)
 
+    # 실패가 없을 때 evidence 요약을 포함한 분석 완료 메시지를 만든다.
     def _render_no_failure_answer(self, evidence: dict[str, Any]) -> str:
         summary = evidence.get("final_status_summary") or {}
         return (
@@ -504,34 +497,8 @@ class NewType11BFailureCauseAnalyzer(Component):
             f"- Final unknown: {summary.get('unknown', 0)}"
         )
 
-    def _available_columns(self, table_name: str) -> set[str]:
-        return set(self._available_column_types(table_name))
-
-    def _available_column_types(self, table_name: str) -> dict[str, str]:
-        table = self._clean_identifier(table_name)
-        schema = str(self._db_config.get("system_schema") or "").strip().upper()
-        with self._connect() as conn:
-            cur = conn.cursor()
-            if schema:
-                cur.execute("SELECT COLUMN_NAME, DATA_TYPE FROM ALL_TAB_COLUMNS WHERE OWNER = :1 AND TABLE_NAME = :2", [schema, table])
-            else:
-                cur.execute("SELECT COLUMN_NAME, DATA_TYPE FROM USER_TAB_COLUMNS WHERE TABLE_NAME = :1", [table])
-            rows = cur.fetchall()
-        return {str(row[0]).upper(): str(row[1]).upper() for row in rows}
-
-    def _select_expr(self, columns: set[str], column: str) -> str:
-        clean = self._clean_identifier(column)
-        return clean if clean in columns else f"CAST(NULL AS VARCHAR2(4000)) AS {clean}"
-
-    def _text_preview_expr(self, column_types: dict[str, str], column: str, length: int) -> str:
-        clean = self._clean_identifier(column)
-        if clean not in column_types:
-            return f"CAST(NULL AS VARCHAR2({max(1, int(length))})) AS {clean}"
-        if column_types.get(clean) in {"CLOB", "NCLOB"}:
-            return f"DBMS_LOB.SUBSTR({clean}, {max(1, int(length))}, 1) AS {clean}"
-        return f"SUBSTR({clean}, 1, {max(1, int(length))}) AS {clean}"
-
     @contextmanager
+    # Oracle 연결을 열고 호출 구간이 끝나면 닫는 context manager다.
     def _connect(self):
         import oracledb
 
@@ -551,6 +518,7 @@ class NewType11BFailureCauseAnalyzer(Component):
         finally:
             conn.close()
 
+    # payload와 Langflow 입력에서 Oracle 접속 및 schema 설정을 모은다.
     def _db_config_from_inputs(self, payload: dict[str, Any]) -> dict[str, Any]:
         _ = payload
         return {
@@ -562,22 +530,28 @@ class NewType11BFailureCauseAnalyzer(Component):
             "system_schema": str(getattr(self, "system_schema", "") or "").strip(),
         }
 
+    # 필수 DB 접속 값이 없으면 DB 작업 전에 명확히 실패시킨다.
     def _require_db_config(self, db_config: dict[str, Any]) -> None:
         missing = [key for key in ("db_host", "db_service_name", "db_username") if not str(db_config.get(key) or "").strip()]
         if missing:
             raise ValueError(f"11B Failure Cause Analyzer is not connected to database settings: missing {', '.join(missing)}")
 
+    # system_schema가 명시된 테이블명을 schema-qualified 이름으로 만든다.
     def _qualify(self, table_name: str) -> str:
         table = self._clean_identifier(table_name)
         schema = str(self._db_config.get("system_schema") or "").strip().upper()
-        return f"{self._clean_identifier(schema)}.{table}" if schema else table
+        if not schema:
+            raise ValueError("System Schema를 입력해야 합니다.")
+        return f"{self._clean_identifier(schema)}.{table}"
 
+    # 동적 SQL identifier에 안전한 Oracle 문자만 허용한다.
     def _clean_identifier(self, value: str) -> str:
         clean = str(value or "").strip().upper()
         if not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", clean):
             raise ValueError(f"Invalid identifier: {clean}")
         return clean
 
+    # Langflow 입력이 Data/Message/dict/JSON 문자열 중 무엇이든 dict로 통일한다.
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):
             return dict(raw.data or {})
@@ -594,6 +568,7 @@ class NewType11BFailureCauseAnalyzer(Component):
             raise ValueError("loop_done must be a JSON object")
         return parsed
 
+    # LOB, NULL, 기타 값을 분석 prompt와 Markdown에 넣을 문자열로 변환한다.
     def _to_text(self, value: Any) -> str:
         if value is None:
             return ""
@@ -603,9 +578,11 @@ class NewType11BFailureCauseAnalyzer(Component):
             return value.decode("utf-8", errors="ignore")
         return str(value)
 
+    # 상태 비교가 흔들리지 않도록 문자열을 대문자 기준으로 정규화한다.
     def _status(self, value: Any) -> str:
         return self._to_text(value).strip().upper()
 
+    # payload나 로그에 넣을 값을 JSON 직렬화 가능한 형태로 정리한다.
     def _json_value(self, value: Any) -> Any:
         if value is None:
             return None
@@ -615,6 +592,7 @@ class NewType11BFailureCauseAnalyzer(Component):
             return value.decode("utf-8", errors="ignore")
         return value if isinstance(value, (str, int, float, bool)) else str(value)
 
+    # Langflow Secret 입력을 일반 문자열로 꺼내 client library 설정에 사용한다.
     def _secret_to_str(self, value: Any) -> str:
         if value is None:
             return ""
@@ -622,6 +600,7 @@ class NewType11BFailureCauseAnalyzer(Component):
             return str(value.get_secret_value())
         return str(value)
 
+    # 숫자 입력을 양의 정수로 변환하고 실패하면 기본값을 사용한다.
     def _positive_int(self, value: Any, default: int) -> int:
         try:
             parsed = int(value or 0)
@@ -629,12 +608,14 @@ class NewType11BFailureCauseAnalyzer(Component):
         except (TypeError, ValueError):
             return default
 
+    # 문자/숫자/NULL 값을 정수로 변환하고 실패하면 안전한 기본값을 반환한다.
     def _num(self, value: Any) -> int:
         try:
             return int(value or 0)
         except (TypeError, ValueError):
             return 0
 
+    # dashboard 표시용 숫자/텍스트를 짧고 안전한 문자열로 변환한다.
     def _clip(self, value: str, limit: int) -> str:
         text = str(value or "")
         if len(text) <= limit:

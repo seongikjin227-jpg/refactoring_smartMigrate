@@ -25,16 +25,17 @@ class NewType06GetRemainingJobs(Component):
 
     inputs = [
         DataInput(name="payload_json", display_name="Payload JSON", required=True),
-        StrInput(name="db_host", display_name="DB Host", required=False),
+        StrInput(name="db_host", display_name="DB Host", required=True),
         IntInput(name="db_port", display_name="DB Port", value=1521, required=False),
-        StrInput(name="db_service_name", display_name="DB Service Name", required=False),
-        StrInput(name="db_username", display_name="DB Username", required=False),
-        SecretStrInput(name="db_password", display_name="DB Password", required=False),
-        StrInput(name="system_schema", display_name="System Schema", required=False),
+        StrInput(name="db_service_name", display_name="DB Service Name", required=True),
+        StrInput(name="db_username", display_name="DB Username", required=True),
+        SecretStrInput(name="db_password", display_name="DB Password", required=True),
+        StrInput(name="system_schema", display_name="System Schema", required=True),
     ]
 
     outputs = [Output(display_name="Payload", name="payload", method="get_remaining_jobs")]
 
+    # Langflow output 진입점에서 입력을 검증하고 이 컴포넌트의 주요 실행 흐름을 시작한다.
     def get_remaining_jobs(self) -> Data:
         logging.getLogger("smartmigrate.workflow").info("before get_remaining_jobs", extra={"workflow_log": [0, "WORKFLOW", "06_GET_JOBS", "INFO", "GET_REMAINING_JOBS", "START", 0]})
         try:
@@ -49,7 +50,7 @@ class NewType06GetRemainingJobs(Component):
                 if not self._has_db_config():
                     raise ValueError("DB connection settings are required for 06 Get Remaining Jobs")
 
-                # 01 LLM owns natural-language target extraction; regex extraction here is only a legacy fallback.
+                # 자연어 target 추출은 01 LLM이 담당한다. 여기의 regex 추출은 예전 payload 호환용이다.
                 targets = self._extract_targets(payload)
                 with self._connect() as conn:
                     counts = self._load_counts(conn)
@@ -102,6 +103,7 @@ class NewType06GetRemainingJobs(Component):
             logging.getLogger("smartmigrate.workflow").error(f"error get_remaining_jobs: {exc}", extra={"workflow_log": [0, "WORKFLOW", "06_GET_JOBS", "ERROR", "GET_REMAINING_JOBS", "ERROR", 0]})
             raise
 
+    # DB 또는 payload에서 이 단계에 필요한 입력 데이터를 로드한다.
     def _load_counts(self, conn: Any) -> dict[str, int]:
         mig_table = self._qualify("NEXT_MIG_INFO")
         sql_table = self._qualify("NEXT_SQL_INFO")
@@ -134,6 +136,7 @@ class NewType06GetRemainingJobs(Component):
         cur = conn.cursor()
         return {route: self._scalar_count(cur, sql) for route, sql in queries.items()}
 
+    # DB 또는 payload에서 이 단계에 필요한 입력 데이터를 로드한다.
     def _load_target_jobs(self, conn: Any, targets: dict[str, list[Any]]) -> dict[str, list[dict[str, Any]]]:
         mig_table = self._qualify("NEXT_MIG_INFO")
         sql_table = self._qualify("NEXT_SQL_INFO")
@@ -216,6 +219,7 @@ class NewType06GetRemainingJobs(Component):
             "sql_formatting_jobs": sql_formatting_jobs,
         }
 
+    # DB 또는 payload에서 이 단계에 필요한 입력 데이터를 로드한다.
     def _load_target_statuses(self, conn: Any, targets: dict[str, list[Any]]) -> dict[str, list[dict[str, Any]]]:
         mig_table = self._qualify("NEXT_MIG_INFO")
         sql_table = self._qualify("NEXT_SQL_INFO")
@@ -257,6 +261,7 @@ class NewType06GetRemainingJobs(Component):
             )
         return statuses
 
+    # cursor 결과를 후속 payload에서 쓰기 쉬운 dict row 목록으로 변환한다.
     def _query_jobs(self, cur: Any, sql: str, params: list[Any], route: str, columns: list[str]) -> list[dict[str, Any]]:
         cur.execute(sql, params)
         jobs: list[dict[str, Any]] = []
@@ -267,6 +272,7 @@ class NewType06GetRemainingJobs(Component):
             jobs.append(job)
         return jobs
 
+    # cursor 결과를 후속 payload에서 쓰기 쉬운 dict row 목록으로 변환한다.
     def _query_statuses(self, cur: Any, sql: str, params: list[Any], columns: list[str]) -> list[dict[str, Any]]:
         cur.execute(sql, params)
         rows: list[dict[str, Any]] = []
@@ -274,11 +280,13 @@ class NewType06GetRemainingJobs(Component):
             rows.append({column: self._json_value(row[index]) for index, column in enumerate(columns)})
         return rows
 
+    # 전달된 SQL/조건으로 단일 COUNT 값을 조회한다.
     def _scalar_count(self, cur: Any, sql: str) -> int:
         cur.execute(sql)
         row = cur.fetchone()
         return int(row[0] or 0) if row else 0
 
+    # 특정 target 요청이 없을 때 사용할 빈 route별 job 목록을 만든다.
     def _empty_requested_jobs(self) -> dict[str, list[dict[str, Any]]]:
         return {
             "all_jobs": [],
@@ -290,6 +298,7 @@ class NewType06GetRemainingJobs(Component):
             "sql_formatting_jobs": [],
         }
 
+    # 문자열이나 payload에서 후속 로직에 필요한 값을 추출한다.
     def _extract_targets(self, payload: dict[str, Any]) -> dict[str, list[Any]]:
         existing = payload.get("target_filter") if isinstance(payload.get("target_filter"), dict) else {}
         text = str(payload.get("user_request") or payload.get("original_request") or payload.get("input") or "")
@@ -299,9 +308,11 @@ class NewType06GetRemainingJobs(Component):
             "space_nms": self._merge_lists(self._normalize_str_list(existing.get("space_nms")), self._extract_text_values(text, r"space[_\s-]*nm|spacenm|space")),
         }
 
+    # 사용자가 MAP_ID 또는 SPACE_NM/SQL_ID 같은 특정 작업을 지정했는지 확인한다.
     def _has_exact_target(self, targets: dict[str, list[Any]]) -> bool:
         return bool(targets.get("map_ids") or targets.get("sql_ids") or targets.get("space_nms"))
 
+    # SPACE_NM/SQL_ID target 조건을 SQL WHERE 절과 bind 값으로 변환한다.
     def _sql_target_where(self, targets: dict[str, list[Any]]) -> tuple[str, list[Any]]:
         clauses: list[str] = []
         params: list[Any] = []
@@ -321,6 +332,7 @@ class NewType06GetRemainingJobs(Component):
             clauses.append(f"TO_CHAR(SPACE_NM) IN ({', '.join(placeholders)})")
         return " AND ".join(clauses), params
 
+    # 문자열이나 payload에서 후속 로직에 필요한 값을 추출한다.
     def _extract_map_ids(self, text: str) -> list[int]:
         values: list[int] = []
         patterns = [
@@ -333,12 +345,14 @@ class NewType06GetRemainingJobs(Component):
                     values.append(int(item))
         return list(dict.fromkeys(values))
 
+    # 문자열이나 payload에서 후속 로직에 필요한 값을 추출한다.
     def _extract_text_values(self, text: str, label_pattern: str) -> list[str]:
         values: list[str] = []
         for match in re.finditer(rf"(?:{label_pattern})\s*[=:]?\s*([A-Za-z0-9_.:-]+(?:\s*,\s*[A-Za-z0-9_.:-]+)*)", text, flags=re.I):
             values.extend([item.strip() for item in match.group(1).split(",") if item.strip()])
         return list(dict.fromkeys(values))
 
+    # 비교와 검색이 안정적으로 동작하도록 입력 값을 정규화한다.
     def _normalize_int_list(self, value: Any) -> list[int]:
         values = value if isinstance(value, list) else ([] if value is None else [value])
         out: list[int] = []
@@ -348,6 +362,7 @@ class NewType06GetRemainingJobs(Component):
                 out.append(converted)
         return out
 
+    # 비교와 검색이 안정적으로 동작하도록 입력 값을 정규화한다.
     def _normalize_str_list(self, value: Any) -> list[str]:
         values = value if isinstance(value, list) else ([] if value is None else [value])
         out: list[str] = []
@@ -357,6 +372,7 @@ class NewType06GetRemainingJobs(Component):
                 out.append(text)
         return out
 
+    # 여러 출처의 값이나 목록을 중복 없이 하나로 합친다.
     def _merge_lists(self, first: list[Any], second: list[Any]) -> list[Any]:
         out: list[Any] = []
         for item in [*first, *second]:
@@ -365,6 +381,7 @@ class NewType06GetRemainingJobs(Component):
         return out
 
     @contextmanager
+    # Oracle 연결을 열고 호출 구간이 끝나면 닫는 context manager다.
     def _connect(self):
         import oracledb
 
@@ -383,20 +400,26 @@ class NewType06GetRemainingJobs(Component):
         finally:
             conn.close()
 
+    # 필수 DB 접속 값이 없으면 DB 작업 전에 명확히 실패시킨다.
     def _has_db_config(self) -> bool:
         return all(str(getattr(self, name, "") or "").strip() for name in ("db_host", "db_service_name", "db_username"))
 
+    # system_schema가 명시된 테이블명을 schema-qualified 이름으로 만든다.
     def _qualify(self, table_name: str) -> str:
         table = self._clean_identifier(table_name)
         schema = str(getattr(self, "system_schema", "") or "").strip().upper()
-        return f"{schema}.{table}" if schema else table
+        if not schema:
+            raise ValueError("System Schema를 입력해야 합니다.")
+        return f"{schema}.{table}"
 
+    # 동적 SQL identifier에 안전한 Oracle 문자만 허용한다.
     def _clean_identifier(self, value: str) -> str:
         clean = str(value or "").strip().upper()
         if not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", clean):
             raise ValueError(f"Invalid identifier: {clean}")
         return clean
 
+    # Langflow 입력이 Data/Message/dict/JSON 문자열 중 무엇이든 dict로 통일한다.
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):
             return dict(raw.data or {})
@@ -411,12 +434,14 @@ class NewType06GetRemainingJobs(Component):
             raise ValueError("payload_json must be a JSON object")
         return parsed
 
+    # 문자/숫자/NULL 값을 정수로 변환하고 실패하면 안전한 기본값을 반환한다.
     def _to_int(self, value: Any) -> int | None:
         try:
             return int(value)
         except (TypeError, ValueError):
             return None
 
+    # payload나 로그에 넣을 값을 JSON 직렬화 가능한 형태로 정리한다.
     def _json_value(self, value: Any) -> Any:
         if value is None:
             return None
@@ -426,6 +451,7 @@ class NewType06GetRemainingJobs(Component):
             return value.decode("utf-8", errors="ignore")
         return value if isinstance(value, (str, int, float, bool)) else str(value)
 
+    # Langflow Secret 입력을 일반 문자열로 꺼내 client library 설정에 사용한다.
     def _secret_to_str(self, value: Any) -> str:
         if value is None:
             return ""

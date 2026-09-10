@@ -76,6 +76,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
 
     outputs = [Output(display_name="Job Result", name="job_result", method="run_job", types=["Data"])]
 
+    # Langflow output에서 SQL Formatting 작업을 검증하고 batch 또는 단건 formatting 흐름을 시작한다.
     def run_job(self) -> Data:
         started = time.perf_counter()
         payload: dict[str, Any] = {}
@@ -120,8 +121,9 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             self._log_run_job(payload, job, status="ERROR", message=f"error run_job: {exc}", log_level="ERROR", require_identity=False)
             return Data(data=result)
 
+    # 선행 conversion/tuning 실패 상태는 유지하되 formatting 결과만 payload에 보강한다.
     def _preserve_prior_failure_after_formatting(self, result: dict[str, Any], payload: dict[str, Any], prior_failure: str) -> dict[str, Any]:
-        """Keep the prior conversion/tuning failure as the row result while retaining formatting details."""
+        """포매팅 상세 결과는 남기되 row의 최종 결과는 선행 conversion/tuning 실패로 유지한다."""
         stages = dict(result.get("stages") or {})
         formatting_stage = stages.get("formatting") or {
             "ok": result.get("formatting_status") == FORMATTED,
@@ -143,8 +145,9 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             "history": history,
         }
 
+    # payload의 generated_sqls 목록을 모아 한 번의 LLM batch 호출로 formatting한다.
     def _run_batch_formatting(self, payload: dict[str, Any], db_config: dict[str, Any], started: float) -> dict[str, Any]:
-        """Format generated SQL references with one DB load pass and one LLM batch call."""
+        """생성 SQL 참조를 한 번의 DB 로드와 한 번의 LLM batch 호출로 포매팅한다."""
         allowed = {
             "NEXT_MIG_INFO": {"MIG_SQL", "VERIFY_SQL"},
             "NEXT_SQL_INFO": {"TUNED_FR_SQL", "TO_SQL", "BIND_SQL", "TEST_SQL", "TUNED_TO_SQL"},
@@ -237,6 +240,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             "next_node": self._dashboard_node(payload),
         }
 
+    # generated_sqls에서 formatting 대상 SQL 항목을 골라 table/column/item 정보를 표준화한다.
     def _formatting_candidates(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         raw = payload.get("generated_sql_list")
         if isinstance(raw, list) and raw:
@@ -253,8 +257,9 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             ]
         return []
 
+    # 단독 SQL Formatting 실행에서 최종 tuned SQL을 FORMATTED_SQL로 저장한다.
     def _run_single_sql_formatting(self, payload: dict[str, Any], job: dict[str, Any], db_config: dict[str, Any], started: float) -> dict[str, Any]:
-        """Format the final tuned SQL into FORMATTED_SQL for standalone SQL Formatting runs."""
+        """단독 SQL Formatting 실행에서 최종 tuned SQL을 FORMATTED_SQL로 저장한다."""
         log_payload = {**payload, **job}
         if not self._is_tuning_pass(job.get("status_tuning") or payload.get("status_tuning") or payload.get("tuning_status")):
             return self._pass_through(
@@ -299,6 +304,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             },
         )
 
+    # formatting 단계별 이벤트를 workflow 로그에 남긴다.
     def _log_formatting_event(self, payload: dict[str, Any], *, step_name: str, status: str, message: str, generate_sql: Any = None) -> None:
         map_id = self._log_map_id(payload, required=True)
         retry_count = self._to_int(payload.get("retry_count"), 0)
@@ -307,6 +313,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             extra={"workflow_log": [map_id, "SQL_FORMATTING", "17C_SQL_FORMAT", "INFO", str(step_name or "")[:50], str(status or "")[:20], retry_count, generate_sql]},
         )
 
+    # run_job 시작/종료/오류 로그를 SQL 작업 식별자와 함께 남긴다.
     def _log_run_job(self, payload: dict[str, Any], job: dict[str, Any] | None = None, *, status: str, message: str, log_level: str = "INFO", require_identity: bool = True) -> None:
         retry_count = self._to_int(payload.get("retry_count"), 0)
         logging.getLogger("smartmigrate.workflow").log(
@@ -315,6 +322,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             extra={"workflow_log": [self._log_map_id(payload, job, required=require_identity), "SQL_FORMATTING", "17C_SQL_FORMAT", str(log_level or "INFO").upper(), "RUN_JOB", str(status or "")[:20], retry_count]},
         )
 
+    # 로그에 사용할 MAP_ID 또는 SQL identity를 payload/job에서 추출한다.
     def _log_map_id(self, payload: dict[str, Any], job: dict[str, Any] | None = None, *, required: bool = True) -> str:
         job = job or {}
         for key in ("map_id", "key_value"):
@@ -341,6 +349,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             raise ValueError("17C SQL formatting log requires NEXT_MIG_INFO.MAP_ID or NEXT_SQL_INFO.SQL_ID + SPACE_NM")
         return "MISSING_IDENTIFIER"
 
+    # SPACE_NM/SQL_ID 기반으로 로그 식별자를 만든다. 12C/15C와 같은 SQL row 기준이다.
     def _sql_log_identity(self, *sources: dict[str, Any]) -> str:
         sql_id = ""
         space_nm = ""
@@ -353,6 +362,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             return f"{sql_id} / {space_nm}"[:100]
         return ""
 
+    # formatting 대상 항목을 중복 없이 구분할 table/row/column key를 만든다.
     def _formatting_item_key(self, table_name: str, item: dict[str, Any]) -> str:
         if table_name == "NEXT_MIG_INFO":
             value = item.get("key_value") if item.get("key_value") is not None else item.get("map_id")
@@ -361,6 +371,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             return self._sql_item_key(item)
         return ""
 
+    # NEXT_SQL_INFO row를 식별할 SPACE_NM/SQL_ID key를 만든다.
     def _sql_item_key(self, item: dict[str, Any]) -> str:
         space_nm = str(item.get("space_nm") or "").strip()
         sql_id = str(item.get("sql_id") or "").strip()
@@ -368,6 +379,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             return ""
         return f"{space_nm}||{sql_id}"
 
+    # SPACE_NM/SQL_ID 기반 UPDATE/SELECT where 절과 bind 값을 만든다. 12C/15C와 같은 구조다.
     def _sql_key_where(self, item: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         space_nm = str(item.get("space_nm") or "").strip()
         sql_id = str(item.get("sql_id") or "").strip()
@@ -375,9 +387,11 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             raise ValueError("NEXT_SQL_INFO formatting item requires space_nm+sql_id")
         return "TO_CHAR(SPACE_NM) = :space_nm AND TO_CHAR(SQL_ID) = :sql_id", {"space_nm": space_nm, "sql_id": sql_id}
 
+    # payload/job에 SQL row를 특정할 key가 있는지 확인한다.
     def _has_sql_key(self, item: dict[str, Any]) -> bool:
         return bool(self._sql_item_key(item))
 
+    # 로그에 의미 없는 빈 값, NaN, null 문자열을 판별한다.
     def _is_blank_log_value(self, value: Any) -> bool:
         if value is None:
             return True
@@ -388,12 +402,14 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             pass
         return str(value).strip().lower() in {"", "nan", "none", "null"}
 
+    # payload 값을 로그/프롬프트에 넣을 수 있는 JSON 문자열로 변환한다.
     def _json_dump(self, value: Any) -> str:
         try:
             return json.dumps(value, ensure_ascii=False, default=str)
         except Exception:
             return str(value)
 
+    # 지정된 table/column에서 formatting할 SQL 본문을 한 건 로드한다.
     def _load_generated_sql(self, db_config: dict[str, Any], table_name: str, item: dict[str, Any], column: str) -> str:
         table = self._qualify(table_name, db_config.get("system_schema"))
         if table_name == "NEXT_MIG_INFO":
@@ -411,8 +427,9 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                 raise ValueError(f"{table_name} row not found")
             return self._lob_to_str(row[0]).strip()
 
+    # formatting 대상 SQL들을 table 단위로 묶어 한 번에 로드한다.
     def _load_generated_sqls(self, db_config: dict[str, Any], items: list[dict[str, Any]]) -> dict[str, str]:
-        """Load all requested SQL columns in table-level batches."""
+        """요청된 SQL 컬럼들을 table 단위 batch로 로드한다."""
         loaded: dict[str, str] = {}
         mig_items = [item for item in items if item["table"] == "NEXT_MIG_INFO"]
         sql_items = [item for item in items if item["table"] == "NEXT_SQL_INFO"]
@@ -426,7 +443,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             with self._connect(db_config) as conn:
                 cur = conn.cursor()
                 cur.execute(f"SELECT MAP_ID, {', '.join(columns)} FROM {table} WHERE MAP_ID IN ({placeholders})", params)
-                # Oracle CLOB values can be LOB locators; read them before the connection closes.
+                # Oracle CLOB은 locator로 올 수 있으므로 연결이 닫히기 전에 문자열로 읽어 둔다.
                 by_key = {
                     str(row[0]): {
                         column: self._lob_to_str(row[index + 1]).strip()
@@ -452,7 +469,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             with self._connect(db_config) as conn:
                 cur = conn.cursor()
                 cur.execute(f"SELECT TO_CHAR(SPACE_NM) AS SPACE_NM, TO_CHAR(SQL_ID) AS SQL_ID, {', '.join(columns)} FROM {table} WHERE {' OR '.join(predicates)}", params)
-                # Oracle CLOB values can be LOB locators; read them before the connection closes.
+                # Oracle CLOB은 locator로 올 수 있으므로 연결이 닫히기 전에 문자열로 읽어 둔다.
                 by_key = {
                     self._sql_item_key({"space_nm": row[0], "sql_id": row[1]}): {
                         column: self._lob_to_str(row[index + 2]).strip()
@@ -465,22 +482,20 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
 
         return loaded
 
+    # formatting된 SQL을 원래 table/column 위치에 저장한다.
     def _update_generated_sql(self, db_config: dict[str, Any], table_name: str, item: dict[str, Any], column: str, value: str) -> None:
         table = self._qualify(table_name, db_config.get("system_schema"))
-        columns = self._table_columns(db_config, table)
-        if column not in columns:
-            raise ValueError(f"{table_name}.{column} does not exist")
         if table_name == "NEXT_MIG_INFO":
             key_sql, params = "MAP_ID = :key", {"key": int(item.get("key_value") or item.get("map_id"))}
         else:
             key_sql, params = self._sql_key_where(item)
         params["value"] = value
-        update_ts = ", UPD_TS = CURRENT_TIMESTAMP" if "UPD_TS" in columns else ""
         with self._connect(db_config) as conn:
             cur = conn.cursor()
-            cur.execute(f"UPDATE {table} SET {column} = :value{update_ts} WHERE {key_sql}", params)
+            cur.execute(f"UPDATE {table} SET {column} = :value, UPD_TS = CURRENT_TIMESTAMP WHERE {key_sql}", params)
             conn.commit()
 
+    # LLM batch 응답을 item_id별 formatted SQL과 변경 사유로 정리한다.
     def _format_sql_batch_response(self, items: list[dict[str, str]], raw_response: str) -> dict[str, tuple[str, str]]:
         if not items:
             return {}
@@ -497,11 +512,13 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             raise ValueError(f"formatter batch response item_id mismatch: missing={missing}, extra={extra}")
         return result
 
+    # 여러 SQL 항목을 한 번에 formatting하도록 batch prompt를 만든다.
     def _build_formatter_batch_prompt(self, items: list[dict[str, str]]) -> str:
         sql_list_json = json.dumps(items, ensure_ascii=False, default=str)
         input_prompt = self._text_input(getattr(self, "input_prompt", "")).strip() or "- (empty)"
         return SQL_FORMAT_BATCH_PROMPT.format(input_prompt=input_prompt, input_sql_list_json=sql_list_json)
 
+    # LLM JSON 응답에서 item_id별 formatted_sql 값을 추출한다.
     def _parse_formatter_batch_response(self, raw: str) -> dict[str, str]:
         text = str(raw or "").strip()
         if not text:
@@ -521,6 +538,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                 result[item_id] = sql
         return result
 
+    # 설정된 LLM/fallback model 순서로 formatting prompt를 호출한다. 12C/15C와 같은 호출 방식이다.
     def _call_formatter_prompt(self, prompt: str, config: dict[str, Any]) -> str:
         api_key = str(config.get("llm_api_key") or "").strip()
         model = str(config.get("llm_model") or "").strip()
@@ -575,6 +593,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                     raise
         raise ValueError("LLM formatter returned no content")
 
+    # LLM 응답에서 markdown/wrapper를 제거하고 formatting된 SQL 본문만 남긴다.
     def _clean_formatted_sql(self, value: str) -> str:
         sql = str(value or "").strip()
         if sql.startswith("```"):
@@ -582,6 +601,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             sql = re.sub(r"\s*```$", "", sql)
         return sql.strip().rstrip(";").strip()
 
+    # formatting 실패 상태를 NEXT_SQL_INFO에 저장하고 표준 실패 payload를 만든다.
     def _finish_failure(self, payload: dict[str, Any], job: dict[str, Any], started: float, message: str) -> dict[str, Any]:
         return self._result(
             payload=payload,
@@ -594,6 +614,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             extra={"formatting_status": FAIL_FORMATTING, "next_node": self._dashboard_node(payload)},
         )
 
+    # formatting을 실행하지 않는 정상 경로에서 현재 payload를 다음 dashboard 노드로 넘긴다.
     def _pass_through(self, *, payload: dict[str, Any], job: dict[str, Any], started: float, status: str, message: str) -> dict[str, Any]:
         return self._result(
             payload=payload,
@@ -606,6 +627,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             extra={"formatting_skipped": True, "next_node": self._dashboard_node(payload)},
         )
 
+    # 현재 item이 17C 담당이 아닐 때 원본 payload를 유지한 채 넘긴다. 10C/12C/15C와 같은 패턴이다.
     def _component_pass_through(self, payload: dict[str, Any], started: float, message: str) -> dict[str, Any]:
         elapsed = time.perf_counter() - started
         total = int(payload.get("total_jobs") or 1)
@@ -633,6 +655,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         result["history"] = history
         return result
 
+    # 17C 실행 결과를 dashboard/후속 단계가 읽는 표준 payload로 만든다.
     def _result(self, *, payload: dict[str, Any], job: dict[str, Any], ok: bool, status: str, elapsed: float, attempts: list[dict[str, Any]], message: str, extra: dict[str, Any]) -> dict[str, Any]:
         total = int(payload.get("total_jobs") or 1)
         index = int(payload.get("job_index") or 1)
@@ -663,9 +686,11 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             "db_status_updated": self._has_sql_key(job) and ok,
         }
 
+    # payload route와 상태를 보고 17C가 formatting을 실행해야 하는지 판단한다.
     def _should_run_formatting(self, payload: dict[str, Any]) -> bool:
         return self._job_name(payload) in {"conversion", "tuning", "formatting"}
 
+    # 선행 conversion/tuning 실패 status가 있으면 formatting 이후에도 유지할 값을 찾는다.
     def _prior_failure_status(self, payload: dict[str, Any]) -> str:
         stages = payload.get("stages") or {}
         for stage_name in ("migration", "conversion", "tuning"):
@@ -681,12 +706,14 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             return status or "FAIL"
         return ""
 
+    # FORMATTED_SQL의 기준이 될 source SQL 컬럼을 payload/job 상태에서 결정한다.
     def _format_source_column(self, payload: dict[str, Any], job: dict[str, Any]) -> str:
         for column, key in (("TUNED_TO_SQL", "tuned_to_sql"), ("TO_SQL", "to_sql")):
             if str(payload.get(key) or job.get(key) or "").strip():
                 return column
         return ""
 
+    # loop payload의 route/job_name 값을 17C 내부 formatting 작업명으로 정규화한다.
     def _job_name(self, payload: dict[str, Any]) -> str:
         value = str(payload.get("job_name") or "").strip().lower()
         if value:
@@ -694,9 +721,9 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         route = str(payload.get("planned_job_route") or payload.get("job_route") or "").strip().upper()
         return {"MIG": "migration", "SQL_CONVERSION": "conversion", "SQL_TUNING": "tuning", "SQL_FORMATTING": "formatting"}.get(route, "")
 
+    # SPACE_NM/SQL_ID 기준으로 NEXT_SQL_INFO 한 건을 로드한다. 12C/15C와 같은 row 식별 체계다.
     def _load_sql_job(self, db_config: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
-        columns = self._table_columns(db_config, table)
         aliases = [
             ("SPACE_NM", "space_nm", "VARCHAR2(4000)"),
             ("SQL_ID", "sql_id", "VARCHAR2(4000)"),
@@ -707,10 +734,9 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             ("TUNED_RESULT", "tuned_result", "VARCHAR2(4000)"),
             ("RETRY_COUNT", "retry_count", "NUMBER"),
         ]
-        select_sql = ",\n               ".join([self._select_expr(columns, col, alias, data_type) for col, alias, data_type in aliases])
+        select_sql = ",\n               ".join([f"{col} AS {alias}" for col, alias, _ in aliases])
         where_sql, params = self._sql_key_where(payload)
-        order_expr = "UPD_TS NULLS FIRST" if "UPD_TS" in columns else "SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST"
-        query = f"SELECT {select_sql} FROM {table} WHERE {where_sql} ORDER BY {order_expr}"
+        query = f"SELECT {select_sql} FROM {table} WHERE {where_sql} ORDER BY UPD_TS NULLS FIRST"
         with self._connect(db_config) as conn:
             cur = conn.cursor()
             cur.execute(query, params)
@@ -721,19 +747,16 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             loaded = {key: self._lob_to_str(row[index]) for index, key in enumerate(keys)}
         return {**payload, **loaded}
 
+    # NEXT_SQL_INFO의 formatting SQL/status 컬럼을 명시적으로 업데이트한다.
     def _update_row(self, db_config: dict[str, Any], job: dict[str, Any], values: dict[str, Any]) -> None:
         table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
-        columns = self._table_columns(db_config, table)
         set_clauses: list[str] = []
         where_sql, params = self._sql_key_where(job)
         for index, (column, value) in enumerate(values.items(), start=1):
-            if column not in columns:
-                continue
             name = f"p{index}"
             set_clauses.append(f"{column} = :{name}")
             params[name] = value
-        if "UPD_TS" in columns:
-            set_clauses.append("UPD_TS = CURRENT_TIMESTAMP")
+        set_clauses.append("UPD_TS = CURRENT_TIMESTAMP")
         if not set_clauses:
             return
         with self._connect(db_config) as conn:
@@ -741,26 +764,25 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             cur.execute(f"UPDATE {table} SET {', '.join(set_clauses)} WHERE {where_sql}", params)
             conn.commit()
 
+    # SQL Formatting 실행 시작 시 BATCH_CNT를 증가시킨다.
     def _increment_batch_count(self, db_config: dict[str, Any], job: dict[str, Any]) -> None:
         table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
-        columns = self._table_columns(db_config, table)
-        if "BATCH_CNT" not in columns:
-            return
-        set_clause = "BATCH_CNT = NVL(BATCH_CNT, 0) + 1"
-        if "UPD_TS" in columns:
-            set_clause += ", UPD_TS = CURRENT_TIMESTAMP"
+        set_clause = "BATCH_CNT = NVL(BATCH_CNT, 0) + 1, UPD_TS = CURRENT_TIMESTAMP"
         where_sql, params = self._sql_key_where(job)
         with self._connect(db_config) as conn:
             cur = conn.cursor()
             cur.execute(f"UPDATE {table} SET {set_clause} WHERE {where_sql}", params)
             conn.commit()
 
+    # DB status 값을 비교하기 쉬운 대문자 문자열로 정규화한다. 12C/15C와 같은 유틸이다.
     def _status(self, value: Any) -> str:
         return str(value or "").strip().upper()
 
+    # SQL Tuning 결과가 formatting 가능한 PASS 상태인지 확인한다.
     def _is_tuning_pass(self, value: Any) -> bool:
         return self._status(value) in TUNING_SUCCESS_STATUSES
 
+    # 현재 payload route에 맞는 dashboard 노드명을 결정한다.
     def _dashboard_node(self, payload: dict[str, Any]) -> str:
         if payload.get("full_workflow"):
             return "18D_fullWorkflowDashboard"
@@ -771,30 +793,12 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             return "15D_sqlTuningIterationDashboard"
         return "17D_sqlFormattingIterationDashboard"
 
+    # 로그에 사용할 MAP_ID를 job/payload에서 문자열로 추출한다.
     def _map_id(self, job: dict[str, Any]) -> str:
         return f"{job.get('sql_id') or ''} / {job.get('space_nm') or ''}"[:100]
 
-    def _select_expr(self, columns: set[str], column: str, alias: str, data_type: str) -> str:
-        if column in columns:
-            return f"{column} AS {alias}"
-        if data_type.upper() == "CLOB":
-            return f"TO_CLOB(NULL) AS {alias}"
-        return f"CAST(NULL AS {data_type}) AS {alias}"
-
-    def _table_columns(self, db_config: dict[str, Any], table: str) -> set[str]:
-        owner, table_name = self._split_table_owner_and_name(table)
-        if owner:
-            sql = "SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS WHERE OWNER = :1 AND TABLE_NAME = :2"
-            params = [owner, table_name]
-        else:
-            sql = "SELECT COLUMN_NAME FROM USER_TAB_COLUMNS WHERE TABLE_NAME = :1"
-            params = [table_name]
-        with self._connect(db_config) as conn:
-            cur = conn.cursor()
-            cur.execute(sql, params)
-            return {str(row[0]).upper() for row in cur.fetchall()}
-
     @contextmanager
+    # Oracle 연결을 열고 사용 후 닫는 context manager다. 10C/12C/15C와 같은 패턴이다.
     def _connect(self, db_config: dict[str, Any]):
         import oracledb
 
@@ -805,6 +809,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         finally:
             conn.close()
 
+    # payload와 Langflow 입력에서 LLM 호출 설정을 모은다.
     def _llm_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         item_config = dict(payload.get("llm_config") or {})
         return {
@@ -817,6 +822,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             "llm_timeout_seconds": self._positive_int(getattr(self, "llm_timeout_seconds", None) or item_config.get("llm_timeout_seconds"), 900),
         }
 
+    # payload와 Langflow 입력에서 Oracle 접속/schema 설정을 모은다.
     def _db_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         item_config = dict(payload.get("db_config") or {})
         return {
@@ -828,22 +834,28 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             "system_schema": str(item_config.get("system_schema") or "").strip(),
         }
 
+    # 필수 Oracle 접속 값 누락을 DB 연결 전에 명확히 실패시킨다.
     def _require_db_config(self, db_config: dict[str, Any]) -> None:
         missing = [key for key in ("db_host", "db_service_name", "db_username") if not str(db_config.get(key) or "").strip()]
         if missing:
             raise ValueError(f"17C SQL Formatting is not connected to database settings: missing {', '.join(missing)}")
 
+    # system_schema가 명시된 테이블명을 schema-qualified 이름으로 만든다. 10C/12C/15C와 같은 원칙이다.
     def _qualify(self, table_name: str, schema: Any) -> str:
         clean_table = self._clean_identifier(table_name)
         clean_schema = str(schema or "").strip().upper()
-        return f"{self._clean_identifier(clean_schema)}.{clean_table}" if clean_schema else clean_table
+        if not clean_schema:
+            raise ValueError("System Schema를 입력해야 합니다.")
+        return f"{self._clean_identifier(clean_schema)}.{clean_table}"
 
+    # 동적 SQL identifier에 안전한 Oracle 문자만 허용한다.
     def _clean_identifier(self, value: str) -> str:
         clean = str(value or "").strip().upper()
         if not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", clean):
             raise ValueError(f"Invalid identifier: {clean}")
         return clean
 
+    # OWNER.TABLE 문자열을 metadata 조회용 owner/table_name으로 나눈다.
     def _split_table_owner_and_name(self, table: str) -> tuple[str | None, str]:
         value = str(table or "").strip().upper()
         if "." in value:
@@ -851,11 +863,13 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             return owner, name
         return None, value
 
+    # Oracle LOB 값을 연결 종료 전에 문자열로 읽는다. 10C/12C/15C도 같은 이유로 사용한다.
     def _lob_to_str(self, value: Any) -> str:
         if value is not None and hasattr(value, "read"):
             return str(value.read())
         return "" if value is None else str(value)
 
+    # Langflow Secret 입력을 일반 문자열로 꺼낸다. 10C/12C/15C와 같은 처리다.
     def _secret_to_str(self, value: Any) -> str:
         if value is None:
             return ""
@@ -863,6 +877,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             return str(value.get_secret_value() or "")
         return str(value or "")
 
+    # Langflow Message/Secret/일반 값을 prompt 입력용 문자열로 정규화한다.
     def _text_input(self, value: Any) -> str:
         if value is None:
             return ""
@@ -876,6 +891,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             return json.dumps(data, ensure_ascii=False, default=str)
         return str(value or "")
 
+    # 숫자 입력을 양의 정수로 변환하고 실패하면 기본값을 사용한다. 10C/12C/15C와 같은 유틸이다.
     def _positive_int(self, value: Any, default: int) -> int:
         try:
             parsed = int(value)
@@ -883,12 +899,14 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         except (TypeError, ValueError):
             return default
 
+    # 정수형 로그 값이나 count 값을 int로 변환하고 실패하면 기본값을 반환한다.
     def _to_int(self, value: Any, default: int = 0) -> int:
         try:
             return int(value)
         except (TypeError, ValueError):
             return default
 
+    # Langflow 입력이 Data/Message/dict/JSON 문자열 중 무엇이든 dict로 통일한다. 10C/12C/15C와 같은 패턴이다.
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):
             return dict(raw.data or {})

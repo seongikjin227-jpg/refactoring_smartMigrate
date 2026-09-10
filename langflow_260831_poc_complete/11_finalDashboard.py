@@ -34,15 +34,16 @@ class NewType11FinalDashboard(Component):
 
     inputs = [
         DataInput(name="loop_done", display_name="Loop Done", required=True),
-        StrInput(name="db_host", display_name="DB Host", required=False),
+        StrInput(name="db_host", display_name="DB Host", required=True),
         IntInput(name="db_port", display_name="DB Port", value=1521, required=False),
-        StrInput(name="db_service_name", display_name="DB Service Name", required=False),
-        StrInput(name="db_username", display_name="DB Username", required=False),
-        SecretStrInput(name="db_password", display_name="DB Password", required=False),
-        StrInput(name="system_schema", display_name="System Schema", required=False),
+        StrInput(name="db_service_name", display_name="DB Service Name", required=True),
+        StrInput(name="db_username", display_name="DB Username", required=True),
+        SecretStrInput(name="db_password", display_name="DB Password", required=True),
+        StrInput(name="system_schema", display_name="System Schema", required=True),
     ]
     outputs = [Output(display_name="Result Message", name="result", method="build_result", types=["Message"])]
 
+    # Langflow output 진입점에서 입력을 검증하고 이 컴포넌트의 주요 실행 흐름을 시작한다.
     def build_result(self) -> Message:
         logging.getLogger("smartmigrate.workflow").info("before build_result", extra={"workflow_log": [0, "WORKFLOW", "11_FINAL_DASH", "INFO", "BUILD_RESULT", "START", 0]})
         try:
@@ -72,6 +73,7 @@ class NewType11FinalDashboard(Component):
             logging.getLogger("smartmigrate.workflow").error(f"error build_result: {exc}", extra={"workflow_log": [0, "WORKFLOW", "11_FINAL_DASH", "ERROR", "BUILD_RESULT", "ERROR", 0]})
             raise
 
+    # 조회 조건을 조립해 DB에서 요청된 정보를 가져온다.
     def _query_dashboard(self) -> dict[str, Any]:
         if not self._has_db_config():
             raise ValueError("Final Dashboard DB inputs are required")
@@ -83,6 +85,7 @@ class NewType11FinalDashboard(Component):
         }
         return {"ok": True, "agents": agents, "recommendation": self._recommendation(agents)}
 
+    # NEXT_MIG_INFO 기준 DB Migration 진행률과 성공/실패 현황을 집계한다.
     def _migration_summary(self) -> dict[str, Any]:
         table = self._qualify("NEXT_MIG_INFO")
         target_scope = "UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'"
@@ -112,6 +115,7 @@ class NewType11FinalDashboard(Component):
             status_counts=self._status_counts(table, "STATUS", target_scope),
         )
 
+    # NEXT_SQL_INFO 기준 SQL Conversion 진행률과 성공/실패 현황을 집계한다.
     def _sql_conversion_summary(self) -> dict[str, Any]:
         table = self._qualify("NEXT_SQL_INFO")
         target_scope = self._sql_status_target_condition("STATUS_CONVERSION", ("PASS", "PASS-CONVERSION"))
@@ -140,12 +144,9 @@ class NewType11FinalDashboard(Component):
             status_counts=self._status_counts(table, "STATUS_CONVERSION", target_scope),
         )
 
+    # NEXT_SQL_INFO 기준 SQL Tuning 진행률과 성공/실패 현황을 집계한다.
     def _sql_tuning_summary(self) -> dict[str, Any]:
         table = self._qualify("NEXT_SQL_INFO")
-        columns = self._available_columns("NEXT_SQL_INFO")
-        missing = [col for col in ("STATUS_TUNING", "STATUS_CONVERSION") if col not in columns]
-        if missing:
-            return self._unavailable("SQL_TUNING", table, f"missing columns: {', '.join(missing)}")
         total_scope = self._sql_status_target_condition("STATUS_TUNING", ("PASS", "PASS-TUNING"))
         base_where = "UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')"
         pending_where = f"{base_where} AND STATUS_TUNING IS NULL"
@@ -173,12 +174,9 @@ class NewType11FinalDashboard(Component):
             status_counts=self._status_counts(table, "STATUS_TUNING", total_scope),
         )
 
+    # NEXT_SQL_INFO 기준 SQL Formatting 적용/대기 현황을 집계한다.
     def _sql_formatting_summary(self) -> dict[str, Any]:
         table = self._qualify("NEXT_SQL_INFO")
-        columns = self._available_columns("NEXT_SQL_INFO")
-        missing = [col for col in ("STATUS_TUNING", "FORMATTED_SQL") if col not in columns]
-        if missing:
-            return self._unavailable("SQL_FORMATTING", table, f"missing columns: {', '.join(missing)}")
         total_scope = self._sql_status_target_condition("STATUS_TUNING", ("PASS", "PASS-TUNING"))
         base_where = "UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING')"
         target_where = f"{base_where} AND (FORMATTED_SQL IS NULL OR NVL(DBMS_LOB.GETLENGTH(FORMATTED_SQL), 0) = 0)"
@@ -202,6 +200,7 @@ class NewType11FinalDashboard(Component):
             has_success_rate=False,
         )
 
+    # 단계별 실행 결과를 dashboard용 집계 구조로 요약한다.
     def _stage_summary(
         self,
         *,
@@ -241,6 +240,7 @@ class NewType11FinalDashboard(Component):
             "status_counts": status_counts,
         }
 
+    # 후속 단계나 사용자 응답에 필요한 구조화된 결과를 조립한다.
     def _build_answer(self, dashboard: dict[str, Any]) -> str:
         agents = dashboard.get("agents") or {}
         lines = [
@@ -291,6 +291,7 @@ class NewType11FinalDashboard(Component):
             )
         return "\n".join(lines)
 
+    # 남은 작업이 있는 단계 중 다음에 실행할 우선순위 작업을 고른다.
     def _recommendation(self, agents: dict[str, dict[str, Any]]) -> dict[str, Any]:
         for key, label in AGENT_ORDER:
             summary = agents.get(key) or {}
@@ -299,6 +300,7 @@ class NewType11FinalDashboard(Component):
                 return {"agent": summary.get("agent"), "label": label, "target_count": count}
         return {}
 
+    # 전달된 SQL/조건으로 단일 COUNT 값을 조회한다.
     def _count(self, table: str, where_clause: str = "1=1") -> int:
         with self._connect() as conn:
             cur = conn.cursor()
@@ -306,20 +308,25 @@ class NewType11FinalDashboard(Component):
             row = cur.fetchone()
         return int(row[0] if row else 0)
 
+    # FAIL 계열 status를 찾는 SQL WHERE 조건을 만든다.
     def _fail_status_condition(self, status_column: str) -> str:
         return f"UPPER(TRIM(NVL({status_column}, 'NULL'))) LIKE 'FAIL-%'"
 
+    # 상세 실패 status 집계용 FAIL 계열 SQL 조건을 만든다.
     def _detailed_fail_status_condition(self, status_column: str) -> str:
         return f"UPPER(TRIM(NVL({status_column}, 'NULL'))) LIKE 'FAIL-%'"
 
+    # SQL 단계에서 실행 대상이 되는 NULL/FAIL/USER_EDITED 상태 조건을 만든다.
     def _sql_status_target_condition(self, status_column: str, pass_statuses: tuple[str, ...]) -> str:
         pass_list = ", ".join(f"'{status}'" for status in pass_statuses)
         normalized = f"UPPER(TRIM(NVL({status_column}, 'NULL')))"
         return f"({status_column} IS NULL OR {normalized} IN ({pass_list}) OR {normalized} LIKE 'FAIL-%')"
 
+    # USER_EDITED=Y인 실패 row를 재실행 대상으로 판단하는 SQL 조건을 만든다.
     def _user_edited_condition(self) -> str:
         return "UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y'"
 
+    # status 값별 row 수를 집계해 dashboard와 QA 응답에 사용한다.
     def _status_counts(self, table: str, status_column: str, where_clause: str = "1=1") -> dict[str, int]:
         with self._connect() as conn:
             cur = conn.cursor()
@@ -335,35 +342,8 @@ class NewType11FinalDashboard(Component):
             rows = cur.fetchall()
         return {str(row[0]): int(row[1]) for row in rows}
 
-    def _available_columns(self, table_name: str) -> set[str]:
-        table = self._clean_identifier(table_name)
-        schema = str(self._db_config.get("system_schema") or "").strip().upper()
-        with self._connect() as conn:
-            cur = conn.cursor()
-            if schema:
-                cur.execute("SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS WHERE OWNER = :1 AND TABLE_NAME = :2", [schema, table])
-            else:
-                cur.execute("SELECT COLUMN_NAME FROM USER_TAB_COLUMNS WHERE TABLE_NAME = :1", [table])
-            rows = cur.fetchall()
-        return {str(row[0]).upper() for row in rows}
-
-    def _unavailable(self, agent: str, table: str, reason: str) -> dict[str, Any]:
-        return {
-            "agent": agent,
-            "available": False,
-            "table": table,
-            "reason": reason,
-            "total": 0,
-            "target_count": 0,
-            "pass_count": 0,
-            "fail_count": 0,
-            "other_count": 0,
-            "progress": {"count": 0, "base": 0, "rate": "-"},
-            "success": {"count": 0, "base": 0, "rate": "-"},
-            "status_counts": {},
-        }
-
     @contextmanager
+    # Oracle 연결을 열고 호출 구간이 끝나면 닫는 context manager다.
     def _connect(self):
         import oracledb
 
@@ -382,9 +362,11 @@ class NewType11FinalDashboard(Component):
         finally:
             conn.close()
 
+    # 필수 DB 접속 값이 없으면 DB 작업 전에 명확히 실패시킨다.
     def _has_db_config(self) -> bool:
         return all(str(self._db_config.get(name) or "").strip() for name in ("db_host", "db_service_name", "db_username"))
 
+    # payload와 Langflow 입력에서 Oracle 접속 및 schema 설정을 모은다.
     def _db_config_from_inputs(self) -> dict[str, Any]:
         return {
             "db_host": str(getattr(self, "db_host", "") or "").strip(),
@@ -395,6 +377,7 @@ class NewType11FinalDashboard(Component):
             "system_schema": str(getattr(self, "system_schema", "") or "").strip(),
         }
 
+    # Langflow Secret 입력을 일반 문자열로 꺼내 client library 설정에 사용한다.
     def _secret_to_str(self, value: Any) -> str:
         if value is None:
             return ""
@@ -402,29 +385,36 @@ class NewType11FinalDashboard(Component):
             return str(value.get_secret_value())
         return str(value)
 
+    # system_schema가 명시된 테이블명을 schema-qualified 이름으로 만든다.
     def _qualify(self, table_name: str) -> str:
         table = self._clean_identifier(table_name)
         schema = str(self._db_config.get("system_schema") or "").strip().upper()
-        return f"{self._clean_identifier(schema)}.{table}" if schema else table
+        if not schema:
+            raise ValueError("System Schema를 입력해야 합니다.")
+        return f"{self._clean_identifier(schema)}.{table}"
 
+    # 동적 SQL identifier에 안전한 Oracle 문자만 허용한다.
     def _clean_identifier(self, value: str) -> str:
         clean = str(value or "").strip().upper()
         if not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", clean):
             raise ValueError(f"Invalid identifier: {clean}")
         return clean
 
+    # dashboard 표시용 숫자/텍스트를 짧고 안전한 문자열로 변환한다.
     def _pct(self, numerator: int, denominator: int) -> str:
         denominator = int(denominator or 0)
         if denominator <= 0:
             return "-"
         return f"{(int(numerator or 0) / denominator) * 100:.1f}%"
 
+    # 문자/숫자/NULL 값을 정수로 변환하고 실패하면 안전한 기본값을 반환한다.
     def _num(self, value: Any) -> int:
         try:
             return int(value or 0)
         except (TypeError, ValueError):
             return 0
 
+    # dashboard 표시용 숫자/텍스트를 짧고 안전한 문자열로 변환한다.
     def _rate(self, value: dict[str, Any]) -> str:
         if value.get("not_applicable"):
             return "-"
@@ -434,6 +424,7 @@ class NewType11FinalDashboard(Component):
             return f"{self._progress_bar(0, 0)} - ({count}/{base})"
         return f"{self._progress_bar(count, base)} {value.get('rate', '-')} ({count}/{base})"
 
+    # dashboard 표시용 숫자/텍스트를 짧고 안전한 문자열로 변환한다.
     def _progress_bar(self, count: int, base: int, width: int = 10) -> str:
         if base <= 0:
             filled = 0
@@ -441,6 +432,7 @@ class NewType11FinalDashboard(Component):
             filled = max(0, min(width, round((int(count or 0) / int(base)) * width)))
         return "■" * filled + "□" * (width - filled)
 
+    # Langflow 입력이 Data/Message/dict/JSON 문자열 중 무엇이든 dict로 통일한다.
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):
             return dict(raw.data or {})

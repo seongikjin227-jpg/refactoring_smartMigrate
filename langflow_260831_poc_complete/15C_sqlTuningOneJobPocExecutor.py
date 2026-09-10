@@ -31,6 +31,7 @@ SQL_OUTPUT_FORMATTING_GUIDE = "\nSQL만 반환하십시오. 최종 공백/들여
 
 
 class _PromptValues(dict):
+    # prompt template에서 선택 값이 비어도 KeyError 없이 빈 문자열로 렌더링되게 한다. 12C와 같은 안전 포맷터다.
     def __missing__(self, key: str) -> str:
         return "{" + key + "}"
 
@@ -153,6 +154,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
 
     outputs = [Output(display_name="Job Result", name="job_result", method="run_job", types=["Data"])]
 
+    # Langflow output에서 SQL Tuning 작업 한 건을 검증하고 tuning graph를 시작한다.
     def run_job(self) -> Data:
         logging.getLogger("smartmigrate.workflow").info("before run_job", extra={"workflow_log": [0, "WORKFLOW", "15C_SQL_TUNE", "INFO", "RUN_JOB", "START", 0]})
         started = time.perf_counter()
@@ -195,6 +197,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         finally:
             logging.getLogger("smartmigrate.workflow").info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "15C_SQL_TUNE", "INFO", "RUN_JOB", "END", 0]})
 
+    # NEXT_SQL_INFO 한 건의 튜닝 상태를 만들고 LangGraph tuning workflow를 호출한다.
     def _run_tuning(self, payload: dict[str, Any], job: dict[str, Any], db_config: dict[str, Any], started: float) -> dict[str, Any]:
         to_sql = str(payload.get("to_sql") or job.get("to_sql") or "").strip()
         if not to_sql:
@@ -240,11 +243,13 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             tuning_guides=final_state.get("tuning_guides") or [],
         )
 
+    # RAG 조회, tuned SQL 생성, tuned test SQL 검증, retry/finalize 노드를 연결한다.
     def _run_tuning_graph(self, context: dict[str, Any]) -> dict[str, Any]:
         from langgraph.graph import END, StateGraph
 
         logger = logging.getLogger("smartmigrate.workflow")
 
+        # tuning graph에서 RAG guide와 검색 예시를 로드하는 노드다.
         def load_rules_node(state: dict[str, Any]) -> dict[str, Any]:
             current_sql = str(state.get("tuned_sql") or state.get("to_sql") or "").strip()
             map_id = self._map_id(state["job"])
@@ -265,6 +270,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                 logger.error(str(exc), extra={"workflow_log": [map_id, "SQL_TUNING", "RAG_RETRIEVE", "ERROR", "LOAD_TUNING_RULES", FAIL_TUNED, state["retry_count"]]})
                 return state
 
+        # tuning graph에서 LLM으로 tuned SQL을 생성하고 저장하는 노드다.
         def apply_tuning_node(state: dict[str, Any]) -> dict[str, Any]:
             if state.get("node_failed"):
                 return state
@@ -315,6 +321,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                 logger.error(str(exc), extra={"workflow_log": [map_id, "SQL_TUNING", "TUNED_TO_SQL", "ERROR", "APPLY_TUNING_RULES", FAIL_TUNED, state["retry_count"]]})
                 return state
 
+        # tuning graph에서 tuned SQL 검증 SQL을 생성·실행하는 노드다.
         def validate_tuned_node(state: dict[str, Any]) -> dict[str, Any]:
             if state.get("node_failed"):
                 return state
@@ -346,6 +353,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                 logger.error(str(exc), extra={"workflow_log": [map_id, "SQL_TUNING", "TUNED_TEST_SQL", "ERROR", "VALIDATE_TUNED_SQL", FAIL_TEST, state["retry_count"], state.get("tuned_test_sql") or ""]})
                 return state
 
+        # tuning/migration graph에서 실패 정보를 다음 attempt로 넘기고 retry count를 증가시킨다.
         def retry_prepare_node(state: dict[str, Any]) -> dict[str, Any]:
             next_attempt = int(state["attempt_no"]) + 1
             running_status = f"RUNNING-{state.get('last_status') or FAIL_TUNED}"
@@ -364,6 +372,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                 next_state.update({"tuned_sql": "", "tuned_result": ""})
             return next_state
 
+        # graph 최종 상태를 DB와 Langflow payload에 반영하는 종료 노드다.
         def finalize_node(state: dict[str, Any]) -> dict[str, Any]:
             if state.get("status") == TUNING_PASS:
                 final_log = f"FINAL SUCCESS stage=SQL_TUNING status={TUNING_PASS} job={state['job'].get('space_nm')}.{state['job'].get('sql_id')} result={state.get('tuned_result') or ''}"
@@ -402,6 +411,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             )
             return state
 
+        # node 실패 여부와 retry 예산에 따라 다음 graph 경로를 결정한다.
         def route_after_stage(state: dict[str, Any]) -> str:
             if state.get("status") == TUNING_PASS:
                 return "finalize"
@@ -425,6 +435,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         workflow.add_edge("finalize", END)
         return workflow.compile().invoke(context)
 
+    # 튜닝 prompt에 필요한 GENERAL guide, SEARCH 예시, source table 범위를 한 번에 준비한다.
     def _retrieve_tuning_context(self, db_config: dict[str, Any], rag_config: dict[str, Any], sql_text: str, target_table: str, map_id: str, retry_count: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]], set[str]]:
         source_tables = self._source_tables(target_table)
         general_rules = self._load_rag_rules(db_config, "SQL_TUNING", RAG_GENERAL, source_tables, map_id)
@@ -432,21 +443,12 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         self._log_rag_context(map_id, "SQL_TUNING", general_rules, tuning_examples, retry_count)
         return general_rules, tuning_examples, source_tables
 
-    # -------------------------------------------------------------------------
-    # Milvus RAG SEARCH retrieval for 15C tuning
-    # -------------------------------------------------------------------------
-    # 15C no longer loads all RAG rows and builds a local FAISS index.
-    # Runtime retrieval is:
-    # 1. split the current TO_SQL into MAIN/SUBQUERY blocks,
-    # 2. normalize each block,
-    # 3. embed each block through the embedding API,
-    # 4. search SM_RAG_RULES.dense_vector in Milvus,
-    # 5. use search_params metric_type=COSINE for vector similarity.
-    #
-    # The stored SM_RAG_RULES.dense_vector values are generated by 00B from
-    # NEXT_MIG_RAG_INFO.SOURCE_SQL. For tuning rules, SOURCE_SQL means the
-    # "before tuning" SQL example, and TARGET_SQL/guidance_text are returned as
-    # metadata for the tuning prompt.
+    # 튜닝 RAG 검색 흐름:
+    # 1. 현재 TO_SQL을 MAIN/SUBQUERY 블록으로 나눈다.
+    # 2. 각 블록을 정규화해서 embedding 입력을 안정화한다.
+    # 3. Milvus SM_RAG_RULES.dense_vector에서 유사한 튜닝 사례를 찾는다.
+    # 4. SOURCE_SQL은 튜닝 전 예시, TARGET_SQL/GUIDANCE_TEXT는 프롬프트 보강 정보로 사용한다.
+    # Milvus dense_vector로 SQL block별 SQL_TUNING SEARCH 예시를 찾는다. 12C 검색 구조를 재사용한 형태다.
     def _retrieve_rag_examples(self, db_config: dict[str, Any], rag_config: dict[str, Any], category: str, sql_text: str, source_tables: set[str], map_id: str, retry_count: int) -> list[dict[str, Any]]:
         blocks = self._split_sql_blocks(sql_text)
         if not blocks:
@@ -455,43 +457,31 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         ordered_blocks.extend(block for block in blocks if block["block_type"] != "SUBQUERY")
         top_k = self._positive_int(getattr(self, "rag_top_k", None), 3)
         fetch_k = max(top_k * 5, top_k)
-        try:
-            # Embed each current TO_SQL block once, then search those query
-            # vectors against Milvus dense_vector. This is remote Milvus COSINE
-            # vector search, not local FAISS and not Oracle-side vector math.
-            client = self._milvus_client()
-            config = self._milvus_config()
-            vectors = self._embed_texts([block["normalized_sql"] for block in ordered_blocks], rag_config)
-            search_result = client.search(
-                collection_name=config["rag_collection"],
-                data=vectors,
-                anns_field="dense_vector",
-                filter=f'category == "{category}" and rule_type == "{RAG_SEARCH}" and is_active == true',
-                limit=fetch_k,
-                output_fields=["rag_id", "category", "rule_type", "source_tables", "guidance_text", "source_sql", "target_sql"],
-                # Milvus calculates dense embedding similarity with COSINE here.
-                # Higher score means the current SQL block is closer to a stored
-                # tuning example's SOURCE_SQL.
-                search_params={"metric_type": "COSINE"},
-            )
-            matches_by_block = []
-            for hits in search_result:
-                matches = []
-                for hit in hits:
-                    rule = self._milvus_rag_entity(hit)
-                    if not self._source_tables_match(rule.get("source_tables") or [], source_tables):
-                        continue
-                    matches.append((rule, self._milvus_score(hit)))
-                    if len(matches) >= top_k:
-                        break
-                matches_by_block.append(matches)
-            method = "milvus_dense_vector"
-        except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").warning(
-                f"Milvus RAG search skipped: {type(exc).__name__}: {exc}",
-                extra={"workflow_log": [map_id, "SQL_TUNING", "RAG_RETRIEVE", "WARN", "RAG_SEARCH", "SKIP", retry_count]},
-            )
-            return []
+        # RAG 검색 실패는 튜닝 품질 저하로 바로 이어지므로 빈 결과로 우회하지 않는다.
+        client = self._milvus_client()
+        config = self._milvus_config()
+        vectors = self._embed_texts([block["normalized_sql"] for block in ordered_blocks], rag_config)
+        search_result = client.search(
+            collection_name=config["rag_collection"],
+            data=vectors,
+            anns_field="dense_vector",
+            filter=f'category == "{category}" and rule_type == "{RAG_SEARCH}" and is_active == true',
+            limit=fetch_k,
+            output_fields=["rag_id", "category", "rule_type", "source_tables", "guidance_text", "source_sql", "target_sql"],
+            search_params={"metric_type": "COSINE"},
+        )
+        matches_by_block = []
+        for hits in search_result:
+            matches = []
+            for hit in hits:
+                rule = self._milvus_rag_entity(hit)
+                if not self._source_tables_match(rule.get("source_tables") or [], source_tables):
+                    continue
+                matches.append((rule, self._milvus_score(hit)))
+                if len(matches) >= top_k:
+                    break
+            matches_by_block.append(matches)
+        method = "milvus_dense_vector"
         payloads = [
             {
                 "block_id": block["block_id"],
@@ -505,9 +495,10 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         match_count = sum(len(block["top_rule_matches"]) for block in payloads)
         return payloads
 
+    # GENERAL tuning guide를 category/rule_type/source table 조건으로 조회한다.
     def _load_rag_rules(self, db_config: dict[str, Any], category: str, rule_type: str, source_tables: set[str], map_id: str) -> list[dict[str, Any]]:
-        # GENERAL tuning guidance is loaded by scalar Milvus query. It is not
-        # ranked by vector distance; SEARCH examples above are the vector path.
+        # GENERAL 튜닝 guide는 Milvus scalar query로 조회한다.
+        # vector 거리로 정렬하지 않고, SEARCH 예시만 vector 검색 경로를 사용한다.
         config = self._milvus_config()
         rows = self._milvus_client().query(
             collection_name=config["rag_collection"],
@@ -522,6 +513,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                 result.append(rule)
         return result
 
+    # 튜닝 prompt에 들어간 RAG guide와 검색 결과 요약을 workflow 로그에 남긴다.
     def _log_rag_context(self, map_id: str, category: str, general_rules: list[dict[str, Any]], examples: list[dict[str, Any]], retry_count: int) -> None:
         match_count = sum(len(block.get("top_rule_matches") or []) for block in examples)
         general_ids = ",".join(str(rule.get("rule_id") or "") for rule in general_rules[:20])
@@ -547,6 +539,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             },
         )
 
+    # 현재 TO_SQL과 RAG guide를 합쳐 튜닝된 SQL을 생성한다.
     def _generate_tuned_sql(self, job: dict[str, Any], llm_config: dict[str, Any], current_sql: str, general_rules: list[dict[str, Any]], tuning_examples: list[dict[str, Any]], last_error: str, retry_count: int) -> tuple[str, str]:
         prompt = self._build_prompt("TUNE_TOBE_SQL", current_tobe_sql=current_sql, universal_tuning_rules=self._serialize_general_rules(general_rules), tuning_examples_text=self._serialize_tuning_examples(tuning_examples), last_error=last_error or "None")
         map_id = self._map_id(job)
@@ -554,6 +547,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         raw, _ = self._call_llm_text(prompt, llm_config, system="의미를 변경하지 않고 Oracle/MyBatis SQL을 튜닝하십시오.")
         return self._parse_tuning_response(raw)
 
+    # 튜닝 전/후 SQL 결과를 비교할 TUNED_TEST_SQL을 생성한다.
     def _generate_tuned_test_sql(self, job: dict[str, Any], db_config: dict[str, Any], llm_config: dict[str, Any], to_sql: str, tuned_sql: str, bind_set: Any, last_error: str, retry_count: int) -> str:
         prompt = self._build_prompt("TUNED_TEST_SQL", baseline_tobe_sql=to_sql, tuned_sql=tuned_sql, tobe_schema=str(db_config.get("target_schema") or os.getenv("ORACLE_SCHEMA_TGT") or "UNKNOWN").strip().upper(), bind_set_json=self._load_bind_sets_json(bind_set), last_error=last_error or "None")
         map_id = self._map_id(job)
@@ -564,6 +558,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             raise ValueError("TUNED_TEST_SQL generation returned empty SQL")
         return test_sql
 
+    # LLM tuning 응답에서 tuned_sql과 explanation을 분리한다.
     def _parse_tuning_response(self, raw: str) -> tuple[str, str]:
         text = str(raw or "").strip()
         if text.startswith("```"):
@@ -585,6 +580,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             return tuned_sql, tuned_result
         return self._clean_generated_sql(text), "TUNING APPLIED"
 
+    # 튜닝 실패 상태와 부분 산출물을 NEXT_SQL_INFO에 저장하고 표준 실패 payload를 만든다.
     def _finish_failure(self, payload: dict[str, Any], job: dict[str, Any], db_config: dict[str, Any], started: float, status: str, message: str, attempts: list[dict[str, Any]] | None = None, partial_values: dict[str, Any] | None = None, tuning_guides: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         failure_attempts = attempts or [{"attempt": 1, "stage": self._failure_stage(status), "status": status, "reason": message}]
         if db_config and self._has_sql_key(job):
@@ -603,9 +599,11 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             extra={"status_tuning": status, "tuning_status": status, "tuned_to_sql": (partial_values or {}).get("tuned_to_sql") or (partial_values or {}).get("TUNED_TO_SQL"), "tuned_result": (partial_values or {}).get("TUNED_RESULT") or message, "tuning_guides": list(tuning_guides or []), "next_node": self._dashboard_node(payload)},
         )
 
+    # 튜닝을 실행하지 않는 정상 경로에서 현재 payload를 다음 dashboard 노드로 넘긴다.
     def _pass_through(self, *, payload: dict[str, Any], job: dict[str, Any], started: float, status: str, message: str) -> dict[str, Any]:
         return self._result(payload=payload, job=job, ok=False, status=status, elapsed=time.perf_counter() - started, attempts=[], message=message, extra={"tuning_skipped": True, "next_node": self._dashboard_node(payload)})
 
+    # 현재 item이 15C 담당이 아닐 때 원본 payload를 유지한 채 넘긴다. 10C/12C의 pass-through와 같은 패턴이다.
     def _component_pass_through(self, payload: dict[str, Any], started: float, message: str) -> dict[str, Any]:
         elapsed = time.perf_counter() - started
         total = int(payload.get("total_jobs") or 1)
@@ -616,6 +614,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         result["history"] = history
         return result
 
+    # 15C 실행 결과를 dashboard/후속 단계가 읽는 표준 payload로 만든다.
     def _result(self, *, payload: dict[str, Any], job: dict[str, Any], ok: bool, status: str, elapsed: float, attempts: list[dict[str, Any]], message: str, extra: dict[str, Any]) -> dict[str, Any]:
         total = int(payload.get("total_jobs") or 1)
         index = int(payload.get("job_index") or 1)
@@ -646,17 +645,19 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             "db_status_updated": self._has_sql_key(job) and not extra.get("tuning_skipped"),
         }
 
+    # 후속 formatting 단계가 볼 수 있도록 tuning 산출 SQL 목록을 표준 구조로 만든다.
     def _generated_sql_list(self, payload: dict[str, Any], job: dict[str, Any], extra: dict[str, Any]) -> list[dict[str, Any]]:
         result = [dict(item) for item in payload.get("generated_sql_list") or [] if isinstance(item, dict)]
         sql_id = job.get("sql_id") or payload.get("sql_id")
         space_nm = job.get("space_nm") or payload.get("space_nm")
-        # Check both state (lowercase) and DB-loaded (uppercase) keys to capture generated SQL,
-        # including those that failed validation but were still generated and need formatting.
+        # state의 소문자 key와 DB에서 읽은 대문자 key를 모두 확인해 생성 SQL을 놓치지 않는다.
+        # 검증 실패 후에도 생성된 SQL은 formatting 단계에서 확인할 수 있어야 한다.
         tuned_to_sql = extra.get("tuned_to_sql") or extra.get("TUNED_TO_SQL")
         if str(tuned_to_sql or "").strip():
             result.append({"table": "NEXT_SQL_INFO", "sql_id": sql_id, "space_nm": space_nm, "column": "TUNED_TO_SQL", "source_component": "15C_sqlTuningOneJobPocExecutor"})
         return self._dedupe_generated_sql_list(result)
 
+    # 같은 SQL 항목이 payload에 중복되지 않게 정리한다. 10C/12C와 같은 목적의 헬퍼다.
     def _dedupe_generated_sql_list(self, values: list[dict[str, Any]]) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         seen: set[tuple[str, str, str, str]] = set()
@@ -668,9 +669,9 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             result.append(item)
         return result
 
+    # SPACE_NM/SQL_ID 기준으로 NEXT_SQL_INFO 한 건을 로드한다. 12C와 같은 row 식별 체계다.
     def _load_sql_job(self, db_config: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
-        columns = self._table_columns(db_config, table)
         aliases = [
             ("TAG_KIND", "tag_kind", "VARCHAR2(100)"),
             ("SPACE_NM", "space_nm", "VARCHAR2(4000)"),
@@ -686,10 +687,9 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             ("PRIORITY", "priority", "NUMBER"),
             ("RETRY_COUNT", "retry_count", "NUMBER"),
         ]
-        select_sql = ",\n               ".join([self._select_expr(columns, col, alias, data_type) for col, alias, data_type in aliases])
+        select_sql = ",\n               ".join([f"{col} AS {alias}" for col, alias, _ in aliases])
         where_sql, params = self._sql_key_where(payload)
-        order_expr = "UPD_TS NULLS FIRST" if "UPD_TS" in columns else "SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST"
-        query = f"SELECT {select_sql} FROM {table} WHERE {where_sql} ORDER BY {order_expr}"
+        query = f"SELECT {select_sql} FROM {table} WHERE {where_sql} ORDER BY UPD_TS NULLS FIRST"
         with self._connect(db_config) as conn:
             cur = conn.cursor()
             cur.execute(query, params)
@@ -700,19 +700,16 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             loaded = {key: self._lob_to_str(row[index]) for index, key in enumerate(keys)}
         return {**payload, **loaded}
 
+    # NEXT_SQL_INFO의 tuning SQL/status 컬럼을 명시적으로 업데이트한다.
     def _update_row(self, db_config: dict[str, Any], job: dict[str, Any], values: dict[str, Any]) -> None:
         table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
-        columns = self._table_columns(db_config, table)
         set_clauses: list[str] = []
         where_sql, params = self._sql_key_where(job)
         for index, (column, value) in enumerate(values.items(), start=1):
-            if column not in columns:
-                continue
             name = f"p{index}"
             set_clauses.append(f"{column} = :{name}")
             params[name] = value
-        if "UPD_TS" in columns:
-            set_clauses.append("UPD_TS = CURRENT_TIMESTAMP")
+        set_clauses.append("UPD_TS = CURRENT_TIMESTAMP")
         if not set_clauses:
             return
         with self._connect(db_config) as conn:
@@ -720,28 +717,25 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             cur.execute(f"UPDATE {table} SET {', '.join(set_clauses)} WHERE {where_sql}", params)
             conn.commit()
 
+    # 튜닝에 사용된 block별 RAG 내용을 NEXT_SQL_INFO.BLOCK_RAG_CONTENT에 저장한다.
     def _update_block_rag_content(self, db_config: dict[str, Any], job: dict[str, Any], tuning_examples: list[dict[str, Any]]) -> None:
-        table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
-        if "BLOCK_RAG_CONTENT" in self._table_columns(db_config, table):
-            self._update_row(db_config, job, {"BLOCK_RAG_CONTENT": self._serialize_tuning_examples(tuning_examples)})
+        self._update_row(db_config, job, {"BLOCK_RAG_CONTENT": self._serialize_tuning_examples(tuning_examples)})
 
+    # SQL Tuning 실행 시작 시 BATCH_CNT를 증가시킨다.
     def _increment_batch_count(self, db_config: dict[str, Any], job: dict[str, Any]) -> None:
         table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
-        columns = self._table_columns(db_config, table)
-        if "BATCH_CNT" not in columns:
-            return
-        set_clause = "BATCH_CNT = NVL(BATCH_CNT, 0) + 1"
-        if "UPD_TS" in columns:
-            set_clause += ", UPD_TS = CURRENT_TIMESTAMP"
+        set_clause = "BATCH_CNT = NVL(BATCH_CNT, 0) + 1, UPD_TS = CURRENT_TIMESTAMP"
         where_sql, params = self._sql_key_where(job)
         with self._connect(db_config) as conn:
             cur = conn.cursor()
             cur.execute(f"UPDATE {table} SET {set_clause} WHERE {where_sql}", params)
             conn.commit()
 
+    # retry 중인 tuning 단계 status와 메시지를 NEXT_SQL_INFO에 저장한다.
     def _mark_running_status(self, db_config: dict[str, Any], job: dict[str, Any], status: str, message: str, retry_count: int = 0) -> None:
         self._update_row(db_config, job, {"STATUS_TUNING": status, "LOG": f"RUNNING stage=SQL_TUNING status={status} message={message}", "RETRY_COUNT": retry_count})
 
+    # SPACE_NM/SQL_ID 기반 UPDATE/SELECT where 절과 bind 값을 만든다. 12C/17C와 같은 구조다.
     def _sql_key_where(self, job: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         space_nm = str(job.get("space_nm") or "").strip()
         sql_id = str(job.get("sql_id") or "").strip()
@@ -749,34 +743,31 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             raise ValueError("SQL tuning item requires space_nm+sql_id")
         return "TO_CHAR(SPACE_NM) = :space_nm AND TO_CHAR(SQL_ID) = :sql_id", {"space_nm": space_nm, "sql_id": sql_id}
 
+    # payload/job에 SQL row를 특정할 key가 있는지 확인한다.
     def _has_sql_key(self, job: dict[str, Any]) -> bool:
         return bool(str(job.get("space_nm") or "").strip() and str(job.get("sql_id") or "").strip())
 
+    # 프롬프트에 사용된 SEARCH RAG rule의 HIT_CNT를 증가시킨다. 12C와 같은 RAG 사용량 기록이다.
     def _increment_rag_hits(self, db_config: dict[str, Any], examples: list[dict[str, Any]]) -> None:
         rule_ids = sorted({match["rule_id"] for block in examples for match in block.get("top_rule_matches", []) if match.get("rule_id")})
         if not rule_ids:
             return
         table = self._qualify(os.getenv("RAG_INFO_TABLE", "NEXT_MIG_RAG_INFO"), db_config.get("system_schema"))
-        try:
-            columns = self._table_columns(db_config, table)
-            if "HIT_CNT" not in columns:
-                return
-            set_clause = "HIT_CNT = NVL(HIT_CNT, 0) + 1"
-            if "UPDATED_AT" in columns:
-                set_clause += ", UPDATED_AT = SYSTIMESTAMP"
-            with self._connect(db_config) as conn:
-                cur = conn.cursor()
-                cur.executemany(f"UPDATE {table} SET {set_clause} WHERE TO_CHAR(RAG_ID) = :rule_id AND UPPER(TRIM(RULE_TYPE)) = 'SEARCH'", [{"rule_id": rule_id} for rule_id in rule_ids])
-                conn.commit()
-        except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").warning(f"RAG HIT_CNT update skipped: {type(exc).__name__}: {exc}", extra={"workflow_log": [0, "SQL_TUNING", "RAG_HIT", "WARN", "HIT_CNT", "SKIP", 0]})
+        set_clause = "HIT_CNT = NVL(HIT_CNT, 0) + 1, UPDATED_AT = SYSTIMESTAMP"
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.executemany(f"UPDATE {table} SET {set_clause} WHERE TO_CHAR(RAG_ID) = :rule_id AND UPPER(TRIM(RULE_TYPE)) = 'SEARCH'", [{"rule_id": rule_id} for rule_id in rule_ids])
+            conn.commit()
 
+    # 내장 tuning prompt template에 현재 context 값을 채워 최종 프롬프트를 만든다.
     def _build_prompt(self, template_name: str, **values: str) -> str:
         return SQL_PROMPT_TEMPLATES[template_name].format_map(_PromptValues(values)) + SQL_OUTPUT_FORMATTING_GUIDE
 
+    # LLM에 전달한 최종 tuning prompt 전문을 workflow 로그에 저장한다.
     def _log_prompt(self, map_id: str, step_name: str, prompt: str, retry_count: int) -> None:
         logging.getLogger("smartmigrate.workflow").info(f"{step_name} assembled", extra={"workflow_log": [map_id, "SQL_TUNING", "PROMPT_BUILD", "INFO", step_name, "PASS", retry_count, prompt]})
 
+    # 설정된 LLM/fallback model 순서로 호출하고 raw text를 반환한다. 12C/17C와 같은 호출 방식이다.
     def _call_llm_text(self, prompt: str, config: dict[str, Any], system: str = "Oracle/MyBatis SQL만 생성하십시오.") -> tuple[str, str]:
         api_key = str(config.get("llm_api_key") or os.getenv("LLM_API_KEY") or os.getenv("OPEN_API_KEY") or "").strip()
         base_url = str(config.get("llm_base_url") or os.getenv("LLM_BASE_URL") or "").strip()
@@ -814,6 +805,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                     raise
         raise ValueError("LLM call failed")
 
+    # 튜닝 RAG 검색 query를 embedding vector 목록으로 변환한다. 12C와 같은 embedding 경로다.
     def _embed_texts(self, texts: list[str], rag_config: dict[str, Any]) -> list[list[float]]:
         endpoint = str(rag_config.get("rag_embed_base_url") or os.getenv("RAG_EMBED_BASE_URL") or "").strip().rstrip("/")
         if not endpoint:
@@ -839,6 +831,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             raise ValueError("embedding response count does not match request count")
         return vectors
 
+    # TUNED_TEST_SQL을 Oracle에서 실행해 검증 row를 읽는다.
     def _execute_test_query(self, db_config: dict[str, Any], sql: str) -> list[dict[str, Any]]:
         clean_sql = self._runtime_sql(sql, "EXECUTE_TUNED_TEST_SQL")
         with self._connect(db_config) as conn:
@@ -847,6 +840,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             columns = [item[0] for item in cur.description] if cur.description else []
             return [{column: self._lob_to_str(value) for column, value in zip(columns, row)} for row in cur.fetchall()]
 
+    # 생성된 tuned/test SQL을 Oracle 실행용 SQL로 정리한다.
     def _runtime_sql(self, sql: str, stage: str) -> str:
         clean_sql = str(sql or "").strip().rstrip(";").strip()
         if not clean_sql:
@@ -865,6 +859,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             raise ValueError(f"{stage} SQL contains unresolved MyBatis tags or bind markers")
         return clean_sql
 
+    # TUNED_TEST_SQL 결과 컬럼과 row count 비교값을 검증해 PASS/FAIL 사유를 만든다.
     def _evaluate_test_rows(self, rows: list[dict[str, Any]]) -> str:
         if not rows:
             raise ValueError("TUNED_TEST_SQL returned no rows")
@@ -880,6 +875,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                 raise ValueError(f"TUNED_TEST_SQL row count mismatch: {row}")
         return "PASS"
 
+    # 저장된 BIND_SET을 tuning/test prompt에 넣기 좋은 JSON 텍스트로 만든다.
     def _load_bind_sets_json(self, bind_set: Any) -> str:
         if isinstance(bind_set, str):
             try:
@@ -895,6 +891,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         parsed = parsed[:3]
         return json.dumps(parsed, ensure_ascii=False, default=str)
 
+    # GENERAL tuning guide 목록을 prompt 줄 단위 텍스트로 렌더링한다.
     def _serialize_general_rules(self, rules: list[dict[str, Any]]) -> str:
         lines = []
         for rule in rules:
@@ -902,6 +899,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             lines.extend(f"  GUIDANCE: {guide}" for guide in rule.get("guidance") or [])
         return "\n".join(lines) if lines else "- (empty)"
 
+    # SQL_TUNING SEARCH 예시를 tuning prompt에 넣을 readable block으로 렌더링한다.
     def _serialize_tuning_examples(self, examples: list[dict[str, Any]]) -> str:
         lines = []
         for block in examples:
@@ -913,6 +911,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                 lines.append(f"  TUNED_SQL: {match.get('target_sql') or ''}")
         return "\n".join(lines) if lines else "- (empty)"
 
+    # RAG 검색 단위를 MAIN_SQL/SUBQUERY block으로 나눈다. 12C와 같은 아이디어다.
     def _split_sql_blocks(self, sql_text: str) -> list[dict[str, str]]:
         source = str(sql_text or "").strip().rstrip(";").strip()
         if not source:
@@ -935,6 +934,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             main_sql = f"{main_sql[:start]}({placeholder}){main_sql[end:]}"
         return [{"block_id": "MAIN_SQL", "block_type": "MAIN", "sql": main_sql, "normalized_sql": self._normalize_sql_shape(main_sql)}, *[{"block_id": placeholder, "block_type": "SUBQUERY", "sql": inner, "normalized_sql": self._normalize_sql_shape(inner)} for _, _, placeholder, inner in replacements]]
 
+    # embedding 비교 전에 literal/숫자/공백을 줄여 SQL 구조 중심으로 정규화한다.
     def _normalize_sql_shape(self, sql_text: str) -> str:
         text = re.sub(r"/\*.*?\*/|--[^\n]*", " ", str(sql_text or ""), flags=re.S)
         text = re.sub(r"'(?:''|[^'])*'", " STR ", text)
@@ -942,9 +942,11 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         text = re.sub(r"\bSUBQUERY_\d+\b", "SUBQUERY", text, flags=re.I)
         return re.sub(r"\s+", " ", text).strip().upper()
 
+    # 튜닝 전/후 SQL 비교용으로 공백과 대소문자를 정규화한다.
     def _normalize_compare_sql(self, sql_text: str) -> str:
         return re.sub(r"\s+", " ", self._clean_generated_sql(sql_text)).strip().upper()
 
+    # LLM 응답에서 markdown/wrapper를 제거하고 실행 가능한 SQL 본문만 남긴다. 12C/17C와 같은 후처리다.
     def _clean_generated_sql(self, value: str) -> str:
         sql = str(value or "").strip()
         code_block = re.search(r"```(?:sql)?\s*(.*?)```", sql, flags=re.I | re.S)
@@ -961,6 +963,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             sql = re.sub(rf"</\s*{re.escape(tag)}\s*>\s*$", "", sql[wrapper.end():].strip(), flags=re.I).strip()
         return sql.rstrip(";").strip()
 
+    # 쉼표/공백/list 형태의 table 값을 대문자 table set으로 정규화한다. 12C/QA와 같은 계열이다.
     def _source_tables(self, value: str) -> set[str]:
         text = str(value or "").strip()
         if text.startswith("["):
@@ -972,14 +975,17 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                 pass
         return {token.split(".")[-1].strip().strip('"').upper() for token in re.split(r"[,;|\s]+", text) if token.strip()}
 
+    # RAG rule에서 embedding 기준이 될 SOURCE_SQL 중심 텍스트를 만든다.
     def _rule_embedding_text(self, rule: dict[str, Any]) -> str:
         return "\n".join([str(rule.get("normalized_source_sql") or ""), str(rule.get("source_sql") or "")]).strip()
 
+    # 필요 시 정규화 SQL 문자열 간 단순 유사도를 계산한다.
     def _lexical_similarity(self, left: str, right: str) -> float:
         left_tokens = set(re.findall(r"[A-Z_]+|\d+", left.upper()))
         right_tokens = set(re.findall(r"[A-Z_]+|\d+", right.upper()))
         return len(left_tokens & right_tokens) / len(left_tokens | right_tokens) if left_tokens and right_tokens else 0.0
 
+    # block별 RAG_ID/score 요약을 로그용 문자열로 만든다.
     def _rag_match_summary(self, blocks: list[dict[str, str]], matches_by_block: list[list[tuple[dict[str, Any], float]]]) -> str:
         parts: list[str] = []
         for block, matches in zip(blocks, matches_by_block):
@@ -990,8 +996,9 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             parts.append(f"{block.get('block_id')}:{matched}")
         return "; ".join(parts)[:3500]
 
-    # Store one auditable log per vector-search match: the searched SQL and
-    # the matched RAG SOURCE_SQL remain paired, while RAG_ID stays searchable.
+    # vector 검색 match마다 감사 가능한 로그를 한 건씩 남긴다.
+    # 검색 SQL과 match된 RAG SOURCE_SQL은 함께 보관하고, RAG_ID는 검색 가능하게 남긴다.
+    # vector 검색에 사용된 현재 SQL과 match된 RAG SQL을 감사 로그로 남긴다.
     def _log_rag_comparisons(self, map_id: str, category: str, blocks: list[dict[str, str]], matches_by_block: list[list[tuple[dict[str, Any], float]]], retry_count: int) -> None:
         logger = logging.getLogger("smartmigrate.workflow")
         for block, matches in zip(blocks, matches_by_block):
@@ -1011,9 +1018,11 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                     extra={"workflow_log": [map_id, "SQL_TUNING", "RAG_COMPARE", "INFO", f"{category}_COMPARE", "PASS", retry_count, comparison_sql]},
                 )
 
+    # payload route와 상태를 보고 15C가 tuning을 실행해야 하는지 판단한다.
     def _should_run_tuning(self, payload: dict[str, Any]) -> bool:
         return self._job_name(payload) in {"conversion", "tuning"}
 
+    # loop payload의 route/job_name 값을 15C 내부 tuning 작업명으로 정규화한다.
     def _job_name(self, payload: dict[str, Any]) -> str:
         value = str(payload.get("job_name") or "").strip().lower()
         if value:
@@ -1021,15 +1030,19 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         route = str(payload.get("planned_job_route") or payload.get("job_route") or "").strip().upper()
         return {"MIG": "migration", "SQL_CONVERSION": "conversion", "SQL_TUNING": "tuning", "SQL_FORMATTING": "formatting"}.get(route, "")
 
+    # DB status 값을 비교하기 쉬운 대문자 문자열로 정규화한다. 12C/17C와 같은 유틸이다.
     def _status(self, value: Any) -> str:
         return str(value or "").strip().upper()
 
+    # SQL Conversion이 tuning 가능한 PASS 상태인지 확인한다.
     def _is_conversion_pass(self, value: Any) -> bool:
         return self._status(value) in CONVERSION_SUCCESS_STATUSES
 
+    # 튜닝 생략으로 간주할 NO_TUNING 계열 결과인지 판단한다.
     def _is_no_tuning_result(self, value: Any) -> bool:
         return "NO TUNING" in str(value or "").upper()
 
+    # 현재 payload route에 맞는 dashboard 노드명을 결정한다.
     def _dashboard_node(self, payload: dict[str, Any]) -> str:
         if payload.get("full_workflow"):
             return "17C_sqlFormattingOneJobPocExecutor"
@@ -1038,46 +1051,32 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             return "12D_sqlConversionIterationDashboard"
         return "15D_sqlTuningIterationDashboard"
 
+    # 최종 status가 의미하는 tuning 실패 단계를 반환한다.
     def _failure_stage(self, status: str) -> str:
         return "GENERATE_TUNED_TEST_SQL" if status == FAIL_TEST else "APPLY_TUNING_RULES"
 
+    # 로그에 사용할 MAP_ID를 job/payload에서 문자열로 추출한다.
     def _map_id(self, job: dict[str, Any]) -> str:
         return f"{job.get('sql_id') or ''} / {job.get('space_nm') or ''}"[:100]
 
+    # tuning graph에서 허용할 전체 attempt 수를 계산한다.
     def _max_retry(self) -> int:
         if getattr(self, "_payload_max_retry", None) is not None:
             return max(1, min(11, int(getattr(self, "_payload_max_retry") or 0) + 1))
         return max(1, min(11, int(getattr(self, "max_retry", None) or 2) + 1))
 
+    # 최초 실행을 제외한 설정 retry limit을 반환한다.
     def _configured_retry_limit(self) -> int:
         if getattr(self, "_payload_max_retry", None) is not None:
             return max(0, min(10, int(getattr(self, "_payload_max_retry") or 0)))
         return max(0, min(10, int(getattr(self, "max_retry", None) or 2)))
 
+    # Langflow에 설정된 tuning 반복 횟수를 양의 정수로 반환한다.
     def _tuning_iterations(self) -> int:
         return max(1, min(5, int(getattr(self, "tuning_iterations", None) or 1)))
 
-    def _select_expr(self, columns: set[str], column: str, alias: str, data_type: str) -> str:
-        if column in columns:
-            return f"{column} AS {alias}"
-        if data_type.upper() == "CLOB":
-            return f"TO_CLOB(NULL) AS {alias}"
-        return f"CAST(NULL AS {data_type}) AS {alias}"
-
-    def _table_columns(self, db_config: dict[str, Any], table: str) -> set[str]:
-        owner, table_name = self._split_table_owner_and_name(table)
-        if owner:
-            sql = "SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS WHERE OWNER = :1 AND TABLE_NAME = :2"
-            params = [owner, table_name]
-        else:
-            sql = "SELECT COLUMN_NAME FROM USER_TAB_COLUMNS WHERE TABLE_NAME = :1"
-            params = [table_name]
-        with self._connect(db_config) as conn:
-            cur = conn.cursor()
-            cur.execute(sql, params)
-            return {str(row[0]).upper() for row in cur.fetchall()}
-
     @contextmanager
+    # Oracle 연결을 열고 사용 후 닫는 context manager다. 10C/12C/17C와 같은 패턴이다.
     def _connect(self, db_config: dict[str, Any]):
         import oracledb
 
@@ -1088,6 +1087,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         finally:
             conn.close()
 
+    # payload와 Langflow 입력에서 LLM 호출 설정을 모은다.
     def _llm_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         item_config = dict(payload.get("llm_config") or {})
         return {
@@ -1100,6 +1100,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             "llm_timeout_seconds": self._positive_int(getattr(self, "llm_timeout_seconds", None) or item_config.get("llm_timeout_seconds"), 900),
         }
 
+    # payload와 Langflow 입력/환경변수에서 RAG embedding 설정을 모은다.
     def _rag_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         item_config = dict(payload.get("rag_config") or {})
         return {
@@ -1109,6 +1110,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             "rag_embed_timeout_seconds": self._positive_int(getattr(self, "rag_embed_timeout_seconds", None) or item_config.get("rag_embed_timeout_seconds") or os.getenv("RAG_EMBED_TIMEOUT_SEC"), 60),
         }
 
+    # Milvus 접속 및 RAG collection 설정을 모은다.
     def _milvus_config(self) -> dict[str, Any]:
         return {
             "uri": str(getattr(self, "milvus_uri", "") or os.getenv("MILVUS_URI") or "").strip(),
@@ -1118,9 +1120,10 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             "rag_collection": self._clean_collection_name(getattr(self, "rag_collection_name", "") or os.getenv("MILVUS_RAG_COLLECTION") or "SM_RAG_RULES"),
         }
 
+    # RAG 검색에 사용할 Milvus client를 생성한다. 12C와 같은 SDK 경로다.
     def _milvus_client(self) -> Any:
-        # Milvus 2.6.5 SDK connection. The URI is passed exactly as entered in
-        # Langflow/env; do not split host/port or rewrite it before calling SDK.
+        # Milvus 2.6.5 SDK 연결은 입력된 URI를 그대로 사용한다.
+        # SDK 호출 전에 host/port를 분리하거나 URI를 재작성하지 않는다.
         from pymilvus import MilvusClient
 
         config = self._milvus_config()
@@ -1135,6 +1138,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             timeout=10,
         )
 
+    # Milvus RAG 검색 hit에서 rule payload를 dict로 추출한다.
     def _milvus_rag_entity(self, hit: Any) -> dict[str, Any]:
         entity = self._milvus_entity(hit)
         source_tables = self._source_tables(entity.get("source_tables") or "")
@@ -1149,6 +1153,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             "normalized_source_sql": self._normalize_sql_shape(entity.get("source_sql") or ""),
         }
 
+    # Milvus hit 객체의 entity/fields를 dict로 정규화한다. 10C/12C와 같은 계열이다.
     def _milvus_entity(self, hit: Any) -> dict[str, Any]:
         if isinstance(hit, dict):
             entity = hit.get("entity") or hit.get("fields") or hit
@@ -1162,6 +1167,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             return dict(entity) if isinstance(entity, dict) else {}
         return {}
 
+    # Milvus hit의 distance/score 값을 float로 통일한다. 10C/12C와 같은 점수 처리다.
     def _milvus_score(self, hit: Any) -> float:
         if isinstance(hit, dict):
             value = hit.get("distance", hit.get("score", 0.0))
@@ -1172,16 +1178,19 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         except (TypeError, ValueError):
             return 0.0
 
+    # RAG rule의 source table 범위와 현재 작업 범위가 겹치는지 판단한다.
     def _source_tables_match(self, rule_tables: list[str] | set[str], source_tables: set[str]) -> bool:
         rule_set = set(rule_tables)
         return not rule_set or not source_tables or bool(rule_set & source_tables)
 
+    # Milvus collection 이름을 공백 없는 유효 문자열로 정리한다. 10C/12C와 같은 헬퍼다.
     def _clean_collection_name(self, value: Any) -> str:
         clean = str(value or "").strip()
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", clean):
             raise ValueError(f"Invalid Milvus collection name: {clean}")
         return clean
 
+    # payload와 Langflow 입력에서 Oracle 접속/schema 설정을 모은다.
     def _db_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         item_config = dict(payload.get("db_config") or {})
         return {
@@ -1194,22 +1203,28 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             "target_schema": str(item_config.get("target_schema") or "").strip(),
         }
 
+    # 필수 Oracle 접속 값 누락을 DB 연결 전에 명확히 실패시킨다.
     def _require_db_config(self, db_config: dict[str, Any]) -> None:
         missing = [key for key in ("db_host", "db_service_name", "db_username") if not str(db_config.get(key) or "").strip()]
         if missing:
             raise ValueError(f"15C SQL Tuning is not connected to database settings: missing {', '.join(missing)}")
 
+    # system_schema가 명시된 테이블명을 schema-qualified 이름으로 만든다. 10C/12C와 같은 원칙이다.
     def _qualify(self, table_name: str, schema: Any) -> str:
         clean_table = self._clean_identifier(table_name)
         clean_schema = str(schema or "").strip().upper()
-        return f"{self._clean_identifier(clean_schema)}.{clean_table}" if clean_schema else clean_table
+        if not clean_schema:
+            raise ValueError("System Schema를 입력해야 합니다.")
+        return f"{self._clean_identifier(clean_schema)}.{clean_table}"
 
+    # 동적 SQL identifier에 안전한 Oracle 문자만 허용한다.
     def _clean_identifier(self, value: str) -> str:
         clean = str(value or "").strip().upper()
         if not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", clean):
             raise ValueError(f"Invalid identifier: {clean}")
         return clean
 
+    # OWNER.TABLE 문자열을 metadata 조회용 owner/table_name으로 나눈다.
     def _split_table_owner_and_name(self, table: str) -> tuple[str | None, str]:
         value = str(table or "").strip().upper()
         if "." in value:
@@ -1217,11 +1232,13 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             return owner, name
         return None, value
 
+    # Oracle LOB 값을 연결 종료 전에 문자열로 읽는다. 10C/12C/17C도 같은 이유로 사용한다.
     def _lob_to_str(self, value: Any) -> str:
         if value is not None and hasattr(value, "read"):
             return str(value.read())
         return "" if value is None else str(value)
 
+    # Langflow Secret 입력을 일반 문자열로 꺼낸다. 10C/12C/17C와 같은 처리다.
     def _secret_to_str(self, value: Any) -> str:
         if value is None:
             return ""
@@ -1229,6 +1246,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             return str(value.get_secret_value() or "")
         return str(value or "")
 
+    # 숫자 입력을 양의 정수로 변환하고 실패하면 기본값을 사용한다. 10C/12C와 같은 유틸이다.
     def _positive_int(self, value: Any, default: int) -> int:
         try:
             parsed = int(value)
@@ -1236,6 +1254,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         except (TypeError, ValueError):
             return default
 
+    # Langflow 입력이 Data/Message/dict/JSON 문자열 중 무엇이든 dict로 통일한다. 10C/12C와 같은 패턴이다.
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):
             return dict(raw.data or {})

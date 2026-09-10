@@ -51,6 +51,7 @@ class NewType12BSqlConversionLoop(Component):
         Output(display_name="Done", name="done", method="done_output", types=["Data"]),
     ]
 
+    # Langflow output 진입점에서 입력을 검증하고 이 컴포넌트의 주요 실행 흐름을 시작한다.
     def initialize_data(self) -> None:
         """Normalize input rows and cache them for a single loop run."""
         if self.ctx.get(f"{self._id}_initialized", False):
@@ -69,9 +70,11 @@ class NewType12BSqlConversionLoop(Component):
             }
         )
 
+    # Langflow Message 입력을 Loop가 처리할 Data 객체로 변환한다.
     def _convert_message_to_data(self, message: Message) -> Data:
         return convert_to_data(message, auto_parse=False)
 
+    # 입력 payload나 job item이 실행 가능한 구조인지 검증한다.
     def _validate_data(self, data: Any) -> list[Data]:
         if isinstance(data, Message):
             data = self._convert_message_to_data(data)
@@ -87,20 +90,24 @@ class NewType12BSqlConversionLoop(Component):
             data = normalized
         return validate_data_input(data)
 
+    # Langflow Loop body에 포함될 graph vertex 집합을 반환한다.
     def get_loop_body_vertices(self) -> set[str]:
         if not hasattr(self, "_vertex") or self._vertex is None:
             return set()
         return get_loop_body_vertices(vertex=self._vertex, graph=self.graph, get_incoming_edge_by_target_param_fn=self.get_incoming_edge_by_target_param)
 
+    # payload나 graph 설정에서 필요한 값을 꺼내 표준 형태로 반환한다.
     def _get_loop_body_start_vertex(self) -> str | None:
         if not hasattr(self, "_vertex") or self._vertex is None:
             return None
         return get_loop_body_start_vertex(vertex=self._vertex)
 
+    # 문자열이나 payload에서 후속 로직에 필요한 값을 추출한다.
     def _extract_loop_output(self, results: list[Any]) -> Data:
         end_vertex_id = self.get_incoming_edge_by_target_param("item")
         return extract_loop_output(results=results, end_vertex_id=end_vertex_id)
 
+    # Langflow Loop body graph를 각 Data item에 대해 비동기로 실행한다.
     async def execute_loop_body(self, data_list: list[Data], event_manager=None) -> list[Data]:
         loop_body_vertex_ids = self.get_loop_body_vertices()
         start_vertex_id = self._get_loop_body_start_vertex()
@@ -116,6 +123,7 @@ class NewType12BSqlConversionLoop(Component):
             event_manager=event_manager,
         )
 
+    # 현재 loop index의 item을 실행하고 다음 item 또는 완료 상태를 계산한다.
     async def _iterate(self) -> list[Data]:
         if self.ctx.get(f"{self._id}_iterated", False):
             cached_error = self.ctx.get(f"{self._id}_iteration_error")
@@ -143,9 +151,10 @@ class NewType12BSqlConversionLoop(Component):
         self.update_ctx({f"{self._id}_aggregated": aggregated_results, f"{self._id}_iterated": True})
         return aggregated_results
 
+    # Loop body로 전달할 현재 item payload를 반환한다.
     async def item_output(self) -> Data:
-        # The Item output is only the loop-body entry point. Its normal return
-        # value must never continue through the outer graph into 12C.
+        # Item output은 loop body로 들어가는 진입점이다. 일반 return 값이
+        # 외부 graph를 타고 12C executor에 한 번 더 전달되면 안 된다.
         logging.getLogger("smartmigrate.workflow").info("before item_output", extra={"workflow_log": [0, "WORKFLOW", "12B_SQL_LOOP", "INFO", "ITEM_OUTPUT", "START", 0]})
         try:
             self.stop("item")
@@ -153,9 +162,9 @@ class NewType12BSqlConversionLoop(Component):
                 if self._vertex is not None:
                     await self._iterate()
             finally:
-                # Running the loop body builds a nested graph. Re-assert the stop
-                # after it finishes so the inspection payload below cannot be
-                # dispatched to 12C as one additional job.
+                # loop body 실행 중 내부 graph가 구성되므로, 실행 후에도 stop 상태를 다시 보장한다.
+                
+                
                 self.stop("item")
             data_list = self.ctx.get(f"{self._id}_data", [])
             __log_result = Data(data={"count": len(data_list), "items": [self._data_dict(item) for item in data_list]})
@@ -165,8 +174,9 @@ class NewType12BSqlConversionLoop(Component):
             logging.getLogger("smartmigrate.workflow").error(f"error item_output: {exc}", extra={"workflow_log": [0, "WORKFLOW", "12B_SQL_LOOP", "ERROR", "ITEM_OUTPUT", "ERROR", 0]})
             raise
 
+    # Loop가 끝났을 때 dashboard/summary로 넘길 완료 payload를 반환한다.
     async def done_output(self) -> Data:
-        # The Done output is the post-loop path. Connect it to 11.
+        # Done output은 loop 완료 후 dashboard/summary로 이어지는 경로다.
         logging.getLogger("smartmigrate.workflow").info("before done_output", extra={"workflow_log": [0, "WORKFLOW", "12B_SQL_LOOP", "INFO", "DONE_OUTPUT", "START", 0]})
         try:
             if self._vertex is not None:
@@ -188,14 +198,17 @@ class NewType12BSqlConversionLoop(Component):
             logging.getLogger("smartmigrate.workflow").error(f"error done_output: {exc}", extra={"workflow_log": [0, "WORKFLOW", "12B_SQL_LOOP", "ERROR", "DONE_OUTPUT", "ERROR", 0]})
             raise
 
+    # 입력 payload나 job item이 실행 가능한 구조인지 검증한다.
     def _validate_sql_key(self, payload: dict[str, Any], index: int) -> None:
         if str(payload.get("space_nm") or "").strip() and str(payload.get("sql_id") or "").strip():
             return
         raise ValueError(f"12B SQL Conversion item {index} requires space_nm+sql_id")
 
+    # route별 작업을 중복 없이 비교할 수 있는 식별 key를 만든다.
     def _job_key(self, payload: dict[str, Any]) -> str:
         return f"space_nm={payload.get('space_nm')}, sql_id={payload.get('sql_id')}"
 
+    # Loop item/Data/Message 값을 dict로 변환해 공통 처리한다.
     def _data_dict(self, item: Any) -> dict[str, Any]:
         if isinstance(item, Data):
             return dict(item.data or {})
@@ -208,6 +221,7 @@ class NewType12BSqlConversionLoop(Component):
             return dict(item)
         return {"value": item}
 
+    # 문자열 입력에서 JSON 객체를 파싱해 후속 로직이 쓰는 dict로 만든다.
     def _parse_json_text(self, text: Any) -> dict[str, Any] | None:
         import json
         import re

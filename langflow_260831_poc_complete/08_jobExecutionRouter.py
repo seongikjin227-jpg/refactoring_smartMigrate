@@ -99,27 +99,35 @@ class NewType08JobExecutionRouter(Component):
         Output(display_name="No Runnable Target Message", name="no_runnable_job", method="no_runnable_response", group_outputs=True, types=["Message"]),
     ]
 
+    # Langflow group output별로 현재 route가 맞을 때만 payload를 반환한다.
     def mig_response(self) -> Data:
         return self._route_output("MIG", "mig_job")
 
+    # Langflow group output별로 현재 route가 맞을 때만 payload를 반환한다.
     def sql_conversion_response(self) -> Data:
         return self._route_output("SQL_CONVERSION", "sql_conversion_job")
 
+    # Langflow group output별로 현재 route가 맞을 때만 payload를 반환한다.
     def sql_tuning_response(self) -> Data:
         return self._route_output("SQL_TUNING", "sql_tuning_job")
 
+    # Langflow group output별로 현재 route가 맞을 때만 payload를 반환한다.
     def sql_formatting_response(self) -> Data:
         return self._route_output("SQL_FORMATTING", "sql_formatting_job")
 
+    # Langflow group output별로 현재 route가 맞을 때만 payload를 반환한다.
     def full_workflow_response(self) -> Data:
         return self._route_output("FULL_WORKFLOW", "full_workflow_job")
 
+    # Langflow group output별로 현재 route가 맞을 때만 payload를 반환한다.
     def prerequisite_required_response(self) -> Message:
         return self._message_route_output("PREREQUISITE_REQUIRED", "prerequisite_required")
 
+    # Langflow group output별로 현재 route가 맞을 때만 payload를 반환한다.
     def no_runnable_response(self) -> Message:
         return self._message_route_output("NO_RUNNABLE_JOB", "no_runnable_job")
 
+    # 예상 route와 실제 route를 비교해 해당 output 실행 여부를 결정한다.
     def _route_output(self, expected_route: str, output_name: str) -> Data:
         try:
             routed = self._get_routed_payload()
@@ -134,6 +142,7 @@ class NewType08JobExecutionRouter(Component):
             self.status = result
             return Data(data=result)
 
+    # 라우터 output이 Message 타입일 때 route 일치 여부에 따라 메시지를 반환한다.
     def _message_route_output(self, expected_route: str, output_name: str) -> Message:
         try:
             routed = self._get_routed_payload()
@@ -149,6 +158,7 @@ class NewType08JobExecutionRouter(Component):
             self.status = {"ok": False, "component": "08_jobExecutionRouter", "error": str(exc), "answer_text": message}
             return Message(text=message)
 
+    # payload나 graph 설정에서 필요한 값을 꺼내 표준 형태로 반환한다.
     def _get_routed_payload(self) -> dict[str, Any]:
         cached = getattr(self, "_cached_routed_payload", None)
         if cached is not None:
@@ -211,6 +221,7 @@ class NewType08JobExecutionRouter(Component):
         self._cached_routed_payload = routed
         return routed
 
+    # 관리 자연어 요청을 LLM에 보내 route/action/target 구조로 분류한다.
     def _route_with_llm(self, payload: dict[str, Any]) -> dict[str, Any]:
         api_key = self._secret_to_str(getattr(self, "llm_api_key", None)).strip()
         model = str(getattr(self, "llm_model", "") or "").strip()
@@ -262,8 +273,9 @@ class NewType08JobExecutionRouter(Component):
         content = (((raw.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
         return self._parse_json_object(content)
 
+    # 비교와 검색이 안정적으로 동작하도록 입력 값을 정규화한다.
     def _normalize_llm_hint(self, hint: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
-        # 01 should provide target_filter; local text extraction remains only for older 01 prompt outputs.
+        # target_filter는 01이 제공해야 한다. 여기의 로컬 텍스트 추출은 예전 01 출력 호환용이다.
         extracted_targets = self._extract_targets(str(payload.get("user_request") or payload.get("original_request") or payload.get("input") or ""))
         payload_targets = payload.get("target_filter") if isinstance(payload.get("target_filter"), dict) else {}
         llm_targets = hint.get("target_filter") if isinstance(hint.get("target_filter"), dict) else {}
@@ -297,6 +309,7 @@ class NewType08JobExecutionRouter(Component):
             "reason": str(hint.get("reason") or ""),
         }
 
+    # 실행 route와 run_mode에 맞춰 실제 loop에 넘길 작업 목록을 선택한다.
     def _selected_jobs(self, payload: dict[str, Any], route: str, run_mode: str) -> list[dict[str, Any]]:
         if run_mode == "all_pending":
             return []
@@ -311,6 +324,7 @@ class NewType08JobExecutionRouter(Component):
             return [dict(job) for job in requested.get("sql_formatting_jobs") or [] if isinstance(job, dict)]
         return []
 
+    # 사용자 요청에서 특정 작업 식별자만 추려 실행 범위를 제한한다.
     def _requested_job_identifiers(self, payload: dict[str, Any]) -> dict[str, Any]:
         requested = payload.get("requested_jobs") if isinstance(payload.get("requested_jobs"), dict) else {}
         return {
@@ -320,6 +334,7 @@ class NewType08JobExecutionRouter(Component):
             "sql_formatting_jobs": list(requested.get("sql_formatting_jobs") or []),
         }
 
+    # 선행 단계가 부족해 현재 route를 실행할 수 없는 이유 문장을 만든다.
     def _prerequisite_reason(self, route: str, run_mode: str, counts: dict[str, int]) -> str:
         if run_mode != "all_pending" or route in {"MIG", "FULL_WORKFLOW", "PREREQUISITE_REQUIRED", "NO_RUNNABLE_JOB"}:
             return ""
@@ -330,6 +345,7 @@ class NewType08JobExecutionRouter(Component):
             blockers.append(f"SQL Conversion 잔여 {counts.get('SQL_CONVERSION', 0)}건")
         return "선행 작업이 남아 있어 요청한 단계를 실행할 수 없습니다: " + ", ".join(blockers) if blockers else ""
 
+    # payload와 target 정보를 바탕으로 사용자가 실행하려는 route를 결정한다.
     def _route_from_payload(self, payload: dict[str, Any], targets: dict[str, Any]) -> str | None:
         domain = str(payload.get("requested_domain") or "").upper()
         if domain in {"MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING", "FULL_WORKFLOW"}:
@@ -341,17 +357,20 @@ class NewType08JobExecutionRouter(Component):
         scope = str(payload.get("execution_scope") or "").lower()
         return "FULL_WORKFLOW" if scope == "all" else None
 
+    # 전체 실행인지 특정 작업 실행인지 run_mode를 결정한다.
     def _run_mode_from_payload(self, payload: dict[str, Any], targets: dict[str, Any]) -> str:
         scope = str(payload.get("execution_scope") or "").lower()
         if scope == "targeted" or any(targets.get(key) for key in ("map_ids", "sql_ids", "space_nms")):
             return "targeted"
         return "all_pending"
 
+    # route별 남은 작업 수 집계에서 현재 route의 count를 꺼낸다.
     def _route_count(self, route: str, counts: dict[str, int]) -> int:
         if route == "FULL_WORKFLOW":
             return counts["total"]
         return counts.get(route, 0)
 
+    # 이전 단계가 계산한 route별 남은 작업 수를 정수 dict로 정리한다.
     def _counts(self, payload: dict[str, Any]) -> dict[str, int]:
         summary = payload.get("job_availability") or payload.get("remaining_summary") or payload.get("pending_summary") or {}
         counts = {
@@ -363,6 +382,7 @@ class NewType08JobExecutionRouter(Component):
         counts["total"] = self._to_int(summary.get("total")) or sum(counts.values())
         return counts
 
+    # 실행할 작업이 없을 때 router가 반환할 표준 decision payload를 만든다.
     def _empty_decision(self, reason: str, targets: dict[str, list[Any]]) -> dict[str, Any]:
         return {
             "job_route": "NO_RUNNABLE_JOB",
@@ -373,6 +393,7 @@ class NewType08JobExecutionRouter(Component):
             "reason": reason,
         }
 
+    # 선행 조건 미충족으로 실행을 막을 때의 표준 decision payload를 만든다.
     def _prerequisite_decision(self, reason: str, targets: dict[str, list[Any]]) -> dict[str, Any]:
         return {
             "job_route": "PREREQUISITE_REQUIRED",
@@ -383,6 +404,7 @@ class NewType08JobExecutionRouter(Component):
             "reason": reason,
         }
 
+    # 선택된 route와 job 목록을 loop 진입용 decision payload로 만든다.
     def _execution_decision(self, route: str, run_mode: str, targets: dict[str, list[Any]], selected_jobs: list[dict[str, Any]]) -> dict[str, Any]:
         return {
             "job_route": route,
@@ -393,12 +415,14 @@ class NewType08JobExecutionRouter(Component):
             "reason": f"{route} 작업을 {run_mode} 모드로 실행합니다.",
         }
 
+    # 남은 작업이 있는 route 중 실행 우선순위가 가장 높은 route를 고른다.
     def _first_available_route(self, counts: dict[str, int]) -> str | None:
         for route in ("MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"):
             if counts.get(route, 0) > 0:
                 return route
         return None
 
+    # 후속 단계나 사용자 응답에 필요한 구조화된 결과를 조립한다.
     def _build_message_route_text(self, routed: dict[str, Any]) -> str:
         route = str(routed.get("job_route") or "")
         reason = str(routed.get("routing_reason") or "").strip()
@@ -410,6 +434,7 @@ class NewType08JobExecutionRouter(Component):
             message = reason or f"{target_label}은 현재 실행 가능한 작업이 아닙니다."
         return "\n".join([message, f"요청: {user_request}"] if user_request else [message])
 
+    # 사용자가 지정한 target 범위를 status 메시지에 넣을 짧은 label로 만든다.
     def _target_label(self, targets: dict[str, Any]) -> str:
         map_ids = targets.get("map_ids") or []
         sql_ids = targets.get("sql_ids") or []
@@ -424,6 +449,7 @@ class NewType08JobExecutionRouter(Component):
             return f"space_nm={', '.join(str(item) for item in space_nms)}"
         return ""
 
+    # 관리 route에 연결된 다음 Langflow node 이름을 반환한다.
     def _next_node(self, route: str) -> str:
         if route == "MIG":
             return "10A_migJobsToLoopTable"
@@ -437,6 +463,7 @@ class NewType08JobExecutionRouter(Component):
             return "18A_fullWorkflowJobsToLoopTable"
         return "chat_output"
 
+    # 문자열이나 payload에서 후속 로직에 필요한 값을 추출한다.
     def _extract_targets(self, text: str) -> dict[str, list[Any]]:
         return {
             "map_ids": self._extract_map_ids(text),
@@ -444,6 +471,7 @@ class NewType08JobExecutionRouter(Component):
             "space_nms": self._extract_text_values(text, r"space[_\s-]*nm|spacenm|space"),
         }
 
+    # 문자열이나 payload에서 후속 로직에 필요한 값을 추출한다.
     def _extract_map_ids(self, text: str) -> list[int]:
         values: list[int] = []
         patterns = [
@@ -456,12 +484,14 @@ class NewType08JobExecutionRouter(Component):
                     values.append(int(item))
         return list(dict.fromkeys(values))
 
+    # 문자열이나 payload에서 후속 로직에 필요한 값을 추출한다.
     def _extract_text_values(self, text: str, label_pattern: str) -> list[str]:
         values: list[str] = []
         for match in re.finditer(rf"(?:{label_pattern})\s*[=:]?\s*([A-Za-z0-9_.:-]+(?:\s*,\s*[A-Za-z0-9_.:-]+)*)", text, flags=re.I):
             values.extend([item.strip() for item in match.group(1).split(",") if item.strip()])
         return list(dict.fromkeys(values))
 
+    # 비교와 검색이 안정적으로 동작하도록 입력 값을 정규화한다.
     def _normalize_list(self, value: Any, caster: Any) -> list[Any]:
         if value is None:
             return []
@@ -476,6 +506,7 @@ class NewType08JobExecutionRouter(Component):
                 out.append(casted)
         return out
 
+    # 여러 출처의 값이나 목록을 중복 없이 하나로 합친다.
     def _merge_lists(self, *lists: list[Any]) -> list[Any]:
         out: list[Any] = []
         for values in lists:
@@ -484,6 +515,7 @@ class NewType08JobExecutionRouter(Component):
                     out.append(item)
         return out
 
+    # 문자/숫자/NULL 값을 정수로 변환하고 실패하면 안전한 기본값을 반환한다.
     def _to_int(self, value: Any) -> int | None:
         if isinstance(value, Mapping):
             for key in ("value", "count", "total", "number", "amount"):
@@ -495,10 +527,12 @@ class NewType08JobExecutionRouter(Component):
         except (TypeError, ValueError):
             return None
 
+    # 숫자 입력을 양의 정수로 변환하고 실패하면 기본값을 사용한다.
     def _positive_int(self, value: Any, default: int) -> int:
         converted = self._to_int(value)
         return converted if converted is not None and converted > 0 else default
 
+    # Langflow 입력이 Data/Message/dict/JSON 문자열 중 무엇이든 dict로 통일한다.
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):
             return dict(raw.data or {})
@@ -506,6 +540,7 @@ class NewType08JobExecutionRouter(Component):
             return dict(raw)
         return self._parse_json_object(str(raw or "").strip()) if str(raw or "").strip() else {}
 
+    # 문자열 입력에서 JSON 객체를 파싱해 후속 로직이 쓰는 dict로 만든다.
     def _parse_json_object(self, text: str) -> dict[str, Any]:
         clean = str(text or "").strip()
         if clean.startswith("```"):
@@ -518,6 +553,7 @@ class NewType08JobExecutionRouter(Component):
             raise ValueError("payload_json must be a JSON object")
         return parsed
 
+    # Langflow Secret 입력을 일반 문자열로 꺼내 client library 설정에 사용한다.
     def _secret_to_str(self, value: Any) -> str:
         if value is None:
             return ""

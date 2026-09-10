@@ -13,35 +13,18 @@ from lfx.schema.message import Message
 # =============================================================================
 # 00A Log Runtime Start
 # =============================================================================
-# Langflow 대화형 workflow의 가장 앞단에서 실행되는 로깅 초기화 컴포넌트다.
+# Langflow 대화형 workflow의 가장 앞에서 DB logging handler를 새로 등록하고,
+# 사용자의 원본 입력을 다음 컴포넌트로 그대로 전달한다.
 #
-# 핵심 책임:
-# 1. 사용자의 원본 채팅 입력을 뒤쪽 컴포넌트로 그대로 전달한다.
-# 2. smartmigrate.workflow logger에 Oracle DB handler를 등록한다.
-# 3. 이후 10C/12C/15C/17C 등에서 남기는 workflow_log extra payload를
-#    NEXT_MIG_LOG 한 곳에 누적 저장할 수 있게 한다.
-#
-# schema 처리 원칙:
-# - Langflow 입력 system_schema가 있으면 해당 schema의 로그 테이블/시퀀스를 사용한다.
-# - system_schema가 비어 있으면 schema prefix를 붙이지 않고 현재 접속 schema의
-#   NEXT_MIG_LOG와 MIGRATION_LOG_SEQ를 사용한다.
-# - 이 파일에서는 특정 schema를 기본값으로 가정하지 않는다.
-#
-# 설계상 중요한 점:
-# - 이 컴포넌트는 업무 판단이나 라우팅을 하지 않는다.
-# - 로깅 핸들러를 매 요청마다 새로 등록하므로, 이전 요청에서 남은 handler가
-#   중복 insert를 만들지 않도록 기존 handler를 모두 제거한다.
-# - 로그 insert 실패는 전체 workflow 실패로 전파하지 않고 status에만 기록한다.
-#   업무 처리 자체보다 로그 DB insert가 약한 의존성이기 때문이다.
+# 이 컴포넌트는 업무 판단이나 라우팅을 하지 않는다. workflow 전역에서 같은 logger를
+# 사용하도록 Oracle logging handler만 준비하는 시작점이다.
 # =============================================================================
 LOGGER_NAME = "smartmigrate.workflow"
 HANDLER_MARKER = "SmartMigrateHandler"
 
 
+# Oracle DSN을 만들고 workflow 로그 적재용 DB connection을 생성한다.
 def create_db_connection(db_config: dict[str, Any]):
-    # Oracle 연결은 모든 로그 insert에서 재사용된다.
-    # Langflow 입력값을 이미 _db_config()에서 문자열/정수로 정리하므로
-    # 여기서는 DSN 생성과 연결 생성만 담당한다.
     import oracledb
 
     dsn = oracledb.makedsn(
@@ -53,15 +36,10 @@ def create_db_connection(db_config: dict[str, Any]):
 
 
 class SmartMigrateDBHandler(logging.Handler):
-    # Python logging.Handler를 Oracle insert handler로 확장한 클래스.
-    #
-    # 일반 logger 호출:
-    #   logger.info("message", extra={"workflow_log": [...]})
-    #
-    # 위 형태의 workflow_log를 표준화해서 NEXT_MIG_LOG row로 저장한다.
-    # handler 내부에 records를 보관하는 이유는 Langflow 실행 중 디버깅할 때
-    # 실제 insert 시도 payload를 component status에서 확인하기 위함이다.
+    # Python logging.Handler를 Oracle insert handler로 확장한 클래스다.
+    # logger.info(..., extra={"workflow_log": [...]}) 형태의 payload를 NEXT_MIG_LOG에 적재한다.
 
+    # 컴포넌트나 helper 객체의 초기 상태와 설정 값을 준비한다.
     def __init__(self, db_config: dict[str, Any]):
         super().__init__(level=logging.DEBUG)
         self.handler_marker = HANDLER_MARKER
@@ -70,10 +48,10 @@ class SmartMigrateDBHandler(logging.Handler):
         self.records: list[dict[str, Any]] = []
         self.insert_error = None
 
+    # logging record를 NEXT_MIG_LOG에 저장할 row로 변환해 insert한다.
     def emit(self, record: logging.LogRecord) -> None:
-        # logging 모듈이 각 record를 전달할 때마다 호출된다.
-        # _event()에서 list/dict/일반 log record를 하나의 dict 형태로 정규화한 뒤
-        # NEXT_MIG_LOG 컬럼 길이에 맞춰 문자열을 잘라 저장한다.
+        # logging 모듈이 전달한 record를 DB row 구조로 변환한다.
+        # records에도 남겨 Langflow status에서 마지막 적재 시도 내용을 확인할 수 있게 한다.
         event = self._event(record)
         row = {
             "created_at": datetime.fromtimestamp(record.created).strftime("%Y-%m-%d %H:%M:%S.%f"),
@@ -90,9 +68,10 @@ class SmartMigrateDBHandler(logging.Handler):
         self.records.append(row)
         self._insert_row(row)
 
+    # handler가 잡고 있는 DB connection을 닫아 Langflow 반복 실행 시 누수를 막는다.
     def close(self) -> None:
-        # Langflow 그래프가 여러 번 실행될 수 있으므로 handler 종료 시
-        # Oracle connection도 명시적으로 닫는다.
+        # Langflow graph가 같은 Python process에서 반복 실행될 수 있으므로,
+        # handler 교체 시 Oracle connection을 명시적으로 닫는다.
         try:
             connection = getattr(self, "connection", None)
             if connection is not None:
@@ -101,20 +80,16 @@ class SmartMigrateDBHandler(logging.Handler):
         finally:
             super().close()
 
+    # logging record의 workflow_log payload를 NEXT_MIG_LOG 컬럼 구조로 변환한다.
     def _event(self, record: logging.LogRecord) -> dict[str, Any]:
-        # workflow_log extra payload 호환 처리.
-        #
-        # 현재 권장 포맷:
-        #   [map_id, mig_kind, log_type, log_level, step_name, status,
-        #    retry_count, generate_sql]
-        #
-        # 일부 과거 컴포넌트는 message와 retry_count 위치가 달랐기 때문에
-        # len(event)와 int-like 여부를 보고 구버전 포맷도 받아준다.
         event = getattr(record, "workflow_log", None)
         if isinstance(event, (list, tuple)):
             message = record.getMessage() or "noMessage"
             retry_count = event[6] if len(event) > 6 else 0
             generate_sql = event[7] if len(event) > 7 else None
+
+            # 일부 이전 컴포넌트는 message와 retry_count 위치가 서로 다른 payload를 남겼다.
+            # 기존 로그 호출을 깨지 않도록 int 여부를 기준으로 legacy payload도 받아준다.
             if len(event) > 7 and not self._is_int_like(event[6]) and self._is_int_like(event[7]):
                 message = event[6]
                 retry_count = event[7]
@@ -147,17 +122,14 @@ class SmartMigrateDBHandler(logging.Handler):
             "generate_sql": None,
         }
 
+    # 변환된 로그 row를 NEXT_MIG_LOG에 insert하고 commit한다.
     def _insert_row(self, row: dict[str, Any]) -> None:
-        # NEXT_MIG_LOG에 실제 insert를 수행한다.
-        #
-        # 주의:
-        # - LOG_ID는 MIGRATION_LOG_SEQ.NEXTVAL을 사용한다.
-        # - GENERATE_SQL은 CLOB일 수 있으므로 row dict 그대로 바인딩한다.
-        # - insert 실패는 raise하지 않는다. 로그 저장 실패가 업무 workflow를
-        #   멈추면 장애 원인을 더 보기 어려워지기 때문이다.
         cursor = None
         try:
             cursor = self.connection.cursor()
+
+            # system_schema가 입력되어 있으면 schema prefix를 붙이고,
+            # 비어 있으면 현재 접속 schema의 NEXT_MIG_LOG와 MIGRATION_LOG_SEQ를 그대로 사용한다.
             cursor.execute(
                 f"""
                 INSERT INTO {self._qualify("NEXT_MIG_LOG")} (
@@ -181,6 +153,7 @@ class SmartMigrateDBHandler(logging.Handler):
             self.connection.commit()
             self.insert_error = None
         except Exception as exc:
+            # 로그 적재 실패가 본 업무 workflow 실패로 전파되지 않게 status에만 남긴다.
             self.insert_error = str(exc)
         finally:
             if cursor is not None:
@@ -189,12 +162,14 @@ class SmartMigrateDBHandler(logging.Handler):
                 except Exception:
                     pass
 
+    # system_schema가 명시된 테이블명을 schema-qualified 이름으로 만든다.
     def _qualify(self, object_name: str) -> str:
-        # system_schema가 입력된 경우에만 schema.object 형식으로 qualify한다.
-        # 비어 있으면 Oracle 현재 접속 schema의 객체를 그대로 사용한다.
         schema = str(self.db_config.get("system_schema") or "").strip().upper()
-        return f"{schema}.{object_name}" if schema else object_name
+        if not schema:
+            raise ValueError("System Schema를 입력해야 합니다.")
+        return f"{schema}.{object_name}"
 
+    # 상태나 값이 특정 조건에 해당하는지 boolean으로 판단한다.
     def _is_int_like(self, value: Any) -> bool:
         try:
             int(value)
@@ -202,6 +177,7 @@ class SmartMigrateDBHandler(logging.Handler):
         except Exception:
             return False
 
+    # 문자/숫자/NULL 값을 정수로 변환하고 실패하면 안전한 기본값을 반환한다.
     def _to_int(self, value: Any, default: int = 0) -> int:
         try:
             return int(value)
@@ -210,9 +186,6 @@ class SmartMigrateDBHandler(logging.Handler):
 
 
 class NewType00ALogRuntimeStart(Component):
-    # Langflow custom component 진입점.
-    # 이 컴포넌트의 output Message는 사용자의 입력 텍스트 그대로이며,
-    # 뒤쪽 01 classifier가 이 값을 받아 의도 분류를 수행한다.
     display_name = "00A Log Runtime Start"
     description = "Register SmartMigrate workflow DB logging handler and pass the chat input through."
     name = "NewType00ALogRuntimeStart"
@@ -224,23 +197,24 @@ class NewType00ALogRuntimeStart(Component):
         StrInput(name="db_service_name", display_name="DB Service Name", required=True),
         StrInput(name="db_username", display_name="DB Username", required=True),
         SecretStrInput(name="db_password", display_name="DB Password", required=True),
-        StrInput(name="system_schema", display_name="System Schema", required=False),
+        StrInput(name="system_schema", display_name="System Schema", required=True),
     ]
-
     outputs = [Output(display_name="Message", name="message", method="run", types=["Message"])]
 
+    # Langflow output 진입점에서 입력을 검증하고 이 컴포넌트의 주요 실행 흐름을 시작한다.
     def run(self) -> Message:
-        # 매 요청마다 logger handler를 새로 구성한다.
-        # 같은 Python 프로세스에서 Langflow 컴포넌트가 재사용되면 handler가 누적될 수
-        # 있으므로, 기존 handler 제거가 없으면 동일 로그가 여러 번 DB에 insert된다.
         text = str(getattr(self, "input_text", "") or "")
         logger = logging.getLogger(LOGGER_NAME)
+
+        # 같은 Langflow process에서 이전 요청의 handler가 남아 있으면 로그가 중복 insert될 수 있다.
+        # 새 요청을 시작할 때 기존 handler를 닫고 이번 요청용 handler만 다시 등록한다.
         for handler in list(logger.handlers):
             logger.removeHandler(handler)
             try:
                 handler.close()
             except Exception:
                 pass
+
         logger.setLevel(logging.DEBUG)
         logger.propagate = False
         handler = SmartMigrateDBHandler(self._db_config())
@@ -252,6 +226,7 @@ class NewType00ALogRuntimeStart(Component):
         self.status = {"ok": handler.insert_error is None, "db_insert_error": handler.insert_error}
         return Message(text=text)
 
+    # payload와 Langflow 입력에서 Oracle 접속 및 schema 설정을 모은다.
     def _db_config(self) -> dict[str, Any]:
         return {
             "host": str(getattr(self, "db_host", "") or "").strip(),
@@ -262,6 +237,7 @@ class NewType00ALogRuntimeStart(Component):
             "system_schema": str(getattr(self, "system_schema", "") or "").strip(),
         }
 
+    # Langflow Secret 입력을 일반 문자열로 꺼내 client library 설정에 사용한다.
     def _secret_to_str(self, value: Any) -> str:
         if hasattr(value, "get_secret_value"):
             return str(value.get_secret_value() or "")

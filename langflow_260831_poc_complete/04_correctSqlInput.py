@@ -20,23 +20,11 @@ except Exception:
 # =============================================================================
 # 04 Correct SQL Input
 # =============================================================================
-# Management Router가 CORRECT_SQL_INPUT으로 분기한 payload를 받아 사용자가 직접
-# 제공한 SQL 본문을 DB에 저장하는 컴포넌트다.
+# Management Router가 CORRECT_SQL_INPUT으로 분기한 요청을 받아, 사용자가 직접
+# 제공한 SQL 본문을 지정된 업무 테이블에 저장한다.
 #
-# 핵심 원칙:
-# - 이 컴포넌트는 SQL을 생성하거나 보정하지 않는다.
-# - correct_sql 값은 사용자가 제공한 원문 그대로 저장한다.
-# - 저장 성공 시 USER_EDITED='Y'로 표시해서 이후 executor가 사용자 교정 SQL을
-#   신뢰 가능한 입력 또는 재실행 후보로 인식할 수 있게 한다.
-#
-# 저장 대상:
-# - DB_MIGRATION: NEXT_MIG_INFO.MIG_SQL 또는 NEXT_MIG_INFO.VERIFY_SQL
-# - SQL_*: NEXT_SQL_INFO.TO_SQL/BIND_SQL/TEST_SQL/TUNED_TO_SQL/FORMATTED_SQL
-#
-# 안전장치:
-# - Router가 추출한 table/column 값을 그대로 신뢰하지 않고 _target()에서 다시 검증한다.
-# - UPDATE 결과가 정확히 1건이 아니면 rollback한다.
-# - 테이블에 필요한 컬럼이 실제로 존재하는지 USER_TAB_COLUMNS/ALL_TAB_COLUMNS로 확인한다.
+# 테이블/컬럼 존재 여부는 배포 DDL이 보장한다. 이 컴포넌트는 사용자가 지정한
+# 업무 종류와 저장 컬럼이 허용 범위 안에 있는지만 확인한다.
 # =============================================================================
 class NewType04CorrectSqlInput(Component):
     display_name = "04 Correct SQL Input"
@@ -51,16 +39,12 @@ class NewType04CorrectSqlInput(Component):
         StrInput(name="db_service_name", display_name="DB Service Name", required=True),
         StrInput(name="db_username", display_name="DB Username", required=True),
         SecretStrInput(name="db_password", display_name="DB Password", required=True),
-        StrInput(name="system_schema", display_name="System Schema", required=False),
+        StrInput(name="system_schema", display_name="System Schema", required=True),
     ]
     outputs = [Output(display_name="Result Message", name="result", method="run", types=["Message"])]
 
+    # Langflow output 진입점에서 입력을 검증하고 이 컴포넌트의 주요 실행 흐름을 시작한다.
     def run(self) -> Message:
-        # 전체 저장 흐름:
-        # 1. Langflow payload를 dict로 파싱한다.
-        # 2. target/work_type/sql_column 조합을 검증하고 실제 UPDATE 대상을 만든다.
-        # 3. DB metadata에서 컬럼 존재 여부를 확인한다.
-        # 4. correct_sql을 CLOB 컬럼에 저장하고 USER_EDITED='Y'를 세팅한다.
         logging.getLogger("smartmigrate.workflow").info(
             "04 Correct SQL Input started",
             extra={"workflow_log": [0, "WORKFLOW", "04_CORRECT_SQL_INPUT", "INFO", "SAVE_SQL", "START", 0]},
@@ -69,21 +53,23 @@ class NewType04CorrectSqlInput(Component):
             payload = self._parse_payload(getattr(self, "payload_json", ""))
             target = dict(payload.get("target") or {})
             sql_text = str(payload.get("correct_sql") or "").strip()
+
+            # 사용자 요청값을 실제 UPDATE 문에 들어갈 테이블/컬럼/조건으로 변환한다.
+            # table/column은 bind가 불가능하므로 여기서 허용 목록으로만 만든다.
             table, column, where_sql, params, identity = self._target(target, sql_text)
 
             with self._connect() as conn:
-                columns = self._columns(conn, table)
-                if column not in columns or "USER_EDITED" not in columns:
-                    raise ValueError(f"{table}에 Correct SQL 저장에 필요한 컬럼({column}, USER_EDITED)이 없습니다.")
-
                 cur = conn.cursor()
                 cur.execute(
                     f"UPDATE {self._qualify(table)} SET {column} = :correct_sql, USER_EDITED = 'Y' WHERE {where_sql}",
                     {**params, "correct_sql": sql_text},
                 )
+
+                # 대상 식별자가 틀리면 0건, 데이터가 중복되면 2건 이상이 될 수 있다.
+                # Correct SQL 저장은 한 행만 바뀌어야 하므로 이 검증은 유지한다.
                 if cur.rowcount != 1:
                     conn.rollback()
-                    raise ValueError(f"저장 대상 작업을 정확히 1건 찾지 못했습니다. ({identity}, count={cur.rowcount})")
+                    raise ValueError(f"저장 대상 행을 정확히 1건 찾지 못했습니다. ({identity}, count={cur.rowcount})")
                 conn.commit()
 
             answer = f"Correct SQL 저장 완료: {table}.{column}, {identity}. USER_EDITED='Y'로 변경했습니다."
@@ -103,9 +89,8 @@ class NewType04CorrectSqlInput(Component):
             )
             return Message(text=answer)
 
+    # 사용자 요청 target을 허용된 테이블/컬럼/식별자 조건으로 변환한다.
     def _target(self, target: dict[str, Any], sql_text: str) -> tuple[str, str, str, dict[str, str], str]:
-        # work_type과 sql_column은 DB UPDATE 문을 구성하는 값이므로 반드시 allow-list로 제한한다.
-        # 여기서 반환하는 table/column/where_sql만 run()에서 SQL 문자열에 삽입된다.
         if not sql_text:
             raise ValueError("Correct SQL 입력을 위해 저장할 SQL 본문을 알려주셔야 합니다.")
 
@@ -132,9 +117,8 @@ class NewType04CorrectSqlInput(Component):
         return "NEXT_SQL_INFO", column, "SQL_ID = :sql_id AND SPACE_NM = :space_nm", {"sql_id": sql_id, "space_nm": space_nm}, f"SQL_ID={sql_id}, SPACE_NM={space_nm}"
 
     @contextmanager
+    # Oracle 연결을 열고 호출 구간이 끝나면 닫는 context manager다.
     def _connect(self):
-        # Oracle 연결 생성과 닫기를 한 곳에서 관리한다.
-        # 호출부는 with 블록 안에서만 cursor와 LOB locator를 사용해야 한다.
         import oracledb
 
         conn = oracledb.connect(
@@ -151,40 +135,26 @@ class NewType04CorrectSqlInput(Component):
         finally:
             conn.close()
 
-    def _columns(self, conn: Any, table: str) -> set[str]:
-        # system_schema가 있으면 ALL_TAB_COLUMNS에서 owner를 지정해 조회하고,
-        # 없으면 현재 접속 schema 기준 USER_TAB_COLUMNS를 조회한다.
-        cur = conn.cursor()
-        schema = str(getattr(self, "system_schema", "") or "").strip().upper()
-        if schema:
-            cur.execute(
-                "SELECT COLUMN_NAME FROM ALL_TAB_COLUMNS WHERE OWNER=:owner AND TABLE_NAME=:table_name",
-                {"owner": schema, "table_name": table},
-            )
-        else:
-            cur.execute("SELECT COLUMN_NAME FROM USER_TAB_COLUMNS WHERE TABLE_NAME=:table_name", {"table_name": table})
-        return {str(row[0]).upper() for row in cur.fetchall()}
-
+    # system_schema가 명시된 테이블명을 schema-qualified 이름으로 만든다.
     def _qualify(self, table: str) -> str:
-        # Oracle object name은 bind variable로 처리할 수 없으므로 schema/table은
-        # _target()과 _columns()를 통과한 값만 조합한다.
         schema = str(getattr(self, "system_schema", "") or "").strip().upper()
-        return f"{schema}.{table}" if schema else table
+        if not schema:
+            raise ValueError("System Schema를 입력해야 합니다.")
+        return f"{schema}.{table}"
 
+    # Langflow 입력이 Data/Message/dict/JSON 문자열 중 무엇이든 dict로 통일한다.
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
-        # Router output은 Langflow 연결 방식에 따라 Data 또는 JSON 문자열로 들어온다.
-        # downstream 로직은 dict만 다루도록 여기서 형태를 통일한다.
         if isinstance(raw, Data):
             return dict(raw.data or {})
         if isinstance(raw, dict):
             return dict(raw)
+
         text = re.sub(r"^```(?:json)?\s*|\s*```$", "", str(raw or "").strip(), flags=re.I)
         value = json.loads(text) if text else {}
         if not isinstance(value, dict):
             raise ValueError("payload_json must be a JSON object")
         return value
 
+    # Langflow Secret 입력을 일반 문자열로 꺼내 client library 설정에 사용한다.
     def _secret(self, value: Any) -> str:
-        # Langflow SecretStrInput은 get_secret_value()를 제공하고,
-        # 테스트나 직접 호출에서는 일반 문자열이 들어올 수 있다.
         return str(value.get_secret_value()) if hasattr(value, "get_secret_value") else str(value or "")

@@ -36,16 +36,17 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
     inputs = [
         DataInput(name="payload_json", display_name="Payload JSON", required=True),
         IntInput(name="max_retry", display_name="Max Retry", value=2, required=False),
-        StrInput(name="db_host", display_name="DB Host", required=False),
+        StrInput(name="db_host", display_name="DB Host", required=True),
         IntInput(name="db_port", display_name="DB Port", value=1521, required=False),
-        StrInput(name="db_service_name", display_name="DB Service Name", required=False),
-        StrInput(name="db_username", display_name="DB Username", required=False),
-        SecretStrInput(name="db_password", display_name="DB Password", required=False),
-        StrInput(name="system_schema", display_name="System Schema", required=False),
+        StrInput(name="db_service_name", display_name="DB Service Name", required=True),
+        StrInput(name="db_username", display_name="DB Username", required=True),
+        SecretStrInput(name="db_password", display_name="DB Password", required=True),
+        StrInput(name="system_schema", display_name="System Schema", required=True),
     ]
 
     outputs = [Output(display_name="Jobs Table", name="jobs_table", method="build_jobs_table")]
 
+    # Langflow output 진입점에서 입력을 검증하고 이 컴포넌트의 주요 실행 흐름을 시작한다.
     def build_jobs_table(self) -> DataFrame:
         logging.getLogger("smartmigrate.workflow").info("before build_jobs_table", extra={"workflow_log": [0, "WORKFLOW", "18A_FULL_JOBS", "INFO", "BUILD_JOBS_TABLE", "START", 0]})
         try:
@@ -108,6 +109,7 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
             logging.getLogger("smartmigrate.workflow").error(f"error build_jobs_table: {exc}", extra={"workflow_log": [0, "WORKFLOW", "18A_FULL_JOBS", "ERROR", "BUILD_JOBS_TABLE", "ERROR", 0]})
             raise
 
+    # full workflow 입력 job을 route별 목록으로 묶어 loop 순서를 만들 준비를 한다.
     def _group_jobs(self, payload: dict[str, Any], db_config: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
         grouped: dict[str, list[dict[str, Any]]] = {route: [] for route in ROUTE_ORDER}
         explicit_jobs = payload.get("selected_jobs")
@@ -134,6 +136,7 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
             return self._load_all_pending_jobs(db_config)
         return grouped
 
+    # DB 또는 payload에서 이 단계에 필요한 입력 데이터를 로드한다.
     def _load_all_pending_jobs(self, db_config: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
         self._require_db_config(db_config)
         mig_table = self._qualify("NEXT_MIG_INFO", db_config)
@@ -191,6 +194,7 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
                 ),
             }
 
+    # cursor 결과를 후속 payload에서 쓰기 쉬운 dict row 목록으로 변환한다.
     def _query_jobs(self, cur: Any, sql: str, route: str, columns: list[str]) -> list[dict[str, Any]]:
         cur.execute(sql)
         jobs: list[dict[str, Any]] = []
@@ -201,6 +205,7 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
             jobs.append(job)
         return jobs
 
+    # 입력 payload나 job item이 실행 가능한 구조인지 검증한다.
     def _validate_job(self, route: str, job: dict[str, Any], index: int) -> None:
         if route == "MIG":
             if str(job.get("map_id") or "").strip():
@@ -210,6 +215,7 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
             return
         raise ValueError(f"18A {route} job row {index} requires space_nm+sql_id")
 
+    # PRIOR_MAP_ID 의존성을 반영해 migration job 실행 순서를 정렬한다.
     def _sort_migration_jobs(self, jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         indexed = [(index, job) for index, job in enumerate(jobs)]
         by_map_id = {self._to_int(job.get("map_id")): (index, job) for index, job in indexed if self._to_int(job.get("map_id")) is not None}
@@ -217,12 +223,14 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
         visiting: set[int] = set()
         ordered: list[dict[str, Any]] = []
 
+        # migration 정렬에서 원래 순서와 우선순위를 비교할 기본 key를 만든다.
         def base_key(item: tuple[int, dict[str, Any]]) -> tuple[int, int, int]:
             index, job = item
             priority = self._to_int(job.get("priority"))
             map_id = self._to_int(job.get("map_id"))
             return (priority if priority is not None else 999999999, map_id if map_id is not None else 999999999, index)
 
+        # 선행 작업을 먼저 방문해 migration 의존 순서를 만든다.
         def visit(map_id: int) -> None:
             if map_id in visited:
                 return
@@ -247,6 +255,7 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
                 visit(map_id)
         return ordered
 
+    # 비교와 검색이 안정적으로 동작하도록 입력 값을 정규화한다.
     def _normalize_route(self, value: Any) -> str:
         route = str(value or "").strip().upper()
         aliases = {
@@ -259,6 +268,7 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
         }
         return aliases.get(route, route)
 
+    # route 값을 loop item에 저장할 내부 job_name 문자열로 변환한다.
     def _job_name(self, route: str) -> str:
         return {
             "MIG": "migration",
@@ -267,6 +277,7 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
             "SQL_FORMATTING": "formatting",
         }.get(route, str(route or "").lower())
 
+    # payload와 Langflow 입력에서 Oracle 접속 및 schema 설정을 모은다.
     def _db_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         payload_config = dict(payload.get("db_config") or {})
         return {
@@ -278,12 +289,14 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
             "system_schema": str(payload_config.get("system_schema") or getattr(self, "system_schema", "") or "").strip(),
         }
 
+    # 필수 DB 접속 값이 없으면 DB 작업 전에 명확히 실패시킨다.
     def _require_db_config(self, db_config: dict[str, Any]) -> None:
         missing = [key for key in ("db_host", "db_service_name", "db_username") if not str(db_config.get(key) or "").strip()]
         if missing:
             raise ValueError(f"18A Full Workflow is not connected to database settings: missing {', '.join(missing)}")
 
     @contextmanager
+    # Oracle 연결을 열고 호출 구간이 끝나면 닫는 context manager다.
     def _connect(self, db_config: dict[str, Any]):
         import oracledb
 
@@ -302,17 +315,22 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
         finally:
             conn.close()
 
+    # system_schema가 명시된 테이블명을 schema-qualified 이름으로 만든다.
     def _qualify(self, table_name: str, db_config: dict[str, Any]) -> str:
         table = self._clean_identifier(table_name)
         schema = str(db_config.get("system_schema") or "").strip().upper()
-        return f"{schema}.{table}" if schema else table
+        if not schema:
+            raise ValueError("System Schema를 입력해야 합니다.")
+        return f"{schema}.{table}"
 
+    # 동적 SQL identifier에 안전한 Oracle 문자만 허용한다.
     def _clean_identifier(self, value: str) -> str:
         clean = str(value or "").strip().upper()
         if not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", clean):
             raise ValueError(f"Invalid identifier: {clean}")
         return clean
 
+    # Langflow 입력이 Data/Message/dict/JSON 문자열 중 무엇이든 dict로 통일한다.
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):
             return dict(raw.data or {})
@@ -327,12 +345,14 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
             raise ValueError("payload_json must be a JSON object")
         return parsed
 
+    # 문자/숫자/NULL 값을 정수로 변환하고 실패하면 안전한 기본값을 반환한다.
     def _to_int(self, value: Any) -> int | None:
         try:
             return int(value)
         except (TypeError, ValueError):
             return None
 
+    # payload나 로그에 넣을 값을 JSON 직렬화 가능한 형태로 정리한다.
     def _json_value(self, value: Any) -> Any:
         if value is None:
             return None
@@ -342,6 +362,7 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
             return value.decode("utf-8", errors="ignore")
         return value if isinstance(value, (str, int, float, bool)) else str(value)
 
+    # Langflow Secret 입력을 일반 문자열로 꺼내 client library 설정에 사용한다.
     def _secret_to_str(self, value: Any) -> str:
         if value is None:
             return ""

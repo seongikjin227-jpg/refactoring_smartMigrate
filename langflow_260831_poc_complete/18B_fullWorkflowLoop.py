@@ -47,6 +47,7 @@ class NewType18BFullWorkflowLoop(Component):
         Output(display_name="Done", name="done", method="done_output", types=["Data"]),
     ]
 
+    # Langflow output 진입점에서 입력을 검증하고 이 컴포넌트의 주요 실행 흐름을 시작한다.
     def initialize_data(self) -> None:
         if self.ctx.get(f"{self._id}_initialized", False):
             return
@@ -55,9 +56,11 @@ class NewType18BFullWorkflowLoop(Component):
             self._validate_job(self._data_dict(item), index)
         self.update_ctx({f"{self._id}_data": data_list, f"{self._id}_index": 0, f"{self._id}_initialized": True})
 
+    # Langflow Message 입력을 Loop가 처리할 Data 객체로 변환한다.
     def _convert_message_to_data(self, message: Message) -> Data:
         return convert_to_data(message, auto_parse=False)
 
+    # 입력 payload나 job item이 실행 가능한 구조인지 검증한다.
     def _validate_data(self, data: Any) -> list[Data]:
         if isinstance(data, Message):
             data = self._convert_message_to_data(data)
@@ -73,20 +76,24 @@ class NewType18BFullWorkflowLoop(Component):
             data = normalized
         return validate_data_input(data)
 
+    # Langflow Loop body에 포함될 graph vertex 집합을 반환한다.
     def get_loop_body_vertices(self) -> set[str]:
         if not hasattr(self, "_vertex") or self._vertex is None:
             return set()
         return get_loop_body_vertices(vertex=self._vertex, graph=self.graph, get_incoming_edge_by_target_param_fn=self.get_incoming_edge_by_target_param)
 
+    # payload나 graph 설정에서 필요한 값을 꺼내 표준 형태로 반환한다.
     def _get_loop_body_start_vertex(self) -> str | None:
         if not hasattr(self, "_vertex") or self._vertex is None:
             return None
         return get_loop_body_start_vertex(vertex=self._vertex)
 
+    # 문자열이나 payload에서 후속 로직에 필요한 값을 추출한다.
     def _extract_loop_output(self, results: list[Any]) -> Data:
         end_vertex_id = self.get_incoming_edge_by_target_param("item")
         return extract_loop_output(results=results, end_vertex_id=end_vertex_id)
 
+    # Langflow Loop body graph를 각 Data item에 대해 비동기로 실행한다.
     async def execute_loop_body(self, data_list: list[Data], event_manager=None) -> list[Data]:
         loop_body_vertex_ids = self.get_loop_body_vertices()
         start_vertex_id = self._get_loop_body_start_vertex()
@@ -102,6 +109,7 @@ class NewType18BFullWorkflowLoop(Component):
             event_manager=event_manager,
         )
 
+    # 현재 loop index의 item을 실행하고 다음 item 또는 완료 상태를 계산한다.
     async def _iterate(self) -> list[Data]:
         if self.ctx.get(f"{self._id}_iterated", False):
             cached_error = self.ctx.get(f"{self._id}_iteration_error")
@@ -133,7 +141,7 @@ class NewType18BFullWorkflowLoop(Component):
 
                 if migration_failed and self._route(item_payload) != "MIG":
                     skipped_plan_counts = self._plan_counts(data_list[index:])
-                    abort_reason = "DB Migration 寃곌낵???ㅽ뙣/誘몄셿猷??묒뾽???덉뼱 SQL Conversion ?댄썑 ?묒뾽???쒖옉?섏? ?딆븯?듬땲??"
+                    abort_reason = "DB Migration failed; SQL Conversion and downstream phases were skipped because migration is still failing."
                     break
 
                 item_results = await self.execute_loop_body([item], event_manager=self._event_manager)
@@ -162,6 +170,7 @@ class NewType18BFullWorkflowLoop(Component):
         self.update_ctx({f"{self._id}_aggregated": aggregated_results, f"{self._id}_iterated": True})
         return aggregated_results
 
+    # Loop body로 전달할 현재 item payload를 반환한다.
     async def item_output(self) -> Data:
         logging.getLogger("smartmigrate.workflow").info("before item_output", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "ITEM_OUTPUT", "START", 0]})
         try:
@@ -179,6 +188,7 @@ class NewType18BFullWorkflowLoop(Component):
             logging.getLogger("smartmigrate.workflow").error(f"error item_output: {exc}", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "ERROR", "ITEM_OUTPUT", "ERROR", 0]})
             raise
 
+    # Loop가 끝났을 때 dashboard/summary로 넘길 완료 payload를 반환한다.
     async def done_output(self) -> Data:
         logging.getLogger("smartmigrate.workflow").info("before done_output", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "DONE_OUTPUT", "START", 0]})
         try:
@@ -209,6 +219,7 @@ class NewType18BFullWorkflowLoop(Component):
             logging.getLogger("smartmigrate.workflow").error(f"error done_output: {exc}", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "ERROR", "DONE_OUTPUT", "ERROR", 0]})
             raise
 
+    # 입력 payload나 job item이 실행 가능한 구조인지 검증한다.
     def _validate_job(self, payload: dict[str, Any], index: int) -> None:
         route = str(payload.get("planned_job_route") or payload.get("job_route") or "").upper()
         if route == "MIG":
@@ -221,6 +232,7 @@ class NewType18BFullWorkflowLoop(Component):
             raise ValueError(f"18B {route} item {index} requires space_nm+sql_id")
         raise ValueError(f"18B item {index} has invalid job_route={route}")
 
+    # 단계별 실행 결과를 dashboard용 집계 구조로 요약한다.
     def _summary(self, results: list[dict[str, Any]], data_list: list[Any], skipped_plan_counts: dict[str, Any] | None = None) -> dict[str, Any]:
         plan_counts = self._plan_counts(data_list)
         summary: dict[str, dict[str, int]] = {
@@ -245,6 +257,7 @@ class NewType18BFullWorkflowLoop(Component):
                 summary[route]["skipped"] += int(count or 0)
         return summary
 
+    # 상태나 값이 특정 조건에 해당하는지 boolean으로 판단한다.
     def _is_success(self, route: str, result: dict[str, Any]) -> bool:
         stages = result.get("stages") or {}
         status = str(result.get("status") or "").upper()
@@ -261,46 +274,45 @@ class NewType18BFullWorkflowLoop(Component):
             return bool(stage.get("ok")) or status == "FORMATTED"
         return bool(result.get("ok"))
 
+    # 상태나 값이 특정 조건에 해당하는지 boolean으로 판단한다.
     def _is_failure_status(self, status: Any) -> bool:
         value = str(status or "").strip().upper()
         return value.startswith("FAIL-")
 
+    # DB Migration 결과가 SQL 후속 단계를 막아야 하는 상태인지 판단한다.
     def _migration_blocks_sql(self, result: dict[str, Any]) -> bool:
         status = str(result.get("status") or "").strip().upper()
         if status in {"PASS", "SUCCESS"} and bool(result.get("ok", True)):
             return False
         return True
 
+    # full workflow loop를 중단해야 하는 migration 실패 신호인지 판단한다.
     def _migration_abort_signal(self, result: dict[str, Any]) -> bool:
         if bool(result.get("full_workflow_abort")):
             return True
         return self._route(result) == "MIG" and self._migration_blocks_sql(result)
 
+    # DB Migration 전체 상태를 DB에서 확인해 SQL 단계 진입 가능 여부를 결정한다.
     def _db_migration_phase_gate(self, payload: dict[str, Any]) -> dict[str, Any]:
         db_config = dict(payload.get("db_config") or {})
-        if not self._has_db_config(db_config):
-            return {"block_sql": False, "reason": "DB config is missing; skipped DB phase gate."}
-        try:
-            table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
-            with self._connect(db_config) as conn:
-                cur = conn.cursor()
-                cur.execute(
-                    f"""
-                    SELECT
-                        SUM(CASE WHEN NVL(UPPER(USE_YN), 'N') = 'Y' AND STATUS IS NULL THEN 1 ELSE 0 END) AS PENDING_NULL_COUNT,
-                        SUM(
-                            CASE
-                                WHEN NVL(UPPER(USE_YN), 'N') = 'Y'
-                                 AND UPPER(STATUS) LIKE 'FAIL-%'
-                                THEN 1 ELSE 0
-                            END
-                        ) AS FAIL_COUNT
-                      FROM {table}
-                    """
-                )
-                row = cur.fetchone() or (0, 0)
-        except Exception as exc:
-            return {"block_sql": False, "reason": f"DB phase gate query failed: {exc}"}
+        table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                SELECT
+                    SUM(CASE WHEN NVL(UPPER(USE_YN), 'N') = 'Y' AND STATUS IS NULL THEN 1 ELSE 0 END) AS PENDING_NULL_COUNT,
+                    SUM(
+                        CASE
+                            WHEN NVL(UPPER(USE_YN), 'N') = 'Y'
+                             AND UPPER(STATUS) LIKE 'FAIL-%'
+                            THEN 1 ELSE 0
+                        END
+                    ) AS FAIL_COUNT
+                  FROM {table}
+                """
+            )
+            row = cur.fetchone() or (0, 0)
 
         pending_null_count = self._num(row[0])
         fail_count = self._num(row[1])
@@ -310,12 +322,13 @@ class NewType18BFullWorkflowLoop(Component):
             "pending_null_count": pending_null_count,
             "fail_count": fail_count,
             "reason": (
-                f"DB Migration 醫낅즺 ???ㅽ뙣 ?곹깭媛 {fail_count}嫄??덉뼱 SQL Conversion ?댄썑 ?묒뾽???쒖옉?섏? ?딆븯?듬땲??"
+                f"DB Migration 종료 후 실패 상태가 {fail_count}건 있어 SQL Conversion 이후 작업을 시작하지 않습니다."
                 if block_sql
                 else ""
             ),
         }
 
+    # loop 입력 목록을 route별 예정 작업 수로 집계한다.
     def _plan_counts(self, data_list: list[Any]) -> dict[str, int]:
         counts = {route: 0 for route in ROUTE_ORDER}
         for item in data_list:
@@ -325,19 +338,19 @@ class NewType18BFullWorkflowLoop(Component):
                 counts[route] += 1
         return counts
 
+    # payload에서 workflow route 값을 읽어 표준 route 이름으로 정규화한다.
     def _route(self, payload: dict[str, Any]) -> str:
         return str(payload.get("planned_job_route") or payload.get("job_route") or "").upper()
 
+    # 문자/숫자/NULL 값을 정수로 변환하고 실패하면 안전한 기본값을 반환한다.
     def _num(self, value: Any) -> int:
         try:
             return int(value or 0)
         except (TypeError, ValueError):
             return 0
 
-    def _has_db_config(self, db_config: dict[str, Any]) -> bool:
-        return all(str(db_config.get(key) or "").strip() for key in ("db_host", "db_service_name", "db_username"))
-
     @contextmanager
+    # Oracle 연결을 열고 호출 구간이 끝나면 닫는 context manager다.
     def _connect(self, db_config: dict[str, Any]):
         import oracledb
 
@@ -356,23 +369,26 @@ class NewType18BFullWorkflowLoop(Component):
         finally:
             conn.close()
 
+    # system_schema가 명시된 테이블명을 schema-qualified 이름으로 만든다.
     def _qualify(self, table_name: str, schema: Any) -> str:
         value = str(table_name or "").strip().upper()
         if "." in value:
             return value
         clean_table = self._clean_identifier(value)
         clean_schema = str(schema or "").strip().upper()
-        if clean_schema:
-            clean_schema = self._clean_identifier(clean_schema)
-            return f"{clean_schema}.{clean_table}"
-        return clean_table
+        if not clean_schema:
+            raise ValueError("System Schema를 입력해야 합니다.")
+        clean_schema = self._clean_identifier(clean_schema)
+        return f"{clean_schema}.{clean_table}"
 
+    # 동적 SQL identifier에 안전한 Oracle 문자만 허용한다.
     def _clean_identifier(self, value: str) -> str:
         clean = str(value or "").strip().upper()
         if not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", clean):
             raise ValueError(f"Invalid identifier: {clean}")
         return clean
 
+    # Loop item/Data/Message 값을 dict로 변환해 공통 처리한다.
     def _data_dict(self, item: Any) -> dict[str, Any]:
         if isinstance(item, Data):
             return dict(item.data or {})
@@ -385,6 +401,7 @@ class NewType18BFullWorkflowLoop(Component):
             return dict(item)
         return {"value": item}
 
+    # 문자열 입력에서 JSON 객체를 파싱해 후속 로직이 쓰는 dict로 만든다.
     def _parse_json_text(self, text: Any) -> dict[str, Any] | None:
         import json
         import re
