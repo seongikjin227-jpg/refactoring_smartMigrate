@@ -82,6 +82,14 @@ flowchart TD
 
 ## 4.3 SQL Conversion Executor: 12C
 
+DBA mapping rule 작성 기준은 `12C_sql_conversion_mapping_rule_contract.md`를 기준으로 한다.
+
+- `TARGET_TABLE` 후보 중 PASS mapping rule이 하나라도 있으면 조회된 rule만 사용해 진행한다.
+- `TARGET_TABLE` 후보 전체에서 mapping rule이 0건이면 `FAIL-TOBE`로 종료한다.
+- `TO_COL`이 null/blank 계열이면 해당 `FR_COL`은 TO-BE SQL에서 미사용 컬럼이다.
+- mapping rule에 없는 source table/column도 TO-BE SQL에서 미사용 object이다.
+- TO-BE에서 제거된 미사용 filter/condition은 TEST SQL의 `FROM_COUNT` 쪽에서도 제거한다.
+
 `12C_sqlConversionOneJobPocExecutor.py`는 `NEXT_SQL_INFO`의 SQL 한 건을 TOBE SQL로 변환하고 binding/validation SQL을 만든다.
 
 ### 입력과 산출

@@ -245,7 +245,11 @@ class NewType04RagGuideManager(Component):
         if action == "query":
             return self._query_answer(result)
         detail = f" {result.get('message')}" if result.get("message") else ""
-        sync_note = " Milvus RAG 검색에 반영하려면 00B Sync Milvus Vector DB를 실행하세요."
+        sync_note = (
+            " DB에는 저장됐지만 Milvus RAG 검색에는 아직 반영되지 않았습니다."
+            " 바로 반영하려면 채팅에서 '벡터DB 동기화해줘' 또는 "
+            "'방금 추가한 RAG 가이드를 Milvus에 반영해줘'라고 요청하세요."
+        )
         return f"RAG Guide {action} 완료: RAG_ID={result.get('rag_id')}, updated_rows={result.get('updated_rows', 0)}.{detail}{sync_note}"
 
     # NEXT_MIG_RAG_INFO 조회 결과를 source/guidance/target 본문까지 포함한 답변으로 만든다.

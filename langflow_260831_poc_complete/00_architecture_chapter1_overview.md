@@ -125,7 +125,7 @@ sequenceDiagram
     participant M04 as 04 Management Router
     participant J06 as 06 Remaining Jobs
     participant J08 as 08 Execution Router
-    participant Loop as Domain/Workflow Loop
+    participant FlowLoop as Domain/Workflow Loop
     participant DB as Oracle
     participant LLM as LLM API
     participant Milvus
@@ -147,11 +147,11 @@ sequenceDiagram
         J06->>DB: runnable count / target status 조회
         J06->>J08: enriched payload
         J08->>LLM: job_route 판단
-        J08-->>Loop: route별 jobs table
-        Loop->>DB: 한 job씩 상태 갱신/로그 저장
-        Loop->>LLM: SQL 생성/변환/튜닝/포맷팅
-        Loop->>Milvus: RAG/Correct SQL 검색
-        Loop-->>User: iteration/final dashboard
+        J08-->>FlowLoop: route별 jobs table
+        FlowLoop->>DB: 한 job씩 상태 갱신/로그 저장
+        FlowLoop->>LLM: SQL 생성/변환/튜닝/포맷팅
+        FlowLoop->>Milvus: RAG/Correct SQL 검색
+        FlowLoop-->>User: iteration/final dashboard
     else GENERAL_CHAT
         R02-->>User: 03 일반 답변
     end
