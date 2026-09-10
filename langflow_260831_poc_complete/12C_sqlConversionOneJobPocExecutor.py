@@ -27,6 +27,7 @@ FAIL_TEST = "FAIL-TEST"
 TUNED_FR_SQL_PRETUNING_MIN_LENGTH_DEFAULT = 8000
 RAG_SEARCH = "SEARCH"
 RAG_GENERAL = "GENERAL"
+CORRECT_SQL_MIN_SCORE = 0.8
 
 SQL_OUTPUT_FORMATTING_GUIDE = "\nSQL만 반환하십시오. 최종 공백/들여쓰기 정리는 17C에서 처리합니다."
 
@@ -92,7 +93,9 @@ FROM SQL의 결과 의미를 보존하면서 매핑 규칙, SQL_CONVERSION RAG, 
 - 모든 SQL은 Oracle 19c 문법에 맞게 생성하거나 수정하십시오.
 - FR_TABLE이나 FR_COL 이름을 타겟명처럼 참조하지 말고, 변환 대상은 오직 타겟 구조와 매핑 규칙을 기준으로 작성하십시오.
 - mapping rules는 테이블명과 컬럼명 변경의 우선 기준입니다.
-- 소스 테이블이나 컬럼이 매핑룰과 매칭되지 않아도 원본 테이블명 또는 컬럼명을 그대로 유지하십시오. 이는 명칭이 바뀌지 않은 것으로 판단합니다.
+- source column이 TO_COL=__UNUSED__, NULL, blank, NONE, N/A, NA, '-'로 매핑되면 해당 컬럼은 TO-BE SQL에서 미사용 컬럼입니다. SELECT, WHERE, JOIN, GROUP BY, ORDER BY, MyBatis 동적 fragment에서 사용하지 마십시오.
+- selected source table의 mapping rules에 없는 source column도 TO-BE SQL에서 미사용 컬럼입니다. 컬럼명이 그대로 유지되는 것으로 판단하지 마십시오.
+- source column은 mapping rules가 실제 TO_COL로 매핑한 경우에만 사용하십시오. mapped column과 unused column이 한 predicate/expression에 섞여 있으면 안전하게 분리 가능한 unused 조건만 제거하고, 분리하기 어렵다면 해당 predicate/expression 전체를 제거하십시오.
 - 가능한 한 원본 쿼리 구조, 필터 의도, 집계 의도, 조인 의도, alias, MyBatis 동적 태그 구조를 유지하십시오.
 - MyBatis 바인딩 파라미터 태그 #{{param}}, ${{param}}는 제거하거나 값으로 치환하지 마십시오.
 - parameter marker 형식(#{{param}} 또는 ${{param}})은 유지하되, parameter 이름은 매핑된 target 컬럼/업무 의미에 맞게 변경할 수 있습니다.
@@ -193,6 +196,9 @@ FROM SQL에서 MyBatis bind parameter 값을 검증용으로 추출할 수 있�
 [Bind Set]
 {bind_set_text}
 
+[Mapping Rule Context]
+{mapping_schema_text}
+
 [Correct SQL 힌트]
 {correct_sql_hint_text}
 
@@ -208,6 +214,10 @@ FROM SQL에서 MyBatis bind parameter 값을 검증용으로 추출할 수 있�
 - 각 case는 SELECT <case_no> AS CASE_NO, (<source_count_query>) AS FROM_COUNT, (<target_count_query>) AS TO_COUNT FROM DUAL 형태를 따르십시오.
 - UNION ALL로 연결되는 각 SELECT block은 반드시 FROM DUAL로 끝나야 합니다.
 - FROM SQL은 from_schema, TO-BE SQL은 tobe_schema를 사용하십시오.
+- mapping_schema_text는 같은 conversion의 migration mapping rules입니다. TO_COL=__UNUSED__, NULL, blank, NONE, N/A, NA, '-'는 TO-BE에서 의도적으로 미사용되는 source column을 뜻합니다.
+- mapping rules에 없는 source column도 TO-BE에서 미사용 컬럼입니다. TEST_SQL의 FROM_COUNT 쪽을 만들 때 TO-BE SQL에 더 이상 존재하지 않는 미사용 컬럼 전용 filter, join predicate, HAVING predicate, GROUP BY 항목, ORDER BY 항목, MyBatis 동적 fragment는 제거하십시오.
+- 제거된 AS-IS filter의 bind parameter가 남은 FROM_COUNT 또는 TO_COUNT SQL에서 사용되지 않으면 최종 TEST_SQL에서도 해당 parameter를 요구하지 마십시오.
+- mapped column과 unused column이 한 predicate에 섞여 있으면 안전하게 분리 가능한 unused 조건만 제거하고, 분리하기 어렵다면 FROM_COUNT 쪽에서 해당 predicate 전체를 제거해 TO-BE SQL과 비교 범위를 맞추십시오.
 - FROM SQL의 물리 테이블은 기존 schema가 있더라도 제거하고 from_schema.TABLE_NAME 형식으로 다시 붙이십시오.
 - TO-BE SQL의 물리 테이블은 기존 schema가 있더라도 제거하고 tobe_schema.TABLE_NAME 형식으로 다시 붙이십시오.
 - CTE 이름, inline view alias, subquery alias, table alias, DUAL에는 schema를 붙이지 마십시오.
@@ -601,6 +611,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                     state["job"], state["db_config"], state["llm_config"], state["source_sql"],
                     state["to_sql"], state.get("bind_set"), state.get("retry_context") or "", state["retry_count"],
                     str((state.get("correct_sql_hints") or {}).get("TEST_SQL") or "- (empty)"),
+                    state["mapping_rules"],
                 )
                 state["test_sql"] = test_sql
                 self._update_row(state["db_config"], state["job"], {"TEST_SQL": test_sql})
@@ -889,6 +900,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         last_error: str,
         retry_count: int,
         correct_sql_hint_text: str | None = None,
+        mapping_rules: list[dict[str, str]] | None = None,
     ) -> str:
         map_id = f"{job.get('sql_id')} / {job.get('space_nm')}"[:100]
         if str(job.get("user_edited") or "").strip().upper() == "Y" and str(job.get("test_sql") or "").strip():
@@ -906,6 +918,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             from_schema=db_config["source_schema"],
             tobe_schema=db_config["target_schema"],
             bind_set_text=self._bind_set_prompt_text(bind_set),
+            mapping_schema_text=self._test_mapping_prompt_text(mapping_rules or [], db_config),
             correct_sql_hint_text=correct_sql_hint_text if correct_sql_hint_text is not None else self._correct_sql_hint_text(db_config, source_sql, job.get("sql_id"), job.get("space_nm"), map_id, retry_count, "TEST_SQL", job.get("tag_kind")),
             last_error=last_error or "None",
         )
@@ -1431,6 +1444,14 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             },
         )
 
+    def _is_unused_target_column(self, to_col: Any) -> bool:
+        normalized = str(to_col or "").strip().upper()
+        return normalized in {"", "NULL", "NONE", "N/A", "NA", "-"}
+
+    def _mapping_to_col_prompt_value(self, to_col: Any) -> str:
+        text = str(to_col or "").strip()
+        return "__UNUSED__" if self._is_unused_target_column(text) else text
+
     # 매핑 규칙과 RAG 예시를 TO_SQL 프롬프트 맥락으로 직렬화한다.
     # 매핑 규칙과 RAG 예시를 TO_SQL 프롬프트용 텍스트로 직렬화한다.
     def _mapping_prompt_text(self, mapping_rules: list[dict[str, str]], general_rules: list[dict[str, Any]], examples: list[dict[str, Any]], db_config: dict[str, Any]) -> str:
@@ -1450,7 +1471,9 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 from_expr = f"(\n{fr_table}\n) SRC"
             else:
                 from_expr = self._qualify_mapping_table(fr_table, source_schema)
-            grouped.setdefault((map_type, from_expr, to_table, description, condition), set()).add((str(rule.get("fr_col") or "").strip(), str(rule.get("to_col") or "").strip()))
+            grouped.setdefault((map_type, from_expr, to_table, description, condition), set()).add(
+                (str(rule.get("fr_col") or "").strip(), self._mapping_to_col_prompt_value(rule.get("to_col")))
+            )
 
         lines = ["[MIGRATION_MAPPING_RULES]"]
         for map_type, from_expr, to_table, description, condition in sorted(grouped):
@@ -1469,6 +1492,27 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             lines.append(f"- RAG_ID={rule['rule_id']} | SOURCE_TABLES={','.join(rule['source_tables']) or 'ALL'}")
             lines.extend(f"  - {guide}" for guide in rule["guidance"])
         lines.extend(["", "[SQL_CONVERSION_SEARCH_RAG_TOP_3_BY_FULL_SQL]", self._serialize_conversion_examples(examples)])
+        return "\n".join(lines)
+
+    def _test_mapping_prompt_text(self, mapping_rules: list[dict[str, str]], db_config: dict[str, Any]) -> str:
+        source_schema, target_schema = db_config["source_schema"], db_config["target_schema"]
+        rows: set[tuple[str, str, str, str]] = set()
+        for rule in mapping_rules:
+            map_type = str(rule.get("map_type") or "").strip().upper()
+            if map_type == "COMPLEX":
+                continue
+            fr_table = self._qualify_mapping_table(rule.get("fr_table") or "", source_schema)
+            to_table = self._qualify_mapping_table(rule.get("to_table") or "", target_schema)
+            fr_col = str(rule.get("fr_col") or "").strip()
+            if fr_table and to_table and fr_col:
+                rows.add((fr_table, fr_col, to_table, self._mapping_to_col_prompt_value(rule.get("to_col"))))
+
+        lines = ["[MIGRATION_MAPPING_RULES]"]
+        if not rows:
+            lines.append("- (empty)")
+            return "\n".join(lines)
+        for fr_table, fr_col, to_table, to_col in sorted(rows):
+            lines.append(f"- FR_TABLE={fr_table} | FR_COL={fr_col} | TO_TABLE={to_table} | TO_COL={to_col}")
         return "\n".join(lines)
 
     # BIND_SQL 생성을 위해 AS-IS 원천 filter 조건을 직렬화한다.
@@ -1704,6 +1748,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 if self._status(entity.get("status_conversion")) not in {"PASS", CONVERSION_PASS}:
                     continue
                 score = self._milvus_score(hit)
+                if score < CORRECT_SQL_MIN_SCORE:
+                    continue
                 for column, field in hint_fields.items():
                     if selected_counts[column] >= top_k:
                         continue
