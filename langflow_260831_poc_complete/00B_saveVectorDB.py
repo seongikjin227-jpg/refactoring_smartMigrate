@@ -497,7 +497,7 @@ class NewType00BSaveVectorDB(Component):
                         # correct SQL 힌트 검색용 dense_vector는 EDIT_FR_SQL을 우선 사용하고, 없으면 FR_SQL을 사용한다.
                         content=self._sql_content(source_sql),
                         is_active=is_active,
-                        updated_at=self._lob_to_str(row[12]),
+                        updated_at=self._lob_to_str(row[11]),
                     )
                 )
             return rows
