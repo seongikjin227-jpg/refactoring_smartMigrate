@@ -93,9 +93,10 @@ FROM SQL의 결과 의미를 보존하면서 매핑 규칙, SQL_CONVERSION RAG, 
 - 모든 SQL은 Oracle 19c 문법에 맞게 생성하거나 수정하십시오.
 - FR_TABLE이나 FR_COL 이름을 타겟명처럼 참조하지 말고, 변환 대상은 오직 타겟 구조와 매핑 규칙을 기준으로 작성하십시오.
 - mapping rules는 테이블명과 컬럼명 변경의 우선 기준입니다.
+- source table이 mapping rules의 FR_TABLE/FR_TABLE_QUERY에 없으면 해당 table은 TO-BE SQL에서 미사용 table입니다. 해당 table 참조, join, filter, projection을 TO-BE SQL에 유지하지 마십시오.
 - source column이 TO_COL=__UNUSED__, NULL, blank, NONE, N/A, NA, '-'로 매핑되면 해당 컬럼은 TO-BE SQL에서 미사용 컬럼입니다. SELECT, WHERE, JOIN, GROUP BY, ORDER BY, MyBatis 동적 fragment에서 사용하지 마십시오.
 - selected source table의 mapping rules에 없는 source column도 TO-BE SQL에서 미사용 컬럼입니다. 컬럼명이 그대로 유지되는 것으로 판단하지 마십시오.
-- source column은 mapping rules가 실제 TO_COL로 매핑한 경우에만 사용하십시오. mapped column과 unused column이 한 predicate/expression에 섞여 있으면 안전하게 분리 가능한 unused 조건만 제거하고, 분리하기 어렵다면 해당 predicate/expression 전체를 제거하십시오.
+- source table/column은 mapping rules가 실제 TO_TABLE/TO_COL로 매핑한 경우에만 사용하십시오. mapped 대상과 unused 대상이 한 predicate/expression에 섞여 있으면 안전하게 분리 가능한 unused 조건만 제거하고, 분리하기 어렵다면 해당 predicate/expression 전체를 제거하십시오.
 - 가능한 한 원본 쿼리 구조, 필터 의도, 집계 의도, 조인 의도, alias, MyBatis 동적 태그 구조를 유지하십시오.
 - MyBatis 바인딩 파라미터 태그 #{{param}}, ${{param}}는 제거하거나 값으로 치환하지 마십시오.
 - parameter marker 형식(#{{param}} 또는 ${{param}})은 유지하되, parameter 이름은 매핑된 target 컬럼/업무 의미에 맞게 변경할 수 있습니다.
@@ -215,6 +216,7 @@ FROM SQL에서 MyBatis bind parameter 값을 검증용으로 추출할 수 있�
 - UNION ALL로 연결되는 각 SELECT block은 반드시 FROM DUAL로 끝나야 합니다.
 - FROM SQL은 from_schema, TO-BE SQL은 tobe_schema를 사용하십시오.
 - mapping_schema_text는 같은 conversion의 migration mapping rules입니다. TO_COL=__UNUSED__, NULL, blank, NONE, N/A, NA, '-'는 TO-BE에서 의도적으로 미사용되는 source column을 뜻합니다.
+- mapping rules에 없는 source table도 TO-BE에서 미사용 테이블입니다. TEST_SQL의 FROM_COUNT 쪽을 만들 때 TO-BE SQL에 더 이상 존재하지 않는 미사용 테이블 전용 join, filter, projection, MyBatis 동적 fragment는 제거하십시오.
 - mapping rules에 없는 source column도 TO-BE에서 미사용 컬럼입니다. TEST_SQL의 FROM_COUNT 쪽을 만들 때 TO-BE SQL에 더 이상 존재하지 않는 미사용 컬럼 전용 filter, join predicate, HAVING predicate, GROUP BY 항목, ORDER BY 항목, MyBatis 동적 fragment는 제거하십시오.
 - 제거된 AS-IS filter의 bind parameter가 남은 FROM_COUNT 또는 TO_COUNT SQL에서 사용되지 않으면 최종 TEST_SQL에서도 해당 parameter를 요구하지 마십시오.
 - mapped column과 unused column이 한 predicate에 섞여 있으면 안전하게 분리 가능한 unused 조건만 제거하고, 분리하기 어렵다면 FROM_COUNT 쪽에서 해당 predicate 전체를 제거해 TO-BE SQL과 비교 범위를 맞추십시오.
@@ -798,12 +800,11 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 "Existing TO_SQL ignored because USER_EDITED is not Y",
                 extra={"workflow_log": [map_id, "SQL_CONVERSION", "TOBE_SQL", "INFO", "IGNORE_EXISTING_TO_SQL", "START", retry_count, str(job.get("to_sql") or "")]},
             )
-        if not mapping_rules:
-            raise ValueError(f"Mapping rules not found for FROM table scope TARGET_TABLE={target_table}")
-
         # TO_SQL 프롬프트 맥락은 다음 순서로 조립한다.
         # migration 테이블/컬럼 매핑 규칙, SQL_CONVERSION GENERAL guide,
         # SQL block별 vector 유사도 순서로 뽑은 SQL_CONVERSION SEARCH 예시를 차례로 넣는다.
+        if not mapping_rules:
+            raise ValueError(f"Mapping rules not found for any FROM table scope TARGET_TABLE={target_table}")
         if general_rules is None or examples is None:
             source_tables = self._source_tables(target_table)
             general_rules = self._load_rag_general_rules(db_config, "SQL_CONVERSION", source_tables, map_id)
@@ -1474,6 +1475,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             )
 
         lines = ["[MIGRATION_MAPPING_RULES]"]
+        if not grouped:
+            lines.append("- (empty)")
         for map_type, from_expr, to_table, condition in sorted(grouped):
             source_key = "FR_TABLE_QUERY" if map_type == "COMPLEX" else "FR_TABLE"
             lines.append(f"- MAP_TYPE={map_type} | {source_key}={from_expr} | TO_TABLE={to_table}")
@@ -1483,6 +1486,15 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 lines.append(f"  - CONDITION={condition}")
             for fr_col, to_col in sorted(grouped[(map_type, from_expr, to_table, condition)]):
                 lines.append(f"  - FR_COL={fr_col} -> TO_COL={to_col}")
+        lines.extend(
+            [
+                "",
+                "[UNMAPPED_OBJECT_POLICY]",
+                "- Source tables not listed in MIGRATION_MAPPING_RULES are unused in TO-BE SQL.",
+                "- Source columns not listed under their mapped source table are unused in TO-BE SQL.",
+                "- Source columns mapped to TO_COL=__UNUSED__ are unused in TO-BE SQL.",
+            ]
+        )
         lines.extend(["", "[SQL_CONVERSION_GENERAL_RAG_GUIDANCE]"])
         for rule in general_rules:
             lines.append(f"- RAG_ID={rule['rule_id']} | SOURCE_TABLES={','.join(rule['source_tables']) or 'ALL'}")
@@ -1506,9 +1518,27 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         lines = ["[MIGRATION_MAPPING_RULES]"]
         if not rows:
             lines.append("- (empty)")
+            lines.extend(
+                [
+                    "",
+                    "[UNMAPPED_OBJECT_POLICY]",
+                    "- Source tables not listed in MIGRATION_MAPPING_RULES are unused in TO-BE SQL.",
+                    "- Source columns not listed under their mapped source table are unused in TO-BE SQL.",
+                    "- Source columns mapped to TO_COL=__UNUSED__ are unused in TO-BE SQL.",
+                ]
+            )
             return "\n".join(lines)
         for fr_table, fr_col, to_table, to_col in sorted(rows):
             lines.append(f"- FR_TABLE={fr_table} | FR_COL={fr_col} | TO_TABLE={to_table} | TO_COL={to_col}")
+        lines.extend(
+            [
+                "",
+                "[UNMAPPED_OBJECT_POLICY]",
+                "- Source tables not listed in MIGRATION_MAPPING_RULES are unused in TO-BE SQL.",
+                "- Source columns not listed under their mapped source table are unused in TO-BE SQL.",
+                "- Source columns mapped to TO_COL=__UNUSED__ are unused in TO-BE SQL.",
+            ]
+        )
         return "\n".join(lines)
 
     # BIND_SQL 생성을 위해 AS-IS 원천 filter 조건을 직렬화한다.
