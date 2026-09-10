@@ -17,7 +17,7 @@ flowchart TD
 | 01 결과 | 의미 | 다음 노드 |
 |---|---|---|
 | `GENERAL_CHAT` | SmartMigrate 작업과 직접 관련 없는 일반 질문 | `03_llmResponsePrompt.md` |
-| `MANAGEMENT` | 상태/로그/원인/대시보드/초기화/Correct SQL 저장 | `04_managementRouter.py` |
+| `MANAGEMENT` | 상태/로그/원인/대시보드/초기화/Correct SQL 저장/RAG Guide 관리/VectorDB 동기화 | `04_managementRouter.py` |
 | `JOB_EXECUTION` | 실제 작업 실행, 재실행, 남은 작업 처리 | `06_getRemainingJobs.py` |
 
 ## 2.2 01 Request Classifier 주요 산출물
@@ -35,6 +35,8 @@ flowchart TD
 | `target_filter.space_nms` | `["DDD"]` | target SQL 조회/실행 |
 | `should_execute` | `true` | `06`에서 실행 여부 guard |
 | `history` | `[{"step":"classify",...}]` | 추적성 |
+
+`VectorDB`, `Milvus`, `벡터DB`, `00B` 동기화/업로드/반영 요청은 "실행해줘"라는 표현이 있어도 `JOB_EXECUTION`이 아니라 `MANAGEMENT`다. 실제 업무 job을 수행하는 요청이 아니라 운영성 동기화 요청이기 때문이다.
 
 ## 2.3 02 Intent Conditional Router
 
