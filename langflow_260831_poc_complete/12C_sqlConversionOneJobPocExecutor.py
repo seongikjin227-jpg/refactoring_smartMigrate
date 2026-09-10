@@ -919,7 +919,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             from_schema=db_config["source_schema"],
             tobe_schema=db_config["target_schema"],
             bind_set_text=self._bind_set_prompt_text(bind_set),
-            mapping_schema_text=self._test_mapping_prompt_text(mapping_rules or [], db_config),
+            mapping_schema_text=self._mapping_prompt_text(mapping_rules or [], [], [], db_config),
             correct_sql_hint_text=correct_sql_hint_text if correct_sql_hint_text is not None else self._correct_sql_hint_text(db_config, source_sql, job.get("sql_id"), job.get("space_nm"), map_id, retry_count, "TEST_SQL", job.get("tag_kind")),
             last_error=last_error or "None",
         )
