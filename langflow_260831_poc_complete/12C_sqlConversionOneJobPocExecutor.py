@@ -1295,7 +1295,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         detail_table = self._qualify(os.getenv("MAPPING_RULE_DETAIL_TABLE", "NEXT_MIG_INFO_DTL"), db_config.get("system_schema"))
         query = f"""
             SELECT M.MAP_TYPE, M.FR_TABLE, D.FR_COL, M.TO_TABLE, D.TO_COL,
-                   M.DESCRIPTION, M.CONDITION
+                   M.CONDITION
               FROM {map_table} M
               JOIN {detail_table} D ON M.MAP_ID = D.MAP_ID
              WHERE UPPER(TRIM(M.STATUS)) = 'PASS'
@@ -1309,8 +1309,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 {
                     "map_type": self._lob_to_str(row[0]).strip().upper(), "fr_table": self._lob_to_str(row[1]).strip(),
                     "fr_col": self._lob_to_str(row[2]).strip(), "to_table": self._lob_to_str(row[3]).strip(),
-                    "to_col": self._lob_to_str(row[4]).strip(), "description": self._lob_to_str(row[5]).strip(),
-                    "condition": self._lob_to_str(row[6]).strip(),
+                    "to_col": self._lob_to_str(row[4]).strip(), "condition": self._lob_to_str(row[5]).strip(),
                 }
                 for row in cur.fetchall()
             ]
@@ -1458,12 +1457,11 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         # 이 텍스트는 내장 TOBE_SQL 프롬프트의 mapping_schema_text로 삽입된다.
         # FR_TABLE/TO_TABLE 단위로 묶어 복잡한 원천 쿼리는 한 번만 보이고 컬럼 매핑은 읽기 쉽게 유지한다.
         source_schema, target_schema = db_config["source_schema"], db_config["target_schema"]
-        grouped: dict[tuple[str, str, str, str, str], set[tuple[str, str]]] = {}
+        grouped: dict[tuple[str, str, str, str], set[tuple[str, str]]] = {}
         for rule in mapping_rules:
             map_type = str(rule.get("map_type") or "").strip().upper() or "SIMPLE"
             fr_table = str(rule.get("fr_table") or "").strip()
             to_table = self._qualify_mapping_table(rule.get("to_table") or "", target_schema)
-            description = str(rule.get("description") or "").strip()
             condition = str(rule.get("condition") or "").strip()
             if map_type == "COMPLEX":
                 while fr_table.endswith(";"):
@@ -1471,21 +1469,19 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 from_expr = f"(\n{fr_table}\n) SRC"
             else:
                 from_expr = self._qualify_mapping_table(fr_table, source_schema)
-            grouped.setdefault((map_type, from_expr, to_table, description, condition), set()).add(
+            grouped.setdefault((map_type, from_expr, to_table, condition), set()).add(
                 (str(rule.get("fr_col") or "").strip(), self._mapping_to_col_prompt_value(rule.get("to_col")))
             )
 
         lines = ["[MIGRATION_MAPPING_RULES]"]
-        for map_type, from_expr, to_table, description, condition in sorted(grouped):
+        for map_type, from_expr, to_table, condition in sorted(grouped):
             source_key = "FR_TABLE_QUERY" if map_type == "COMPLEX" else "FR_TABLE"
             lines.append(f"- MAP_TYPE={map_type} | {source_key}={from_expr} | TO_TABLE={to_table}")
             if map_type == "COMPLEX":
                 lines.append("  - Use the FR_TABLE_QUERY as one inline view and reference mapped FR_COL values from alias SRC.")
-            if description:
-                lines.append(f"  - DESCRIPTION={description}")
             if condition:
                 lines.append(f"  - CONDITION={condition}")
-            for fr_col, to_col in sorted(grouped[(map_type, from_expr, to_table, description, condition)]):
+            for fr_col, to_col in sorted(grouped[(map_type, from_expr, to_table, condition)]):
                 lines.append(f"  - FR_COL={fr_col} -> TO_COL={to_col}")
         lines.extend(["", "[SQL_CONVERSION_GENERAL_RAG_GUIDANCE]"])
         for rule in general_rules:
