@@ -27,6 +27,7 @@ MANAGEMENT_ROUTER_PROMPT = """당신은 SmartMigrate 관리 요청 라우터입�
 - STATUS_CHANGE: 작업 상태 초기화 요청
 - CORRECT_SQL_INPUT: 사용자가 제공한 SQL 원문을 저장하는 요청
 - RAG_GUIDE_MANAGEMENT: NEXT_MIG_RAG_INFO의 SQL Conversion RAG 가이드 또는 SQL Tuning 가이드를 조회/추가/수정/비활성화하는 요청
+- VECTOR_DB_SYNC: Oracle의 RAG/Correct SQL 원천 데이터를 Milvus VectorDB에 업로드/동기화하는 요청
 - EXCEPTION: 필수 정보가 없거나 요청이 모호해서 처리할 수 없는 경우
 
 STATUS_CHANGE 규칙:
@@ -64,11 +65,17 @@ RAG_GUIDE_MANAGEMENT 규칙:
 - 조회 요청에서 "전체 내용", "전문", "원문까지"처럼 말하면 rag.full_text=true로 설정하세요.
 - 사용자가 가이드 내용 자체를 주지 않았으면 guidance_text, source_sql, target_sql을 지어내지 마세요.
 
+VECTOR_DB_SYNC 규칙:
+- 사용자가 "VectorDB 업로드", "Milvus 업로드", "RAG 벡터 동기화", "00B 실행", "가이드 추가 후 벡터DB 반영"처럼 요청하면 이 route를 선택하세요.
+- 이 route는 NEXT_MIG_RAG_INFO, NEXT_SQL_INFO, NEXT_MIG_INFO 원천 데이터를 00B_saveVectorDB.py에서 Milvus collection으로 동기화하는 작업입니다.
+- 사용자가 특정 RAG_ID만 말해도 현재 00B는 전체 snapshot 동기화 방식이므로 부분 업로드 조건을 만들지 마세요.
+
 JOB_QA와 CURRENT_PROGRESS 선택 규칙:
 - 작업 상태/결과/실패/로그를 조회하고 원인 해석이 필요하면 JOB_QA를 선택하세요.
 - "전체 Fail 분석해줘", "최근 실패 원인 알려줘", "SQL Tuning만 분석해줘" 같은 요청은 JOB_QA입니다.
 - 단순히 현재 실행 중인 작업이나 진행 현황만 묻는 요청은 CURRENT_PROGRESS입니다.
 - RAG 가이드 테이블 자체가 주제이면 JOB_QA가 아니라 RAG_GUIDE_MANAGEMENT를 선택하세요.
+- RAG 가이드 변경분을 VectorDB/Milvus에 반영하는 실행 요청이면 RAG_GUIDE_MANAGEMENT가 아니라 VECTOR_DB_SYNC를 선택하세요.
 
 필수 정보 누락 규칙:
 - 필요한 값이 없으면 management_route=EXCEPTION으로 설정하고 exception_message에 한국어로 무엇이 부족한지 구체적으로 쓰세요.
@@ -77,7 +84,7 @@ JOB_QA와 CURRENT_PROGRESS 선택 규칙:
 - 예: "RAG Guide 수정/삭제에는 RAG_ID가 필요합니다. 먼저 조회해서 대상 RAG_ID를 확인해주세요."
 
 JSON schema:
-{"management_route":"DASHBOARD|CURRENT_PROGRESS|JOB_QA|STATUS_CHANGE|CORRECT_SQL_INPUT|RAG_GUIDE_MANAGEMENT|EXCEPTION","target":{"work_type":"","map_id":"","sql_id":"","space_nm":"","sql_column":"","priority":5},"correct_sql":"","rag_action":"","rag":{"rag_id":"","category":"","rule_type":"","source_tables":"","use_yn":"Y","keyword":"","limit":"","full_text":false,"guidance_text":"","source_sql":"","target_sql":""},"exception_message":"","reason":""}"""
+{"management_route":"DASHBOARD|CURRENT_PROGRESS|JOB_QA|STATUS_CHANGE|CORRECT_SQL_INPUT|RAG_GUIDE_MANAGEMENT|VECTOR_DB_SYNC|EXCEPTION","target":{"work_type":"","map_id":"","sql_id":"","space_nm":"","sql_column":"","priority":5},"correct_sql":"","rag_action":"","rag":{"rag_id":"","category":"","rule_type":"","source_tables":"","use_yn":"Y","keyword":"","limit":"","full_text":false,"guidance_text":"","source_sql":"","target_sql":""},"exception_message":"","reason":""}"""
 
 EXCEPTION_MESSAGE = "Management 요청을 처리할 수 없습니다. 작업 종류와 필요한 식별자를 다시 알려주세요."
 
@@ -102,6 +109,7 @@ class NewType04ManagementRouter(Component):
         Output(display_name="Status Change", name="status_change", method="status_change_response", group_outputs=True),
         Output(display_name="Correct SQL Input", name="correct_sql_input", method="correct_sql_input_response", group_outputs=True),
         Output(display_name="RAG Guide Manager", name="rag_guide_manager", method="rag_guide_manager_response", group_outputs=True),
+        Output(display_name="Vector DB Sync", name="vector_db_sync", method="vector_db_sync_response", group_outputs=True),
         Output(display_name="Exception Message", name="exception", method="exception_response", group_outputs=True, types=["Message"]),
     ]
 
@@ -128,6 +136,10 @@ class NewType04ManagementRouter(Component):
     # Langflow group output별로 현재 route가 맞을 때만 payload를 반환한다.
     def rag_guide_manager_response(self) -> Data:
         return self._route_output("RAG_GUIDE_MANAGEMENT", "rag_guide_manager")
+
+    # Langflow group output별로 현재 route가 맞을 때만 payload를 반환한다.
+    def vector_db_sync_response(self) -> Data:
+        return self._route_output("VECTOR_DB_SYNC", "vector_db_sync")
 
     # Langflow group output별로 현재 route가 맞을 때만 payload를 반환한다.
     def exception_response(self) -> Message:
@@ -185,7 +197,7 @@ class NewType04ManagementRouter(Component):
     # 비교와 검색이 안정적으로 동작하도록 입력 값을 정규화한다.
     def _normalize_decision(self, decision: dict[str, Any]) -> dict[str, Any]:
         route = str(decision.get("management_route") or "").upper()
-        if route not in {"DASHBOARD", "CURRENT_PROGRESS", "JOB_QA", "STATUS_CHANGE", "CORRECT_SQL_INPUT", "RAG_GUIDE_MANAGEMENT", "EXCEPTION"}:
+        if route not in {"DASHBOARD", "CURRENT_PROGRESS", "JOB_QA", "STATUS_CHANGE", "CORRECT_SQL_INPUT", "RAG_GUIDE_MANAGEMENT", "VECTOR_DB_SYNC", "EXCEPTION"}:
             raise ValueError(f"Invalid management_route: {route}")
         return {"management_route": route, "target": dict(decision.get("target") or {}), "correct_sql": str(decision.get("correct_sql") or ""), "rag_action": str(decision.get("rag_action") or ""), "rag": dict(decision.get("rag") or {}), "exception_message": str(decision.get("exception_message") or ""), "reason": str(decision.get("reason") or "")}
 
@@ -264,7 +276,7 @@ class NewType04ManagementRouter(Component):
 
     # 관리 route에 연결된 다음 Langflow node 이름을 반환한다.
     def _next_node(self, route: str) -> str:
-        return {"DASHBOARD": "04_dashboard", "CURRENT_PROGRESS": "04_currentProgress", "JOB_QA": "04_jobQaAgent", "STATUS_CHANGE": "04_statusChange", "CORRECT_SQL_INPUT": "04_correctSqlInput", "RAG_GUIDE_MANAGEMENT": "04_ragGuideManager", "EXCEPTION": "04_managementRouter"}.get(route, "04_dashboard")
+        return {"DASHBOARD": "04_dashboard", "CURRENT_PROGRESS": "04_currentProgress", "JOB_QA": "04_jobQaAgent", "STATUS_CHANGE": "04_statusChange", "CORRECT_SQL_INPUT": "04_correctSqlInput", "RAG_GUIDE_MANAGEMENT": "04_ragGuideManager", "VECTOR_DB_SYNC": "00B_saveVectorDB", "EXCEPTION": "04_managementRouter"}.get(route, "04_dashboard")
 
     # Langflow 입력이 Data/Message/dict/JSON 문자열 중 무엇이든 dict로 통일한다.
     def _parse_payload(self, raw: Any) -> dict[str, Any]:

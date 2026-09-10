@@ -60,6 +60,7 @@ flowchart TD
     M -->|STATUS_CHANGE| RESET[04 Status Change]
     M -->|CORRECT_SQL_INPUT| CORRECT[04 Correct SQL Input]
     M -->|RAG_GUIDE_MANAGEMENT| RAG[04 RAG Guide Manager]
+    M -->|VECTOR_DB_SYNC| VDB[00B Sync Milvus Vector DB]
     M -->|EXCEPTION| EX[Exception Message]
 ```
 
@@ -71,6 +72,7 @@ flowchart TD
 | `STATUS_CHANGE` | "map id 101 다시 돌리게 초기화해줘" | status NULL, retry 0, priority 1 또는 5 |
 | `CORRECT_SQL_INPUT` | "sql id S001 / space DDD의 TO_SQL을 ...로 저장해줘" | 사용자가 준 SQL 그대로 저장, `USER_EDITED='Y'` |
 | `RAG_GUIDE_MANAGEMENT` | "SQL Conversion RAG 가이드 추가해줘", "튜닝 가이드 RAG_ID 12 비활성화해줘" | `NEXT_MIG_RAG_INFO` 조회/추가/수정/비활성화 |
+| `VECTOR_DB_SYNC` | "VectorDB 업로드해줘", "방금 추가한 RAG 가이드를 Milvus에 반영해줘" | `00B_saveVectorDB.py`로 Oracle 원천 데이터를 Milvus collection에 동기화 |
 | `EXCEPTION` | 필수 target 누락 | 구체적인 한국어 에러 메시지 |
 
 중요한 결정: `FAIL_ANALYSIS` output은 04에서 제거되었다. 채팅으로 들어오는 실패 분석은 모두 `JOB_QA`가 담당한다. 단, 실행 완료 후 자동 분석인 `11B_failureCauseAnalyzer.py`는 여전히 실행 workflow 후단에서 사용한다.
@@ -228,6 +230,20 @@ RAG 가이드 테이블 자체를 조회/추가/수정/비활성화하려는 요
 | 추가/수정/비활성화 후에는 `00B_saveVectorDB.py`를 실행한다. | Milvus RAG 검색 인덱스에 DB 변경분을 반영해야 한다. |
 
 조회에서 `limit`는 최대 몇 건을 가져올지 정하는 값이다. 예를 들어 "user_info 테이블과 관련된 SQL Conversion RAG 조회해줘"라고 요청하면 `category=SQL_CONVERSION`, `keyword=user_info`로 조회하고, `SOURCE_TABLES`, `GUIDANCE_TEXT`, `SOURCE_SQL`, `TARGET_SQL` 중 `user_info`가 포함된 row를 반환한다.
+
+## 2.11 VectorDB Sync
+
+`VECTOR_DB_SYNC`는 04 관리 요청에서 `00B_saveVectorDB.py`를 실행하기 위한 route다. RAG 가이드나 Correct SQL을 DB에 추가한 뒤 Milvus 검색에 반영해야 할 때 사용한다.
+
+| 요청 예 | route | 실행 컴포넌트 |
+|---|---|---|
+| "VectorDB 업로드해줘" | `VECTOR_DB_SYNC` | `00B_saveVectorDB.py` |
+| "방금 추가한 튜닝 가이드 Milvus에 반영해줘" | `VECTOR_DB_SYNC` | `00B_saveVectorDB.py` |
+| "00B 실행해줘" | `VECTOR_DB_SYNC` | `00B_saveVectorDB.py` |
+
+현재 00B는 특정 `RAG_ID`만 부분 업로드하지 않고 Oracle 원천 테이블 snapshot 기준으로 전체 동기화한다. 변경되지 않은 row는 `content_hash`로 건너뛰고, Oracle 기준 active가 아닌 문서는 Milvus에서 inactive 처리한다.
+
+00B output은 Chat Output에 직접 연결할 수 있는 `Message`다. 성공 시 "Correct SQL 및 Conversion / Tuning Guide를 Milvus Vector DB에 동기화 완료했습니다." 문구와 함께 RAG/Correct SQL별 active, upserted, skipped, deactivated 건수를 출력한다.
 
 ### 요청 예시
 

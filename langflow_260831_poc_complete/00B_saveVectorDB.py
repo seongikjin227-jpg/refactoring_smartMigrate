@@ -10,8 +10,14 @@ from contextlib import contextmanager
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
-from lfx.io import IntInput, Output, SecretStrInput, StrInput
+from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
 from lfx.schema.data import Data
+from lfx.schema.message import Message
+
+try:
+    from lfx.io import DataInput
+except Exception:
+    DataInput = MessageTextInput
 
 
 RAG_TABLE = "NEXT_MIG_RAG_INFO"
@@ -51,6 +57,7 @@ class NewType00BSaveVectorDB(Component):
     icon = "Database"
 
     inputs = [
+        DataInput(name="payload_json", display_name="Payload JSON", required=False),
         StrInput(name="db_host", display_name="DB Host", required=True),
         IntInput(name="db_port", display_name="DB Port", value=1521, required=False),
         StrInput(name="db_service_name", display_name="DB Service Name", required=True),
@@ -70,10 +77,10 @@ class NewType00BSaveVectorDB(Component):
         IntInput(name="rag_embed_timeout_seconds", display_name="RAG Embedding Timeout Seconds", value=60, required=False),
     ]
 
-    outputs = [Output(display_name="Result", name="result", method="run", types=["Data"])]
+    outputs = [Output(display_name="Result Message", name="result", method="run", types=["Message"])]
 
     # Langflow output 진입점에서 입력을 검증하고 이 컴포넌트의 주요 실행 흐름을 시작한다.
-    def run(self) -> Data:
+    def run(self) -> Message:
         # ---------------------------------------------------------------------
         # 전체 동기화 오케스트레이션
         # ---------------------------------------------------------------------
@@ -83,6 +90,7 @@ class NewType00BSaveVectorDB(Component):
         # 4. 필요한 Milvus collection이 존재하는지 확인하고 없으면 생성한다.
         # 5. 변경된 active row는 upsert하고, 더 이상 유효하지 않은 문서는 비활성화한다.
         started = time.perf_counter()
+        payload = self._parse_payload(getattr(self, "payload_json", ""))
         db_config = self._db_config()
         milvus_config = self._milvus_config()
         embed_config = self._embed_config()
@@ -110,6 +118,11 @@ class NewType00BSaveVectorDB(Component):
         result = {
             "ok": not rag_result["failures"] and not conversion_result["failures"] and not migration_result["failures"],
             "component": "00B_syncMilvusVectorDB",
+            "trigger": {
+                "management_route": payload.get("management_route") or "",
+                "user_request": payload.get("user_request") or "",
+                "routing_reason": payload.get("management_routing_reason") or "",
+            },
             "milvus_db_name": milvus_config["db_name"],
             "collections": {
                 "rag_rules": milvus_config["rag_collection"],
@@ -129,7 +142,44 @@ class NewType00BSaveVectorDB(Component):
             "elapsed_seconds": round(time.perf_counter() - started, 3),
         }
         self.status = result
-        return Data(data=result)
+        return Message(text=self._answer(result))
+
+    # VectorDB 동기화 결과를 Chat Output에 바로 연결할 수 있는 사용자 메시지로 만든다.
+    def _answer(self, result: dict[str, Any]) -> str:
+        if not result.get("ok"):
+            return (
+                "Correct SQL 및 Conversion / Tuning Guide를 Milvus Vector DB에 동기화하지 못했습니다.\n"
+                f"- RAG 실패 batch: {result.get('rag', {}).get('failed_batch_count', 0)}\n"
+                f"- Correct SQL Conversion 실패 batch: {result.get('correct_sql_conversion', {}).get('failed_batch_count', 0)}\n"
+                f"- Correct SQL Migration 실패 batch: {result.get('correct_sql_migration', {}).get('failed_batch_count', 0)}"
+            )
+        rag = result.get("rag") or {}
+        conversion = result.get("correct_sql_conversion") or {}
+        migration = result.get("correct_sql_migration") or {}
+        return (
+            "Correct SQL 및 Conversion / Tuning Guide를 Milvus Vector DB에 동기화 완료했습니다.\n"
+            f"- RAG Guide: active={rag.get('active_count', 0)}, upserted={rag.get('upserted_count', 0)}, skipped={rag.get('skipped_count', 0)}, deactivated={rag.get('deactivated_count', 0)}\n"
+            f"- Correct SQL Conversion: active={conversion.get('active_count', 0)}, upserted={conversion.get('upserted_count', 0)}, skipped={conversion.get('skipped_count', 0)}, deactivated={conversion.get('deactivated_count', 0)}\n"
+            f"- Correct SQL Migration: active={migration.get('active_count', 0)}, upserted={migration.get('upserted_count', 0)}, skipped={migration.get('skipped_count', 0)}, deactivated={migration.get('deactivated_count', 0)}\n"
+            f"- Milvus DB: {result.get('milvus_db_name')}\n"
+            f"- Embedding Model: {result.get('embedding_model')}\n"
+            f"- Elapsed: {result.get('elapsed_seconds')}s"
+        )
+
+    # 04 Management Router에서 넘어온 payload를 dict로 읽고, 직접 실행이면 빈 dict로 둔다.
+    def _parse_payload(self, raw: Any) -> dict[str, Any]:
+        if isinstance(raw, Data):
+            return dict(raw.data or {})
+        if isinstance(raw, dict):
+            return dict(raw)
+        text = str(raw or "").strip()
+        if not text:
+            return {}
+        clean = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.I)
+        parsed = json.loads(clean)
+        if not isinstance(parsed, dict):
+            raise ValueError("payload_json must be a JSON object")
+        return parsed
 
     # Milvus collection 존재 여부를 확인하고 없으면 schema에 맞춰 생성한다.
     def _ensure_collection(self, client: Any, collection_name: str, vector_dim: int, schema_kind: str) -> bool:
