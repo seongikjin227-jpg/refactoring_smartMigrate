@@ -1851,6 +1851,50 @@ class NewType10CMigOneJobPocExecutor(Component):
             raise ValueError(f"Invalid identifier: {clean}")
         return clean
 
+    # Source table에는 source_schema를 붙인다. 이미 schema-qualified이면 그대로 둔다.
+    def _qualify_fr_table(self, table_name: str, db_config: dict[str, Any]) -> str:
+        return self._qualify_runtime_table(table_name, db_config.get("source_schema"))
+
+    # Target table에는 target_schema를 붙인다. 이미 schema-qualified이면 그대로 둔다.
+    def _qualify_to_table(self, table_name: str, db_config: dict[str, Any]) -> str:
+        return self._qualify_runtime_table(table_name, db_config.get("target_schema"))
+
+    def _qualify_runtime_table(self, table_name: str, schema: Any) -> str:
+        table = str(table_name or "").strip()
+        if not table or "." in table:
+            return table
+        clean_table = self._clean_identifier(table)
+        clean_schema = str(schema or "").strip().upper()
+        return f"{self._clean_identifier(clean_schema)}.{clean_table}" if clean_schema else clean_table
+
+    # COMPLEX FR_TABLE SQL에서 FROM/JOIN 뒤의 물리 table에 source_schema를 붙인다.
+    def _qualify_source_tables_in_sql(self, sql_text: str, db_config: dict[str, Any]) -> str:
+        source_schema = str(db_config.get("source_schema") or "").strip().upper()
+        if not source_schema:
+            return str(sql_text or "")
+
+        def replace(match: re.Match[str]) -> str:
+            prefix = match.group(1)
+            table_name = match.group(2)
+            if "." in table_name:
+                return match.group(0)
+            return f"{prefix}{self._clean_identifier(source_schema)}.{self._clean_identifier(table_name)}"
+
+        return re.sub(
+            r"(\b(?:FROM|JOIN)\s+)([A-Z_][A-Z0-9_$#]*)",
+            replace,
+            str(sql_text or ""),
+            flags=re.IGNORECASE,
+        )
+
+    # OWNER.TABLE 형태를 Oracle metadata 조회용 owner/table_name으로 분리한다.
+    def _split_table_owner_and_name(self, table: str) -> tuple[str | None, str]:
+        value = str(table or "").strip().upper()
+        if "." in value:
+            owner, name = value.split(".", 1)
+            return self._clean_identifier(owner), self._clean_identifier(name)
+        return None, self._clean_identifier(value)
+
     def _lob_to_str(self, value: Any) -> str:
         """Oracle LOB 및 nullable 값을 문자열로 변환한다."""
         if value is not None and hasattr(value, "read"):
