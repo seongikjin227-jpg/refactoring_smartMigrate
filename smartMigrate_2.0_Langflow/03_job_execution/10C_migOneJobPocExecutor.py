@@ -219,6 +219,10 @@ class NewType10CMigOneJobPocExecutor(Component):
             max_retry = max(0, int(job.get("max_retry") if job.get("max_retry") is not None else (getattr(self, "max_retry", None) or 2)))
             db_config = self._db_config(job)
             attempts: list[dict[str, Any]] = []
+            graph_result: dict[str, Any] = {}
+            final_status = "FAIL-INSERT"
+            retry_count = 0
+            message = ""
 
             try:
                 # 1. 대상 DDL/데이터를 건드리기 전에 선행 migration 의존성을 확인한다.
@@ -309,11 +313,13 @@ class NewType10CMigOneJobPocExecutor(Component):
                 return __log_result
             except Exception as exc:
                 elapsed = int(time.perf_counter() - started)
+                error_message = message or str(exc)
+                stage_sql = graph_result.get("stage_sql", "") if isinstance(graph_result, dict) else ""
                 try:
                     self._update_job(db_config, map_id, "FAIL-INSERT", elapsed, max(0, len(attempts) - 1))
                     logger.error(
-                        message,
-                        extra={"workflow_log": [map_id, "DB_MIGRATION", "JOB_FAIL", "ERROR", "FINAL", final_status, retry_count, graph_result.get("stage_sql", "")]},
+                        error_message,
+                        extra={"workflow_log": [map_id, "DB_MIGRATION", "JOB_FAIL", "ERROR", "FINAL", final_status, retry_count, stage_sql]},
                     )
                 except Exception:
                     logger.warning(

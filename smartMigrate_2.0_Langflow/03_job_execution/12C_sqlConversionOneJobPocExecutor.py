@@ -314,14 +314,51 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             self._require_db_config(db_config)
             job: dict[str, Any] = {}
             try:
-                prereq = self._migration_prerequisite_status(db_config)
-                if prereq.get("blocked"):
-                    result = self._prerequisite_blocked(payload, started, prereq)
-                    self.status = result
-                    __log_result = Data(data=result)
-                    logger.info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "INFO", "RUN_JOB", "END", 0]})
-                    return __log_result
+                if not bool(payload.get("full_workflow")):
+                    prereq = self._migration_prerequisite_status(db_config)
+                    if prereq.get("blocked"):
+                        result = self._prerequisite_blocked(payload, started, prereq)
+                        self.status = result
+                        __log_result = Data(data=result)
+                        logger.info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "INFO", "RUN_JOB", "END", 0]})
+                        return __log_result
                 job = self._load_sql_job(db_config, payload)
+                if bool(payload.get("full_workflow")):
+                    readiness = self._mapping_rule_readiness(db_config, job)
+                    if readiness.get("non_pass_count"):
+                        result = self._finish_failure(
+                            payload,
+                            job,
+                            db_config,
+                            started,
+                            FAIL_TOBE,
+                            str(readiness.get("message") or "Related DB Migration mapping is not PASS."),
+                            attempts=[
+                                {
+                                    "attempt": 1,
+                                    "stage": "CHECK_MAPPING_RULE_STATUS",
+                                    "status": FAIL_TOBE,
+                                    "reason": str(readiness.get("message") or ""),
+                                }
+                            ],
+                            retry_count_override=0,
+                        )
+                        self.status = result
+                        __log_result = Data(data=result)
+                        logger.info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "INFO", "RUN_JOB", "END", 0]})
+                        return __log_result
+                    if not readiness.get("pass_count"):
+                        result = self._finish_skip(
+                            payload,
+                            job,
+                            db_config,
+                            started,
+                            str(readiness.get("message") or "No related DB Migration mapping rule exists for this SQL target table."),
+                        )
+                        self.status = result
+                        __log_result = Data(data=result)
+                        logger.info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "INFO", "RUN_JOB", "END", 0]})
+                        return __log_result
                 self._increment_batch_count(db_config, job)
                 self._mark_running_status(db_config, job, "STATUS_CONVERSION", "RUNNING", "SQL conversion started")
 
@@ -951,6 +988,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         message: str,
         attempts: list[dict[str, Any]] | None = None,
         partial_values: dict[str, Any] | None = None,
+        retry_count_override: int | None = None,
     ) -> dict[str, Any]:
         """source status 값을 기준으로 SQL conversion 실패를 저장한다."""
         failure_attempts = attempts or [{"attempt": 1, "stage": self._failure_stage(status), "status": status, "reason": message}]
@@ -964,7 +1002,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 {
                     "STATUS_CONVERSION": status,
                     "LOG": f"FINAL FAILURE stage=SQL_CONVERSION status={status} error={message}",
-                    "RETRY_COUNT": self._configured_retry_limit(),
+                    "RETRY_COUNT": self._configured_retry_limit() if retry_count_override is None else retry_count_override,
                 }
             )
             self._update_row(
@@ -972,7 +1010,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 job,
                 update_values,
             )
-            retry_count = self._retry_count(failure_attempts)
+            retry_count = self._retry_count(failure_attempts) if retry_count_override is None else retry_count_override
             logging.getLogger("smartmigrate.workflow").error(
                 message,
                 extra={
@@ -1009,6 +1047,58 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
 
     # 다음 컴포넌트로 넘길 표준 Langflow 결과 payload를 만든다.
     # 12C 실행 결과를 dashboard/후속 단계가 읽는 표준 payload로 만든다.
+    # SQL conversion 대상 mapping rule이 없어 재시도 없이 SKIP으로 저장한다.
+    def _finish_skip(
+        self,
+        payload: dict[str, Any],
+        job: dict[str, Any],
+        db_config: dict[str, Any],
+        started: float,
+        message: str,
+    ) -> dict[str, Any]:
+        attempts = [{"attempt": 1, "stage": "CHECK_MAPPING_RULE_STATUS", "status": "SKIP", "reason": message}]
+        if self._has_sql_key(job):
+            self._update_row(
+                db_config,
+                job,
+                {
+                    "STATUS_CONVERSION": "SKIP",
+                    "LOG": f"SKIP stage=SQL_CONVERSION status=SKIP reason={message}",
+                    "RETRY_COUNT": 0,
+                },
+            )
+            logging.getLogger("smartmigrate.workflow").info(
+                message,
+                extra={
+                    "workflow_log": [
+                        f"{job.get('sql_id') or ''} / {job.get('space_nm') or ''}"[:100],
+                        "SQL_CONVERSION",
+                        "SQL_CONVERSION",
+                        "INFO",
+                        "CHECK_MAPPING_RULE_STATUS",
+                        "SKIP",
+                        0,
+                        "",
+                    ]
+                },
+            )
+        return self._result(
+            payload=payload,
+            job=job,
+            ok=False,
+            status="SKIP",
+            elapsed=time.perf_counter() - started,
+            attempts=attempts,
+            message=message,
+            extra={
+                "status_conversion": "SKIP",
+                "conversion_status": "SKIP",
+                "skipped": True,
+                "conversion_skipped": True,
+                "next_node": "15C_sqlTuningOneJobPocExecutor" if payload.get("full_workflow") else "12D_sqlConversionIterationDashboard",
+            },
+        )
+
     def _result(
         self,
         *,
@@ -1321,6 +1411,62 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
     # GENERAL RAG는 SQL 변환 프롬프트의 기준 규칙이다.
     # RAG 테이블/스키마 문제가 있으면 빈 규칙으로 우회하지 않고 즉시 오류를 노출한다.
     # SQL Conversion GENERAL RAG 규칙을 조회하고 오류는 숨기지 않는다.
+    # Full Workflow 내부에서는 SQL job의 TARGET_TABLE과 관련 있는 mapping row만 선행 상태로 본다.
+    def _mapping_rule_readiness(self, db_config: dict[str, Any], job: dict[str, Any]) -> dict[str, Any]:
+        target_table = str(job.get("target_table") or "").strip()
+        source_scope_tables = self._source_tables(target_table)
+        map_table = self._qualify(os.getenv("MAPPING_RULE_TABLE", "NEXT_MIG_INFO"), db_config.get("system_schema"))
+        query = f"""
+            SELECT M.MAP_ID, M.MAP_TYPE, M.FR_TABLE, M.STATUS
+              FROM {map_table} M
+             ORDER BY M.MAP_ID
+        """
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(query)
+            rows = [
+                {
+                    "map_id": self._lob_to_str(row[0]).strip(),
+                    "map_type": self._lob_to_str(row[1]).strip().upper(),
+                    "fr_table": self._lob_to_str(row[2]).strip(),
+                    "status": self._status(row[3]),
+                }
+                for row in cur.fetchall()
+            ]
+
+        related = [
+            row
+            for row in rows
+            if not source_scope_tables or self._table_matches(row.get("fr_table") or "", source_scope_tables)
+        ]
+        pass_rows = [row for row in related if row.get("status") == "PASS"]
+        non_pass_rows = [row for row in related if row.get("status") != "PASS"]
+
+        if non_pass_rows:
+            examples = ", ".join(
+                f"map_id={row.get('map_id') or '-'} fr_table={row.get('fr_table') or '-'} status={row.get('status') or 'NULL'}"
+                for row in non_pass_rows[:5]
+            )
+            return {
+                "matched_count": len(related),
+                "pass_count": len(pass_rows),
+                "non_pass_count": len(non_pass_rows),
+                "message": f"Related DB Migration mapping has non-PASS rows for TARGET_TABLE={target_table}: {examples}",
+            }
+        if not pass_rows:
+            return {
+                "matched_count": 0,
+                "pass_count": 0,
+                "non_pass_count": 0,
+                "message": f"No related DB Migration mapping rule exists for TARGET_TABLE={target_table}; SQL Conversion skipped.",
+            }
+        return {
+            "matched_count": len(related),
+            "pass_count": len(pass_rows),
+            "non_pass_count": 0,
+            "message": "",
+        }
+
     def _load_rag_general_rules(self, db_config: dict[str, Any], category: str, source_tables: set[str], map_id: str) -> list[dict[str, Any]]:
         return self._load_rag_rules(db_config, category, RAG_GENERAL, source_tables, map_id)
 

@@ -136,12 +136,14 @@ class NewType18BFullWorkflowLoop(Component):
                     db_gate = self._db_migration_phase_gate(item_payload)
                     if db_gate.get("block_sql"):
                         skipped_plan_counts = self._plan_counts(data_list[index:])
-                        abort_reason = str(db_gate.get("reason") or "DB Migration failed; SQL phases were not started.")
+                        abort_reason = str(db_gate.get("reason") or "DB Migration is not 100% PASS; SQL phases were not started.")
+                        self._log_workflow_abort(abort_reason, db_gate)
                         break
 
                 if migration_failed and self._route(item_payload) != "MIG":
                     skipped_plan_counts = self._plan_counts(data_list[index:])
-                    abort_reason = "DB Migration failed; SQL Conversion and downstream phases were skipped because migration is still failing."
+                    abort_reason = "DB Migration failed; SQL Conversion and downstream phases were skipped because DB Migration is not 100% PASS."
+                    self._log_workflow_abort(abort_reason, {"pending_null_count": 0, "fail_count": 1})
                     break
 
                 item_results = await self.execute_loop_body([item], event_manager=self._event_manager)
@@ -197,6 +199,10 @@ class NewType18BFullWorkflowLoop(Component):
             data_list = self.ctx.get(f"{self._id}_data", [])
             first_payload = self._data_dict(data_list[0]) if data_list else {}
             results = [self._data_dict(item) for item in self.ctx.get(f"{self._id}_aggregated", [])]
+            workflow_summary = self._summary(results, data_list, self.ctx.get(f"{self._id}_skipped_plan_counts", {}))
+            workflow_aborted = bool(self.ctx.get(f"{self._id}_workflow_aborted", False))
+            abort_reason = str(self.ctx.get(f"{self._id}_abort_reason", "") or "")
+            skipped_plan_counts = dict(self.ctx.get(f"{self._id}_skipped_plan_counts", {}) or {})
             payload = {
                 "component": "18B_fullWorkflowLoop",
                 "job_route": "FULL_WORKFLOW",
@@ -205,14 +211,16 @@ class NewType18BFullWorkflowLoop(Component):
                 "db_config": dict(first_payload.get("db_config") or {}),
                 "workflow_plan_counts": dict(first_payload.get("workflow_plan_counts") or self._plan_counts(data_list)),
                 "aggregated_results": results,
-                "workflow_summary": self._summary(results, data_list, self.ctx.get(f"{self._id}_skipped_plan_counts", {})),
-                "workflow_aborted": bool(self.ctx.get(f"{self._id}_workflow_aborted", False)),
-                "abort_reason": str(self.ctx.get(f"{self._id}_abort_reason", "") or ""),
-                "skipped_plan_counts": dict(self.ctx.get(f"{self._id}_skipped_plan_counts", {}) or {}),
+                "workflow_summary": workflow_summary,
+                "workflow_aborted": workflow_aborted,
+                "abort_reason": abort_reason,
+                "skipped_plan_counts": skipped_plan_counts,
+                "done_reason": self._done_reason(data_list, results, workflow_aborted, abort_reason, skipped_plan_counts),
                 "next_node": "18D_fullWorkflowDashboard",
             }
             self.status = payload
             __log_result = Data(data=payload)
+            self._log_done_output(payload)
             logging.getLogger("smartmigrate.workflow").info("after done_output", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "DONE_OUTPUT", "END", 0]})
             return __log_result
         except Exception as exc:
@@ -316,19 +324,77 @@ class NewType18BFullWorkflowLoop(Component):
 
         pending_null_count = self._num(row[0])
         fail_count = self._num(row[1])
-        block_sql = pending_null_count == 0 and fail_count > 0
+        block_sql = pending_null_count > 0 or fail_count > 0
         return {
             "block_sql": block_sql,
             "pending_null_count": pending_null_count,
             "fail_count": fail_count,
             "reason": (
-                f"DB Migration 종료 후 실패 상태가 {fail_count}건 있어 SQL Conversion 이후 작업을 시작하지 않습니다."
+                f"DB Migration is not 100% PASS; pending={pending_null_count}, fail={fail_count}. SQL Conversion and downstream phases were not started."
                 if block_sql
                 else ""
             ),
         }
 
     # loop 입력 목록을 route별 예정 작업 수로 집계한다.
+    # DB Migration phase가 100% PASS가 아니어서 SQL phase를 시작하지 않는 event를 남긴다.
+    # 18B Done output이 반환되는 이유를 payload와 log에 남길 문장으로 만든다.
+    def _done_reason(
+        self,
+        data_list: list[Any],
+        results: list[dict[str, Any]],
+        workflow_aborted: bool,
+        abort_reason: str,
+        skipped_plan_counts: dict[str, Any],
+    ) -> str:
+        if not data_list:
+            return "NO_PLANNED_JOB: Full Workflow had no planned jobs."
+        if workflow_aborted:
+            skipped_total = sum(self._num(value) for value in skipped_plan_counts.values())
+            suffix = f" skipped={skipped_total}" if skipped_total else ""
+            return f"ABORTED: {abort_reason or 'Full Workflow stopped before all planned jobs were executed.'}{suffix}"
+        planned_total = len(data_list)
+        completed_total = len(results)
+        return f"COMPLETED: all planned jobs were handled. completed={completed_total}, planned={planned_total}"
+
+    # 18B Done output 직전에 종료 사유를 workflow log로 남긴다.
+    def _log_done_output(self, payload: dict[str, Any]) -> None:
+        reason = str(payload.get("done_reason") or "").strip()
+        workflow_aborted = bool(payload.get("workflow_aborted"))
+        logging.getLogger("smartmigrate.workflow").log(
+            logging.WARNING if workflow_aborted else logging.INFO,
+            reason or "Full Workflow Done output emitted.",
+            extra={
+                "workflow_log": [
+                    0,
+                    "WORKFLOW",
+                    "18B_FULL_LOOP",
+                    "WARN" if workflow_aborted else "INFO",
+                    "DONE_OUTPUT",
+                    "ABORTED" if workflow_aborted else "DONE",
+                    0,
+                    reason,
+                ]
+            },
+        )
+
+    def _log_workflow_abort(self, reason: str, gate: dict[str, Any]) -> None:
+        logging.getLogger("smartmigrate.workflow").warning(
+            reason,
+            extra={
+                "workflow_log": [
+                    0,
+                    "WORKFLOW",
+                    "18B_FULL_LOOP",
+                    "WARN",
+                    "DB_MIGRATION_GATE",
+                    "ABORT",
+                    0,
+                    f"pending={gate.get('pending_null_count', 0)}, fail={gate.get('fail_count', 0)}; {reason}",
+                ]
+            },
+        )
+
     def _plan_counts(self, data_list: list[Any]) -> dict[str, int]:
         counts = {route: 0 for route in ROUTE_ORDER}
         for item in data_list:

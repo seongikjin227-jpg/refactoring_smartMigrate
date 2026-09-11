@@ -98,6 +98,25 @@ flowchart TD
 | `SQL_FORMATTING` | 남은 formatting 대상이 있으면 실행. 선행 잔여 count 때문에 막지 않는다. |
 | `FULL_WORKFLOW` | prerequisite branch로 보내지 않는다. |
 
+### Full Workflow 내부 SQL Conversion gate
+
+`18A -> 18B` Full Workflow는 DB Migration을 먼저 모두 실행한 뒤 SQL Conversion phase로 넘어간다. SQL phase 진입 직전에 `18B_fullWorkflowLoop.py`가 전체 `NEXT_MIG_INFO` 상태를 확인하고, `USE_YN='Y'`인 DB Migration row 중 `STATUS IS NULL` 또는 `FAIL-%`가 하나라도 있으면 SQL Conversion/Tuning/Formatting을 시작하지 않고 Done payload로 종료한다. 이때 `18B_FULL_LOOP / DB_MIGRATION_GATE / ABORT` workflow log를 남긴다.
+
+`18B`는 Done output을 반환하기 직전에 항상 종료 사유를 workflow log로 남긴다. 종료 사유는 `NO_PLANNED_JOB`, `COMPLETED`, `ABORTED` 중 하나로 구분되며 Done payload의 `done_reason`에도 포함된다.
+
+`18B` gate를 통과한 뒤 `12C_sqlConversionOneJobPocExecutor.py`는 SQL job 단위로 `TARGET_TABLE` 관련 mapping 상태만 다시 판단한다. 이 검사는 전체 workflow를 멈추기 위한 것이 아니라, 해당 SQL row를 `FAIL-TOBE`, `SKIP`, 또는 conversion 진행으로 분류하기 위한 방어선이다.
+
+`12C`의 Full Workflow 내부 판정 기준:
+
+| 조건 | 처리 |
+|---|---|
+| `TARGET_TABLE` 관련 `NEXT_MIG_INFO` row 중 `STATUS <> 'PASS'` 또는 `STATUS IS NULL`인 row가 하나라도 있음 | 해당 SQL job만 `FAIL-TOBE`로 저장하고 retry 없이 다음 job으로 진행 |
+| `TARGET_TABLE` 관련 `NEXT_MIG_INFO` row가 하나도 없음 | conversion 대상이 아니므로 해당 SQL job을 `SKIP`으로 저장하고 retry 없이 다음 job으로 진행 |
+| `TARGET_TABLE` 관련 `NEXT_MIG_INFO` row가 있고 모두 `PASS` | `PASS` mapping rule만 prompt context로 사용해 SQL Conversion 진행 |
+| `TARGET_TABLE`에 mapping rule이 없는 source table과 `PASS` mapping source table이 섞여 있음 | 없는 table은 무시하고 `PASS` mapping이 하나라도 있으면 SQL Conversion 진행 |
+
+이 규칙은 Full Workflow 내부에서만 적용한다. 단독 `SQL_CONVERSION` 실행 요청은 위 `Standalone prerequisite` 규칙에 따라 DB Migration이 100% 완료되지 않았으면 시작하지 않는다.
+
 ## 3.5 시나리오: "전체 작업 진행해줘"
 
 이 요청은 최종적으로 `FULL_WORKFLOW`로 실행되는 것이 정상이다.
