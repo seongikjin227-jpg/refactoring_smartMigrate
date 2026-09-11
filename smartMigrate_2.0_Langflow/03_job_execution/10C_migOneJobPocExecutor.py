@@ -1844,6 +1844,13 @@ class NewType10CMigOneJobPocExecutor(Component):
         return all(re.fullmatch(r"[A-Za-z][A-Za-z0-9_$#]*", part.strip()) for part in parts)
 
     # Oracle LOB 값을 연결 종료 전에 문자열로 읽는다. 12C/15C/17C도 같은 이유로 사용한다.
+    # Oracle identifier로 안전한 문자만 허용하고 대문자 형태로 반환한다.
+    def _clean_identifier(self, value: str) -> str:
+        clean = str(value or "").strip().upper()
+        if not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", clean):
+            raise ValueError(f"Invalid identifier: {clean}")
+        return clean
+
     def _lob_to_str(self, value: Any) -> str:
         """Oracle LOB 및 nullable 값을 문자열로 변환한다."""
         if value is not None and hasattr(value, "read"):
