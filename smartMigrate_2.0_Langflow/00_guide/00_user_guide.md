@@ -8,7 +8,7 @@
 |---|---|---|---|
 | 조회 | 전체 현황, 진행 현황, 실패 원인, SQL 원문 조회 | 전체 작업, `MAP_ID`, `SQL_ID` + `SPACE_NM` | DB 상태와 로그를 조회하고 근거 기반 답변을 반환한다. |
 | 실행 | DB Migration, SQL Conversion, SQL Tuning, SQL Formatting, 전체 workflow 실행 | 전체 잔여 작업 또는 특정 작업 | 실행 가능한 job을 DB에서 다시 조회한 뒤 도메인별 executor를 실행한다. |
-| 수정 | 실패 job 상태 초기화, priority 변경, 담당자 보정 SQL 저장 | `MAP_ID` 또는 `SQL_ID` + `SPACE_NM` | 상태값, retry count, priority 또는 SQL CLOB를 DB에 반영한다. |
+| 수정 | 실패 job 상태 초기화, priority 변경, 담당자 보정 SQL 저장, `USER_EDITED` 변경, DB Migration `USE_YN` 변경 | `MAP_ID` 또는 `SQL_ID` + `SPACE_NM` | 상태값, retry count, priority, `USER_EDITED`, `USE_YN` 또는 SQL CLOB를 DB에 반영한다. |
 | RAG Guide 관리 | Conversion/Tuning 가이드 조회, 추가, 수정, 비활성화 | `NEXT_MIG_RAG_INFO`, `RAG_ID` | RAG rule 원천 테이블을 관리한다. 신규/수정분은 VectorDB 동기화 후 검색에 반영된다. |
 | VectorDB 관리 | RAG Guide와 Correct SQL 동기화 | Oracle 원천 테이블, Milvus collection | Oracle snapshot 기준으로 Milvus 검색 인덱스를 갱신한다. |
 
@@ -17,13 +17,13 @@
 | 기능 | 필수 입력 | 선택 입력 | 요청 템플릿 | 처리 결과 |
 |---|---|---|---|---|
 | 전체 대시보드 조회 | 없음 | 없음 | `전체 대시보드 보여줘.` | DB Migration, SQL Conversion, SQL Tuning, SQL Formatting의 상태별 건수를 보여준다. |
-| 현재 진행 현황 조회 | 없음 | 최근 로그 건수 | `지금 실행 중인 작업과 최근 로그 20건 보여줘.` | running job과 최근 workflow 로그를 보여준다. |
+| 현재 진행 현황 조회 | 없음 | 없음 | `지금 실행 중인 작업과 최근 로그 5건 보여줘.` | running job과 최근 workflow 로그 5건을 보여준다. |
 | DB Migration 상태 조회 | `MAP_ID` | 조회할 SQL 컬럼, 로그 범위 | `MAP_ID={MAP_ID} 상태와 최근 로그 보여줘.` | `NEXT_MIG_INFO` 기준 상태, 대상 테이블, 최근 로그를 조회한다. |
 | DB Migration SQL 원문 조회 | `MAP_ID`, SQL 컬럼명 | 없음 | `MAP_ID={MAP_ID}의 MIG_SQL과 VERIFY_SQL 원문 보여줘.` | `MIG_SQL`, `VERIFY_SQL` 등 요청한 CLOB 원문을 반환한다. |
 | SQL job 상태 조회 | `SQL_ID`, `SPACE_NM` | 도메인 | `SQL_ID={SQL_ID}, SPACE_NM={SPACE_NM} 상태 알려줘.` | `NEXT_SQL_INFO` 기준 Conversion/Tuning/Formatting 상태와 로그를 조회한다. |
 | SQL job SQL 원문 조회 | `SQL_ID`, `SPACE_NM`, SQL 컬럼명 | 없음 | `SQL_ID={SQL_ID}, SPACE_NM={SPACE_NM}의 TO_SQL, BIND_SQL, TEST_SQL 보여줘.` | 요청한 SQL 컬럼의 CLOB 원문을 반환한다. |
 | 실패 원인 분석 | 없음 | 도메인, `MAP_ID`, `SQL_ID`, `SPACE_NM`, 건수 | `최근 SQL Conversion 실패 10건 원인 요약해줘.` | 상태, 로그, 저장 SQL을 근거로 실패 원인과 확인 포인트를 요약한다. |
-| RAG Guide 조회 | 없음 | `CATEGORY`, `RULE_TYPE`, `KEYWORD`, `USE_YN`, `LIMIT`, `FULL_TEXT` | `SQL Conversion RAG Guide 중 KEYWORD=CUSTOMER인 항목 20건 조회해줘.` | 조건에 맞는 `NEXT_MIG_RAG_INFO` row를 조회한다. |
+| RAG Guide 조회 | 없음 | `CATEGORY`, `RULE_TYPE`, 검색어, 사용 여부, 조회 건수, 원문 포함 여부 | `SQL Conversion RAG Guide 중 CUSTOMER가 포함된 항목 20건 조회해줘.` | 조건에 맞는 `NEXT_MIG_RAG_INFO` row를 조회한다. 검색어는 `SOURCE_TABLES`, `GUIDANCE_TEXT`, `SOURCE_SQL`, `TARGET_SQL`에서 찾는다. |
 
 ## 1.3 실행 요청
 
@@ -46,9 +46,13 @@ SQL 관련 단건 작업은 `SQL_ID`와 `SPACE_NM`을 모두 입력해야 한다
 | 기능 | 대상 | 필수 입력 | 선택 입력 | 요청 템플릿 | 처리 결과 |
 |---|---|---|---|---|---|
 | DB Migration 상태 초기화 | `NEXT_MIG_INFO` | `MAP_ID` | `PRIORITY=1` 또는 `PRIORITY=5` | `MAP_ID={MAP_ID} 다시 실행할 수 있게 상태 초기화하고 PRIORITY=1로 설정해줘.` | 상태와 retry count를 초기화하고 priority를 반영한다. SQL 본문은 유지한다. |
-| SQL job 상태 초기화 | `NEXT_SQL_INFO` | `SQL_ID`, `SPACE_NM`, 작업 종류 | `PRIORITY=1` 또는 `PRIORITY=5` | `SQL_ID={SQL_ID}, SPACE_NM={SPACE_NM} SQL Conversion 상태 초기화해줘.` | 해당 도메인 상태와 retry count를 초기화한다. |
+| SQL Conversion 상태 초기화 | `NEXT_SQL_INFO` | `SQL_ID`, `SPACE_NM` | `PRIORITY=1` 또는 `PRIORITY=5` | `SQL_ID={SQL_ID}, SPACE_NM={SPACE_NM} SQL Conversion 상태 초기화해줘.` | `STATUS_CONVERSION`만 초기화한다. `RETRY_COUNT`, `PRIORITY`는 row 공통 값으로 함께 갱신된다. |
+| SQL Tuning 상태 초기화 | `NEXT_SQL_INFO` | `SQL_ID`, `SPACE_NM` | `PRIORITY=1` 또는 `PRIORITY=5` | `SQL_ID={SQL_ID}, SPACE_NM={SPACE_NM} SQL Tuning 상태 초기화해줘.` | `STATUS_TUNING`만 초기화한다. `STATUS_CONVERSION`은 유지하고, `RETRY_COUNT`, `PRIORITY`는 row 공통 값으로 함께 갱신된다. |
 | DB Migration 보정 SQL 저장 | `NEXT_MIG_INFO` | `MAP_ID`, SQL 컬럼명, SQL 본문 | 없음 | `MAP_ID={MAP_ID}의 MIG_SQL을 아래 SQL로 저장해줘. SQL=...` | 사용자가 제공한 SQL을 지정 컬럼에 저장하고 `USER_EDITED='Y'`로 표시한다. |
 | SQL job 보정 SQL 저장 | `NEXT_SQL_INFO` | `SQL_ID`, `SPACE_NM`, SQL 컬럼명, SQL 본문 | 없음 | `SQL_ID={SQL_ID}, SPACE_NM={SPACE_NM}의 TO_SQL을 아래 SQL로 저장해줘. SQL=...` | 사용자가 제공한 SQL을 지정 컬럼에 저장하고 `USER_EDITED='Y'`로 표시한다. |
+| DB Migration USER_EDITED 변경 | `NEXT_MIG_INFO` | `MAP_ID`, `USER_EDITED=Y` 또는 `USER_EDITED=N` | 없음 | `MAP_ID={MAP_ID}의 USER_EDITED를 N으로 바꿔줘.` | SQL 본문은 유지하고 `USER_EDITED` 값만 변경한다. |
+| SQL job USER_EDITED 변경 | `NEXT_SQL_INFO` | `SQL_ID`, `SPACE_NM`, `USER_EDITED=Y` 또는 `USER_EDITED=N` | 없음 | `SQL_ID={SQL_ID}, SPACE_NM={SPACE_NM}의 USER_EDITED를 N으로 바꿔줘.` | SQL 본문과 상태는 유지하고 `USER_EDITED` 값만 변경한다. |
+| DB Migration USE_YN 변경 | `NEXT_MIG_INFO` | `MAP_ID`, `USE_YN=Y` 또는 `USE_YN=N` | 없음 | `MAP_ID={MAP_ID}의 USE_YN을 N으로 바꿔줘.` | SQL 본문과 상태는 유지하고 실행 대상 사용 여부만 변경한다. |
 
 허용 SQL 컬럼은 DB Migration의 경우 `MIG_SQL`, `VERIFY_SQL`이고, SQL job의 경우 `TO_SQL`, `BIND_SQL`, `TEST_SQL`, `TUNED_TO_SQL`, `FORMATTED_SQL`이다.
 
@@ -69,7 +73,7 @@ RAG Guide는 `NEXT_MIG_RAG_INFO`에 저장된다. 추가, 수정, 비활성화�
 
 | 작업 | 필수 입력 | 선택 입력 | 요청 템플릿 | 처리 결과 |
 |---|---|---|---|---|
-| 조회 | 없음 | `CATEGORY`, `RULE_TYPE`, `KEYWORD`, `USE_YN`, `LIMIT`, `FULL_TEXT` | `CATEGORY=SQL_TUNING, RULE_TYPE=GENERAL RAG Guide 전체 내용 조회해줘.` | 조건에 맞는 RAG Guide 목록과 본문을 조회한다. |
+| 조회 | 없음 | `CATEGORY`, `RULE_TYPE`, 검색어, 사용 여부, 조회 건수, 원문 포함 여부 | `SQL Tuning GENERAL RAG Guide 전체 내용 조회해줘.` | 조건에 맞는 RAG Guide 목록과 본문을 조회한다. 검색어는 `SOURCE_TABLES`, `GUIDANCE_TEXT`, `SOURCE_SQL`, `TARGET_SQL`에서 찾는다. |
 | 수정 | `RAG_ID`, 수정할 필드 | 없음 | `RAG_ID={RAG_ID}의 GUIDANCE_TEXT를 아래 내용으로 수정해줘. GUIDANCE_TEXT=...` | 해당 row만 update한다. |
 | 비활성화 | `RAG_ID` | 없음 | `RAG_ID={RAG_ID} RAG Guide 비활성화해줘.` | 물리 삭제 대신 `USE_YN='N'`으로 변경한다. |
 | VectorDB 동기화 | 없음 | 없음 | `RAG Guide와 Correct SQL을 VectorDB에 동기화해줘.` | Oracle 원천 snapshot을 기준으로 Milvus collection을 갱신한다. |
@@ -106,4 +110,6 @@ RAG Guide는 `NEXT_MIG_RAG_INFO`에 저장된다. 추가, 수정, 비활성화�
 | 실행성 요청은 DB를 변경할 수 있다. | `실행`, `진행`, `남은 작업 처리` 요청은 executor로 연결되어 상태, 로그, 결과 SQL 또는 target table이 변경될 수 있다. |
 | Correct SQL 저장은 사용자가 제공한 SQL만 반영한다. | LLM이 보정 SQL을 새로 작성해 저장하지 않는다. |
 | 상태 초기화는 SQL 본문을 삭제하지 않는다. | status, retry count, priority만 변경하고 기존 SQL CLOB는 유지한다. |
+| `USER_EDITED` 변경은 SQL 본문을 삭제하지 않는다. | `USER_EDITED='N'`으로 바꾸면 이후 실행에서 저장된 보정 SQL을 강제 재사용하지 않는다. |
+| DB Migration `USE_YN` 변경은 SQL 본문과 상태를 삭제하지 않는다. | `USE_YN='N'`이면 DB Migration 실행 대상에서 제외된다. `NEXT_SQL_INFO`에는 `USE_YN` 컬럼이 없다. |
 | RAG Guide 추가 후 VectorDB 동기화가 필요하다. | Oracle에는 즉시 저장되지만 Milvus 검색 결과에는 동기화 이후 반영된다. |

@@ -20,14 +20,14 @@ except Exception:
 # =============================================================================
 # =============================================================================
 # Management Router가 STATUS_CHANGE로 분기한 요청을 받아 특정 작업 row를
-# 다시 실행 가능한 상태로 되돌린다.
+# 다시 실행 가능한 상태로 되돌리거나 USER_EDITED/USE_YN 플래그를 변경한다.
 #
-# SQL 본문은 수정하지 않고 상태 컬럼, RETRY_COUNT, PRIORITY만 갱신한다.
+# SQL 본문은 수정하지 않고 상태 컬럼, RETRY_COUNT, PRIORITY, USER_EDITED, USE_YN만 갱신한다.
 # 테이블/컬럼 존재 여부는 배포 DDL이 보장한다.
 # =============================================================================
 class NewType04StatusChange(Component):
     display_name = "04 Status Change"
-    description = "Resets the selected job status and sets retry count to zero; SQL is preserved."
+    description = "Resets the selected job status or changes USER_EDITED/USE_YN; SQL is preserved."
     name = "NewType04StatusChange"
     icon = "RotateCcw"
 
@@ -53,14 +53,35 @@ class NewType04StatusChange(Component):
             target = dict(payload.get("target") or {})
             priority = self._priority(target)
 
-            # 사용자가 지정한 작업 종류와 식별자를 UPDATE 대상 테이블/상태 컬럼/조건으로 변환한다.
+            # 사용자가 지정한 작업 종류와 식별자를 UPDATE 대상 테이블/조건으로 변환한다.
             table, status_column, where_sql, params, identity = self._target(target)
+            status_reset = self._status_reset(target)
+            user_edited = self._user_edited(target)
+            use_yn = self._use_yn(target)
+            if use_yn and str(target.get("work_type") or "").upper() != "DB_MIGRATION":
+                raise ValueError("USE_YN 변경은 DB Migration 작업에만 적용할 수 있습니다.")
+            if not status_reset and not user_edited and not use_yn:
+                raise ValueError("Status Change 요청에는 상태 초기화, USER_EDITED 변경, USE_YN 변경 값 중 하나가 필요합니다.")
+            if status_reset and not status_column:
+                raise ValueError("SQL Formatting은 별도 reset 대상 상태 컬럼이 없으므로 Status Change(Reset)를 지원하지 않습니다.")
+
+            set_clauses: list[str] = []
+            update_params: dict[str, Any] = dict(params)
+            if status_reset:
+                set_clauses.extend([f"{status_column} = NULL", "RETRY_COUNT = 0", "PRIORITY = :priority"])
+                update_params["priority"] = priority
+            if user_edited:
+                set_clauses.append("USER_EDITED = :user_edited")
+                update_params["user_edited"] = user_edited
+            if use_yn:
+                set_clauses.append("USE_YN = :use_yn")
+                update_params["use_yn"] = use_yn
 
             with self._connect() as conn:
                 cur = conn.cursor()
                 cur.execute(
-                    f"UPDATE {self._qualify(table)} SET {status_column} = NULL, RETRY_COUNT = 0, PRIORITY = :priority WHERE {where_sql}",
-                    {**params, "priority": priority},
+                    f"UPDATE {self._qualify(table)} SET {', '.join(set_clauses)} WHERE {where_sql}",
+                    update_params,
                 )
 
                 # reset은 특정 작업 한 건만 대상으로 해야 한다.
@@ -70,8 +91,15 @@ class NewType04StatusChange(Component):
                     raise ValueError(f"대상 작업을 정확히 1건 찾지 못했습니다. ({identity}, count={cur.rowcount})")
                 conn.commit()
 
-            answer = f"Status Change(Reset) 완료: {identity}. {status_column}=NULL, RETRY_COUNT=0, PRIORITY={priority}로 변경했고 SQL 본문은 유지했습니다."
-            self.status = {**payload, "component": "04_statusChange", "updated_rows": 1, "priority": priority, "answer_text": answer, "final": True}
+            changes = []
+            if status_reset:
+                changes.append(f"{status_column}=NULL, RETRY_COUNT=0, PRIORITY={priority}")
+            if user_edited:
+                changes.append(f"USER_EDITED='{user_edited}'")
+            if use_yn:
+                changes.append(f"USE_YN='{use_yn}'")
+            answer = f"Status Change 완료: {identity}. {', '.join(changes)}로 변경했고 SQL 본문은 유지했습니다."
+            self.status = {**payload, "component": "04_statusChange", "updated_rows": 1, "priority": priority, "user_edited": user_edited, "use_yn": use_yn, "answer_text": answer, "final": True}
             log_id = target.get("map_id") or f"{target.get('sql_id') or ''} / {target.get('space_nm') or ''}".strip(" / ") or 0
             logging.getLogger("smartmigrate.workflow").info(
                 answer,
@@ -100,7 +128,7 @@ class NewType04StatusChange(Component):
         status = {"SQL_CONVERSION": "STATUS_CONVERSION", "SQL_TUNING": "STATUS_TUNING"}.get(kind)
         sql_id = str(target.get("sql_id") or "").strip()
         space_nm = str(target.get("space_nm") or "").strip()
-        if not status or not sql_id or not space_nm:
+        if kind not in {"SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"} or not sql_id or not space_nm:
             raise ValueError("Status Change(Reset)를 위해 SQL_ID와 SPACE_NM을 모두 알려주셔야 합니다.")
         return "NEXT_SQL_INFO", status, "SQL_ID = :sql_id AND SPACE_NM = :space_nm", {"sql_id": sql_id, "space_nm": space_nm}, f"SQL_ID={sql_id}, SPACE_NM={space_nm}"
 
@@ -110,6 +138,29 @@ class NewType04StatusChange(Component):
             return 1 if int(target.get("priority") or 5) == 1 else 5
         except (TypeError, ValueError):
             return 5
+
+    # 상태 컬럼 초기화 여부를 payload에서 읽는다. USER_EDITED만 바꾸는 요청은 false로 들어온다.
+    def _status_reset(self, target: dict[str, Any]) -> bool:
+        value = target.get("status_reset")
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower() in {"true", "y", "yes", "1"}
+        return not bool(self._user_edited(target) or self._use_yn(target))
+
+    # USER_EDITED 변경 요청 값을 Y/N으로 검증한다.
+    def _user_edited(self, target: dict[str, Any]) -> str:
+        value = str(target.get("user_edited") or "").strip().upper()
+        if value and value not in {"Y", "N"}:
+            raise ValueError("USER_EDITED 변경 값은 Y 또는 N이어야 합니다.")
+        return value
+
+    # USE_YN 변경 요청 값을 Y/N으로 검증한다. 이 값은 DB Migration job에서만 사용한다.
+    def _use_yn(self, target: dict[str, Any]) -> str:
+        value = str(target.get("use_yn") or "").strip().upper()
+        if value and value not in {"Y", "N"}:
+            raise ValueError("USE_YN 변경 값은 Y 또는 N이어야 합니다.")
+        return value
 
     @contextmanager
     # Oracle 연결을 열고 호출 구간이 끝나면 닫는 context manager다.

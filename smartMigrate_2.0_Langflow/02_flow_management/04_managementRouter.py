@@ -24,7 +24,7 @@ MANAGEMENT_ROUTER_PROMPT = """당신은 SmartMigrate 관리 요청 라우터입�
 - DASHBOARD: 읽기 전용 전체 요약/대시보드 요청
 - CURRENT_PROGRESS: 단순 진행 중/실행 중 작업 현황 요청
 - JOB_QA: 작업 상태, 결과, 실패 원인, 로그, 진단처럼 DB 조회 근거를 바탕으로 LLM 해석이 필요한 요청
-- STATUS_CHANGE: 작업 상태 초기화 요청
+- STATUS_CHANGE: 작업 상태 초기화, USER_EDITED 플래그 변경, DB Migration USE_YN 변경 요청
 - CORRECT_SQL_INPUT: 사용자가 제공한 SQL 원문을 저장하는 요청
 - RAG_GUIDE_MANAGEMENT: NEXT_MIG_RAG_INFO의 SQL Conversion RAG 가이드 또는 SQL Tuning 가이드를 조회/추가/수정/비활성화하는 요청
 - VECTOR_DB_SYNC: Oracle의 RAG/Correct SQL 원천 데이터를 Milvus VectorDB에 업로드/동기화하는 요청
@@ -33,6 +33,13 @@ MANAGEMENT_ROUTER_PROMPT = """당신은 SmartMigrate 관리 요청 라우터입�
 STATUS_CHANGE 규칙:
 - reset은 status 컬럼을 NULL로 바꾸고 RETRY_COUNT를 0으로 바꾸는 작업입니다.
 - reset은 SQL 본문을 삭제하거나 수정하지 않습니다.
+- 사용자가 USER_EDITED를 Y 또는 N으로 변경해달라고 하면 STATUS_CHANGE로 보내고 target.user_edited에 Y 또는 N을 넣으세요.
+- 사용자가 DB Migration 작업의 USE_YN을 Y 또는 N으로 변경해달라고 하면 STATUS_CHANGE로 보내고 target.use_yn에 Y 또는 N을 넣으세요.
+- USE_YN은 NEXT_MIG_INFO에만 있는 실행 대상 사용 여부입니다. SQL_* 작업에는 USE_YN을 적용하지 마세요.
+- USER_EDITED만 변경하는 요청이면 target.status_reset=false로 설정하세요.
+- USE_YN만 변경하는 요청이면 target.status_reset=false로 설정하세요.
+- 상태 초기화와 USER_EDITED 변경을 함께 요청하면 target.status_reset=true로 설정하고 target.user_edited도 채우세요.
+- 상태 초기화와 USE_YN 변경을 함께 요청하면 target.status_reset=true로 설정하고 target.use_yn도 채우세요.
 - 사용자가 우선순위 상향, 긴급, 바로 처리 같은 표현을 쓰면 target.priority=1로 설정하세요.
 - 그 외에는 target.priority=5로 설정하세요.
 
@@ -85,7 +92,7 @@ JOB_QA와 CURRENT_PROGRESS 선택 규칙:
 - 예: "RAG Guide 수정/삭제에는 RAG_ID가 필요합니다. 먼저 조회해서 대상 RAG_ID를 확인해주세요."
 
 JSON schema:
-{"management_route":"DASHBOARD|CURRENT_PROGRESS|JOB_QA|STATUS_CHANGE|CORRECT_SQL_INPUT|RAG_GUIDE_MANAGEMENT|VECTOR_DB_SYNC|EXCEPTION","target":{"work_type":"","map_id":"","sql_id":"","space_nm":"","sql_column":"","priority":5},"correct_sql":"","rag_action":"","rag":{"rag_id":"","category":"","rule_type":"","source_tables":"","use_yn":"Y","keyword":"","limit":"","full_text":false,"guidance_text":"","source_sql":"","target_sql":""},"exception_message":"","reason":""}"""
+{"management_route":"DASHBOARD|CURRENT_PROGRESS|JOB_QA|STATUS_CHANGE|CORRECT_SQL_INPUT|RAG_GUIDE_MANAGEMENT|VECTOR_DB_SYNC|EXCEPTION","target":{"work_type":"","map_id":"","sql_id":"","space_nm":"","sql_column":"","priority":5,"status_reset":true,"user_edited":"","use_yn":""},"correct_sql":"","rag_action":"","rag":{"rag_id":"","category":"","rule_type":"","source_tables":"","use_yn":"Y","keyword":"","limit":"","full_text":false,"guidance_text":"","source_sql":"","target_sql":""},"exception_message":"","reason":""}"""
 
 EXCEPTION_MESSAGE = "Management 요청을 처리할 수 없습니다. 작업 종류와 필요한 식별자를 다시 알려주세요."
 
@@ -215,8 +222,25 @@ class NewType04ManagementRouter(Component):
         if work_type not in {"DB_MIGRATION", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"}:
             return self._exception(decision, "Status Change 또는 Correct SQL 입력을 위해 작업 종류(DB Migration, SQL Conversion, SQL Tuning, SQL Formatting)를 알려주셔야 합니다.")
         target["work_type"] = work_type
-        if route == "STATUS_CHANGE" and work_type == "SQL_FORMATTING":
+        user_edited = str(target.get("user_edited") or "").strip().upper()
+        if user_edited and user_edited not in {"Y", "N"}:
+            return self._exception(decision, "USER_EDITED 변경 값은 Y 또는 N이어야 합니다.")
+        use_yn = str(target.get("use_yn") or "").strip().upper()
+        if use_yn and use_yn not in {"Y", "N"}:
+            return self._exception(decision, "USE_YN 변경 값은 Y 또는 N이어야 합니다.")
+        if use_yn and work_type != "DB_MIGRATION":
+            return self._exception(decision, "USE_YN 변경은 DB Migration 작업에만 적용할 수 있습니다.")
+        status_reset = target.get("status_reset")
+        if not isinstance(status_reset, bool):
+            target["status_reset"] = False if user_edited or use_yn else True
+        if route == "STATUS_CHANGE" and work_type == "SQL_FORMATTING" and target.get("status_reset"):
             return self._exception(decision, "SQL Formatting은 별도 reset 대상 상태 컬럼이 없으므로 Status Change(Reset)를 지원하지 않습니다.")
+        if route == "STATUS_CHANGE" and not target.get("status_reset") and not user_edited and not use_yn:
+            return self._exception(decision, "Status Change 요청에는 상태 초기화, USER_EDITED 변경, USE_YN 변경 값 중 하나가 필요합니다.")
+        if user_edited:
+            target["user_edited"] = user_edited
+        if use_yn:
+            target["use_yn"] = use_yn
         if route == "STATUS_CHANGE":
             try:
                 target["priority"] = 1 if int(target.get("priority") or 5) == 1 else 5
