@@ -10,7 +10,7 @@
 | `00_user_guide.md` | 사용자가 이용 가능한 기능, 질문 예시, 기능별 결과 | 일반 사용자, 운영자, 검수자 |
 | `00_architecture.md` | 개발자용 전체 구조, 핵심 흐름, 문서 목차 | 개발자, 운영 설계자 |
 | `00_architecture_chapter1_overview.md` | 시스템 목적, 컴포넌트 맵, 데이터 저장소, 외부 의존성 | 신규 개발자, 운영자 |
-| `00_architecture_chapter2_chat_management.md` | 사용자 채팅 분류, 02/04 라우팅, Dashboard/Progress/Select Agent/Reset/Correct SQL | 프론트/플로우 운영자 |
+| `00_architecture_chapter2_chat_management.md` | 사용자 채팅 분류, 02/04 라우팅, Dashboard/Progress/Select Agent/Update Command | 프론트/플로우 운영자 |
 | `00_architecture_chapter3_job_execution.md` | "전체 작업 진행해줘" 포함 실행 라우팅, 잔여 작업 산정, Loop 구성 | 백엔드/플로우 개발자 |
 | `00_architecture_chapter4_domain_executors.md` | 10C/12C/15C/17C 단일 작업 실행 로직, 상태 전이, RAG/LLM 처리 | 실행 엔진 개발자 |
 | `00_architecture_chapter5_logging_operations.md` | 로깅, `NEXT_MIG_LOG`, Select Command Tool, 장애 분석, 운영 Runbook | 운영자, 유지보수 담당 |
@@ -34,17 +34,14 @@ flowchart TD
     R02 -->|MANAGEMENT| M04[04 Management LLM Router]
     M04 -->|DASHBOARD| D04[04 Dashboard]
     M04 -->|CURRENT_PROGRESS| P04[04 Current Progress]
-    M04 -->|SELECT_AGENT| QA_AGENT[04 Select Agent]
-    M04 -->|UPDATE_COMMAND| S04[04 Update Command Tool]
-    M04 -->|UPDATE_COMMAND| C04[04 Update Command Tool]
+    M04 -->|MANAGEMENT_AGENT| QA_AGENT[04 Management Agent]
+    QA_AGENT --> TOOL_SELECT[04 Select Command Tool]
+    QA_AGENT --> TOOL_UPDATE[04 Update Command Tool]
+    QA_AGENT --> TOOL_RAG[04 RAG Command Tool]
     M04 -->|EXCEPTION| E04[Exception Message]
-    QA_AGENT --> TOOL04[04 Select Command Tool]
-    TOOL04 --> QA_AGENT
     D04 --> OUT2[Chat Output]
     P04 --> OUT2
     QA_AGENT --> OUT2
-    S04 --> OUT2
-    C04 --> OUT2
     E04 --> OUT2
 
     R02 -->|JOB_EXECUTION| J06[06 Get Remaining Jobs]
@@ -86,7 +83,7 @@ flowchart TD
 | RAG/Correct SQL Vector Sync | `04_saveVectorDB.py` | Oracle 원천 데이터를 Milvus 컬렉션으로 one-shot sync |
 | 1차 의도 분류 | `01_requestClassifierPrompt.md` | 채팅을 일반 대화, 관리성 조회, 실행 요청으로 분류 |
 | 1차 라우팅 | `02_intentRouter.py` | 01 결과의 `intent_route`에 따라 branch 선택 |
-| 관리성 라우팅 | `04_managementRouter.py` | Dashboard, Current Progress, Select Agent, Reset, Correct SQL 저장 분기 |
+| 관리성 라우팅 | `04_managementRouter.py` | Dashboard, Current Progress, Management Agent, VectorDB 분기 |
 | 잔여 작업 조회 | `06_getRemainingJobs.py` | 실행 가능 job count와 특정 target 상태 조회 |
 | 실행 라우팅 | `08_jobExecutionRouter.py` | MIG/SQL/FULL_WORKFLOW 실행 route와 run mode 결정 |
 | 도메인별 Loop | `10B`, `12B`, `15B`, `17B`, `18B` | 한 row씩 실행하고 loop 완료 신호 emit |
@@ -101,10 +98,10 @@ flowchart TD
 | "안녕", "이 시스템 뭐야?" | `GENERAL_CHAT` | 03 | LLM 일반 답변 |
 | "대시보드 보여줘" | `MANAGEMENT` | 04 `DASHBOARD` | 정해진 dashboard 메시지 |
 | "현재 진행 상황 어때?" | `MANAGEMENT` | 04 `CURRENT_PROGRESS` | running job + 최근 로그 |
-| "map id 101 왜 실패했어?" | `MANAGEMENT` | 04 `SELECT_AGENT` | Agent가 DB Tool 조회 후 LLM 분석 답변 |
-| "전체 Fail 분석해줘" | `MANAGEMENT` | 04 `SELECT_AGENT` | 최근 fail 로그 중심 분석 |
-| "map id 101 상태 초기화해줘" | `MANAGEMENT` | 04 `UPDATE_COMMAND` | status NULL, retry 0, SQL 유지 |
-| "sql id A / space B의 TO_SQL을 이걸로 저장해줘 ..." | `MANAGEMENT` | 04 `UPDATE_COMMAND` | SQL CLOB 저장, `USER_EDITED='Y'` |
+| "map id 101 왜 실패했어?" | `MANAGEMENT` | 04 `MANAGEMENT_AGENT` | Select Tool 조회 후 LLM 분석 답변 |
+| "전체 Fail 분석해줘" | `MANAGEMENT` | 04 `MANAGEMENT_AGENT` | 최근 fail 로그 중심 분석 |
+| "map id 101 상태 초기화해줘" | `MANAGEMENT` | 04 `MANAGEMENT_AGENT` | Update Tool action으로 status NULL, retry 0 |
+| "sql id A / space B의 TO_SQL을 이걸로 저장해줘 ..." | `MANAGEMENT` | 04 `MANAGEMENT_AGENT` | Update Tool action으로 SQL CLOB 저장 |
 | "전체 작업 진행해줘" | `JOB_EXECUTION` | 08 `FULL_WORKFLOW` | MIG -> Conversion -> Tuning -> Formatting 실행 |
 | "SQL Tuning 남은 작업 진행해줘" | `JOB_EXECUTION` | 08 `SQL_TUNING` | 선행 조건 확인 후 tuning loop |
 
@@ -113,9 +110,10 @@ flowchart TD
 | 규칙 | 설명 |
 |---|---|
 | 로그는 `NEXT_MIG_LOG`만 사용 | SQL 계열 로그도 `NEXT_SQL_LOG`가 아니라 `NEXT_MIG_LOG`에 저장한다. |
-| chat 기반 fail 분석은 `SELECT_AGENT` | `04_managementRouter.py`에는 `FAIL_ANALYSIS` output이 없다. |
+| chat 기반 fail 분석은 Management Agent | `04_managementRouter.py`에는 `FAIL_ANALYSIS` output이 없다. |
 | `11B`는 실행 후 분석 | 사용자가 채팅으로 fail 분석을 요청할 때 직접 가는 route가 아니라, job execution 완료 뒤 final dashboard 흐름에서 사용한다. |
 | read-only 조회는 Select Command Tool | `04_selectCommandTool.py`는 SELECT 전용이다. |
+| 변경 작업은 Update Command Tool | `04_updateCommandTool.py`는 고정 action별 SQL만 transaction 단위로 UPDATE한다. |
 | CLOB 전체 출력은 명시 요청에서만 | 일반 진단/최근 로그는 1000자 preview, 특정 SQL 원문 요청은 full text action 사용. |
 | 전체 workflow는 선행 조건으로 막지 않음 | `FULL_WORKFLOW`는 MIG부터 Formatting까지 순서대로 처리하므로 prerequisite branch로 보내지 않는다. |
 

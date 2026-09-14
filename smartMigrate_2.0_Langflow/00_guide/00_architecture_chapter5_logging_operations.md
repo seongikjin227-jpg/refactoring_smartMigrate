@@ -175,14 +175,14 @@ SELECT COUNT(*)
 {"command_json":{"action":"get_log_text","log_id":12345}}
 ```
 
-### 5.7.5 Correct SQL 저장 후 재실행이 안 될 때
+### 5.7.5 Update Command 저장 후 재실행이 안 될 때
 
 | 확인 항목 | 설명 |
 |---|---|
-| `USER_EDITED='Y'` | `04_updateCommandTool.py` 저장 성공 시 자동 설정된다. |
+| `USER_EDITED='Y'` | SQL 보정 저장이 필요하면 `04_updateCommandTool.py`로 명시적으로 설정한다. |
 | status가 `FAIL-*`인지 | user-edited rerun 조건은 fail 상태와 결합된다. |
 | status reset 여부 | 필요하면 `04_updateCommandTool.py`로 status NULL, retry 0 처리한다. |
-| SQL 컬럼 허용 여부 | DB Migration은 `MIG_SQL/VERIFY_SQL`, SQL은 허용 컬럼만 저장 가능 |
+| SQL 저장 action 여부 | DB Migration과 SQL 계열 모두 정의된 save/clear action만 사용 가능 |
 
 ### 5.7.6 로그가 안 쌓일 때
 
@@ -228,7 +228,7 @@ SELECT COUNT(*)
 | SQL CLOB 정책 명확 | 일반 조회 preview, 명시 원문 조회 full text |
 | logging handler 정상 | `00A`가 flow 초반에 배치됨 |
 | Milvus sync 분리 | `04_saveVectorDB`는 운영 중 반복 실행이 아니라 maintenance one-shot sync |
-| Correct SQL 안전성 | 사용자 SQL만 저장, 허용 컬럼만 update |
+| Update Command 안전성 | 고정 action별 SQL만 update |
 
 
 

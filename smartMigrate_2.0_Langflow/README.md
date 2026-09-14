@@ -61,11 +61,10 @@ smartMigrate_2.0_Langflow/
     04_managementRouter.py
     04_dashboard.py
     04_currentProgress.py
-    04_selectAgentPrompt.md
+    04_managementAgentPrompt.md
     04_selectCommandTool.py
-    04_updateAgentPrompt.md
     04_updateCommandTool.py
-    04_ragGuideManager.py
+    04_ragCommandTool.py
     04_saveVectorDB.py
 
   03_job_execution/
@@ -101,7 +100,7 @@ smartMigrate_2.0_Langflow/
 |---|---|
 | `00_guide` | 사용자 가이드, 개발자 가이드, 상세 아키텍처, logging 규칙, payload 설계 문서 |
 | `01_agent_start` | workflow 시작, 사용자 요청 분류, 1차 intent route, 일반 답변 prompt |
-| `02_flow_management` | 04 관리 기능: dashboard, progress, Select Agent, 상태 변경, Correct SQL 입력, RAG Guide 관리, Vector DB 동기화 |
+| `02_flow_management` | 04 관리 기능: dashboard, progress, Select Agent, Update Command, RAG Guide 관리, Vector DB 동기화 |
 | `03_job_execution` | 실제 작업 실행: 잔여 작업 조회, 실행 라우팅, DB Migration, SQL Conversion, SQL Tuning, SQL Formatting, 최종 dashboard |
 
 ## 파일 번호 규칙

@@ -17,7 +17,7 @@ flowchart TD
 | 01 결과 | 의미 | 다음 노드 |
 |---|---|---|
 | `GENERAL_CHAT` | SmartMigrate 작업과 직접 관련 없는 일반 질문 | `03_llmResponsePrompt.md` |
-| `MANAGEMENT` | 상태/로그/원인/대시보드/초기화/Correct SQL 저장/RAG Guide 관리/VectorDB 동기화 | `04_managementRouter.py` |
+| `MANAGEMENT` | 상태/로그/원인/대시보드/잔여 작업 조회/Update Command/RAG Guide 관리/VectorDB 동기화 | `04_managementRouter.py` |
 | `JOB_EXECUTION` | 실제 작업 실행, 재실행, 남은 작업 처리 | `06_getRemainingJobs.py` |
 
 ## 2.2 01 Request Classifier 주요 산출물
@@ -52,15 +52,14 @@ flowchart LR
 
 ## 2.4 04 Management Router
 
-`04_managementRouter.py`는 관리성 요청을 다시 여섯 route로 나눈다.
+`04_managementRouter.py`는 관리성 요청을 다시 일곱 route로 나눈다.
 
 ```mermaid
 flowchart TD
     M[04 Management Router] -->|DASHBOARD| DASH[04 Dashboard]
     M -->|CURRENT_PROGRESS| PROG[04 Current Progress]
     M -->|SELECT_AGENT| QA[04 Select Agent]
-    M -->|UPDATE_COMMAND| RESET[04 Update Command Tool]
-    M -->|UPDATE_COMMAND| CORRECT[04 Update Command Tool]
+    M -->|UPDATE_COMMAND| UPDATE[04 Update Command Tool]
     M -->|RAG_GUIDE_MANAGEMENT| RAG[04 RAG Guide Manager]
     M -->|VECTOR_DB_SYNC| VDB[04 Sync Milvus Vector DB]
     M -->|EXCEPTION| EX[Exception Message]
@@ -70,9 +69,8 @@ flowchart TD
 |---|---|---|
 | `DASHBOARD` | "대시보드 보여줘", "전체 현황" | 정해진 DB aggregate 조회 후 메시지 생성 |
 | `CURRENT_PROGRESS` | "지금 돌고 있는 작업 있어?" | running 상태와 최근 5개 로그 조회 |
-| `SELECT_AGENT` | "map id 101 왜 실패했어?", "SQL Tuning 최근 실패 원인", "전체 Fail 분석해줘" | Agent가 read-only Tool을 호출하고 LLM이 답변 |
-| `UPDATE_COMMAND` | "map id 101 다시 돌리게 초기화해줘" | status NULL, retry 0, priority 1 또는 5 |
-| `UPDATE_COMMAND` | "sql id S001 / space DDD의 TO_SQL을 ...로 저장해줘" | 사용자가 준 SQL 그대로 저장, `USER_EDITED='Y'` |
+| `SELECT_AGENT` | "DB Migration 남은 작업 목록 보여줘", "map id 101 왜 실패했어?", "전체 Fail 분석해줘" | Agent가 read-only Tool을 호출하고 LLM이 답변 |
+| `UPDATE_COMMAND` | "map id 101 USER_EDITED를 N으로 바꾸고 MIG_SQL을 null로 바꿔줘" | 고정 action을 transaction으로 처리. SQL은 Tool 내부에 정의 |
 | `RAG_GUIDE_MANAGEMENT` | "SQL Conversion RAG 가이드 추가해줘", "튜닝 가이드 RAG_ID 12 비활성화해줘" | `NEXT_MIG_RAG_INFO` 조회/추가/수정/비활성화 |
 | `VECTOR_DB_SYNC` | "VectorDB 업로드해줘", "방금 추가한 RAG 가이드를 Milvus에 반영해줘" | `04_saveVectorDB.py`로 Oracle 원천 데이터를 Milvus collection에 동기화 |
 | `EXCEPTION` | 필수 target 누락 | 구체적인 한국어 에러 메시지 |
@@ -171,33 +169,33 @@ sequenceDiagram
 | "sql id S001, space DDD의 BIND_SQL 원문 보여줘" | `SELECT_AGENT` | `get_sql_text(sql_id="S001", space_nm="DDD", columns=["BIND_SQL"])` |
 | "sql id S001, space DDD의 to sql/tuned to sql 비교해줘" | `SELECT_AGENT` | `get_sql_text(sql_id="S001", space_nm="DDD", columns=["TO_SQL","TUNED_TO_SQL","TUNED_RESULT"])` |
 
-## 2.8 Status Change
+## 2.8 Update Command
 
-`04_updateCommandTool.py`는 재실행 가능한 상태로 되돌리는 관리 기능이다.
+`04_updateCommandTool.py`는 04 관리 흐름의 모든 UPDATE 요청을 담당한다. LLM이 컬럼명과 값을 조합하지 않고, `actions` 배열의 action 이름과 식별자만 전달한다. 실제 SQL은 Tool 내부의 고정 쿼리로만 실행된다.
 
-| work_type | 대상 테이블 | 조건 | 변경 컬럼 |
-|---|---|---|---|
-| `DB_MIGRATION` | `NEXT_MIG_INFO` | `MAP_ID = :map_id` | `STATUS=NULL`, `RETRY_COUNT=0`, `PRIORITY=1 또는 5` |
-| `SQL_CONVERSION` | `NEXT_SQL_INFO` | `SQL_ID=:sql_id AND SPACE_NM=:space_nm` | `STATUS_CONVERSION=NULL`, `RETRY_COUNT=0`, `PRIORITY=1 또는 5` |
-| `SQL_TUNING` | `NEXT_SQL_INFO` | `SQL_ID=:sql_id AND SPACE_NM=:space_nm` | `STATUS_TUNING=NULL`, `RETRY_COUNT=0`, `PRIORITY=1 또는 5` |
-| `SQL_FORMATTING` | 없음 | 04 router에서 exception | formatting은 status 컬럼을 reset하지 않는다. |
-
-SQL 본문은 삭제하거나 변경하지 않는다.
-
-## 2.9 Correct SQL Input
-
-`04_updateCommandTool.py`는 사용자가 제공한 SQL을 그대로 저장한다. LLM이 SQL을 생성하거나 보완하지 않는다.
-
-| work_type | 허용 컬럼 | 대상 |
+| action 예 | 대상 | 설명 |
 |---|---|---|
-| `DB_MIGRATION` | `MIG_SQL`, `VERIFY_SQL` | `NEXT_MIG_INFO.MAP_ID` |
-| `SQL_CONVERSION` | `TO_SQL`, `BIND_SQL`, `TEST_SQL`, `TUNED_TO_SQL`, `FORMATTED_SQL` | `NEXT_SQL_INFO.SQL_ID + SPACE_NM` |
-| `SQL_TUNING` | `TO_SQL`, `BIND_SQL`, `TEST_SQL`, `TUNED_TO_SQL`, `FORMATTED_SQL` | `NEXT_SQL_INFO.SQL_ID + SPACE_NM` |
-| `SQL_FORMATTING` | `TO_SQL`, `BIND_SQL`, `TEST_SQL`, `TUNED_TO_SQL`, `FORMATTED_SQL` | `NEXT_SQL_INFO.SQL_ID + SPACE_NM` |
+| `reset_migration_status` | `NEXT_MIG_INFO` | `STATUS=NULL`, `RETRY_COUNT=0`, 선택적으로 `PRIORITY` 변경 |
+| `set_migration_user_edited` | `NEXT_MIG_INFO` | `USER_EDITED`를 Y/N으로 변경 |
+| `clear_migration_mig_sql` | `NEXT_MIG_INFO` | `MIG_SQL=NULL` |
+| `save_migration_mig_sql` | `NEXT_MIG_INFO` | 사용자가 제공한 SQL을 `MIG_SQL`에 저장 |
+| `reset_sql_conversion_status` | `NEXT_SQL_INFO` | `STATUS_CONVERSION=NULL`, `RETRY_COUNT=0` |
+| `reset_sql_tuning_status` | `NEXT_SQL_INFO` | `STATUS_TUNING=NULL`, `RETRY_COUNT=0` |
+| `reset_sql_formatting_result` | `NEXT_SQL_INFO` | `FORMATTED_SQL=NULL`, `RETRY_COUNT=0` |
+| `clear_sql_to_sql` / `save_sql_to_sql` | `NEXT_SQL_INFO` | `TO_SQL` 비우기 또는 저장 |
 
-저장 성공 시 `USER_EDITED='Y'`로 바뀐다. 이후 실행 가능 조건에서 `USER_EDITED='Y' AND STATUS LIKE 'FAIL-%'` row는 재실행 대상이 될 수 있다.
+예시 payload:
 
-## 2.10 RAG Guide Management
+```json
+{"actions":[{"action":"set_migration_user_edited","map_id":101,"user_edited":"N"},{"action":"clear_migration_mig_sql","map_id":101}]}
+```
+
+주의 사항:
+- 상태 초기화와 SQL 비우기는 전용 action을 사용한다.
+- 여러 action은 transaction으로 묶어 한 작업처럼 성공/실패한다.
+- UPDATE SQL은 Tool 내부의 고정 쿼리로만 실행한다.
+
+## 2.9 RAG Guide Management
 
 `04_ragGuideManager.py`는 `NEXT_MIG_RAG_INFO`의 SQL Conversion RAG 가이드와 SQL Tuning 가이드를 관리한다. 삭제 요청도 물리 삭제하지 않고 `USE_YN='N'`으로 비활성화한다.
 
@@ -238,7 +236,7 @@ RAG 가이드 테이블 자체를 조회/추가/수정/비활성화하려는 요
 
 조회에서 `limit`는 최대 몇 건을 가져올지 정하는 값이다. 예를 들어 "user_info 테이블과 관련된 SQL Conversion RAG 조회해줘"라고 요청하면 `category=SQL_CONVERSION`, `keyword=user_info`로 조회하고, `SOURCE_TABLES`, `GUIDANCE_TEXT`, `SOURCE_SQL`, `TARGET_SQL` 중 `user_info`가 포함된 row를 반환한다.
 
-## 2.11 VectorDB Sync
+## 2.10 VectorDB Sync
 
 `VECTOR_DB_SYNC`는 04 관리 요청에서 `04_saveVectorDB.py`를 실행하기 위한 route다. RAG 가이드나 Correct SQL을 DB에 추가한 뒤 Milvus 검색에 반영해야 할 때 사용한다.
 
@@ -272,6 +270,7 @@ GUIDANCE_TEXT=대량 테이블 조인에서는 필터 조건이 강한 테이블
 ```text
 RAG_ID 25 튜닝 가이드 비활성화해줘.
 ```
+
 
 
 

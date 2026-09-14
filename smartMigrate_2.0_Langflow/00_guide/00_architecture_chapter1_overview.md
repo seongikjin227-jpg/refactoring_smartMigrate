@@ -37,8 +37,7 @@ flowchart LR
 | `04` | `04_managementRouter.py` | 관리성 요청의 세부 route 결정 |
 | `04` | `04_dashboard.py` | 전체/도메인 dashboard 조회 |
 | `04` | `04_currentProgress.py` | running 상태와 최근 로그 조회 |
-| `04` | `04_updateCommandTool.py` | status reset, retry reset, priority 설정 |
-| `04` | `04_updateCommandTool.py` | 사용자가 제공한 SQL 저장 및 `USER_EDITED='Y'` |
+| `04` | `04_updateCommandTool.py` | 상태/플래그/우선순위/SQL 컬럼/NULL 변경을 transaction UPDATE로 처리 |
 | `04` | `04_selectAgentPrompt.md` | Select Agent system prompt |
 | `04` | `04_selectCommandTool.py` | Select Agent read-only DB Tool |
 | `06` | `06_getRemainingJobs.py` | 실행 가능 job count와 target status 조회 |
@@ -110,7 +109,7 @@ flowchart TD
 | 실행과 조회를 분리 | `JOB_EXECUTION`은 `06/08/10/12/15/17/18`, 관리 조회는 `04` 계열로 분리한다. |
 | 정형 출력과 LLM 분석을 분리 | Dashboard/Progress는 정해진 포맷, Select Agent는 Tool 조회 + LLM 해석. |
 | 로그 저장소 단일화 | `NEXT_SQL_LOG`는 사용하지 않고 `NEXT_MIG_LOG`의 `MIG_KIND`로 도메인을 분리한다. |
-| 수정 작업 최소화 | Reset은 status/retry/priority만 수정하고 SQL CLOB는 보존한다. Correct SQL은 사용자가 준 SQL만 저장한다. |
+| 수정 작업 최소화 | Update Command는 고정 action별 SQL만 transaction 단위로 실행하고, SELECT 조회와 분리한다. |
 | 실행 가능 조건을 DB 기준으로 판단 | `06_getRemainingJobs.py`가 실제 Oracle 상태를 기준으로 runnable count를 만든다. |
 | Full Workflow는 end-to-end 처리 | 선행 작업이 남아도 prerequisite으로 막지 않고 MIG -> Conversion -> Tuning -> Formatting 순서로 처리한다. |
 
@@ -139,7 +138,7 @@ sequenceDiagram
     alt MANAGEMENT
         R02->>M04: payload_json
         M04->>LLM: management_route 판단
-        M04-->>LF: 04 Dashboard / Progress / Select Agent / Reset / Correct SQL
+        M04-->>LF: 04 Dashboard / Progress / Select Agent / Update Command
         LF->>DB: 필요한 조회 또는 수정
         LF-->>User: Chat Output
     else JOB_EXECUTION

@@ -43,7 +43,7 @@ flowchart TD
 flowchart TD
     J[map_id] --> PRIOR[Check PRIOR_MAP_ID status]
     PRIOR -->|prior fail/skip| SKIP[SKIP-PRIOR-FAIL]
-    PRIOR -->|ready| META[Load NEXT_MIG_INFO + DTL]
+    PRIOR -->|dependency ok| META[Load NEXT_MIG_INFO + DTL]
     META --> RUNNING[STATUS=RUNNING, BATCH_CNT + 1]
     RUNNING --> USER{USER_EDITED='Y' and MIG_SQL exists?}
     USER -->|yes| REUSE[Reuse MIG_SQL<br/>generate VERIFY_SQL if missing]

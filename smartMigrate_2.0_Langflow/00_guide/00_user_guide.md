@@ -45,9 +45,9 @@ SQL 관련 단건 작업은 `SQL_ID`와 `SPACE_NM`을 모두 입력해야 한다
 
 | 기능 | 대상 | 필수 입력 | 선택 입력 | 요청 템플릿 | 처리 결과 |
 |---|---|---|---|---|---|
-| DB Migration 상태 초기화 | `NEXT_MIG_INFO` | `MAP_ID` | `PRIORITY=1` 또는 `PRIORITY=5` | `MAP_ID={MAP_ID} 다시 실행할 수 있게 상태 초기화하고 PRIORITY=1로 설정해줘.` | 상태와 retry count를 초기화하고 priority를 반영한다. SQL 본문은 유지한다. |
-| SQL Conversion 상태 초기화 | `NEXT_SQL_INFO` | `SQL_ID`, `SPACE_NM` | `PRIORITY=1` 또는 `PRIORITY=5` | `SQL_ID={SQL_ID}, SPACE_NM={SPACE_NM} SQL Conversion 상태 초기화해줘.` | `STATUS_CONVERSION`만 초기화한다. `RETRY_COUNT`, `PRIORITY`는 row 공통 값으로 함께 갱신된다. |
-| SQL Tuning 상태 초기화 | `NEXT_SQL_INFO` | `SQL_ID`, `SPACE_NM` | `PRIORITY=1` 또는 `PRIORITY=5` | `SQL_ID={SQL_ID}, SPACE_NM={SPACE_NM} SQL Tuning 상태 초기화해줘.` | `STATUS_TUNING`만 초기화한다. `STATUS_CONVERSION`은 유지하고, `RETRY_COUNT`, `PRIORITY`는 row 공통 값으로 함께 갱신된다. |
+| DB Migration 상태 초기화 | `NEXT_MIG_INFO` | `MAP_ID` | `PRIORITY=1` 또는 `PRIORITY=5` | `MAP_ID={MAP_ID} 다시 실행할 수 있게 상태 초기화하고 PRIORITY=1로 설정해줘.` | `STATUS`를 DB `NULL`로 바꾸고 retry count를 초기화한다. SQL 본문은 유지한다. |
+| SQL Conversion 상태 초기화 | `NEXT_SQL_INFO` | `SQL_ID`, `SPACE_NM` | `PRIORITY=1` 또는 `PRIORITY=5` | `SQL_ID={SQL_ID}, SPACE_NM={SPACE_NM} SQL Conversion 상태 초기화해줘.` | `STATUS_CONVERSION`을 DB `NULL`로 바꾼다. |
+| SQL Tuning 상태 초기화 | `NEXT_SQL_INFO` | `SQL_ID`, `SPACE_NM` | `PRIORITY=1` 또는 `PRIORITY=5` | `SQL_ID={SQL_ID}, SPACE_NM={SPACE_NM} SQL Tuning 상태 초기화해줘.` | `STATUS_TUNING`을 DB `NULL`로 바꾼다. `STATUS_CONVERSION`은 유지한다. |
 | DB Migration 보정 SQL 저장 | `NEXT_MIG_INFO` | `MAP_ID`, SQL 컬럼명, SQL 본문 | 없음 | `MAP_ID={MAP_ID}의 MIG_SQL을 아래 SQL로 저장해줘. SQL=...` | 사용자가 제공한 SQL을 지정 컬럼에 저장하고 `USER_EDITED='Y'`로 표시한다. |
 | SQL job 보정 SQL 저장 | `NEXT_SQL_INFO` | `SQL_ID`, `SPACE_NM`, SQL 컬럼명, SQL 본문 | 없음 | `SQL_ID={SQL_ID}, SPACE_NM={SPACE_NM}의 TO_SQL을 아래 SQL로 저장해줘. SQL=...` | 사용자가 제공한 SQL을 지정 컬럼에 저장하고 `USER_EDITED='Y'`로 표시한다. |
 | DB Migration USER_EDITED 변경 | `NEXT_MIG_INFO` | `MAP_ID`, `USER_EDITED=Y` 또는 `USER_EDITED=N` | 없음 | `MAP_ID={MAP_ID}의 USER_EDITED를 N으로 바꿔줘.` | SQL 본문은 유지하고 `USER_EDITED` 값만 변경한다. |
@@ -108,8 +108,8 @@ RAG Guide는 `NEXT_MIG_RAG_INFO`에 저장된다. 추가, 수정, 비활성화�
 |---|---|
 | 조회성 요청은 read-only로 처리한다. | 상태, 로그, SQL 원문, 실패 원인 분석은 조회 전용 경로를 사용한다. |
 | 실행성 요청은 DB를 변경할 수 있다. | `실행`, `진행`, `남은 작업 처리` 요청은 executor로 연결되어 상태, 로그, 결과 SQL 또는 target table이 변경될 수 있다. |
-| Correct SQL 저장은 사용자가 제공한 SQL만 반영한다. | LLM이 보정 SQL을 새로 작성해 저장하지 않는다. |
-| 상태 초기화는 SQL 본문을 삭제하지 않는다. | status, retry count, priority만 변경하고 기존 SQL CLOB는 유지한다. |
+| Update Command의 SQL 저장은 사용자가 제공한 SQL만 반영한다. | LLM이 보정 SQL을 새로 작성해 저장하지 않는다. |
+| 상태 초기화는 DB `NULL`이다. | 재실행 대상 조건은 상태 컬럼 `IS NULL` 기준이다. SQL 본문은 별도 요청이 없으면 유지한다. |
 | `USER_EDITED` 변경은 SQL 본문을 삭제하지 않는다. | `USER_EDITED='N'`으로 바꾸면 이후 실행에서 저장된 보정 SQL을 강제 재사용하지 않는다. |
 | DB Migration `USE_YN` 변경은 SQL 본문과 상태를 삭제하지 않는다. | `USE_YN='N'`이면 DB Migration 실행 대상에서 제외된다. `NEXT_SQL_INFO`에는 `USE_YN` 컬럼이 없다. |
 | RAG Guide 추가 후 VectorDB 동기화가 필요하다. | Oracle에는 즉시 저장되지만 Milvus 검색 결과에는 동기화 이후 반영된다. |
