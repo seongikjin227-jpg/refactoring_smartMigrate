@@ -1,4 +1,4 @@
-# SmartMigrate Langflow POC
+﻿# SmartMigrate Langflow POC
 
 이 디렉터리는 SmartMigrate Langflow POC의 최종 컴포넌트 묶음입니다. Langflow IDE에서는 각 `.py` 파일을 Custom Component로 올려 노드 입출력을 연결하고, 실제 업무 실행은 각 컴포넌트 내부의 Python/LangGraph 로직이 담당합니다.
 
@@ -61,10 +61,10 @@ smartMigrate_2.0_Langflow/
     04_managementRouter.py
     04_dashboard.py
     04_currentProgress.py
-    04_jobQaAgentPrompt.md
-    04_jobQaCommandTool.py
-    04_statusChange.py
-    04_correctSqlInput.py
+    04_selectAgentPrompt.md
+    04_selectCommandTool.py
+    04_updateAgentPrompt.md
+    04_updateCommandTool.py
     04_ragGuideManager.py
     04_saveVectorDB.py
 
@@ -101,7 +101,7 @@ smartMigrate_2.0_Langflow/
 |---|---|
 | `00_guide` | 사용자 가이드, 개발자 가이드, 상세 아키텍처, logging 규칙, payload 설계 문서 |
 | `01_agent_start` | workflow 시작, 사용자 요청 분류, 1차 intent route, 일반 답변 prompt |
-| `02_flow_management` | 04 관리 기능: dashboard, progress, Job QA, 상태 변경, Correct SQL 입력, RAG Guide 관리, Vector DB 동기화 |
+| `02_flow_management` | 04 관리 기능: dashboard, progress, Select Agent, 상태 변경, Correct SQL 입력, RAG Guide 관리, Vector DB 동기화 |
 | `03_job_execution` | 실제 작업 실행: 잔여 작업 조회, 실행 라우팅, DB Migration, SQL Conversion, SQL Tuning, SQL Formatting, 최종 dashboard |
 
 ## 파일 번호 규칙
@@ -251,3 +251,4 @@ python -m py_compile `
 | `00_guide/00_job_execution_payload_plan.md` | 개발자용 실행 요청 payload 전달 규칙 |
 | `00_guide/00_main_logic_components.md` | 개발자용 C 컴포넌트 중심 읽기 가이드 |
 | `00_guide/00_logging_rules.txt` | 개발자용 workflow logging 세부 규칙 |
+

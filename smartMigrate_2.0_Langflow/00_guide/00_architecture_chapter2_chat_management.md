@@ -1,4 +1,4 @@
-# Chapter 2. Chat And Management Routing
+﻿# Chapter 2. Chat And Management Routing
 
 ## 2.1 Chat 요청 처리 개요
 
@@ -58,9 +58,9 @@ flowchart LR
 flowchart TD
     M[04 Management Router] -->|DASHBOARD| DASH[04 Dashboard]
     M -->|CURRENT_PROGRESS| PROG[04 Current Progress]
-    M -->|JOB_QA| QA[04 Job QA Agent]
-    M -->|STATUS_CHANGE| RESET[04 Status Change]
-    M -->|CORRECT_SQL_INPUT| CORRECT[04 Correct SQL Input]
+    M -->|SELECT_AGENT| QA[04 Select Agent]
+    M -->|UPDATE_COMMAND| RESET[04 Update Command Tool]
+    M -->|UPDATE_COMMAND| CORRECT[04 Update Command Tool]
     M -->|RAG_GUIDE_MANAGEMENT| RAG[04 RAG Guide Manager]
     M -->|VECTOR_DB_SYNC| VDB[04 Sync Milvus Vector DB]
     M -->|EXCEPTION| EX[Exception Message]
@@ -70,14 +70,14 @@ flowchart TD
 |---|---|---|
 | `DASHBOARD` | "대시보드 보여줘", "전체 현황" | 정해진 DB aggregate 조회 후 메시지 생성 |
 | `CURRENT_PROGRESS` | "지금 돌고 있는 작업 있어?" | running 상태와 최근 5개 로그 조회 |
-| `JOB_QA` | "map id 101 왜 실패했어?", "SQL Tuning 최근 실패 원인", "전체 Fail 분석해줘" | Agent가 read-only Tool을 호출하고 LLM이 답변 |
-| `STATUS_CHANGE` | "map id 101 다시 돌리게 초기화해줘" | status NULL, retry 0, priority 1 또는 5 |
-| `CORRECT_SQL_INPUT` | "sql id S001 / space DDD의 TO_SQL을 ...로 저장해줘" | 사용자가 준 SQL 그대로 저장, `USER_EDITED='Y'` |
+| `SELECT_AGENT` | "map id 101 왜 실패했어?", "SQL Tuning 최근 실패 원인", "전체 Fail 분석해줘" | Agent가 read-only Tool을 호출하고 LLM이 답변 |
+| `UPDATE_COMMAND` | "map id 101 다시 돌리게 초기화해줘" | status NULL, retry 0, priority 1 또는 5 |
+| `UPDATE_COMMAND` | "sql id S001 / space DDD의 TO_SQL을 ...로 저장해줘" | 사용자가 준 SQL 그대로 저장, `USER_EDITED='Y'` |
 | `RAG_GUIDE_MANAGEMENT` | "SQL Conversion RAG 가이드 추가해줘", "튜닝 가이드 RAG_ID 12 비활성화해줘" | `NEXT_MIG_RAG_INFO` 조회/추가/수정/비활성화 |
 | `VECTOR_DB_SYNC` | "VectorDB 업로드해줘", "방금 추가한 RAG 가이드를 Milvus에 반영해줘" | `04_saveVectorDB.py`로 Oracle 원천 데이터를 Milvus collection에 동기화 |
 | `EXCEPTION` | 필수 target 누락 | 구체적인 한국어 에러 메시지 |
 
-중요한 결정: `FAIL_ANALYSIS` output은 04에서 제거되었다. 채팅으로 들어오는 실패 분석은 모두 `JOB_QA`가 담당한다. 단, 실행 완료 후 자동 분석인 `11B_failureCauseAnalyzer.py`는 여전히 실행 workflow 후단에서 사용한다.
+중요한 결정: `FAIL_ANALYSIS` output은 04에서 제거되었다. 채팅으로 들어오는 실패 분석은 모두 `SELECT_AGENT`가 담당한다. 단, 실행 완료 후 자동 분석인 `11B_failureCauseAnalyzer.py`는 여전히 실행 workflow 후단에서 사용한다.
 
 ## 2.5 Dashboard
 
@@ -100,7 +100,7 @@ flowchart LR
 
 ## 2.6 Current Progress
 
-`04_currentProgress.py`는 "단순 running 상태" 확인에 사용한다. 원인 분석이나 최근 실패 해석이 들어가면 `JOB_QA`가 맞다.
+`04_currentProgress.py`는 "단순 running 상태" 확인에 사용한다. 원인 분석이나 최근 실패 해석이 들어가면 `SELECT_AGENT`가 맞다.
 
 | 조회 범위 | 설명 |
 |---|---|
@@ -109,21 +109,21 @@ flowchart LR
 | `NEXT_SQL_INFO.STATUS_TUNING LIKE 'RUNNING%'` | tuning running jobs |
 | `NEXT_MIG_LOG` 최근 5개 | 최근 workflow/job event |
 
-## 2.7 Job QA Agent
+## 2.7 Select Agent
 
-Job QA는 정해진 결과가 아니라 Agent 답변이 그대로 chat output으로 넘어간다.
+Select Agent는 정해진 결과가 아니라 Agent 답변이 그대로 chat output으로 넘어간다.
 
 ```mermaid
 sequenceDiagram
     participant User
     participant R04 as 04 Management Router
-    participant Agent as Job QA Agent
-    participant Tool as 04 Job QA Command Tool
+    participant Agent as Select Agent
+    participant Tool as 04 Select Command Tool
     participant DB as Oracle
     participant Out as Chat Output
 
     User->>R04: "map id 101 왜 실패했어?"
-    R04->>Agent: management_route=JOB_QA payload
+    R04->>Agent: management_route=SELECT_AGENT payload
     Agent->>Tool: get_migration_job(map_id=101)
     Tool->>DB: NEXT_MIG_INFO / DTL / NEXT_MIG_LOG
     DB-->>Tool: row + recent logs
@@ -135,7 +135,7 @@ sequenceDiagram
     Agent-->>Out: LLM 분석 답변
 ```
 
-### Job QA Tool 원칙
+### Select Command Tool 원칙
 
 | 원칙 | 내용 |
 |---|---|
@@ -145,7 +145,7 @@ sequenceDiagram
 | 원문 조회는 명시적 | 사용자가 "전체 원문", "BIND_SQL 보여줘"처럼 명시하면 `get_sql_text`, `get_migration_text`, `get_log_text`를 사용한다. |
 | 전체 fail 분석은 제한 | "전체 Fail 분석" 같은 broad 요청은 최근 100개 이내 로그 기준으로 요약한다. |
 
-### Job QA Tool Actions
+### Select Command Tool Actions
 
 | action | 조회 테이블 | 목적 | 대표 파라미터 |
 |---|---|---|---|
@@ -160,20 +160,20 @@ sequenceDiagram
 | `query_rag_info` | `NEXT_MIG_RAG_INFO` | RAG rule/guidance 조회 | `category`, `keyword`, `use_yn`, `limit` |
 | `table_columns` | Oracle metadata | 테이블 컬럼 확인. Tool schema가 바뀌었거나 DB 컬럼 차이가 있을 때 사용 | `tables` |
 
-### Job QA 라우팅 예시
+### Select Agent 라우팅 예시
 
 | 요청 | 04 route | Agent 권장 Tool 호출 |
 |---|---|---|
-| "map id 101 migration 결과 알려줘" | `JOB_QA` | `get_migration_job(map_id=101)` |
-| "map id 101 fail 원인이 뭐야?" | `JOB_QA` | `get_migration_job(map_id=101, fail_only=true)`, `search_logs(map_id_like="%101%", status_like="FAIL-%")` |
-| "SQL Conversion 현재 진행 상황 어때? 최근 실패도 알려줘" | `JOB_QA` | `recent_domain_status(domain="SQL_CONVERSION", fail_only=true, limit=10)` |
-| "전체 Fail 분석해줘" | `JOB_QA` | `search_logs(fail_only=true, limit=100)` |
-| "sql id S001, space DDD의 BIND_SQL 원문 보여줘" | `JOB_QA` | `get_sql_text(sql_id="S001", space_nm="DDD", columns=["BIND_SQL"])` |
-| "sql id S001, space DDD의 to sql/tuned to sql 비교해줘" | `JOB_QA` | `get_sql_text(sql_id="S001", space_nm="DDD", columns=["TO_SQL","TUNED_TO_SQL","TUNED_RESULT"])` |
+| "map id 101 migration 결과 알려줘" | `SELECT_AGENT` | `get_migration_job(map_id=101)` |
+| "map id 101 fail 원인이 뭐야?" | `SELECT_AGENT` | `get_migration_job(map_id=101, fail_only=true)`, `search_logs(map_id_like="%101%", status_like="FAIL-%")` |
+| "SQL Conversion 현재 진행 상황 어때? 최근 실패도 알려줘" | `SELECT_AGENT` | `recent_domain_status(domain="SQL_CONVERSION", fail_only=true, limit=10)` |
+| "전체 Fail 분석해줘" | `SELECT_AGENT` | `search_logs(fail_only=true, limit=100)` |
+| "sql id S001, space DDD의 BIND_SQL 원문 보여줘" | `SELECT_AGENT` | `get_sql_text(sql_id="S001", space_nm="DDD", columns=["BIND_SQL"])` |
+| "sql id S001, space DDD의 to sql/tuned to sql 비교해줘" | `SELECT_AGENT` | `get_sql_text(sql_id="S001", space_nm="DDD", columns=["TO_SQL","TUNED_TO_SQL","TUNED_RESULT"])` |
 
 ## 2.8 Status Change
 
-`04_statusChange.py`는 재실행 가능한 상태로 되돌리는 관리 기능이다.
+`04_updateCommandTool.py`는 재실행 가능한 상태로 되돌리는 관리 기능이다.
 
 | work_type | 대상 테이블 | 조건 | 변경 컬럼 |
 |---|---|---|---|
@@ -186,7 +186,7 @@ SQL 본문은 삭제하거나 변경하지 않는다.
 
 ## 2.9 Correct SQL Input
 
-`04_correctSqlInput.py`는 사용자가 제공한 SQL을 그대로 저장한다. LLM이 SQL을 생성하거나 보완하지 않는다.
+`04_updateCommandTool.py`는 사용자가 제공한 SQL을 그대로 저장한다. LLM이 SQL을 생성하거나 보완하지 않는다.
 
 | work_type | 허용 컬럼 | 대상 |
 |---|---|---|
@@ -201,7 +201,7 @@ SQL 본문은 삭제하거나 변경하지 않는다.
 
 `04_ragGuideManager.py`는 `NEXT_MIG_RAG_INFO`의 SQL Conversion RAG 가이드와 SQL Tuning 가이드를 관리한다. 삭제 요청도 물리 삭제하지 않고 `USE_YN='N'`으로 비활성화한다.
 
-RAG 가이드 테이블 자체를 조회/추가/수정/비활성화하려는 요청은 `RAG_GUIDE_MANAGEMENT`로 보낸다. 반면 "실패 원인 분석 중 참고된 RAG를 같이 보여줘"처럼 작업 진단 답변의 근거로 RAG row를 읽는 경우에는 `JOB_QA`의 `query_rag_info` tool을 쓴다.
+RAG 가이드 테이블 자체를 조회/추가/수정/비활성화하려는 요청은 `RAG_GUIDE_MANAGEMENT`로 보낸다. 반면 "실패 원인 분석 중 참고된 RAG를 같이 보여줘"처럼 작업 진단 답변의 근거로 RAG row를 읽는 경우에는 `SELECT_AGENT`의 `query_rag_info` tool을 쓴다.
 
 | 작업 | 사용자 요청 예 | 필수 정보 | 처리 |
 |---|---|---|---|
@@ -272,3 +272,6 @@ GUIDANCE_TEXT=대량 테이블 조인에서는 필터 조건이 강한 테이블
 ```text
 RAG_ID 25 튜닝 가이드 비활성화해줘.
 ```
+
+
+

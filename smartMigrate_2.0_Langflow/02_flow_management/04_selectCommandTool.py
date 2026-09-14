@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import logging
@@ -11,10 +11,10 @@ from lfx.io import BoolInput, IntInput, MessageTextInput, Output, SecretStrInput
 from lfx.schema.data import Data
 
 
-class NewType04JobQaCommandTool(Component):
-    display_name = "04 Job QA Command Tool"
-    description = "Read-only DB lookup tool for Job QA Agent. Uses NEXT_MIG_LOG as the single log source."
-    name = "NewType04JobQaCommandTool"
+class NewType04SelectCommandTool(Component):
+    display_name = "04 Select Command Tool"
+    description = "Read-only SELECT DB lookup tool for management QA agents. Uses NEXT_MIG_LOG as the single log source."
+    name = "NewType04SelectCommandTool"
     icon = "Search"
 
     inputs = [
@@ -29,6 +29,7 @@ class NewType04JobQaCommandTool(Component):
                 '{"action":"get_sql_job","sql_id":"Q001","space_nm":"SALES"}, '
                 '{"action":"get_sql_text","sql_id":"Q001","space_nm":"SALES","columns":["TO_SQL","TUNED_TO_SQL"]}, '
                 '{"action":"search_logs","mig_kind":"SQL_CONVERSION","fail_only":true,"limit":10}, '
+                '{"action":"list_remaining_jobs","domain":"DB_MIGRATION","limit":20}, '
                 '{"action":"recent_domain_status","domain":"SQL_CONVERSION","limit":10}'
             ),
         ),
@@ -92,11 +93,10 @@ class NewType04JobQaCommandTool(Component):
         "TARGET_SQL",
     }
 
-    # Langflow output 진입점에서 입력을 검증하고 이 컴포넌트의 주요 실행 흐름을 시작한다.
     def run_command(self) -> Data:
         logging.getLogger("smartmigrate.workflow").info(
-            "04 Job QA Command Tool started",
-            extra={"workflow_log": [0, "WORKFLOW", "04_JOB_QA_TOOL", "INFO", "RUN", "START", 0]},
+            "04 Select Command Tool started",
+            extra={"workflow_log": [0, "WORKFLOW", "04_SELECT_TOOL", "INFO", "RUN", "START", 0]},
         )
         try:
             command = self._parse_command()
@@ -104,11 +104,10 @@ class NewType04JobQaCommandTool(Component):
             self.status = result
             return Data(data=result)
         except Exception as exc:
-            result = {"ok": False, "component": "04_jobQaCommandTool", "error": str(exc)}
+            result = {"ok": False, "component": "04_selectCommandTool", "error": str(exc)}
             self.status = result
             return Data(data=result)
 
-    # QA command action 값을 보고 실제 조회 handler로 분기한다.
     def _dispatch(self, command: dict[str, Any]) -> dict[str, Any]:
         action = str(command.get("action") or "").strip().lower()
         if action == "get_migration_job":
@@ -129,6 +128,8 @@ class NewType04JobQaCommandTool(Component):
             return self._recent_domain_status(command)
         if action == "search_jobs":
             return self._search_jobs(command)
+        if action == "list_remaining_jobs":
+            return self._list_remaining_jobs(command)
         if action == "query_rag_info":
             return self._query_rag_info(command)
         if action in {"schema", "table_columns"}:
@@ -137,7 +138,6 @@ class NewType04JobQaCommandTool(Component):
             return {"ok": True, "action": "help", "supported_actions": self._supported_actions()}
         raise ValueError(f"Unsupported action: {action}")
 
-    # payload나 graph 설정에서 필요한 값을 꺼내 표준 형태로 반환한다.
     def _get_migration_job(self, command: dict[str, Any]) -> dict[str, Any]:
         map_id = self._required_text(command, "map_id")
         limit = self._limit(command.get("limit"))
@@ -165,13 +165,12 @@ class NewType04JobQaCommandTool(Component):
         )
         return {
             "ok": True,
-            "component": "04_jobQaCommandTool",
+            "component": "04_selectCommandTool",
             "action": "get_migration_job",
             "target": {"map_id": map_id},
             "data": {"job": job, "details": details, "logs": logs},
         }
 
-    # payload나 graph 설정에서 필요한 값을 꺼내 표준 형태로 반환한다.
     def _get_sql_job(self, command: dict[str, Any]) -> dict[str, Any]:
         sql_id = self._required_text(command, "sql_id")
         space_nm = str(command.get("space_nm") or "").strip()
@@ -197,13 +196,12 @@ class NewType04JobQaCommandTool(Component):
         mapping_rules = self._sql_mapping_rules(sql_info)
         return {
             "ok": True,
-            "component": "04_jobQaCommandTool",
+            "component": "04_selectCommandTool",
             "action": "get_sql_job",
             "target": {"sql_id": sql_id, "space_nm": space_nm},
             "data": {"sql_info": sql_info, "mapping_rules": mapping_rules, "logs": logs},
         }
 
-    # payload나 graph 설정에서 필요한 값을 꺼내 표준 형태로 반환한다.
     def _get_sql_mapping_rules(self, command: dict[str, Any]) -> dict[str, Any]:
         sql_id = self._required_text(command, "sql_id")
         space_nm = str(command.get("space_nm") or "").strip()
@@ -219,13 +217,12 @@ class NewType04JobQaCommandTool(Component):
         )
         return {
             "ok": True,
-            "component": "04_jobQaCommandTool",
+            "component": "04_selectCommandTool",
             "action": "get_sql_mapping_rules",
             "target": {"sql_id": sql_id, "space_nm": space_nm},
             "data": {"sql_info": sql_info, "mapping_rules": self._sql_mapping_rules(sql_info)},
         }
 
-    # payload나 graph 설정에서 필요한 값을 꺼내 표준 형태로 반환한다.
     def _get_sql_text(self, command: dict[str, Any]) -> dict[str, Any]:
         sql_id = self._required_text(command, "sql_id")
         space_nm = str(command.get("space_nm") or "").strip()
@@ -256,14 +253,13 @@ class NewType04JobQaCommandTool(Component):
         )
         return {
             "ok": True,
-            "component": "04_jobQaCommandTool",
+            "component": "04_selectCommandTool",
             "action": "get_sql_text",
             "target": {"sql_id": sql_id, "space_nm": space_nm, "columns": columns},
             "data": {"rows": rows},
             "full_text": True,
         }
 
-    # payload나 graph 설정에서 필요한 값을 꺼내 표준 형태로 반환한다.
     def _get_migration_text(self, command: dict[str, Any]) -> dict[str, Any]:
         map_id = self._required_text(command, "map_id")
         columns = self._requested_columns(
@@ -282,14 +278,13 @@ class NewType04JobQaCommandTool(Component):
         )
         return {
             "ok": True,
-            "component": "04_jobQaCommandTool",
+            "component": "04_selectCommandTool",
             "action": "get_migration_text",
             "target": {"map_id": map_id, "columns": columns},
             "data": {"rows": rows},
             "full_text": True,
         }
 
-    # payload나 graph 설정에서 필요한 값을 꺼내 표준 형태로 반환한다.
     def _get_log_text(self, command: dict[str, Any]) -> dict[str, Any]:
         log_id = str(command.get("log_id") or "").strip()
         columns = self._requested_columns(
@@ -330,24 +325,22 @@ class NewType04JobQaCommandTool(Component):
         )
         return {
             "ok": True,
-            "component": "04_jobQaCommandTool",
+            "component": "04_selectCommandTool",
             "action": "get_log_text",
             "target": {"log_id": log_id, "columns": columns},
             "data": {"rows": rows},
             "full_text": True,
         }
 
-    # 검색 조건과 limit을 적용해 관련 작업 또는 로그 목록을 조회한다.
     def _search_logs(self, command: dict[str, Any]) -> dict[str, Any]:
         return {
             "ok": True,
-            "component": "04_jobQaCommandTool",
+            "component": "04_selectCommandTool",
             "action": "search_logs",
             "target": self._public_filter(command),
             "data": {"logs": self._query_logs(command)},
         }
 
-    # 요청 domain의 최근 작업과 status 분포를 QA 응답으로 만든다.
     def _recent_domain_status(self, command: dict[str, Any]) -> dict[str, Any]:
         domain = self._normalize_domain(command.get("domain") or command.get("mig_kind") or "ALL")
         limit = self._limit(command.get("limit"))
@@ -365,9 +358,8 @@ class NewType04JobQaCommandTool(Component):
         if bool(command.get("fail_only", True)):
             log_filter["fail_only"] = True
         result["recent_logs"] = self._query_logs(log_filter)
-        return {"ok": True, "component": "04_jobQaCommandTool", "action": "recent_domain_status", "data": result}
+        return {"ok": True, "component": "04_selectCommandTool", "action": "recent_domain_status", "data": result}
 
-    # SQL job의 target table 기준으로 관련 migration mapping rule을 묶어 조회한다.
     def _sql_mapping_rules(self, sql_info_rows: list[dict[str, Any]]) -> dict[str, Any]:
         source_scope_tables: set[str] = set()
         sql_targets = []
@@ -419,7 +411,6 @@ class NewType04JobQaCommandTool(Component):
             if self._table_matches(str(rule.get("fr_table") or ""), source_scope_tables)
         ]
 
-        # 같은 테이블 매핑은 한 번만 보여주고, 그 아래에 컬럼 매핑을 묶어서 출력한다.
         grouped: dict[tuple, list[dict[str, Any]]] = {}
         for rule in matched:
             key = (
@@ -432,7 +423,6 @@ class NewType04JobQaCommandTool(Component):
             )
             grouped.setdefault(key, []).append(rule)
 
-        # 테이블 매핑 단위로 컬럼 매핑을 들여쓰기해 사람이 읽기 쉬운 Markdown을 만든다.
         formatted_rules = []
         for key, col_mappings in grouped.items():
             map_id, map_type, fr_table, to_table, description, condition = key
@@ -458,7 +448,6 @@ class NewType04JobQaCommandTool(Component):
             "message": "" if formatted_rules else "No PASS mapping rule matched the SQL FROM table scope.",
         }
 
-    # 검색 조건과 limit을 적용해 관련 작업 또는 로그 목록을 조회한다.
     def _search_jobs(self, command: dict[str, Any]) -> dict[str, Any]:
         domain = self._normalize_domain(command.get("domain") or "ALL")
         keyword = str(command.get("keyword") or "").strip()
@@ -471,13 +460,45 @@ class NewType04JobQaCommandTool(Component):
             data["sql_jobs"] = self._search_sql_jobs(keyword, domain if domain != "ALL" else "", fail_only, limit)
         return {
             "ok": True,
-            "component": "04_jobQaCommandTool",
+            "component": "04_selectCommandTool",
             "action": "search_jobs",
             "target": {"domain": domain, "keyword": keyword, "fail_only": fail_only, "limit": limit},
             "data": data,
         }
 
-    # 조회 조건을 조립해 DB에서 요청된 정보를 가져온다.
+    def _list_remaining_jobs(self, command: dict[str, Any]) -> dict[str, Any]:
+        domain = self._normalize_domain(command.get("domain") or command.get("mig_kind") or "ALL")
+        keyword = str(command.get("keyword") or "").strip()
+        limit = self._limit(command.get("limit"))
+        data: dict[str, Any] = {"remaining_summary": self._remaining_counts()}
+        if domain in {"ALL", "DB_MIGRATION", "DB_MIG"}:
+            data["migration_jobs"] = self._remaining_migration_jobs(keyword, limit)
+        if domain in {"ALL", "SQL_CONVERSION"}:
+            data["sql_conversion_jobs"] = self._remaining_sql_jobs("SQL_CONVERSION", keyword, limit)
+        if domain in {"ALL", "SQL_TUNING"}:
+            data["sql_tuning_jobs"] = self._remaining_sql_jobs("SQL_TUNING", keyword, limit)
+        if domain in {"ALL", "SQL_FORMATTING"}:
+            data["sql_formatting_jobs"] = self._remaining_sql_jobs("SQL_FORMATTING", keyword, limit)
+
+        all_jobs = []
+        for key in ("migration_jobs", "sql_conversion_jobs", "sql_tuning_jobs", "sql_formatting_jobs"):
+            all_jobs.extend(data.get(key) or [])
+        data["all_jobs"] = all_jobs
+
+        return {
+            "ok": True,
+            "component": "04_selectCommandTool",
+            "action": "list_remaining_jobs",
+            "target": {"domain": domain, "keyword": keyword, "limit_per_domain": limit},
+            "definition": {
+                "DB_MIGRATION": "USE_YN='Y' AND (STATUS IS NULL OR USER_EDITED='Y' AND STATUS LIKE 'FAIL-%')",
+                "SQL_CONVERSION": "STATUS_CONVERSION IS NULL OR USER_EDITED='Y' AND STATUS_CONVERSION LIKE 'FAIL-%'",
+                "SQL_TUNING": "STATUS_CONVERSION PASS and (STATUS_TUNING IS NULL OR USER_EDITED='Y' AND STATUS_TUNING LIKE 'FAIL-%')",
+                "SQL_FORMATTING": "STATUS_TUNING PASS and FORMATTED_SQL empty",
+            },
+            "data": data,
+        }
+
     def _query_rag_info(self, command: dict[str, Any]) -> dict[str, Any]:
         limit = self._limit(command.get("limit"))
         rag_id = str(command.get("rag_id") or "").strip()
@@ -523,13 +544,12 @@ class NewType04JobQaCommandTool(Component):
         )
         return {
             "ok": True,
-            "component": "04_jobQaCommandTool",
+            "component": "04_selectCommandTool",
             "action": "query_rag_info",
             "target": {"rag_id": rag_id, "category": category, "rule_type": rule_type, "keyword": keyword, "limit": limit},
             "data": {"rules": rows},
         }
 
-    # QA 요청 table의 Oracle 컬럼명과 타입을 조회해 사용자에게 반환한다.
     def _table_columns(self, command: dict[str, Any]) -> dict[str, Any]:
         tables = command.get("tables") or ["NEXT_MIG_INFO", "NEXT_MIG_INFO_DTL", "NEXT_SQL_INFO", "NEXT_MIG_LOG", "NEXT_MIG_RAG_INFO"]
         if isinstance(tables, str):
@@ -538,9 +558,8 @@ class NewType04JobQaCommandTool(Component):
         for table in tables:
             clean = self._clean_identifier(str(table))
             data[clean] = self._available_column_types(clean)
-        return {"ok": True, "component": "04_jobQaCommandTool", "action": "table_columns", "data": data}
+        return {"ok": True, "component": "04_selectCommandTool", "action": "table_columns", "data": data}
 
-    # 조회 조건을 조립해 DB에서 요청된 정보를 가져온다.
     def _query_logs(self, command: dict[str, Any]) -> list[dict[str, Any]]:
         limit = self._limit(command.get("limit"))
         column_types = self._available_column_types("NEXT_MIG_LOG")
@@ -615,7 +634,6 @@ class NewType04JobQaCommandTool(Component):
         )
         return rows
 
-    # 검색 조건과 limit을 적용해 관련 작업 또는 로그 목록을 조회한다.
     def _search_migration_jobs(self, keyword: str, fail_only: bool, limit: int) -> list[dict[str, Any]]:
         column_types = self._available_column_types("NEXT_MIG_INFO")
         columns = set(column_types)
@@ -642,7 +660,6 @@ class NewType04JobQaCommandTool(Component):
             table_name="NEXT_MIG_INFO",
         )
 
-    # 검색 조건과 limit을 적용해 관련 작업 또는 로그 목록을 조회한다.
     def _search_sql_jobs(self, keyword: str, domain: str, fail_only: bool, limit: int) -> list[dict[str, Any]]:
         column_types = self._available_column_types("NEXT_SQL_INFO")
         conditions = []
@@ -669,7 +686,114 @@ class NewType04JobQaCommandTool(Component):
             table_name="NEXT_SQL_INFO",
         )
 
-    # 지정된 관리 테이블에서 최근 작업 row를 UPD_TS 기준으로 조회한다.
+    def _remaining_counts(self) -> dict[str, int]:
+        queries = {
+            "DB_MIGRATION": ("NEXT_MIG_INFO", self._remaining_where("DB_MIGRATION")),
+            "SQL_CONVERSION": ("NEXT_SQL_INFO", self._remaining_where("SQL_CONVERSION")),
+            "SQL_TUNING": ("NEXT_SQL_INFO", self._remaining_where("SQL_TUNING")),
+            "SQL_FORMATTING": ("NEXT_SQL_INFO", self._remaining_where("SQL_FORMATTING")),
+        }
+        counts = {
+            domain: self._count_rows(table_name, where_clause)
+            for domain, (table_name, where_clause) in queries.items()
+        }
+        counts["TOTAL"] = sum(counts.values())
+        return counts
+
+    def _remaining_migration_jobs(self, keyword: str, limit: int) -> list[dict[str, Any]]:
+        column_types = self._available_column_types("NEXT_MIG_INFO")
+        conditions = [self._remaining_where("DB_MIGRATION")]
+        params: dict[str, Any] = {"limit": limit}
+        if keyword:
+            conditions.append(self._like_any_condition(["MAP_ID", "MAP_TYPE", "FR_TABLE", "TO_TABLE", "STATUS"], "keyword", column_types))
+            params["keyword"] = f"%{keyword}%"
+        return self._query_rows(
+            f"""
+            SELECT *
+              FROM (
+                    SELECT 'DB_MIGRATION' AS JOB_ROUTE, {self._select_list('NEXT_MIG_INFO', include_text=False)}
+                      FROM {self._qualify('NEXT_MIG_INFO')}
+                     WHERE {" AND ".join(conditions)}
+                     ORDER BY {self._remaining_order_by(column_types, ['PRIORITY', 'MAP_ID'])}
+                   )
+             WHERE ROWNUM <= :limit
+            """,
+            params,
+            table_name="NEXT_MIG_INFO",
+        )
+
+    def _remaining_sql_jobs(self, domain: str, keyword: str, limit: int) -> list[dict[str, Any]]:
+        domain = self._normalize_domain(domain)
+        column_types = self._available_column_types("NEXT_SQL_INFO")
+        conditions = [self._remaining_where(domain)]
+        params: dict[str, Any] = {"limit": limit}
+        if keyword:
+            conditions.append(self._like_any_condition(["SPACE_NM", "SQL_ID", "TAG_KIND", "TARGET_TABLE", "STATUS_CONVERSION", "STATUS_TUNING"], "keyword", column_types))
+            params["keyword"] = f"%{keyword}%"
+        return self._query_rows(
+            f"""
+            SELECT *
+              FROM (
+                    SELECT '{domain}' AS JOB_ROUTE, {self._select_list('NEXT_SQL_INFO', include_text=False)}
+                      FROM {self._qualify('NEXT_SQL_INFO')}
+                     WHERE {" AND ".join(conditions)}
+                     ORDER BY {self._remaining_order_by(column_types, ['PRIORITY', 'SPACE_NM', 'SQL_ID'])}
+                   )
+             WHERE ROWNUM <= :limit
+            """,
+            params,
+            table_name="NEXT_SQL_INFO",
+        )
+
+    def _remaining_where(self, domain: str) -> str:
+        domain = self._normalize_domain(domain)
+        user_edited = "UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y'"
+        if domain in {"DB_MIGRATION", "DB_MIG"}:
+            return (
+                "UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y' "
+                "AND (STATUS IS NULL OR "
+                f"({user_edited} AND UPPER(TRIM(NVL(STATUS, 'NULL'))) LIKE 'FAIL-%'))"
+            )
+        if domain == "SQL_CONVERSION":
+            return (
+                "(STATUS_CONVERSION IS NULL OR "
+                f"({user_edited} AND UPPER(TRIM(NVL(STATUS_CONVERSION, 'NULL'))) LIKE 'FAIL-%'))"
+            )
+        if domain == "SQL_TUNING":
+            return (
+                "UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION') "
+                "AND (STATUS_TUNING IS NULL OR "
+                f"({user_edited} AND UPPER(TRIM(NVL(STATUS_TUNING, 'NULL'))) LIKE 'FAIL-%'))"
+            )
+        if domain == "SQL_FORMATTING":
+            return (
+                "UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING') "
+                "AND (FORMATTED_SQL IS NULL OR NVL(DBMS_LOB.GETLENGTH(FORMATTED_SQL), 0) = 0)"
+            )
+        raise ValueError(f"Unsupported remaining job domain: {domain}")
+
+    def _remaining_order_by(self, column_types: dict[str, str], preferred_columns: list[str]) -> str:
+        parts = []
+        for column in preferred_columns:
+            clean = self._clean_identifier(column)
+            if clean not in column_types:
+                continue
+            if clean == "PRIORITY":
+                parts.append("PRIORITY ASC NULLS LAST")
+            else:
+                parts.append(f"{clean} ASC NULLS LAST")
+        if "UPD_TS" in column_types:
+            parts.append("UPD_TS DESC NULLS LAST")
+        return ", ".join(parts) if parts else "1"
+
+    def _count_rows(self, table_name: str, where_clause: str) -> int:
+        rows = self._query_rows(
+            f"SELECT COUNT(*) AS CNT FROM {self._qualify(table_name)} WHERE {where_clause}",
+            {},
+            columns=["count"],
+        )
+        return int((rows[0] or {}).get("count") or 0) if rows else 0
+
     def _recent_jobs(self, table_name: str, id_column: str, status_column: str, limit: int) -> list[dict[str, Any]]:
         return self._query_rows(
             f"""
@@ -685,7 +809,6 @@ class NewType04JobQaCommandTool(Component):
             table_name=table_name,
         )
 
-    # status 값별 row 수를 집계해 dashboard와 QA 응답에 사용한다.
     def _status_counts(self, table_name: str, status_column: str, where_clause: str) -> dict[str, int]:
         rows = self._query_rows(
             f"""
@@ -700,7 +823,6 @@ class NewType04JobQaCommandTool(Component):
         )
         return {str(row.get("status")): int(row.get("count") or 0) for row in rows}
 
-    # cursor 결과를 후속 payload에서 쓰기 쉬운 dict row 목록으로 변환한다.
     def _query_rows(
         self,
         sql: str,
@@ -719,7 +841,6 @@ class NewType04JobQaCommandTool(Component):
         _ = table_name
         return result
 
-    # QA 조회에서 허용된 컬럼만 SELECT 목록으로 구성한다.
     def _select_list(
         self,
         table_name: str,
@@ -744,7 +865,6 @@ class NewType04JobQaCommandTool(Component):
                 expressions.append(column)
         return ", ".join(expressions)
 
-    # QA 응답에 특정 컬럼을 포함할지 텍스트 컬럼 옵션 기준으로 판단한다.
     def _include_column(self, column: str, *, include_text: bool | None = None) -> bool:
         if include_text is None:
             include_text = self._as_bool(getattr(self, "include_sql_text", True))
@@ -752,7 +872,6 @@ class NewType04JobQaCommandTool(Component):
             return True
         return column not in self.SQL_TEXT_COLUMNS
 
-    # 검색어가 여러 후보 컬럼 중 하나라도 매칭되는 SQL 조건을 만든다.
     def _like_any_condition(self, columns: list[str], param_name: str, available_columns: set[str] | dict[str, str]) -> str:
         column_types = available_columns if isinstance(available_columns, dict) else {}
         column_names = set(column_types) if column_types else set(available_columns)
@@ -769,7 +888,6 @@ class NewType04JobQaCommandTool(Component):
             return "1=0"
         return "(" + " OR ".join(clauses) + ")"
 
-    # 테이블 범위 입력을 쉼표로 구분된 대문자 테이블 목록으로 정리한다.
     def _source_tables(self, value: Any) -> set[str]:
         text = str(value or "").strip()
         if text.startswith("["):
@@ -781,25 +899,21 @@ class NewType04JobQaCommandTool(Component):
                 pass
         return {token.split(".")[-1].strip().strip('"').upper() for token in re.split(r"[,;|\s]+", text) if token.strip()}
 
-    # 테이블명이 현재 source table 후보 집합과 매칭되는지 판단한다.
     def _table_matches(self, table_name: str, candidates: set[str]) -> bool:
         normalized = str(table_name or "").upper()
         return any(re.search(rf"(?<![A-Z0-9_$#]){re.escape(table)}(?![A-Z0-9_$#])", normalized) for table in candidates)
 
-    # FAIL 계열 status를 찾는 SQL 조건식을 만든다.
     def _failure_status_condition(self, column: str) -> str:
         clean = self._clean_identifier(column)
         normalized = f"UPPER(TRIM(NVL({clean}, '')))"
         return f"({normalized} IN ('FAIL', 'FAILED', 'ERROR') OR {normalized} LIKE 'FAIL-%')"
 
-    # SQL domain별로 사용할 status 컬럼명을 결정한다.
     def _status_column_for_domain(self, domain: str) -> str:
         domain = self._normalize_domain(domain)
         if domain == "SQL_TUNING":
             return "STATUS_TUNING"
         return "STATUS_CONVERSION"
 
-    # QA 표시와 text 컬럼 처리를 위해 Oracle metadata에서 컬럼 타입을 조회한다.
     def _available_column_types(self, table_name: str) -> dict[str, str]:
         table = self._clean_identifier(table_name)
         schema = str(getattr(self, "system_schema", "") or "").strip().upper()
@@ -819,7 +933,6 @@ class NewType04JobQaCommandTool(Component):
         return {str(row[0]).upper(): str(row[1]).upper() for row in rows}
 
     @contextmanager
-    # Oracle 연결을 열고 호출 구간이 끝나면 닫는 context manager다.
     def _connect(self):
         import oracledb
 
@@ -839,7 +952,6 @@ class NewType04JobQaCommandTool(Component):
         finally:
             conn.close()
 
-    # 문자열 입력에서 JSON 객체를 파싱해 후속 로직이 쓰는 dict로 만든다.
     def _parse_command(self) -> dict[str, Any]:
         raw = getattr(self, "command_json", "")
         if isinstance(raw, dict):
@@ -855,22 +967,19 @@ class NewType04JobQaCommandTool(Component):
             raise ValueError("command_json must be a JSON object")
         return parsed
 
-    # system_schema가 명시된 테이블명을 schema-qualified 이름으로 만든다.
     def _qualify(self, table_name: str) -> str:
         table = self._clean_identifier(table_name)
         schema = str(getattr(self, "system_schema", "") or "").strip().upper()
         if not schema:
-            raise ValueError("System Schema를 입력해야 합니다.")
+            raise ValueError("System Schema is required")
         return f"{self._clean_identifier(schema)}.{table}"
 
-    # 동적 SQL identifier에 안전한 Oracle 문자만 허용한다.
     def _clean_identifier(self, value: str) -> str:
         clean = str(value or "").strip().upper()
         if not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", clean):
             raise ValueError(f"Invalid identifier: {clean}")
         return clean
 
-    # 비교와 검색이 안정적으로 동작하도록 입력 값을 정규화한다.
     def _normalize_domain(self, value: Any) -> str:
         text = str(value or "").strip().upper().replace("-", "_").replace(" ", "_")
         aliases = {
@@ -887,25 +996,21 @@ class NewType04JobQaCommandTool(Component):
         }
         return aliases.get(text, text)
 
-    # QA command에서 필수 문자열 인자를 검증해 반환한다.
     def _required_text(self, command: dict[str, Any], key: str) -> str:
         value = str(command.get(key) or "").strip()
         if not value:
             raise ValueError(f"{key} is required")
         return value
 
-    # QA 조회 row 수와 전문 출력 제한 값을 허용 범위 안으로 보정한다.
     def _limit(self, value: Any) -> int:
         default = self._positive_int(getattr(self, "default_limit", None), 10)
         max_limit = self._positive_int(getattr(self, "max_limit", None), 100)
         return max(1, min(self._positive_int(value, default), max_limit))
 
-    # QA 조회 row 수와 전문 출력 제한 값을 허용 범위 안으로 보정한다.
     def _full_text_limit(self, value: Any) -> int:
         default = self._positive_int(getattr(self, "full_text_row_limit", None), 3)
         return max(1, min(self._positive_int(value, default), 10))
 
-    # QA command의 요청 컬럼 목록을 allow-list 기준으로 정리한다.
     def _requested_columns(
         self,
         raw_columns: Any,
@@ -933,7 +1038,6 @@ class NewType04JobQaCommandTool(Component):
             raise ValueError("At least one column is required")
         return columns
 
-    # SQL 전문 조회에서 출력 가능한 컬럼을 고정 순서로 반환한다.
     def _ordered_allowed_sql_text_columns(self) -> list[str]:
         return [
             "FR_SQL",
@@ -950,7 +1054,6 @@ class NewType04JobQaCommandTool(Component):
             "BLOCK_RAG_CONTENT",
         ]
 
-    # 숫자 입력을 양의 정수로 변환하고 실패하면 기본값을 사용한다.
     def _positive_int(self, value: Any, default: int) -> int:
         try:
             parsed = int(value or 0)
@@ -958,13 +1061,11 @@ class NewType04JobQaCommandTool(Component):
         except (TypeError, ValueError):
             return default
 
-    # 문자열/숫자/boolean 입력을 Langflow 옵션용 boolean 값으로 정규화한다.
     def _as_bool(self, value: Any) -> bool:
         if isinstance(value, bool):
             return value
         return str(value or "").strip().lower() in {"1", "true", "t", "y", "yes", "on"}
 
-    # payload나 로그에 넣을 값을 JSON 직렬화 가능한 형태로 정리한다.
     def _json_value(self, value: Any) -> Any:
         if value is None:
             return None
@@ -974,7 +1075,6 @@ class NewType04JobQaCommandTool(Component):
             return value.decode("utf-8", errors="ignore")
         return value if isinstance(value, (str, int, float, bool)) else str(value)
 
-    # Langflow Secret 입력을 일반 문자열로 꺼내 client library 설정에 사용한다.
     def _secret_to_str(self, value: Any) -> str:
         if value is None:
             return ""
@@ -982,7 +1082,6 @@ class NewType04JobQaCommandTool(Component):
             return str(value.get_secret_value())
         return str(value)
 
-    # QA 응답에 표시할 검색 조건만 추려 사용자용 filter로 만든다.
     def _public_filter(self, command: dict[str, Any]) -> dict[str, Any]:
         allowed = [
             "mig_kind",
@@ -1003,7 +1102,6 @@ class NewType04JobQaCommandTool(Component):
         ]
         return {key: command.get(key) for key in allowed if key in command}
 
-    # QA command tool이 지원하는 action 목록과 필수 인자를 반환한다.
     def _supported_actions(self) -> list[dict[str, Any]]:
         return [
             {"action": "get_migration_job", "required": ["map_id"], "optional": ["limit", "fail_only", "map_id_like"]},
@@ -1015,6 +1113,8 @@ class NewType04JobQaCommandTool(Component):
             {"action": "search_logs", "optional": ["mig_kind", "map_id_like", "sql_id", "space_nm", "keyword", "status_like", "log_level", "log_type", "step_name_like", "fail_only", "created_after", "include_generate_sql_preview", "include_generate_sql_search", "limit"]},
             {"action": "recent_domain_status", "optional": ["domain", "limit", "fail_only"]},
             {"action": "search_jobs", "optional": ["domain", "keyword", "fail_only", "limit"]},
+            {"action": "list_remaining_jobs", "optional": ["domain", "keyword", "limit"]},
             {"action": "query_rag_info", "optional": ["rag_id", "category", "rule_type", "keyword", "use_yn", "limit"]},
             {"action": "table_columns", "optional": ["tables"]},
         ]
+
