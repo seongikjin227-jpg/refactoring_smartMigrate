@@ -58,9 +58,10 @@ flowchart LR
 flowchart TD
     M[04 Management Router] -->|DASHBOARD| DASH[04 Dashboard]
     M -->|CURRENT_PROGRESS| PROG[04 Current Progress]
-    M -->|SELECT_AGENT| QA[04 Select Agent]
-    M -->|UPDATE_COMMAND| UPDATE[04 Update Command Tool]
-    M -->|RAG_GUIDE_MANAGEMENT| RAG[04 RAG Guide Manager]
+    M -->|MANAGEMENT_AGENT| QA[04 Management Agent]
+    QA --> TOOL_SELECT[04 Select Command Tool]
+    QA --> TOOL_UPDATE[04 Update Command Tool]
+    QA --> TOOL_RAG[04 RAG Command Tool]
     M -->|VECTOR_DB_SYNC| VDB[04 Sync Milvus Vector DB]
     M -->|EXCEPTION| EX[Exception Message]
 ```
@@ -69,13 +70,11 @@ flowchart TD
 |---|---|---|
 | `DASHBOARD` | "대시보드 보여줘", "전체 현황" | 정해진 DB aggregate 조회 후 메시지 생성 |
 | `CURRENT_PROGRESS` | "지금 돌고 있는 작업 있어?" | running 상태와 최근 5개 로그 조회 |
-| `SELECT_AGENT` | "DB Migration 남은 작업 목록 보여줘", "map id 101 왜 실패했어?", "전체 Fail 분석해줘" | Agent가 read-only Tool을 호출하고 LLM이 답변 |
-| `UPDATE_COMMAND` | "map id 101 USER_EDITED를 N으로 바꾸고 MIG_SQL을 null로 바꿔줘" | 고정 action을 transaction으로 처리. SQL은 Tool 내부에 정의 |
-| `RAG_GUIDE_MANAGEMENT` | "SQL Conversion RAG 가이드 추가해줘", "튜닝 가이드 RAG_ID 12 비활성화해줘" | `NEXT_MIG_RAG_INFO` 조회/추가/수정/비활성화 |
+| `MANAGEMENT_AGENT` | "DB Migration 남은 작업 목록 보여줘", "map id 101 왜 실패했어?", "전체 Fail 분석해줘" | Management Agent가 3개의 tool을 조합해서 조회/분석/수정/가이드 관리 수행 |
 | `VECTOR_DB_SYNC` | "VectorDB 업로드해줘", "방금 추가한 RAG 가이드를 Milvus에 반영해줘" | `04_saveVectorDB.py`로 Oracle 원천 데이터를 Milvus collection에 동기화 |
 | `EXCEPTION` | 필수 target 누락 | 구체적인 한국어 에러 메시지 |
 
-중요한 결정: `FAIL_ANALYSIS` output은 04에서 제거되었다. 채팅으로 들어오는 실패 분석은 모두 `SELECT_AGENT`가 담당한다. 단, 실행 완료 후 자동 분석인 `11B_failureCauseAnalyzer.py`는 여전히 실행 workflow 후단에서 사용한다.
+중요한 결정: `SELECT_AGENT`, `UPDATE_COMMAND`, `RAG_GUIDE_MANAGEMENT`는 독립 agent가 아니라 `04 Management Agent`의 내부 sub-route/tool 호출로 통합되었다. 채팅으로 들어오는 조회/수정/가이드 관리는 모두 Management Agent가 3개 tool을 순서대로 활용한다. 단, 실행 완료 후 자동 분석인 `11B_failureCauseAnalyzer.py`는 여전히 실행 workflow 후단에서 사용한다.
 
 ## 2.5 Dashboard
 
@@ -98,7 +97,7 @@ flowchart LR
 
 ## 2.6 Current Progress
 
-`04_currentProgress.py`는 "단순 running 상태" 확인에 사용한다. 원인 분석이나 최근 실패 해석이 들어가면 `SELECT_AGENT`가 맞다.
+`04_currentProgress.py`는 "단순 running 상태" 확인에 사용한다. 원인 분석이나 최근 실패 해석이 들어가면 `MANAGEMENT_AGENT`가 맞다.
 
 | 조회 범위 | 설명 |
 |---|---|
@@ -107,67 +106,66 @@ flowchart LR
 | `NEXT_SQL_INFO.STATUS_TUNING LIKE 'RUNNING%'` | tuning running jobs |
 | `NEXT_MIG_LOG` 최근 5개 | 최근 workflow/job event |
 
-## 2.7 Select Agent
+## 2.7 Management Agent and Tools
 
-Select Agent는 정해진 결과가 아니라 Agent 답변이 그대로 chat output으로 넘어간다.
+Management Agent는 정해진 결과가 아니라 Agent 답변이 그대로 chat output으로 넘어간다. 다만 실제 로직은 `Select Command Tool`, `Update Command Tool`, `RAG Command Tool`라는 3개의 tool을 조합해서 처리한다.
 
 ```mermaid
 sequenceDiagram
     participant User
     participant R04 as 04 Management Router
-    participant Agent as Select Agent
-    participant Tool as 04 Select Command Tool
+    participant Agent as Management Agent
+    participant Select as 04 Select Command Tool
+    participant Update as 04 Update Command Tool
+    participant RAG as 04 RAG Command Tool
     participant DB as Oracle
     participant Out as Chat Output
 
     User->>R04: "map id 101 왜 실패했어?"
-    R04->>Agent: management_route=SELECT_AGENT payload
-    Agent->>Tool: get_migration_job(map_id=101)
-    Tool->>DB: NEXT_MIG_INFO / DTL / NEXT_MIG_LOG
-    DB-->>Tool: row + recent logs
-    Tool-->>Agent: JSON evidence
-    Agent->>Tool: search_logs(map_id_like="%101%", status_like="FAIL-%")
-    Tool->>DB: NEXT_MIG_LOG
-    DB-->>Tool: failure logs
-    Tool-->>Agent: JSON evidence
+    R04->>Agent: management_route=MANAGEMENT_AGENT payload
+    Agent->>Select: get_migration_job(map_id=101)
+    Select->>DB: NEXT_MIG_INFO / DTL / NEXT_MIG_LOG
+    DB-->>Select: row + recent logs
+    Select-->>Agent: JSON evidence
+    Agent->>Select: search_logs(map_id_like="%101%", status_like="FAIL-%")
+    Select->>DB: NEXT_MIG_LOG
+    DB-->>Select: failure logs
+    Select-->>Agent: JSON evidence
     Agent-->>Out: LLM 분석 답변
 ```
 
-### Select Command Tool 원칙
+### Management Tool 원칙
 
 | 원칙 | 내용 |
 |---|---|
-| read-only | SELECT만 수행한다. |
-| 로그 단일화 | `NEXT_SQL_LOG`를 조회하지 않는다. SQL 로그도 `NEXT_MIG_LOG`에서 조회한다. |
+| read-only/select | `04_selectCommandTool.py`는 SELECT 전용이다. |
+| update/repair | `04_updateCommandTool.py`는 상태 초기화, USER_EDITED 변경, SQL 저장 등 변경 작업만 수행한다. |
+| guide management | `04_ragCommandTool.py`는 RAG rule/guidance row 조회/추가/수정/비활성화와 VectorDB 반영을 담당한다. |
+| 로그 단일화 | SQL 로그도 `NEXT_MIG_LOG`에서 조회한다. |
 | 일반 진단은 짧게 | bulk/recent/log 진단은 SQL CLOB을 기본 제외하고, text preview는 최대 1000자다. |
 | 원문 조회는 명시적 | 사용자가 "전체 원문", "BIND_SQL 보여줘"처럼 명시하면 `get_sql_text`, `get_migration_text`, `get_log_text`를 사용한다. |
-| 전체 fail 분석은 제한 | "전체 Fail 분석" 같은 broad 요청은 최근 100개 이내 로그 기준으로 요약한다. |
 
-### Select Command Tool Actions
-
-| action | 조회 테이블 | 목적 | 대표 파라미터 |
-|---|---|---|---|
-| `get_migration_job` | `NEXT_MIG_INFO`, `NEXT_MIG_INFO_DTL`, `NEXT_MIG_LOG` | 특정 `MAP_ID`의 상태, 매핑, 최근 로그 조회 | `map_id`, `fail_only`, `map_id_like`, `limit` |
-| `get_sql_job` | `NEXT_SQL_INFO`, `NEXT_MIG_LOG` | 특정 `SQL_ID`/`SPACE_NM`의 conversion/tuning/formatting 상태와 로그 조회 | `sql_id`, `space_nm`, `mig_kind`, `fail_only`, `limit` |
-| `get_sql_text` | `NEXT_SQL_INFO` | SQL CLOB 원문 전체 조회 | `sql_id`, `space_nm`, `columns`, `limit` |
-| `get_migration_text` | `NEXT_MIG_INFO` | migration SQL CLOB 원문 전체 조회 | `map_id`, `columns` |
-| `get_log_text` | `NEXT_MIG_LOG` | 로그의 `GENERATE_SQL` 원문 전체 조회 | `log_id`, `map_id_like`, `mig_kind`, `status_like`, `fail_only`, `limit` |
-| `search_logs` | `NEXT_MIG_LOG` | 조건 기반 로그 검색 | `mig_kind`, `map_id_like`, `sql_id`, `space_nm`, `keyword`, `status_like`, `fail_only`, `created_after`, `limit` |
-| `recent_domain_status` | `NEXT_MIG_INFO`, `NEXT_SQL_INFO`, `NEXT_MIG_LOG` | 도메인별 최근 상태와 최근 로그 요약 | `domain`, `fail_only`, `limit` |
-| `search_jobs` | `NEXT_MIG_INFO`, `NEXT_SQL_INFO` | job master row 검색 | `domain`, `keyword`, `fail_only`, `limit` |
-| `query_rag_info` | `NEXT_MIG_RAG_INFO` | RAG rule/guidance 조회 | `category`, `keyword`, `use_yn`, `limit` |
-| `table_columns` | Oracle metadata | 테이블 컬럼 확인. Tool schema가 바뀌었거나 DB 컬럼 차이가 있을 때 사용 | `tables` |
-
-### Select Agent 라우팅 예시
+### Management Agent 라우팅 예시
 
 | 요청 | 04 route | Agent 권장 Tool 호출 |
 |---|---|---|
-| "map id 101 migration 결과 알려줘" | `SELECT_AGENT` | `get_migration_job(map_id=101)` |
-| "map id 101 fail 원인이 뭐야?" | `SELECT_AGENT` | `get_migration_job(map_id=101, fail_only=true)`, `search_logs(map_id_like="%101%", status_like="FAIL-%")` |
-| "SQL Conversion 현재 진행 상황 어때? 최근 실패도 알려줘" | `SELECT_AGENT` | `recent_domain_status(domain="SQL_CONVERSION", fail_only=true, limit=10)` |
-| "전체 Fail 분석해줘" | `SELECT_AGENT` | `search_logs(fail_only=true, limit=100)` |
-| "sql id S001, space DDD의 BIND_SQL 원문 보여줘" | `SELECT_AGENT` | `get_sql_text(sql_id="S001", space_nm="DDD", columns=["BIND_SQL"])` |
-| "sql id S001, space DDD의 to sql/tuned to sql 비교해줘" | `SELECT_AGENT` | `get_sql_text(sql_id="S001", space_nm="DDD", columns=["TO_SQL","TUNED_TO_SQL","TUNED_RESULT"])` |
+| "map id 101 migration 결과 알려줘" | `MANAGEMENT_AGENT` | `get_migration_job(map_id=101)` |
+| "map id 101 fail 원인이 뭐야?" | `MANAGEMENT_AGENT` | `get_migration_job(map_id=101, fail_only=true)`, `search_logs(map_id_like="%101%", status_like="FAIL-%")` |
+| "SQL Conversion 현재 진행 상황 어때? 최근 실패도 알려줘" | `MANAGEMENT_AGENT` | `recent_domain_status(domain="SQL_CONVERSION", fail_only=true, limit=10)` |
+| "전체 Fail 분석해줘" | `MANAGEMENT_AGENT` | `search_logs(fail_only=true, limit=100)` |
+| "sql id S001, space DDD의 BIND_SQL 원문 보여줘" | `MANAGEMENT_AGENT` | `get_sql_text(sql_id="S001", space_nm="DDD", columns=["BIND_SQL"])` |
+| "sql id S001, space DDD의 to sql/tuned to sql 비교해줘" | `MANAGEMENT_AGENT` | `get_sql_text(sql_id="S001", space_nm="DDD", columns=["TO_SQL","TUNED_TO_SQL","TUNED_RESULT"])` |
+| "SQL Conversion RAG 가이드 추가해줘" | `MANAGEMENT_AGENT` | `04_ragCommandTool`의 insert/update action |
+| "RAG_ID 12 비활성화해줘" | `MANAGEMENT_AGENT` | `04_ragCommandTool`의 deactivate action |
+
+### SQL Conversion RAG 입력 규칙
+
+| 규칙 | 설명 |
+|---|---|
+| `SQL_CONVERSION` 가이드는 `SOURCE_TABLES`를 필수로 둔다. | SQL 변환은 대상 테이블 범위가 있어야 매핑/검색의 정확도가 높다. 변환 가이드 추가 시 기본적으로 `SOURCE_TABLES`를 입력해야 한다. |
+| `SQL_CONVERSION`에서 `GUIDANCE_TEXT`는 기본적으로 비운다. | 변환 규칙/예시는 테이블 범위와 SQL 예시 중심으로 관리하는 편이 더 정확하고, `GUIDANCE_TEXT`는 SQL Tuning에 더 적합하다. |
+| `SOURCE_TABLES`는 적용 대상이 분명한 테이블 목록을 넣는다. | 예외적으로 범위가 명확한 테이블군에만 사용한다. |
+| `SEARCH` 추가는 `SOURCE_TABLES`, `SOURCE_SQL`, `TARGET_SQL`을 같이 넣는다. | 예시 문맥과 적용 범위가 있어야 검색 의미가 유지된다. |
 
 ## 2.8 Update Command
 
@@ -197,14 +195,14 @@ sequenceDiagram
 
 ## 2.9 RAG Guide Management
 
-`04_ragGuideManager.py`는 `NEXT_MIG_RAG_INFO`의 SQL Conversion RAG 가이드와 SQL Tuning 가이드를 관리한다. 삭제 요청도 물리 삭제하지 않고 `USE_YN='N'`으로 비활성화한다.
+`04_ragCommandTool.py`는 `NEXT_MIG_RAG_INFO`의 SQL Conversion/Tuning RAG 가이드와 관련 메타데이터를 관리한다. 삭제 요청도 물리 삭제하지 않고 `USE_YN='N'`으로 비활성화한다.
 
-RAG 가이드 테이블 자체를 조회/추가/수정/비활성화하려는 요청은 `RAG_GUIDE_MANAGEMENT`로 보낸다. 반면 "실패 원인 분석 중 참고된 RAG를 같이 보여줘"처럼 작업 진단 답변의 근거로 RAG row를 읽는 경우에는 `SELECT_AGENT`의 `query_rag_info` tool을 쓴다.
+RAG 가이드 테이블 자체를 조회/추가/수정/비활성화하려는 요청은 `MANAGEMENT_AGENT`의 `RAG` tool로 처리한다. 반면 "실패 원인 분석 중 참고된 RAG를 같이 보여줘"처럼 작업 진단 답변의 근거로 RAG row를 읽는 경우에는 `Select Command Tool`의 `query_rag_info` action을 쓴다.
 
 | 작업 | 사용자 요청 예 | 필수 정보 | 처리 |
 |---|---|---|---|
 | 조회 | "SQL Conversion RAG 가이드 중 CUSTOMER 들어간 것 조회해줘" | 선택: `category`, `rule_type`, `keyword`, `use_yn`, `limit`, `full_text` | 조건에 맞는 `NEXT_MIG_RAG_INFO` row의 `SOURCE_TABLES`, `GUIDANCE_TEXT`, `SOURCE_SQL`, `TARGET_SQL`을 출력 |
-| 추가 | "SQL Conversion SEARCH 가이드 추가. SOURCE_TABLES=CUSTOMER. SOURCE_SQL=... TARGET_SQL=..." | `category=SQL_CONVERSION`, `rule_type`, `SOURCE_TABLES`, `SOURCE_SQL`, `TARGET_SQL` | 신규 row insert, `RAG_ID`는 DB identity가 자동 생성 |
+| 추가 | "SQL Conversion SEARCH 가이드 추가. SOURCE_TABLES=CUSTOMER SOURCE_SQL=... TARGET_SQL=..." | `category=SQL_CONVERSION`, `rule_type`, `SOURCE_TABLES`, `SOURCE_SQL`, `TARGET_SQL`; `GUIDANCE_TEXT`는 비움 | 신규 row insert, `RAG_ID`는 DB identity가 자동 생성 |
 | 추가 | "SQL Tuning GENERAL 가이드 추가. GUIDANCE_TEXT=..." | `category=SQL_TUNING`, `rule_type=GENERAL`, `GUIDANCE_TEXT`; `SOURCE_TABLES`는 비움 | 모든 Tuning에 적용되는 공통 가이드 row insert |
 | 추가 | "SQL Tuning SEARCH 가이드 추가. GUIDANCE_TEXT=... SOURCE_SQL=... TARGET_SQL=..." | `category=SQL_TUNING`, `rule_type=SEARCH`, `GUIDANCE_TEXT`, `SOURCE_SQL`, `TARGET_SQL`; `SOURCE_TABLES`는 비움 | 튜닝 예시/가이드 row insert |
 | 수정 | "RAG_ID 12의 guidance_text를 ...로 수정해줘" | `RAG_ID`, 수정할 필드 | 해당 row만 update |
@@ -224,14 +222,16 @@ RAG 가이드 테이블 자체를 조회/추가/수정/비활성화하려는 요
 | 규칙 | 이유 |
 |---|---|
 | 신규 추가 시 `RAG_ID`를 입력하지 않는다. | `RAG_ID`는 `GENERATED BY DEFAULT AS IDENTITY` 컬럼이라 DB가 생성한다. |
-| `SQL_CONVERSION`은 `SOURCE_TABLES`가 필수다. | 어떤 테이블이 쓰이는 Conversion에 해당 rule을 적용할지 정하는 핵심 metadata다. |
+| `SQL_CONVERSION`은 `SOURCE_TABLES`를 필수로 둔다. | SQL 변환은 대상 테이블 범위가 있어야 매핑/검색의 정확도가 높다. |
+| `SQL_CONVERSION`에서 `GUIDANCE_TEXT`는 기본적으로 비운다. | 변환 규칙/예시는 테이블 범위와 SQL 예시 중심으로 관리하는 편이 더 정확하고, `GUIDANCE_TEXT`는 SQL Tuning에서 주로 사용한다. |
+| `SQL_CONVERSION`에서 `SOURCE_TABLES`를 넣는 건 범위가 분명할 때만 허용한다. | 특정 schema/table 집합에만 적용되는 규칙을 보관할 때만 사용한다. |
 | `SQL_TUNING`은 `SOURCE_TABLES`를 저장하지 않는다. | 튜닝 가이드는 테이블 매핑 범위가 아니라 튜닝 규칙/예시 기준으로 적용한다. |
-| `SEARCH` 추가는 `SOURCE_SQL`과 `TARGET_SQL`을 둘 다 입력한다. | 한쪽만 있으면 유사 예시 검색 결과로 쓰기 어렵다. |
+| `SEARCH` 추가는 `SOURCE_TABLES`, `SOURCE_SQL`, `TARGET_SQL`을 둘 다 입력한다. | 한쪽만 있으면 유사 예시 검색 결과로 쓰기 어렵다. |
 | 수정 시에도 `SOURCE_SQL` 또는 `TARGET_SQL`을 건드리면 둘 다 같이 입력한다. | 기존 row 값을 추측해서 보완하지 않는다. |
 | `GENERAL` 추가는 `GUIDANCE_TEXT`를 입력한다. | SQL 예시가 아니라 공통 지침으로 적용되는 row다. |
 | 모든 Tuning에 필수 적용할 가이드는 `SQL_TUNING + GENERAL`로 입력한다. | `GENERAL` 튜닝 가이드는 특정 SQL 예시 검색 결과와 무관하게 공통 규칙으로 로드된다. |
 | `SQL_TUNING` 추가는 `GUIDANCE_TEXT`가 필수다. | 튜닝은 SQL 예시만으로 적용 의도가 모호하므로 규칙 의도와 적용 기준을 함께 남긴다. |
-| `SQL_CONVERSION + SEARCH`의 `GUIDANCE_TEXT`는 권장값이다. | 변환 예시도 설명이 있으면 운영자가 나중에 판단하기 쉽다. |
+| `SQL_CONVERSION + SEARCH`는 `GUIDANCE_TEXT`를 비워 둔다. | 변환 예시는 테이블 범위와 SQL 예시를 중심으로 검색하고, 설명 텍스트는 별도 가이드로 다룬다. |
 | 추가/수정/비활성화 후에는 `04_saveVectorDB.py`를 실행한다. | Milvus RAG 검색 인덱스에 DB 변경분을 반영해야 한다. |
 
 조회에서 `limit`는 최대 몇 건을 가져올지 정하는 값이다. 예를 들어 "user_info 테이블과 관련된 SQL Conversion RAG 조회해줘"라고 요청하면 `category=SQL_CONVERSION`, `keyword=user_info`로 조회하고, `SOURCE_TABLES`, `GUIDANCE_TEXT`, `SOURCE_SQL`, `TARGET_SQL` 중 `user_info`가 포함된 row를 반환한다.

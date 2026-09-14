@@ -10,7 +10,7 @@
 | `00_user_guide.md` | 사용자가 이용 가능한 기능, 질문 예시, 기능별 결과 | 일반 사용자, 운영자, 검수자 |
 | `00_architecture.md` | 개발자용 전체 구조, 핵심 흐름, 문서 목차 | 개발자, 운영 설계자 |
 | `00_architecture_chapter1_overview.md` | 시스템 목적, 컴포넌트 맵, 데이터 저장소, 외부 의존성 | 신규 개발자, 운영자 |
-| `00_architecture_chapter2_chat_management.md` | 사용자 채팅 분류, 02/04 라우팅, Dashboard/Progress/Select Agent/Update Command | 프론트/플로우 운영자 |
+| `00_architecture_chapter2_chat_management.md` | 사용자 채팅 분류, 02/04 라우팅, Dashboard/Progress/Management Agent + 3 tools | 프론트/플로우 운영자 |
 | `00_architecture_chapter3_job_execution.md` | "전체 작업 진행해줘" 포함 실행 라우팅, 잔여 작업 산정, Loop 구성 | 백엔드/플로우 개발자 |
 | `00_architecture_chapter4_domain_executors.md` | 10C/12C/15C/17C 단일 작업 실행 로직, 상태 전이, RAG/LLM 처리 | 실행 엔진 개발자 |
 | `00_architecture_chapter5_logging_operations.md` | 로깅, `NEXT_MIG_LOG`, Select Command Tool, 장애 분석, 운영 Runbook | 운영자, 유지보수 담당 |
@@ -18,7 +18,7 @@
 
 ## 시스템 한 줄 요약
 
-SmartMigrate는 사용자의 자연어 요청을 `GENERAL_CHAT`, `MANAGEMENT`, `JOB_EXECUTION`으로 분류하고, 실행 요청이면 Oracle DB의 잔여 작업을 조회한 뒤 DB Migration, SQL Conversion, SQL Tuning, SQL Formatting을 도메인별 또는 전체 Workflow로 수행한다. 모든 실행 이력은 `NEXT_MIG_LOG`에 기록되며, 관리성 질의는 Select Agent가 read-only DB Tool로 근거를 조회한 뒤 LLM 답변으로 반환한다.
+SmartMigrate는 사용자의 자연어 요청을 `GENERAL_CHAT`, `MANAGEMENT`, `JOB_EXECUTION`으로 분류하고, 실행 요청이면 Oracle DB의 잔여 작업을 조회한 뒤 DB Migration, SQL Conversion, SQL Tuning, SQL Formatting을 도메인별 또는 전체 Workflow로 수행한다. 모든 실행 이력은 `NEXT_MIG_LOG`에 기록되며, 관리성 질의는 Management Agent가 read-only/select/update/RAG tool을 조합해 근거를 조회하고 답변한다.
 
 ## 전체 Flowchart
 
@@ -121,7 +121,7 @@ flowchart TD
 
 1. 일반 사용자/검수자는 `00_user_guide.md`만 먼저 읽는다.
 2. 신규 개발자는 `00_architecture.md -> chapter1 -> chapter2 -> chapter3 -> chapter4 -> chapter5 -> chapter6` 순서로 읽는다.
-3. 운영 장애 대응자는 `00_user_guide.md -> chapter5 -> chapter2(Select Agent) -> chapter4(도메인 executor)` 순서가 빠르다.
+3. 운영 장애 대응자는 `00_user_guide.md -> chapter5 -> chapter2(Management Agent) -> chapter4(도메인 executor)` 순서가 빠르다.
 4. DBA/백엔드 개발자는 schema 확인이 필요할 때 `chapter6`을 먼저 확인한다.
 5. `00_job_execution_payload_plan.md`, `00_main_logic_components.md`, `00_logging_rules.txt`는 개발자용 세부 참고 문서로 필요할 때만 읽는다.
 

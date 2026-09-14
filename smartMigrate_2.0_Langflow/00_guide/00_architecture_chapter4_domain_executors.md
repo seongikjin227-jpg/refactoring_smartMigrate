@@ -270,7 +270,7 @@ stateDiagram-v2
 | tuning rule 적용 방식 변경 | `15C_sqlTuningOneJobPocExecutor.py` |
 | formatting 대상 컬럼 추가 | `17C_sqlFormattingOneJobPocExecutor.py` |
 | 실행 가능 조건 변경 | `06_getRemainingJobs.py`, 각 `A` jobs table, `04_dashboard.py`, `11_finalDashboard.py` |
-| 상태값 추가 | executor, dashboard, Select Agent prompt/tool, failure analyzer 모두 함께 확인 |
+| 상태값 추가 | executor, dashboard, Management Agent prompt/tool, failure analyzer 모두 함께 확인 |
 | 로그 컬럼/규칙 변경 | `00A_logRuntimeStart.py`, `00_logging_rules.txt`, `04_selectCommandTool.py`, `11B_failureCauseAnalyzer.py` |
 
 

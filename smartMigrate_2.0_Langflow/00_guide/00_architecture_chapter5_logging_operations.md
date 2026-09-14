@@ -1,4 +1,4 @@
-﻿# Chapter 5. Logging, Select Agent, And Operations
+﻿# Chapter 5. Logging, Management Agent, And Operations
 
 ## 5.1 로깅 아키텍처
 
@@ -10,7 +10,7 @@ flowchart LR
     PYLOG --> H[SmartMigrateDBHandler]
     H --> DB[(NEXT_MIG_LOG)]
     DB --> DASH[Dashboard / Current Progress]
-    DB --> QA[Select Command Tool]
+    DB --> QA[Management Agent / Select Command Tool]
     DB --> F11B[11B Failure Cause Analyzer]
 ```
 
@@ -60,16 +60,16 @@ flowchart TD
 | 분석 범위 | 최신 `08_JOB_ROUTER` start 이후 현재 run의 실패 로그 |
 | 도메인 분리 | `MIG_KIND`로 `DB_MIGRATION`과 SQL 계열 분리 |
 | 목적 | 실행 직후 사용자가 별도 질문하지 않아도 실패 요약 제공 |
-| 한계 | 과거 run 전체 분석이나 임의 조건 분석은 Select Agent가 더 적합 |
+| 한계 | 과거 run 전체 분석이나 임의 조건 분석은 Management Agent가 더 적합 |
 
-## 5.5 채팅 기반 Failure/Status 분석: Select Agent
+## 5.5 채팅 기반 Failure/Status 분석: Management Agent
 
-채팅에서 들어오는 read-only 분석은 `04_managementRouter.py`의 `SELECT_AGENT`로 간다.
+채팅에서 들어오는 read-only 분석은 `04_managementRouter.py`의 `MANAGEMENT_AGENT`로 간다.
 
 ```mermaid
 flowchart TD
     USER[사용자 질문] --> R04[04 Management Router]
-    R04 -->|SELECT_AGENT| AGENT[Select Agent]
+    R04 -->|MANAGEMENT_AGENT| AGENT[Management Agent]
     AGENT --> TOOL[04 Select Command Tool]
     TOOL --> MINFO[NEXT_MIG_INFO]
     TOOL --> MINFOD[NEXT_MIG_INFO_DTL]
@@ -85,7 +85,7 @@ flowchart TD
     AGENT --> OUT[Chat Output]
 ```
 
-### Select Agent 조회 전략
+### Management Agent 조회 전략
 
 | 질문 유형 | Tool 전략 |
 |---|---|
@@ -163,7 +163,7 @@ SELECT COUNT(*)
 
 ### 5.7.4 특정 SQL 원문이 잘려 보일 때
 
-일반 `get_sql_job`, `search_logs`, `recent_domain_status`는 진단용 preview를 반환한다. 원문 전체가 필요하면 Select Agent가 아래 action을 호출해야 한다.
+일반 `get_sql_job`, `search_logs`, `recent_domain_status`는 진단용 preview를 반환한다. 원문 전체가 필요하면 Management Agent가 아래 action을 호출해야 한다.
 
 ```json
 {"command_json":{"action":"get_sql_text","sql_id":"S001","space_nm":"DDD","columns":["TO_SQL","TUNED_TO_SQL"]}}
@@ -198,22 +198,22 @@ SELECT COUNT(*)
 
 | 변경 | 같이 수정해야 하는 파일 |
 |---|---|
-| 신규 도메인 추가 | 01 prompt, 04 router, 06 count, 08 route, A/B/C/D loop set, dashboard, Select Agent, logging rule |
-| 실패 상태 추가 | executor, 04 dashboard/current progress, 11 final dashboard, 11B, Select Agent prompt/tool |
+| 신규 도메인 추가 | 01 prompt, 04 router, 06 count, 08 route, A/B/C/D loop set, dashboard, Management Agent, logging rule |
+| 실패 상태 추가 | executor, 04 dashboard/current progress, 11 final dashboard, 11B, Management Agent prompt/tool |
 | SQL CLOB 컬럼 추가 | `NEXT_SQL_INFO` DDL, `04_selectCommandTool.py`, `04_selectAgentPrompt.md`, 관련 executor |
 | 로그 schema 변경 | `00A_logRuntimeStart.py`, `99.LogHelper.py`, `00_logging_rules.txt`, `04_currentProgress.py`, `04_selectCommandTool.py`, `11B` |
 | runnable 조건 변경 | `06_getRemainingJobs.py`, `10A/12A/15A/17A/18A`, `04_dashboard.py`, `11_finalDashboard.py` |
 | RAG collection 변경 | `04_saveVectorDB.py`, `10C`, `12C`, `15C`, environment/flow variables |
 
-## 5.9 운영자가 자주 쓰는 Select Agent 질문
+## 5.9 운영자가 자주 쓰는 Management Agent 질문
 
 | 질문 | 기대 route | 내부 조회 |
 |---|---|---|
-| "map id 101 왜 실패했어?" | `SELECT_AGENT` | `NEXT_MIG_INFO`, `NEXT_MIG_INFO_DTL`, `NEXT_MIG_LOG` |
-| "SQL Conversion 최근 실패 10개 원인 알려줘" | `SELECT_AGENT` | `NEXT_MIG_LOG WHERE MIG_KIND='SQL_CONVERSION' AND FAIL` |
-| "sql id S001 space DDD의 BIND_SQL 보여줘" | `SELECT_AGENT` | `NEXT_SQL_INFO.BIND_SQL` full CLOB |
-| "전체 Fail 분석해줘" | `SELECT_AGENT` | 최근 100개 fail log |
-| "SQL Tuning만 분석해줘" | `SELECT_AGENT` | `MIG_KIND='SQL_TUNING'` fail/recent log |
+| "map id 101 왜 실패했어?" | `MANAGEMENT_AGENT` | `NEXT_MIG_INFO`, `NEXT_MIG_INFO_DTL`, `NEXT_MIG_LOG` |
+| "SQL Conversion 최근 실패 10개 원인 알려줘" | `MANAGEMENT_AGENT` | `NEXT_MIG_LOG WHERE MIG_KIND='SQL_CONVERSION' AND FAIL` |
+| "sql id S001 space DDD의 BIND_SQL 보여줘" | `MANAGEMENT_AGENT` | `NEXT_SQL_INFO.BIND_SQL` full CLOB |
+| "전체 Fail 분석해줘" | `MANAGEMENT_AGENT` | 최근 100개 fail log |
+| "SQL Tuning만 분석해줘" | `MANAGEMENT_AGENT` | `MIG_KIND='SQL_TUNING'` fail/recent log |
 | "대시보드 보여줘" | `DASHBOARD` | aggregate count |
 | "지금 진행 중인 작업 있어?" | `CURRENT_PROGRESS` | running status + recent 5 logs |
 
@@ -222,7 +222,7 @@ SELECT COUNT(*)
 | 항목 | 기준 |
 |---|---|
 | `NEXT_SQL_LOG` 참조 없음 | 최종 운영 flow는 `NEXT_MIG_LOG` only |
-| `FAIL_ANALYSIS` route 없음 | 04 chat fail 분석은 `SELECT_AGENT` |
+| `FAIL_ANALYSIS` route 없음 | 04 chat fail 분석은 `MANAGEMENT_AGENT` |
 | Full Workflow route 정상 | 08에서 `FULL_WORKFLOW`가 prerequisite으로 막히지 않음 |
 | runnable count 일관성 | 06, A components, dashboard 조건이 같은 의미를 가짐 |
 | SQL CLOB 정책 명확 | 일반 조회 preview, 명시 원문 조회 full text |

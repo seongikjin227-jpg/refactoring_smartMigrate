@@ -191,7 +191,7 @@ COMMENT ON TABLE NEXT_MIG_RAG_INFO IS 'SQL Conversion/Tuning RAG Guide 원천 ru
 COMMENT ON COLUMN NEXT_MIG_RAG_INFO.RAG_ID IS 'RAG Guide 식별자. 신규 추가 시 DB가 자동 생성한다.';
 COMMENT ON COLUMN NEXT_MIG_RAG_INFO.CATEGORY IS 'RAG 적용 도메인. SQL_CONVERSION 또는 SQL_TUNING.';
 COMMENT ON COLUMN NEXT_MIG_RAG_INFO.RULE_TYPE IS 'RAG 적용 방식. GENERAL은 공통 가이드, SEARCH는 유사 SQL 검색용 예시.';
-COMMENT ON COLUMN NEXT_MIG_RAG_INFO.SOURCE_TABLES IS 'SQL_CONVERSION Guide 적용 대상 AS-IS table scope. SQL_TUNING에서는 비워 둔다.';
+COMMENT ON COLUMN NEXT_MIG_RAG_INFO.SOURCE_TABLES IS 'SQL_CONVERSION Guide의 table scope 메타데이터. 범위가 분명할 때만 입력하고, 기본값은 비워 둔다. SQL_TUNING에서는 비워 둔다.';
 COMMENT ON COLUMN NEXT_MIG_RAG_INFO.USE_YN IS 'Guide 사용 여부. 삭제 요청은 물리 삭제가 아니라 N으로 비활성화한다.';
 COMMENT ON COLUMN NEXT_MIG_RAG_INFO.GUIDANCE_TEXT IS '가이드 본문. SQL_TUNING에서는 필수 입력값이다.';
 COMMENT ON COLUMN NEXT_MIG_RAG_INFO.SOURCE_SQL IS 'SEARCH Guide의 원본 SQL 예시.';
@@ -253,7 +253,7 @@ CREATE INDEX IX_NEXT_MIG_LOG_STATUS ON NEXT_MIG_LOG (MIG_KIND, STATUS, CREATED_A
 |---|---|
 | SQL job 단건 식별 | `NEXT_SQL_INFO`는 `SPACE_NM + SQL_ID`를 단건 key로 사용한다. |
 | DB Migration 단건 식별 | `NEXT_MIG_INFO`는 `MAP_ID`를 단건 key로 사용한다. |
-| SQL Conversion RAG | `CATEGORY='SQL_CONVERSION'` row는 `SOURCE_TABLES`를 입력한다. |
+| SQL Conversion RAG | `CATEGORY='SQL_CONVERSION'` row는 `SOURCE_TABLES`를 반드시 입력하고, `GUIDANCE_TEXT`는 비운다. |
 | SQL Tuning RAG | `CATEGORY='SQL_TUNING'` row는 `GUIDANCE_TEXT`를 입력하고 `SOURCE_TABLES`를 비운다. |
 | 로그 단일화 | `NEXT_SQL_LOG`는 사용하지 않고 SQL 계열 로그도 `NEXT_MIG_LOG`에 저장한다. |
 | FK 적용 | 초기 적재, 보정, 재실행 편의성을 위해 DDL에는 FK를 기본 포함하지 않는다. 필요 시 운영 정책에 따라 `NEXT_MIG_INFO_DTL.MAP_ID -> NEXT_MIG_INFO.MAP_ID`만 별도 추가한다. |

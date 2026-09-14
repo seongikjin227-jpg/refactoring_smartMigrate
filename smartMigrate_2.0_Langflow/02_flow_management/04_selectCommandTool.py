@@ -491,10 +491,10 @@ class NewType04SelectCommandTool(Component):
             "action": "list_remaining_jobs",
             "target": {"domain": domain, "keyword": keyword, "limit_per_domain": limit},
             "definition": {
-                "DB_MIGRATION": "USE_YN='Y' AND (STATUS IS NULL OR USER_EDITED='Y' AND STATUS LIKE 'FAIL-%')",
-                "SQL_CONVERSION": "STATUS_CONVERSION IS NULL OR USER_EDITED='Y' AND STATUS_CONVERSION LIKE 'FAIL-%'",
-                "SQL_TUNING": "STATUS_CONVERSION PASS and (STATUS_TUNING IS NULL OR USER_EDITED='Y' AND STATUS_TUNING LIKE 'FAIL-%')",
-                "SQL_FORMATTING": "STATUS_TUNING PASS and FORMATTED_SQL empty",
+                "DB_MIGRATION": "(UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y' AND (STATUS IS NULL OR (UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y' AND UPPER(TRIM(NVL(STATUS, 'NULL'))) LIKE 'FAIL-%')))",
+                "SQL_CONVERSION": "(STATUS_CONVERSION IS NULL OR (UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y' AND UPPER(TRIM(NVL(STATUS_CONVERSION, 'NULL'))) LIKE 'FAIL-%'))",
+                "SQL_TUNING": "(UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION') AND (STATUS_TUNING IS NULL OR (UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y' AND UPPER(TRIM(NVL(STATUS_TUNING, 'NULL'))) LIKE 'FAIL-%')))",
+                "SQL_FORMATTING": "(UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING') AND (FORMATTED_SQL IS NULL OR NVL(DBMS_LOB.GETLENGTH(FORMATTED_SQL), 0) = 0))",
             },
             "data": data,
         }

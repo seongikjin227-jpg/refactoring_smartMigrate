@@ -11,7 +11,7 @@ flowchart LR
     CHAT[Chat Layer<br/>User Request] --> ROUTE[Routing Layer<br/>01 / 02 / 04 / 08]
     ROUTE --> EXEC[Execution Layer<br/>10 / 12 / 15 / 17 / 18]
     EXEC --> DATA[Data Layer<br/>Oracle + Milvus]
-    DATA --> OBS[Observability Layer<br/>Dashboard + Logs + Select Agent]
+    DATA --> OBS[Observability Layer<br/>Dashboard + Logs + Management Agent]
     OBS --> CHAT
 ```
 
@@ -21,7 +21,7 @@ flowchart LR
 | Routing Layer | `01_requestClassifierPrompt.md`, `02_intentRouter.py`, `04_managementRouter.py`, `08_jobExecutionRouter.py` | 요청 의미를 분류하고 실행/조회/수정 route를 결정한다. |
 | Execution Layer | `10*`, `12*`, `15*`, `17*`, `18*` | 실제 단일 job 처리, loop, retry, dashboard를 수행한다. |
 | Data Layer | Oracle tables, Milvus collections | 상태, SQL CLOB, 로그, RAG rule, correct SQL hint를 저장한다. |
-| Observability Layer | `04_dashboard.py`, `04_currentProgress.py`, `04_selectCommandTool.py`, `11B_failureCauseAnalyzer.py` | 운영자가 진행률과 실패 원인을 이해할 수 있게 한다. |
+| Observability Layer | `04_dashboard.py`, `04_currentProgress.py`, `04_updateCommandTool.py`, `04_ragCommandTool.py`, `11B_failureCauseAnalyzer.py` | 운영자가 진행률과 실패 원인을 이해할 수 있게 한다. |
 
 ## 1.2 최종 프로젝트 파일 맵
 
@@ -38,8 +38,10 @@ flowchart LR
 | `04` | `04_dashboard.py` | 전체/도메인 dashboard 조회 |
 | `04` | `04_currentProgress.py` | running 상태와 최근 로그 조회 |
 | `04` | `04_updateCommandTool.py` | 상태/플래그/우선순위/SQL 컬럼/NULL 변경을 transaction UPDATE로 처리 |
-| `04` | `04_selectAgentPrompt.md` | Select Agent system prompt |
-| `04` | `04_selectCommandTool.py` | Select Agent read-only DB Tool |
+| `04` | `04_managementAgentPrompt.md` | Management Agent system prompt |
+| `04` | `04_selectCommandTool.py` | read-only DB query tool used by Management Agent |
+| `04` | `04_updateCommandTool.py` | update/repair action tool used by Management Agent |
+| `04` | `04_ragCommandTool.py` | RAG guide management tool used by Management Agent |
 | `06` | `06_getRemainingJobs.py` | 실행 가능 job count와 target status 조회 |
 | `08` | `08_jobExecutionRouter.py` | 실행 route, run mode, prerequisite 판단 |
 | `10` | `10A/B/C/D` | DB Migration jobs table, loop, one-job executor, iteration dashboard |
@@ -107,7 +109,7 @@ flowchart TD
 | 원칙 | 구현 방식 |
 |---|---|
 | 실행과 조회를 분리 | `JOB_EXECUTION`은 `06/08/10/12/15/17/18`, 관리 조회는 `04` 계열로 분리한다. |
-| 정형 출력과 LLM 분석을 분리 | Dashboard/Progress는 정해진 포맷, Select Agent는 Tool 조회 + LLM 해석. |
+| 정형 출력과 LLM 분석을 분리 | Dashboard/Progress는 정해진 포맷, Management Agent는 Tool 조회 + LLM 해석. |
 | 로그 저장소 단일화 | `NEXT_SQL_LOG`는 사용하지 않고 `NEXT_MIG_LOG`의 `MIG_KIND`로 도메인을 분리한다. |
 | 수정 작업 최소화 | Update Command는 고정 action별 SQL만 transaction 단위로 실행하고, SELECT 조회와 분리한다. |
 | 실행 가능 조건을 DB 기준으로 판단 | `06_getRemainingJobs.py`가 실제 Oracle 상태를 기준으로 runnable count를 만든다. |
@@ -138,7 +140,7 @@ sequenceDiagram
     alt MANAGEMENT
         R02->>M04: payload_json
         M04->>LLM: management_route 판단
-        M04-->>LF: 04 Dashboard / Progress / Select Agent / Update Command
+        M04-->>LF: 04 Dashboard / Progress / Management Agent / Update + RAG tools
         LF->>DB: 필요한 조회 또는 수정
         LF-->>User: Chat Output
     else JOB_EXECUTION

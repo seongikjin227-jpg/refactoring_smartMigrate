@@ -64,17 +64,30 @@ RAG Guide는 `NEXT_MIG_RAG_INFO`에 저장된다. 추가, 수정, 비활성화�
 
 | 구분 | CATEGORY | RULE_TYPE | 필수 입력 | 입력하지 않는 값 | 요청 템플릿 | 처리 결과 |
 |---|---|---|---|---|---|---|
-| SQL Conversion 공통 가이드 추가 | `SQL_CONVERSION` | `GENERAL` | `SOURCE_TABLES`, `GUIDANCE_TEXT` | 없음 | `SQL Conversion GENERAL RAG Guide 추가해줘. SOURCE_TABLES={테이블명}. GUIDANCE_TEXT={변환 공통 규칙}` | 지정 테이블을 사용하는 Conversion에 적용할 공통 변환 가이드를 저장한다. |
-| SQL Conversion 검색 가이드 추가 | `SQL_CONVERSION` | `SEARCH` | `SOURCE_TABLES`, `SOURCE_SQL`, `TARGET_SQL` | 없음 | `SQL Conversion SEARCH RAG Guide 추가해줘. SOURCE_TABLES={테이블명}. SOURCE_SQL={원본 SQL}. TARGET_SQL={변환 SQL}` | 지정 테이블을 사용하는 Conversion에 적용할 유사 SQL 예시를 저장한다. |
+| SQL Conversion 공통 가이드 추가 | `SQL_CONVERSION` | `GENERAL` | `SOURCE_TABLES` | `GUIDANCE_TEXT`는 비움 | `SQL Conversion GENERAL RAG Guide 추가해줘. SOURCE_TABLES=CUSTOMER, ORDER` | 특정 테이블군에 공통 적용할 변환 규칙 메타데이터를 저장한다. |
+| SQL Conversion 검색 가이드 추가 | `SQL_CONVERSION` | `SEARCH` | `SOURCE_TABLES`, `SOURCE_SQL`, `TARGET_SQL` | `GUIDANCE_TEXT`는 비움 | `SQL Conversion SEARCH RAG Guide 추가해줘. SOURCE_TABLES=CUSTOMER. SOURCE_SQL={원본 SQL}. TARGET_SQL={변환 SQL}` | 유사 SQL 검색에 사용할 변환 예시와 범위를 저장한다. |
 | SQL Tuning 전체 가이드 추가 | `SQL_TUNING` | `GENERAL` | `GUIDANCE_TEXT` | `SOURCE_TABLES` | `SQL Tuning GENERAL RAG Guide 추가해줘. GUIDANCE_TEXT={모든 튜닝에 적용할 지침}` | 모든 Tuning에 공통 적용할 가이드를 저장한다. |
 | SQL Tuning 검색 가이드 추가 | `SQL_TUNING` | `SEARCH` | `GUIDANCE_TEXT`, `SOURCE_SQL`, `TARGET_SQL` | `SOURCE_TABLES` | `SQL Tuning SEARCH RAG Guide 추가해줘. GUIDANCE_TEXT={튜닝 의도}. SOURCE_SQL={튜닝 전 SQL}. TARGET_SQL={튜닝 후 SQL}` | 유사 SQL 검색으로 참고할 튜닝 예시와 적용 지침을 저장한다. |
+
+### 요청 템플릿 예시 (다양한 입력 조합)
+
+| 유형 | 예시 요청 | 핵심 입력값 |
+|---|---|---|
+| SQL Conversion 테이블 범위 가이드 추가 | `SQL Conversion RAG Guide 추가해줘. CATEGORY=SQL_CONVERSION, RULE_TYPE=GENERAL, SOURCE_TABLES=CUSTOMER, ORDER` | `SOURCE_TABLES` 필수, `GUIDANCE_TEXT` 비움 |
+| SQL Conversion 예시 추가 | `SQL Conversion SEARCH RAG 추가해줘. SOURCE_TABLES=CUSTOMER, SOURCE_SQL=SELECT * FROM CUSTOMER WHERE CUST_ID = 1, TARGET_SQL=SELECT CUST_ID, NAME FROM CUSTOMER WHERE CUST_ID = 1` | `SOURCE_TABLES` + `SOURCE_SQL` + `TARGET_SQL` |
+| SQL Conversion 특정 테이블 조회 | `CUSTOMER 테이블 관련 SQL Conversion RAG Guide 20건 조회해줘.` | `category=SQL_CONVERSION`, `keyword=CUSTOMER`, `limit=20` |
+| SQL Conversion 보정된 예시 수정 | `RAG_ID=12의 SOURCE_TABLES를 CUSTOMER, ORDER로 수정해줘.` | `RAG_ID` + 수정 필드 |
+| SQL Tuning 공통 가이드 추가 | `SQL Tuning GENERAL RAG Guide 추가해줘. GUIDANCE_TEXT=중복 조인은 서브쿼리로 분리하고 인덱스 사용 가능 컬럼을 우선 고려한다.` | `GUIDANCE_TEXT` 필수 |
+| SQL Tuning 검색 예시 추가 | `SQL Tuning SEARCH RAG 추가해줘. GUIDANCE_TEXT=인덱스 힌트는 조건이 넓은 테이블에 우선 적용한다. SOURCE_SQL=..., TARGET_SQL=...` | `GUIDANCE_TEXT` + `SOURCE_SQL` + `TARGET_SQL` |
+| RAG Guide 비활성화 | `RAG_ID=25 RAG Guide 비활성화해줘.` | `RAG_ID` |
+| VectorDB 동기화 | `RAG Guide와 Correct SQL을 VectorDB에 동기화해줘.` | 없음 |
 
 ### RAG Guide 관리 작업
 
 | 작업 | 필수 입력 | 선택 입력 | 요청 템플릿 | 처리 결과 |
 |---|---|---|---|---|
 | 조회 | 없음 | `CATEGORY`, `RULE_TYPE`, 검색어, 사용 여부, 조회 건수, 원문 포함 여부 | `SQL Tuning GENERAL RAG Guide 전체 내용 조회해줘.` | 조건에 맞는 RAG Guide 목록과 본문을 조회한다. 검색어는 `SOURCE_TABLES`, `GUIDANCE_TEXT`, `SOURCE_SQL`, `TARGET_SQL`에서 찾는다. |
-| 수정 | `RAG_ID`, 수정할 필드 | 없음 | `RAG_ID={RAG_ID}의 GUIDANCE_TEXT를 아래 내용으로 수정해줘. GUIDANCE_TEXT=...` | 해당 row만 update한다. |
+| 수정 | `RAG_ID`, 수정할 필드 | 없음 | `RAG_ID={RAG_ID}의 SOURCE_TABLES를 CUSTOMER, ORDER로 수정해줘.` | 해당 row만 update한다. |
 | 비활성화 | `RAG_ID` | 없음 | `RAG_ID={RAG_ID} RAG Guide 비활성화해줘.` | 물리 삭제 대신 `USE_YN='N'`으로 변경한다. |
 | VectorDB 동기화 | 없음 | 없음 | `RAG Guide와 Correct SQL을 VectorDB에 동기화해줘.` | Oracle 원천 snapshot을 기준으로 Milvus collection을 갱신한다. |
 
@@ -82,8 +95,10 @@ RAG Guide는 `NEXT_MIG_RAG_INFO`에 저장된다. 추가, 수정, 비활성화�
 
 | 규칙 | 설명 |
 |---|---|
-| `SQL_CONVERSION`은 `SOURCE_TABLES`가 필수다. | 어떤 테이블이 쓰이는 Conversion에 해당 변환 룰을 적용할지 결정하는 기준이다. |
-| `SQL_CONVERSION + SEARCH`는 `SOURCE_SQL`과 `TARGET_SQL`을 모두 입력한다. | 유사 SQL 검색 예시로 쓰이므로 원본 SQL과 변환 SQL이 한 쌍이어야 한다. |
+| `SQL_CONVERSION`은 `SOURCE_TABLES`를 필수로 둔다. | SQL 변환은 대상 테이블 범위가 있어야 매핑/검색의 정확도가 높다. 기본적으로 `SOURCE_TABLES`를 입력해야 한다. |
+| `SQL_CONVERSION`에서 `GUIDANCE_TEXT`는 보통 비운다. | 변환 규칙은 SQL 예시와 테이블 범위 중심으로 관리하는 편이 더 정확하고, `GUIDANCE_TEXT`는 SQL Tuning에 더 적합하다. |
+| `SOURCE_TABLES`는 범위가 명확할 때만 넣는다. | 특정 테이블군에만 적용되는 규칙이나 예시를 저장할 때 사용한다. |
+| `SQL_CONVERSION + SEARCH`는 `SOURCE_TABLES`, `SOURCE_SQL`, `TARGET_SQL`을 함께 입력한다. | 유사 SQL 검색 예시로 쓰이므로 원본 SQL, 변환 SQL, 범위가 한 세트여야 한다. |
 | `SQL_TUNING`은 `GUIDANCE_TEXT`가 필수다. | 튜닝은 SQL 예시만으로 적용 의도가 모호하므로 튜닝 목적과 적용 기준을 함께 남긴다. |
 | `SQL_TUNING`은 `SOURCE_TABLES`를 입력하지 않는다. | 튜닝 가이드는 테이블 매핑 범위가 아니라 튜닝 규칙과 SQL 예시 기준으로 적용한다. |
 | 모든 Tuning에 필수 적용할 가이드는 `SQL_TUNING + GENERAL`로 입력한다. | `SOURCE_TABLES` 없이 `GUIDANCE_TEXT`만으로 전체 튜닝 공통 규칙을 저장한다. |
