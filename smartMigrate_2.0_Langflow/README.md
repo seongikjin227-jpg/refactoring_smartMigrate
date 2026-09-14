@@ -42,6 +42,7 @@ smartMigrate_2.0_Langflow/
   README.md
 
   00_guide/
+    00_user_guide.md
     00_developer_guidebook.html
     00_architecture*.md
     00_logging_rules.txt
@@ -98,7 +99,7 @@ smartMigrate_2.0_Langflow/
 
 | 폴더 | 역할 |
 |---|---|
-| `00_guide` | 개발자 가이드, 상세 아키텍처, logging 규칙, payload 설계 문서 |
+| `00_guide` | 사용자 가이드, 개발자 가이드, 상세 아키텍처, logging 규칙, payload 설계 문서 |
 | `01_agent_start` | workflow 시작, 사용자 요청 분류, 1차 intent route, 일반 답변 prompt |
 | `02_flow_management` | 04 관리 기능: dashboard, progress, Job QA, 상태 변경, Correct SQL 입력, RAG Guide 관리, Vector DB 동기화 |
 | `03_job_execution` | 실제 작업 실행: 잔여 작업 조회, 실행 라우팅, DB Migration, SQL Conversion, SQL Tuning, SQL Formatting, 최종 dashboard |
@@ -235,16 +236,18 @@ python -m py_compile `
 
 ## 관련 문서
 
-상세 설계는 README에 반복하지 않고 아래 문서에서 관리합니다.
+사용자용 첫 안내와 개발자용 상세 설계는 아래 문서에서 관리합니다.
 
 | 문서 | 내용 |
 |---|---|
-| `00_guide/00_architecture.md` | 전체 아키텍처 진입점과 상세 문서 목차 |
-| `00_guide/00_architecture_chapter1_overview.md` | 시스템 목적, 저장소, 기본 흐름 |
+| `00_guide/00_user_guide.md` | 일반 사용자가 이용 가능한 기능과 질문 예시 |
+| `00_guide/00_architecture.md` | 개발자용 전체 아키텍처 진입점과 상세 문서 목차 |
+| `00_guide/00_architecture_chapter1_overview.md` | 개발자용 시스템 목적, 저장소, 기본 흐름 |
 | `00_guide/00_architecture_chapter2_chat_management.md` | 채팅/관리 요청 처리 |
 | `00_guide/00_architecture_chapter3_job_execution.md` | 작업 실행 라우팅과 Loop 구조 |
 | `00_guide/00_architecture_chapter4_domain_executors.md` | 10C/12C/15C/17C 실행기 상세 |
 | `00_guide/00_architecture_chapter5_logging_operations.md` | logging, 운영, 장애 확인 |
-| `00_guide/00_job_execution_payload_plan.md` | 실행 요청 payload 전달 규칙 |
-| `00_guide/00_main_logic_components.md` | C 컴포넌트 중심 읽기 가이드 |
-| `00_guide/00_logging_rules.txt` | workflow logging 세부 규칙 |
+| `00_guide/00_architecture_chapter6_oracle_ddl.md` | Oracle 테이블 DDL, 컬럼 코멘트, 주요 인덱스 |
+| `00_guide/00_job_execution_payload_plan.md` | 개발자용 실행 요청 payload 전달 규칙 |
+| `00_guide/00_main_logic_components.md` | 개발자용 C 컴포넌트 중심 읽기 가이드 |
+| `00_guide/00_logging_rules.txt` | 개발자용 workflow logging 세부 규칙 |

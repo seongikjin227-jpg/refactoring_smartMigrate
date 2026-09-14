@@ -974,51 +974,6 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             except json.JSONDecodeError:
                 pass
         return {token.split(".")[-1].strip().strip('"').upper() for token in re.split(r"[,;|\s]+", text) if token.strip()}
-
-    # RAG rule에서 embedding 기준이 될 SOURCE_SQL 중심 텍스트를 만든다.
-    def _rule_embedding_text(self, rule: dict[str, Any]) -> str:
-        return "\n".join([str(rule.get("normalized_source_sql") or ""), str(rule.get("source_sql") or "")]).strip()
-
-    # 필요 시 정규화 SQL 문자열 간 단순 유사도를 계산한다.
-    def _lexical_similarity(self, left: str, right: str) -> float:
-        left_tokens = set(re.findall(r"[A-Z_]+|\d+", left.upper()))
-        right_tokens = set(re.findall(r"[A-Z_]+|\d+", right.upper()))
-        return len(left_tokens & right_tokens) / len(left_tokens | right_tokens) if left_tokens and right_tokens else 0.0
-
-    # block별 RAG_ID/score 요약을 로그용 문자열로 만든다.
-    def _rag_match_summary(self, blocks: list[dict[str, str]], matches_by_block: list[list[tuple[dict[str, Any], float]]]) -> str:
-        parts: list[str] = []
-        for block, matches in zip(blocks, matches_by_block):
-            if not matches:
-                parts.append(f"{block.get('block_id')}:none")
-                continue
-            matched = ",".join(f"{rule.get('rule_id')}:{round(float(score), 4)}" for rule, score in matches[:5])
-            parts.append(f"{block.get('block_id')}:{matched}")
-        return "; ".join(parts)[:3500]
-
-    # vector 검색 match마다 감사 가능한 로그를 한 건씩 남긴다.
-    # 검색 SQL과 match된 RAG SOURCE_SQL은 함께 보관하고, RAG_ID는 검색 가능하게 남긴다.
-    # vector 검색에 사용된 현재 SQL과 match된 RAG SQL을 감사 로그로 남긴다.
-    def _log_rag_comparisons(self, map_id: str, category: str, blocks: list[dict[str, str]], matches_by_block: list[list[tuple[dict[str, Any], float]]], retry_count: int) -> None:
-        logger = logging.getLogger("smartmigrate.workflow")
-        for block, matches in zip(blocks, matches_by_block):
-            for rule, score in matches:
-                rule_id = str(rule.get("rule_id") or "-")
-                comparison_sql = "\n".join(
-                    [
-                        "[작업 대상 SQL]",
-                        str(block.get("sql") or ""),
-                        "",
-                        "[검색된 참고 SQL]",
-                        str(rule.get("source_sql") or ""),
-                    ]
-                )
-                logger.info(
-                    f"RAG comparison category={category}, block={block.get('block_id')}, RAG_ID={rule_id}, score={round(float(score), 6)}",
-                    extra={"workflow_log": [map_id, "SQL_TUNING", "RAG_COMPARE", "INFO", f"{category}_COMPARE", "PASS", retry_count, comparison_sql]},
-                )
-
-    # payload route와 상태를 보고 15C가 tuning을 실행해야 하는지 판단한다.
     def _should_run_tuning(self, payload: dict[str, Any]) -> bool:
         return self._job_name(payload) in {"conversion", "tuning"}
 
@@ -1223,16 +1178,6 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         if not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", clean):
             raise ValueError(f"Invalid identifier: {clean}")
         return clean
-
-    # OWNER.TABLE 문자열을 metadata 조회용 owner/table_name으로 나눈다.
-    def _split_table_owner_and_name(self, table: str) -> tuple[str | None, str]:
-        value = str(table or "").strip().upper()
-        if "." in value:
-            owner, name = value.split(".", 1)
-            return owner, name
-        return None, value
-
-    # Oracle LOB 값을 연결 종료 전에 문자열로 읽는다. 10C/12C/17C도 같은 이유로 사용한다.
     def _lob_to_str(self, value: Any) -> str:
         if value is not None and hasattr(value, "read"):
             return str(value.read())

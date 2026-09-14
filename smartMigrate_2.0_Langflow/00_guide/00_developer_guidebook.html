@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SmartMigrate Developer Guidebook</title>
+  <title>SmartMigrate Guidebook</title>
   <style>
     :root {
       --bg: #f6f7f9;
@@ -142,7 +142,7 @@
 
     .main {
       min-width: 0;
-      padding: 26px clamp(18px, 4vw, 56px) 52px;
+      padding: 26px clamp(16px, 2.4vw, 36px) 52px;
     }
 
     .topbar {
@@ -215,7 +215,7 @@
     }
 
     .hero p {
-      max-width: 760px;
+      max-width: none;
       margin: 12px 0 0;
       font-size: 16px;
       line-height: 1.55;
@@ -250,7 +250,8 @@
     }
 
     .content {
-      max-width: 1040px;
+      width: 100%;
+      max-width: none;
       border: 1px solid var(--line);
       border-radius: var(--radius);
       background: rgba(255, 255, 255, 0.97);
@@ -410,7 +411,7 @@
         <div class="brand-mark">SM</div>
         <div>
           <h1>SmartMigrate Guidebook</h1>
-          <p>Langflow POC architecture, operation flow, executor logic, and runbook documentation.</p>
+          <p>User guide first, developer architecture and operation notes after that.</p>
         </div>
       </div>
       <input id="search" class="search" type="search" placeholder="문서 검색">
@@ -431,8 +432,8 @@
       </div>
 
       <section class="hero">
-        <h2>Developer Guidebook</h2>
-        <p>Read the 00-series SmartMigrate architecture notes as a navigable, searchable guide.</p>
+        <h2>SmartMigrate Guidebook</h2>
+        <p>Start with user-facing features and example questions, then continue into developer architecture and operation notes.</p>
       </section>
 
       <section class="meta-grid" aria-label="Guide metrics">
@@ -452,14 +453,16 @@
     import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
 
     const docs = [
-      { file: "00_architecture.md", title: "Final Architecture", desc: "전체 구조와 최종 아키텍처" },
-      { file: "00_architecture_chapter1_overview.md", title: "Chapter 1. Overview", desc: "목적, 컴포넌트 맵, 저장소" },
-      { file: "00_architecture_chapter2_chat_management.md", title: "Chapter 2. Chat Management", desc: "관리 라우팅, Job QA, 교정 입력, RAG 가이드 관리" },
-      { file: "00_architecture_chapter3_job_execution.md", title: "Chapter 3. Job Execution", desc: "잔여 작업 조회와 실행 라우팅" },
-      { file: "00_architecture_chapter4_domain_executors.md", title: "Chapter 4. Domain Executors", desc: "10C/12C/15C/17C 실행 로직" },
-      { file: "00_architecture_chapter5_logging_operations.md", title: "Chapter 5. Logging Operations", desc: "로그 정책과 운영 Runbook" },
-      { file: "00_job_execution_payload_plan.md", title: "Execution Payload Plan", desc: "실행 payload 설계" },
-      { file: "00_main_logic_components.md", title: "Main Logic Components", desc: "핵심 executor 읽기 가이드" }
+      { file: "00_user_guide.md", title: "Chapter 1. User Guide", desc: "사용 가능 기능과 질문 예시" },
+      { file: "00_architecture.md", title: "Developer. Final Architecture", desc: "전체 구조와 최종 아키텍처" },
+      { file: "00_architecture_chapter1_overview.md", title: "Developer. System Overview", desc: "목적, 컴포넌트 맵, 저장소" },
+      { file: "00_architecture_chapter2_chat_management.md", title: "Developer. Chat Management", desc: "관리 라우팅, Job QA, 교정 입력, RAG 가이드 관리" },
+      { file: "00_architecture_chapter3_job_execution.md", title: "Developer. Job Execution", desc: "잔여 작업 조회와 실행 라우팅" },
+      { file: "00_architecture_chapter4_domain_executors.md", title: "Developer. Domain Executors", desc: "10C/12C/15C/17C 실행 로직" },
+      { file: "00_architecture_chapter5_logging_operations.md", title: "Developer. Logging Operations", desc: "로그 정책과 운영 Runbook" },
+      { file: "00_architecture_chapter6_oracle_ddl.md", title: "Developer. Oracle DDL", desc: "테이블 DDL, 컬럼 코멘트, 주요 인덱스" },
+      { file: "00_job_execution_payload_plan.md", title: "Developer. Execution Payload Plan", desc: "실행 payload 설계" },
+      { file: "00_main_logic_components.md", title: "Developer. Main Logic Components", desc: "핵심 executor 읽기 가이드" }
     ];
 
     const state = {

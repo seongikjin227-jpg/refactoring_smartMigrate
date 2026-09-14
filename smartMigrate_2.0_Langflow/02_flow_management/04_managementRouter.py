@@ -58,7 +58,8 @@ RAG_GUIDE_MANAGEMENT 규칙:
 - rule_type은 사용자 요청을 보고 GENERAL 또는 SEARCH 중 하나로 분류하세요.
 - 전체 공통 원칙, 작성 지침, 금지 규칙처럼 특정 SQL 예시 검색이 필요 없는 내용은 rule_type=GENERAL입니다.
 - SOURCE_SQL/TARGET_SQL 예시를 기반으로 유사 SQL을 검색해 적용할 내용은 rule_type=SEARCH입니다.
-- SQL_CONVERSION + SEARCH는 source_tables가 필수입니다. 사용자가 대상 테이블을 말하지 않았으면 EXCEPTION으로 보내세요.
+- SQL_CONVERSION RAG Guide 추가는 rule_type과 무관하게 source_tables가 필수입니다. 사용자가 대상 테이블을 말하지 않았으면 EXCEPTION으로 보내세요.
+- SQL_TUNING RAG Guide 추가는 guidance_text가 필수이고 source_tables를 입력하지 않습니다. 사용자가 source_tables를 말했으면 EXCEPTION으로 보내세요.
 - SEARCH rule을 추가할 때는 source_sql과 target_sql을 모두 요구하세요. 둘 중 하나만 있으면 EXCEPTION으로 보내세요.
 - GENERAL rule은 guidance_text 중심으로 저장하세요. source_sql/target_sql은 사용자가 명시한 경우에만 넣으세요.
 - 조회 요청이면 사용자가 찾고 싶은 테이블명, 업무명, SQL 조각, 규칙 키워드를 rag.keyword에 넣으세요.
@@ -256,10 +257,14 @@ class NewType04ManagementRouter(Component):
             source_sql = str(rule.get("source_sql") or "").strip()
             target_sql = str(rule.get("target_sql") or "").strip()
             guidance_text = str(rule.get("guidance_text") or "").strip()
-            if category == "SQL_CONVERSION" and rule_type == "SEARCH" and not source_tables:
-                return self._exception(decision, "SQL_CONVERSION SEARCH RAG Guide 추가에는 SOURCE_TABLES가 필요합니다.")
+            if category == "SQL_CONVERSION" and not source_tables:
+                return self._exception(decision, "SQL_CONVERSION RAG Guide 추가에는 SOURCE_TABLES가 필요합니다.")
+            if category == "SQL_TUNING" and source_tables:
+                return self._exception(decision, "SQL_TUNING RAG Guide에는 SOURCE_TABLES를 입력하지 않습니다.")
             if rule_type == "SEARCH" and (not source_sql or not target_sql):
                 return self._exception(decision, "SEARCH RAG Guide 추가에는 SOURCE_SQL과 TARGET_SQL을 모두 입력해야 합니다.")
+            if category == "SQL_TUNING" and not guidance_text:
+                return self._exception(decision, "SQL_TUNING RAG Guide 추가에는 GUIDANCE_TEXT가 필요합니다.")
             if rule_type == "GENERAL" and not guidance_text:
                 return self._exception(decision, "GENERAL RAG Guide 추가에는 GUIDANCE_TEXT가 필요합니다.")
         return {**decision, "rag_action": action, "rag": rule}

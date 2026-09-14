@@ -220,6 +220,8 @@ class NewType04RagGuideManager(Component):
         if require_content and not any(str(result.get(key) or "").strip() for key in ("guidance_text", "source_sql", "target_sql")):
             raise ValueError("GUIDANCE_TEXT, SOURCE_SQL, TARGET_SQL 중 최소 1개는 필요합니다.")
         self._validate_rule_shape(result, require_complete=require_content and not partial)
+        if result.get("category") == "SQL_TUNING":
+            result["source_tables"] = ""
         return result
 
     # category/rule_type 조합별 필수 입력을 검사한다.
@@ -230,12 +232,16 @@ class NewType04RagGuideManager(Component):
         guidance_text = str(rule.get("guidance_text") or "").strip()
         source_sql = str(rule.get("source_sql") or "").strip()
         target_sql = str(rule.get("target_sql") or "").strip()
-        if category == "SQL_CONVERSION" and rule_type == "SEARCH" and not source_tables:
-            raise ValueError("SQL_CONVERSION SEARCH RAG guide에는 SOURCE_TABLES가 필요합니다.")
+        if category == "SQL_CONVERSION" and require_complete and not source_tables:
+            raise ValueError("SQL_CONVERSION RAG guide 추가에는 SOURCE_TABLES가 필요합니다.")
+        if category == "SQL_TUNING" and source_tables:
+            raise ValueError("SQL_TUNING RAG guide에는 SOURCE_TABLES를 입력하지 않습니다.")
         if rule_type == "SEARCH" and require_complete and (not source_sql or not target_sql):
             raise ValueError("SEARCH RAG guide 추가에는 SOURCE_SQL과 TARGET_SQL을 모두 입력해야 합니다.")
         if bool(source_sql) != bool(target_sql):
             raise ValueError("SOURCE_SQL과 TARGET_SQL은 둘 다 입력하거나 둘 다 비워야 합니다.")
+        if category == "SQL_TUNING" and require_complete and not guidance_text:
+            raise ValueError("SQL_TUNING RAG guide 추가에는 GUIDANCE_TEXT가 필요합니다.")
         if rule_type == "GENERAL" and require_complete and not guidance_text:
             raise ValueError("GENERAL RAG guide 추가에는 GUIDANCE_TEXT가 필요합니다.")
 

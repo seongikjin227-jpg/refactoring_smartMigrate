@@ -1647,50 +1647,6 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             lines.extend(f"  - {guide}" for guide in rule["guidance"])
         lines.extend(["", "[SQL_CONVERSION_SEARCH_RAG_TOP_3_BY_FULL_SQL]", self._serialize_conversion_examples(examples)])
         return "\n".join(lines)
-
-    def _test_mapping_prompt_text(self, mapping_rules: list[dict[str, str]], db_config: dict[str, Any]) -> str:
-        source_schema, target_schema = db_config["source_schema"], db_config["target_schema"]
-        rows: set[tuple[str, str, str, str]] = set()
-        for rule in mapping_rules:
-            map_type = str(rule.get("map_type") or "").strip().upper()
-            if map_type == "COMPLEX":
-                continue
-            fr_table = self._qualify_mapping_table(rule.get("fr_table") or "", source_schema)
-            to_table = self._qualify_mapping_table(rule.get("to_table") or "", target_schema)
-            fr_col = str(rule.get("fr_col") or "").strip()
-            if fr_table and to_table and fr_col:
-                rows.add((fr_table, fr_col, to_table, self._mapping_to_col_prompt_value(rule.get("to_col"))))
-
-        lines = ["[MIGRATION_MAPPING_RULES]"]
-        if not rows:
-            lines.append("- (empty)")
-            lines.extend(
-                [
-                    "",
-                    "[UNMAPPED_OBJECT_POLICY]",
-                    "- Source tables not listed in MIGRATION_MAPPING_RULES are unused in TO-BE SQL.",
-                    "- Source columns not listed under their mapped source table are unused in TO-BE SQL.",
-                    "- Source columns mapped to TO_COL=__UNUSED__ are unused in TO-BE SQL.",
-                ]
-            )
-            return "\n".join(lines)
-        for fr_table, fr_col, to_table, to_col in sorted(rows):
-            lines.append(f"- FR_TABLE={fr_table} | FR_COL={fr_col} | TO_TABLE={to_table} | TO_COL={to_col}")
-        lines.extend(
-            [
-                "",
-                "[UNMAPPED_OBJECT_POLICY]",
-                "- Source tables not listed in MIGRATION_MAPPING_RULES are unused in TO-BE SQL.",
-                "- Source columns not listed under their mapped source table are unused in TO-BE SQL.",
-                "- Source columns mapped to TO_COL=__UNUSED__ are unused in TO-BE SQL.",
-            ]
-        )
-        return "\n".join(lines)
-
-    # BIND_SQL 생성을 위해 AS-IS 원천 filter 조건을 직렬화한다.
-    # LLM이 현재 source scope에 맞는 filter를 고를 수 있도록 FR_TABLE과 TO_TABLE을 함께 제공한다.
-    # 현재 변환 범위와 맞지 않는 조건을 쓰지 않게 하기 위한 맥락이다.
-    # BIND_SQL 생성을 위해 source filter 조건을 프롬프트 텍스트로 만든다.
     def _source_filter_prompt_text(self, mapping_rules: list[dict[str, str]]) -> str:
         lines = ["[ASIS_SOURCE_FILTER_CONDITIONS]"]
         conditions = sorted(
@@ -1796,14 +1752,6 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         if len(vectors) != len(texts):
             raise ValueError("embedding response count does not match request count")
         return vectors
-
-    # 각 RAG rule에서 embedding에 사용할 텍스트를 만든다.
-    # RAG rule에서 embedding 기준이 될 SOURCE_SQL 중심 텍스트를 만든다.
-    def _rule_embedding_text(self, rule: dict[str, Any]) -> str:
-        return "\n".join([str(rule.get("normalized_source_sql") or ""), str(rule.get("source_sql") or "")]).strip()
-
-    # DB 로그용으로 block -> RAG_ID(score) 요약 문자열을 만든다.
-    # block별 RAG_ID/score 요약을 로그용 문자열로 만든다.
     def _rag_match_summary(self, blocks: list[dict[str, str]], matches_by_block: list[list[tuple[dict[str, Any], float]]]) -> str:
         parts: list[str] = []
         for block, matches in zip(blocks, matches_by_block):
@@ -1813,38 +1761,6 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             matched = ",".join(f"{rule.get('rule_id')}:{round(float(score), 4)}" for rule, score in matches[:5])
             parts.append(f"{block.get('block_id')}:{matched}")
         return "; ".join(parts)[:3500]
-
-    # vector 검색 match에 사용된 SQL pair를 그대로 로그에 남긴다.
-    # message에는 RAG_ID를 남기고 SQL CLOB에는 비교 입력 전체를 보관한다.
-    # vector 검색에 사용된 현재 SQL과 match된 RAG SQL을 감사 로그로 남긴다.
-    def _log_rag_comparisons(self, map_id: str, category: str, blocks: list[dict[str, str]], matches_by_block: list[list[tuple[dict[str, Any], float]]]) -> None:
-        logger = logging.getLogger("smartmigrate.workflow")
-        for block, matches in zip(blocks, matches_by_block):
-            for rule, score in matches:
-                rule_id = str(rule.get("rule_id") or "-")
-                comparison_sql = "\n".join(
-                    [
-                        "[작업 대상 SQL]",
-                        str(block.get("sql") or ""),
-                        "",
-                        "[검색된 참고 SQL]",
-                        str(rule.get("source_sql") or ""),
-                    ]
-                )
-                logger.info(
-                    f"RAG comparison category={category}, block={block.get('block_id')}, RAG_ID={rule_id}, score={round(float(score), 6)}",
-                    extra={"workflow_log": [map_id, "SQL_CONVERSION", "RAG_COMPARE", "INFO", f"{category}_COMPARE", "PASS", 0, comparison_sql]},
-                )
-
-    # vector 검색을 쓰지 못할 때 정규화된 SQL 문자열끼리 점수를 계산한다.
-    # 필요 시 정규화 SQL 문자열 간 단순 유사도를 계산한다.
-    def _lexical_similarity(self, left: str, right: str) -> float:
-        left_tokens = set(re.findall(r"[A-Z_]+|\d+", left.upper()))
-        right_tokens = set(re.findall(r"[A-Z_]+|\d+", right.upper()))
-        return len(left_tokens & right_tokens) / len(left_tokens | right_tokens) if left_tokens and right_tokens else 0.0
-
-    # TO_SQL 프롬프트에 넣을 SQL_CONVERSION SEARCH match를 렌더링한다.
-    # TO_SQL 프롬프트에 넣을 SQL_CONVERSION SEARCH 예시를 렌더링한다.
     def _serialize_conversion_examples(self, examples: list[dict[str, Any]]) -> str:
         lines = []
         for block in examples:
@@ -2410,19 +2326,6 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         if not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", clean):
             raise ValueError(f"Invalid identifier: {clean}")
         return clean
-
-    # OWNER.TABLE 형식을 metadata 조회용 owner/table_name으로 나눈다.
-    # OWNER.TABLE 문자열을 metadata 조회용 owner/table_name으로 나눈다.
-    def _split_table_owner_and_name(self, table: str) -> tuple[str | None, str]:
-        """owner가 붙을 수 있는 table identifier를 owner/table로 나눈다."""
-        value = str(table or "").strip().upper()
-        if "." in value:
-            owner, name = value.split(".", 1)
-            return owner, name
-        return None, value
-
-    # payload dict에 넣기 전에 Oracle LOB 값을 문자열로 읽는다.
-    # Oracle LOB 값을 연결 종료 전에 문자열로 읽는다. 10C/15C/17C도 같은 이유로 사용한다.
     def _lob_to_str(self, value: Any) -> str:
         """Oracle LOB 및 nullable 값을 문자열로 변환한다."""
         if value is not None and hasattr(value, "read"):
