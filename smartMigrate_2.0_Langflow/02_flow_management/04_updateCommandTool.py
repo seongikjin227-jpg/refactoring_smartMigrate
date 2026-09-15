@@ -73,7 +73,8 @@ class NewType04UpdateCommandTool(Component):
             try:
                 for index, statement in enumerate(statements):
                     cur.execute(statement["sql"], statement["params"])
-                    if cur.rowcount != 1:
+                    skipped = bool(statement.get("skip_when_not_matched")) and cur.rowcount == 0
+                    if cur.rowcount != 1 and not skipped:
                         raise ValueError(
                             f"Action {index + 1} did not update exactly one row: "
                             f"{statement['identity']}, rowcount={cur.rowcount}"
@@ -84,7 +85,8 @@ class NewType04UpdateCommandTool(Component):
                             "action": statement["action"],
                             "identity": statement["identity"],
                             "updated_rows": cur.rowcount,
-                            "summary": statement["summary"],
+                            "summary": "Skipped: status is no longer FAIL-*" if skipped else statement["summary"],
+                            "skipped": skipped,
                         }
                     )
                 conn.commit()
@@ -102,7 +104,7 @@ class NewType04UpdateCommandTool(Component):
             "component": "04_updateCommandTool",
             "action": "apply_actions",
             "transaction": True,
-            "updated_count": len(results),
+            "updated_count": sum(int(item["updated_rows"]) for item in results),
             "actions": results,
             "answer_text": answer,
             "final": True,
@@ -164,6 +166,12 @@ class NewType04UpdateCommandTool(Component):
         if action == "reset_sql_tuning_status":
             return self._sql_reset_statement(raw, action, "STATUS_TUNING")
 
+        if action == "retry_failed_sql_conversion":
+            return self._sql_retry_failed_statement(raw, action, "STATUS_CONVERSION")
+
+        if action == "retry_failed_sql_tuning":
+            return self._sql_retry_failed_statement(raw, action, "STATUS_TUNING")
+
         if action == "reset_sql_formatting_result":
             sql_id, space_nm = self._sql_identity(raw)
             retry_count = self._int_value(raw.get("retry_count", 0), "retry_count")
@@ -217,6 +225,29 @@ class NewType04UpdateCommandTool(Component):
             set_sql += ", PRIORITY = :priority"
             params["priority"] = self._int_value(raw.get("priority"), "priority")
         return self._sql_statement(action, sql_id, space_nm, set_sql, params, f"{status_column}=NULL, RETRY_COUNT reset")
+
+    def _sql_retry_failed_statement(self, raw: dict[str, Any], action: str, status_column: str) -> dict[str, Any]:
+        """Reset a SQL status only when its current value is FAIL-*.
+
+        The predicate is evaluated at write time, rather than trusting a preceding
+        vector search result, so a concurrently completed PASS row is protected.
+        """
+        sql_id, space_nm = self._sql_identity(raw)
+        retry_count = self._int_value(raw.get("retry_count", 0), "retry_count")
+        return {
+            "action": action,
+            "identity": f"SQL_ID={sql_id}, SPACE_NM={space_nm}",
+            "summary": f"{status_column}=NULL, RETRY_COUNT reset (only if current status is FAIL-*)",
+            "sql": (
+                f"UPDATE {self._qualify('NEXT_SQL_INFO')} "
+                f"SET {status_column} = NULL, RETRY_COUNT = :retry_count "
+                "WHERE UPPER(TRIM(SQL_ID)) = UPPER(TRIM(:sql_id)) "
+                "AND UPPER(TRIM(SPACE_NM)) = UPPER(TRIM(:space_nm)) "
+                f"AND UPPER(TRIM(NVL({status_column}, 'NULL'))) LIKE 'FAIL-%'"
+            ),
+            "params": {"sql_id": sql_id, "space_nm": space_nm, "retry_count": retry_count},
+            "skip_when_not_matched": True,
+        }
 
     def _migration_statement(self, action: str, map_id: str, set_sql: str, params: dict[str, Any], summary: str) -> dict[str, Any]:
         params.setdefault("map_id", map_id)

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import urllib.request
 from contextlib import contextmanager
 from typing import Any
 
@@ -39,6 +41,15 @@ class NewType04RagCommandTool(Component):
         StrInput(name="system_schema", display_name="System Schema", required=True),
         IntInput(name="default_limit", display_name="Default Limit", value=10, required=False),
         IntInput(name="max_text_chars", display_name="Max Text Chars", value=4000, required=False),
+        StrInput(name="milvus_uri", display_name="Milvus URI", required=False),
+        StrInput(name="milvus_username", display_name="Milvus Username", required=False),
+        SecretStrInput(name="milvus_password", display_name="Milvus Password", required=False),
+        StrInput(name="milvus_db_name", display_name="Milvus DB Name", value="default", required=False),
+        StrInput(name="asis_sql_collection_name", display_name="AS-IS SQL Collection Name", value="SM_ASIS_SQL", required=False),
+        StrInput(name="rag_embed_base_url", display_name="RAG Embedding Base URL", required=False),
+        SecretStrInput(name="rag_embed_api_key", display_name="RAG Embedding API Key", required=False),
+        StrInput(name="rag_embed_model", display_name="RAG Embedding Model", value="BAAI/bge-m3", required=False),
+        IntInput(name="rag_embed_timeout_seconds", display_name="RAG Embedding Timeout Seconds", value=60, required=False),
     ]
     outputs = [Output(display_name="Result", name="result", method="run_command")]
 
@@ -56,6 +67,8 @@ class NewType04RagCommandTool(Component):
             with self._connect() as conn:
                 if action in {"query", "list", "get"}:
                     result = self._query(conn, command)
+                elif action in {"search_similar_asis_sql", "find_similar_asis_sql", "similar_asis_sql"}:
+                    result = self._search_similar_asis_sql(conn, command)
                 elif action in {"add", "insert", "create"}:
                     result = self._insert(conn, command)
                 elif action in {"update", "modify"}:
@@ -135,6 +148,188 @@ class NewType04RagCommandTool(Component):
         rows = [{names[index]: self._json_value(value) for index, value in enumerate(row)} for row in cur.fetchall()]
         return {"ok": True, "action": "query", "row_count": len(rows), "data": {"rules": rows}, "needs_vector_sync": False}
 
+    def _search_similar_asis_sql(self, conn: Any, command: dict[str, Any]) -> dict[str, Any]:
+        """Find AS-IS SQL neighbours, then filter with the authoritative Oracle status.
+
+        The AS-IS collection deliberately has no status metadata.  This avoids a
+        sync delay accidentally offering a now-PASS job for retry.
+        """
+        query_sql, query_source, query_identity = self._similarity_query_sql(conn, command)
+        status_filter = self._status_filter(command.get("status_filter") or command.get("filter"))
+        status_scope = self._status_scope(command.get("status_scope") or command.get("domain"))
+        limit = self._limit(command.get("limit"))
+        candidate_limit = max(limit, min(self._positive_int(command.get("candidate_limit"), max(limit * 5, 50)), 100))
+
+        vector = self._embed_texts([self._sql_content(query_sql)], self._embed_config())[0]
+        client = self._milvus_client(self._milvus_config())
+        hits = client.search(
+            collection_name=self._milvus_config()["asis_sql_collection"],
+            data=[vector],
+            anns_field="dense_vector",
+            limit=candidate_limit,
+            filter="is_active == true",
+            output_fields=["sql_id", "space_nm", "tag_kind", "target_table"],
+            search_params={"metric_type": "COSINE", "params": {}},
+        )
+        candidates = self._milvus_hits(hits)
+        statuses = self._load_sql_statuses(conn, candidates)
+        matches: list[dict[str, Any]] = []
+        for candidate in candidates:
+            identity = self._identity_key(candidate.get("sql_id"), candidate.get("space_nm"))
+            if query_identity and identity == query_identity and not self._as_bool(command.get("include_self")):
+                continue
+            status = statuses.get(identity)
+            if not status:
+                continue
+            matched_statuses = self._matching_statuses(status, status_scope, status_filter)
+            if not matched_statuses:
+                continue
+            matches.append(
+                {
+                    **candidate,
+                    "status_conversion": status["status_conversion"],
+                    "status_tuning": status["status_tuning"],
+                    "matched_statuses": matched_statuses,
+                    "retry_actions": self._retry_actions(candidate, matched_statuses) if status_filter == "FAIL_ONLY" else [],
+                }
+            )
+            if len(matches) >= limit:
+                break
+        return {
+            "ok": True,
+            "action": "search_similar_asis_sql",
+            "query_source": query_source,
+            "status_filter": status_filter,
+            "status_scope": status_scope,
+            "candidate_count": len(candidates),
+            "row_count": len(matches),
+            "data": {"similar_sqls": matches},
+            "confirmation_required": status_filter == "FAIL_ONLY" and bool(matches),
+            "confirmation_message": (
+                "The listed FAIL-* rows can be reset to NULL for retry. Confirm before running the supplied retry_actions; PASS rows are never included."
+                if status_filter == "FAIL_ONLY" and matches
+                else "No status change has been made."
+            ),
+        }
+
+    def _similarity_query_sql(self, conn: Any, command: dict[str, Any]) -> tuple[str, str, tuple[str, str] | None]:
+        for field in ("query_sql", "sql", "fr_sql", "edit_fr_sql"):
+            value = str(command.get(field) or "").strip()
+            if value:
+                return value, field, None
+        sql_id = str(command.get("sql_id") or "").strip()
+        space_nm = str(command.get("space_nm") or "").strip()
+        if not sql_id or not space_nm:
+            raise ValueError("query_sql (or sql/fr_sql) or both sql_id and space_nm are required")
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            SELECT EDIT_FR_SQL, FR_SQL
+              FROM {self._qualify('NEXT_SQL_INFO')}
+             WHERE UPPER(TRIM(SQL_ID)) = UPPER(TRIM(:sql_id))
+               AND UPPER(TRIM(SPACE_NM)) = UPPER(TRIM(:space_nm))
+            """,
+            {"sql_id": sql_id, "space_nm": space_nm},
+        )
+        row = cur.fetchone()
+        if not row:
+            raise ValueError(f"NEXT_SQL_INFO row not found: SQL_ID={sql_id}, SPACE_NM={space_nm}")
+        sql_text = self._json_value(row[0]) or self._json_value(row[1]) or ""
+        if not str(sql_text).strip():
+            raise ValueError("The selected NEXT_SQL_INFO row has neither EDIT_FR_SQL nor FR_SQL")
+        return str(sql_text).strip(), "sql_id+space_nm", self._identity_key(sql_id, space_nm)
+
+    def _load_sql_statuses(self, conn: Any, candidates: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, str]]:
+        if not candidates:
+            return {}
+        conditions = []
+        params: dict[str, Any] = {}
+        for index, candidate in enumerate(candidates):
+            sql_id = str(candidate.get("sql_id") or "").strip()
+            space_nm = str(candidate.get("space_nm") or "").strip()
+            if not sql_id or not space_nm:
+                continue
+            conditions.append(f"(UPPER(TRIM(SQL_ID)) = UPPER(TRIM(:sql_id_{index})) AND UPPER(TRIM(SPACE_NM)) = UPPER(TRIM(:space_nm_{index})))")
+            params[f"sql_id_{index}"] = sql_id
+            params[f"space_nm_{index}"] = space_nm
+        if not conditions:
+            return {}
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            SELECT SQL_ID, SPACE_NM, STATUS_CONVERSION, STATUS_TUNING
+              FROM {self._qualify('NEXT_SQL_INFO')}
+             WHERE {' OR '.join(conditions)}
+            """,
+            params,
+        )
+        return {
+            self._identity_key(row[0], row[1]): {
+                "status_conversion": str(self._json_value(row[2]) or "").strip().upper(),
+                "status_tuning": str(self._json_value(row[3]) or "").strip().upper(),
+            }
+            for row in cur.fetchall()
+        }
+
+    def _milvus_hits(self, response: Any) -> list[dict[str, Any]]:
+        raw_hits = response[0] if isinstance(response, list) and response and isinstance(response[0], list) else response
+        if not isinstance(raw_hits, list):
+            return []
+        result = []
+        for hit in raw_hits:
+            if not isinstance(hit, dict):
+                continue
+            entity = hit.get("entity") if isinstance(hit.get("entity"), dict) else hit
+            sql_id = str(entity.get("sql_id") or "").strip()
+            space_nm = str(entity.get("space_nm") or "").strip()
+            if not sql_id or not space_nm:
+                continue
+            result.append({
+                "sql_id": sql_id,
+                "space_nm": space_nm,
+                "tag_kind": str(entity.get("tag_kind") or "").strip(),
+                "target_table": str(entity.get("target_table") or "").strip(),
+                "similarity": float(hit.get("distance", hit.get("score", 0.0)) or 0.0),
+            })
+        return result
+
+    def _status_filter(self, value: Any) -> str:
+        normalized = str(value or "FAIL_ONLY").strip().upper().replace("-", "_")
+        aliases = {"FAIL": "FAIL_ONLY", "FAILED": "FAIL_ONLY", "PASS": "PASS_ONLY", "ALL": "ALL", "ANY": "ALL"}
+        normalized = aliases.get(normalized, normalized)
+        if normalized not in {"FAIL_ONLY", "PASS_ONLY", "ALL"}:
+            raise ValueError("status_filter must be FAIL_ONLY, PASS_ONLY, or ALL")
+        return normalized
+
+    def _status_scope(self, value: Any) -> str:
+        normalized = str(value or "CONVERSION").strip().upper().replace("-", "_")
+        aliases = {"SQL_CONVERSION": "CONVERSION", "SQL_TUNING": "TUNING", "BOTH": "ANY", "ALL": "ANY"}
+        normalized = aliases.get(normalized, normalized)
+        if normalized not in {"CONVERSION", "TUNING", "ANY"}:
+            raise ValueError("status_scope must be CONVERSION, TUNING, or ANY")
+        return normalized
+
+    def _matching_statuses(self, status: dict[str, str], scope: str, status_filter: str) -> list[str]:
+        columns = {"CONVERSION": status.get("status_conversion", ""), "TUNING": status.get("status_tuning", "")}
+        selected = ("CONVERSION", "TUNING") if scope == "ANY" else (scope,)
+        if status_filter == "ALL":
+            return [name for name in selected]
+        prefix = "FAIL-" if status_filter == "FAIL_ONLY" else "PASS"
+        return [name for name in selected if columns[name].startswith(prefix)]
+
+    def _retry_actions(self, candidate: dict[str, Any], matched_statuses: list[str]) -> list[dict[str, str]]:
+        return [
+            {
+                "action": "retry_failed_sql_conversion" if status_name == "CONVERSION" else "retry_failed_sql_tuning",
+                "sql_id": str(candidate["sql_id"]),
+                "space_nm": str(candidate["space_nm"]),
+            }
+            for status_name in matched_statuses
+        ]
+
+    def _identity_key(self, sql_id: Any, space_nm: Any) -> tuple[str, str]:
+        return str(sql_id or "").strip().upper(), str(space_nm or "").strip().upper()
+
     def _insert(self, conn: Any, command: dict[str, Any]) -> dict[str, Any]:
         rule = self._normalized_rule(command, require_content=True, partial=False)
         cur = conn.cursor()
@@ -190,6 +385,12 @@ class NewType04RagCommandTool(Component):
         action = result.get("action")
         if action == "query":
             return f"RAG Guide query completed: {result.get('row_count', 0)} row(s)."
+        if action == "search_similar_asis_sql":
+            return (
+                f"AS-IS SQL similarity search completed: {result.get('row_count', 0)} row(s) "
+                f"matched with status_filter={result.get('status_filter')}. "
+                "No status was changed."
+            )
         rag_id = result.get("rag_id")
         sync_sentence = "RAG Guide와 Correct SQL을 VectorDB에 동기화해줘"
         if rag_id:
@@ -341,6 +542,72 @@ class NewType04RagCommandTool(Component):
         if hasattr(value, "read"):
             value = value.read()
         return value if isinstance(value, (str, int, float, bool)) else str(value)
+
+    def _milvus_config(self) -> dict[str, str]:
+        config = {
+            "uri": str(getattr(self, "milvus_uri", "") or os.getenv("MILVUS_URI") or "").strip(),
+            "username": str(getattr(self, "milvus_username", "") or os.getenv("MILVUS_USERNAME") or "").strip(),
+            "password": self._secret_to_str(getattr(self, "milvus_password", None)) or str(os.getenv("MILVUS_PASSWORD") or ""),
+            "db_name": str(getattr(self, "milvus_db_name", "") or os.getenv("MILVUS_DB_NAME") or "default").strip(),
+            "asis_sql_collection": str(getattr(self, "asis_sql_collection_name", "") or os.getenv("MILVUS_ASIS_SQL_COLLECTION") or "SM_ASIS_SQL").strip(),
+        }
+        missing = [key for key in ("uri", "username", "password", "db_name", "asis_sql_collection") if not config[key]]
+        if missing:
+            raise ValueError(f"missing Milvus config for AS-IS SQL search: {', '.join(missing)}")
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", config["asis_sql_collection"]):
+            raise ValueError("Invalid AS-IS SQL collection name")
+        return config
+
+    def _milvus_client(self, config: dict[str, str]) -> Any:
+        from pymilvus import MilvusClient
+
+        return MilvusClient(
+            uri=config["uri"],
+            user=config["username"],
+            password=config["password"],
+            db_name=config["db_name"],
+            timeout=10,
+        )
+
+    def _embed_config(self) -> dict[str, Any]:
+        config = {
+            "base_url": str(getattr(self, "rag_embed_base_url", "") or os.getenv("RAG_EMBED_BASE_URL") or "").strip(),
+            "api_key": self._secret_to_str(getattr(self, "rag_embed_api_key", None)) or str(os.getenv("RAG_EMBED_API_KEY") or "").strip(),
+            "model": str(getattr(self, "rag_embed_model", "") or os.getenv("RAG_EMBED_MODEL") or "BAAI/bge-m3").strip(),
+            "timeout_seconds": self._positive_int(getattr(self, "rag_embed_timeout_seconds", None) or os.getenv("RAG_EMBED_TIMEOUT_SEC"), 60),
+        }
+        if not config["base_url"] or not config["model"]:
+            raise ValueError("rag_embed_base_url and rag_embed_model are required for AS-IS SQL similarity search")
+        return config
+
+    def _embed_texts(self, texts: list[str], config: dict[str, Any]) -> list[list[float]]:
+        base_url = str(config["base_url"]).rstrip("/")
+        endpoint = base_url if base_url.endswith("/embeddings") else f"{base_url}/embeddings" if base_url.endswith("/v1") else f"{base_url}/v1/embeddings"
+        headers = {"Content-Type": "application/json"}
+        if config["api_key"]:
+            headers["Authorization"] = f"Bearer {config['api_key']}"
+        request = urllib.request.Request(
+            endpoint,
+            data=json.dumps({"model": config["model"], "input": texts}).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=int(config["timeout_seconds"])) as response:
+            body = json.loads(response.read().decode("utf-8"))
+        data = body.get("data") if isinstance(body, dict) else None
+        vectors = [[float(value) for value in item["embedding"]] for item in data if isinstance(item, dict) and isinstance(item.get("embedding"), list)] if isinstance(data, list) else []
+        if len(vectors) != len(texts):
+            raise ValueError(f"embedding response count mismatch: expected={len(texts)}, actual={len(vectors)}")
+        return vectors
+
+    def _sql_content(self, sql_text: str) -> str:
+        source = str(sql_text or "").strip()
+        normalized = re.sub(r"/\*.*?\*/", " ", source, flags=re.DOTALL)
+        normalized = re.sub(r"--[^\n]*", " ", normalized)
+        normalized = re.sub(r"'(?:''|[^'])*'", " STR ", normalized)
+        normalized = re.sub(r"\b\d+(?:\.\d+)?\b", " NUM ", normalized)
+        normalized = re.sub(r"\s+", " ", normalized).strip().upper()
+        return "\n".join(part for part in (normalized, source) if part).strip()
 
     def _qualify(self, table: str) -> str:
         schema = str(getattr(self, "system_schema", "") or "").strip().upper()

@@ -25,6 +25,7 @@ SQL_TABLE = "NEXT_SQL_INFO"
 RAG_COLLECTION = "SM_RAG_RULES"
 CORRECT_SQL_CONVERSION_COLLECTION = "SM_CORRECT_SQL_CONVERSION"
 CORRECT_SQL_MIGRATION_COLLECTION = "SM_CORRECT_SQL_MIGRATION"
+ASIS_SQL_COLLECTION = "SM_ASIS_SQL"
 RAG_GENERAL = "GENERAL"
 RAG_SEARCH = "SEARCH"
 BATCH_SIZE = 32
@@ -69,6 +70,7 @@ class NewType04SaveVectorDB(Component):
         StrInput(name="rag_collection_name", display_name="RAG Collection Name", value=RAG_COLLECTION, required=False),
         StrInput(name="correct_sql_conversion_collection_name", display_name="Correct SQL Conversion Collection Name", value=CORRECT_SQL_CONVERSION_COLLECTION, required=False),
         StrInput(name="correct_sql_migration_collection_name", display_name="Correct SQL Migration Collection Name", value=CORRECT_SQL_MIGRATION_COLLECTION, required=False),
+        StrInput(name="asis_sql_collection_name", display_name="AS-IS SQL Collection Name", value=ASIS_SQL_COLLECTION, required=False),
         StrInput(name="rag_embed_base_url", display_name="RAG Embedding Base URL", required=True),
         SecretStrInput(name="rag_embed_api_key", display_name="RAG Embedding API Key", required=False),
         StrInput(name="rag_embed_model", display_name="RAG Embedding Model", value="BAAI/bge-m3", required=False),
@@ -99,7 +101,8 @@ class NewType04SaveVectorDB(Component):
         rag_rows = self._load_rag_rows(db_config)
         conversion_rows = self._load_correct_sql_rows(db_config)
         migration_rows = self._load_correct_migration_rows(db_config)
-        active_rows = rag_rows + conversion_rows + migration_rows
+        asis_sql_rows = self._load_asis_sql_rows(db_config)
+        active_rows = rag_rows + conversion_rows + migration_rows + asis_sql_rows
         vector_dim = self._detect_vector_dim(active_rows, embed_config)
 
         client = self._milvus_client(milvus_config)
@@ -107,14 +110,16 @@ class NewType04SaveVectorDB(Component):
             "rag": self._ensure_collection(client, milvus_config["rag_collection"], vector_dim, "rag"),
             "correct_sql_conversion": self._ensure_collection(client, milvus_config["correct_sql_conversion_collection"], vector_dim, "conversion"),
             "correct_sql_migration": self._ensure_collection(client, milvus_config["correct_sql_migration_collection"], vector_dim, "migration"),
+            "asis_sql": self._ensure_collection(client, milvus_config["asis_sql_collection"], vector_dim, "asis_sql"),
         }
 
         rag_result = self._sync_collection(client, milvus_config["rag_collection"], rag_rows, embed_config)
         conversion_result = self._sync_collection(client, milvus_config["correct_sql_conversion_collection"], conversion_rows, embed_config)
         migration_result = self._sync_collection(client, milvus_config["correct_sql_migration_collection"], migration_rows, embed_config)
+        asis_sql_result = self._sync_collection(client, milvus_config["asis_sql_collection"], asis_sql_rows, embed_config)
 
         result = {
-            "ok": not rag_result["failures"] and not conversion_result["failures"] and not migration_result["failures"],
+            "ok": not rag_result["failures"] and not conversion_result["failures"] and not migration_result["failures"] and not asis_sql_result["failures"],
             "component": "04_syncMilvusVectorDB",
             "trigger": {
                 "management_route": payload.get("management_route") or "",
@@ -126,17 +131,19 @@ class NewType04SaveVectorDB(Component):
                 "rag_rules": milvus_config["rag_collection"],
                 "correct_sql_conversion": milvus_config["correct_sql_conversion_collection"],
                 "correct_sql_migration": milvus_config["correct_sql_migration_collection"],
+                "asis_sql": milvus_config["asis_sql_collection"],
             },
             "collection_created": created,
             "vector_dim": vector_dim,
             "embedding_model": embed_config["model"],
             "source_scope": {
                 RAG_TABLE: "all rows synced; USE_YN='Y' and SOURCE_SQL present become active",
-                SQL_TABLE: "USER_EDITED='Y' and STATUS_CONVERSION pass rows become active for correct SQL hints",
+                SQL_TABLE: "Correct SQL uses USER_EDITED='Y' and PASS rows; AS-IS SQL indexes FR_SQL / EDIT_FR_SQL rows for similarity search",
             },
             "rag": rag_result,
             "correct_sql_conversion": conversion_result,
             "correct_sql_migration": migration_result,
+            "asis_sql": asis_sql_result,
             "elapsed_seconds": round(time.perf_counter() - started, 3),
         }
         self.status = result
@@ -149,16 +156,19 @@ class NewType04SaveVectorDB(Component):
                 "Correct SQL 및 Conversion / Tuning Guide를 Milvus Vector DB에 동기화하지 못했습니다.\n"
                 f"- RAG 실패 batch: {result.get('rag', {}).get('failed_batch_count', 0)}\n"
                 f"- Correct SQL Conversion 실패 batch: {result.get('correct_sql_conversion', {}).get('failed_batch_count', 0)}\n"
-                f"- Correct SQL Migration 실패 batch: {result.get('correct_sql_migration', {}).get('failed_batch_count', 0)}"
+                f"- Correct SQL Migration 실패 batch: {result.get('correct_sql_migration', {}).get('failed_batch_count', 0)}\n"
+                f"- AS-IS SQL 실패 batch: {result.get('asis_sql', {}).get('failed_batch_count', 0)}"
             )
         rag = result.get("rag") or {}
         conversion = result.get("correct_sql_conversion") or {}
         migration = result.get("correct_sql_migration") or {}
+        asis_sql = result.get("asis_sql") or {}
         return (
             "Correct SQL 및 Conversion / Tuning Guide를 Milvus Vector DB에 동기화 완료했습니다.\n"
             f"- RAG Guide: active={rag.get('active_count', 0)}, upserted={rag.get('upserted_count', 0)}, skipped={rag.get('skipped_count', 0)}, deactivated={rag.get('deactivated_count', 0)}\n"
             f"- Correct SQL Conversion: active={conversion.get('active_count', 0)}, upserted={conversion.get('upserted_count', 0)}, skipped={conversion.get('skipped_count', 0)}, deactivated={conversion.get('deactivated_count', 0)}\n"
             f"- Correct SQL Migration: active={migration.get('active_count', 0)}, upserted={migration.get('upserted_count', 0)}, skipped={migration.get('skipped_count', 0)}, deactivated={migration.get('deactivated_count', 0)}\n"
+            f"- AS-IS SQL: active={asis_sql.get('active_count', 0)}, upserted={asis_sql.get('upserted_count', 0)}, skipped={asis_sql.get('skipped_count', 0)}, deactivated={asis_sql.get('deactivated_count', 0)}\n"
             f"- Milvus DB: {result.get('milvus_db_name')}\n"
             f"- Embedding Model: {result.get('embedding_model')}\n"
             f"- Elapsed: {result.get('elapsed_seconds')}s"
@@ -239,6 +249,15 @@ class NewType04SaveVectorDB(Component):
             schema.add_field("to_sql", DataType.VARCHAR, max_length=TEXT_MAX)
             schema.add_field("bind_sql", DataType.VARCHAR, max_length=TEXT_MAX)
             schema.add_field("test_sql", DataType.VARCHAR, max_length=TEXT_MAX)
+        elif schema_kind == "asis_sql":
+            # 실패 SQL 재시도 후보를 찾기 위한 AS-IS 전용 색인이다. 상태와 TO-BE SQL은
+            # 의도적으로 보관하지 않고, 검색 뒤 Oracle 원본에서 최신 상태를 판별한다.
+            schema.add_field("space_nm", DataType.VARCHAR, max_length=512)
+            schema.add_field("sql_id", DataType.VARCHAR, max_length=512)
+            schema.add_field("tag_kind", DataType.VARCHAR, max_length=100)
+            schema.add_field("target_table", DataType.VARCHAR, max_length=2048)
+            schema.add_field("fr_sql", DataType.VARCHAR, max_length=TEXT_MAX)
+            schema.add_field("edit_fr_sql", DataType.VARCHAR, max_length=TEXT_MAX)
         elif schema_kind == "migration":
             schema.add_field("map_id", DataType.VARCHAR, max_length=128)
             schema.add_field("fr_table", DataType.VARCHAR, max_length=2048)
@@ -554,13 +573,63 @@ class NewType04SaveVectorDB(Component):
                 )
             return rows
 
+    def _load_asis_sql_rows(self, db_config: dict[str, Any]) -> list[dict[str, Any]]:
+        """Load every searchable AS-IS SQL row without carrying TO-BE/result fields.
+
+        ``content`` is EDIT_FR_SQL when present, otherwise FR_SQL.  Status is not a
+        vector metadata field: it is intentionally evaluated from NEXT_SQL_INFO at
+        search time so a stale vector can never cause a PASS row to be retried.
+        """
+        table = self._qualify(SQL_TABLE, db_config.get("system_schema"))
+        sql = f"""
+            SELECT SPACE_NM,
+                   SQL_ID,
+                   TAG_KIND,
+                   TARGET_TABLE,
+                   FR_SQL,
+                   EDIT_FR_SQL,
+                   TO_CHAR(UPD_TS, 'YYYY-MM-DD HH24:MI:SS')
+              FROM {table}
+             WHERE FR_SQL IS NOT NULL
+                OR EDIT_FR_SQL IS NOT NULL
+             ORDER BY UPD_TS DESC NULLS LAST
+        """
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(sql)
+            rows = []
+            for row in cur.fetchall():
+                space_nm = self._lob_to_str(row[0]).strip()
+                sql_id = self._lob_to_str(row[1]).strip()
+                fr_sql = self._lob_to_str(row[4]).strip()
+                edit_fr_sql = self._lob_to_str(row[5]).strip()
+                content_source = edit_fr_sql or fr_sql
+                if not space_nm or not sql_id or not content_source:
+                    continue
+                doc_key = f"{space_nm}:{sql_id}"
+                rows.append(
+                    self._entity(
+                        doc_id=f"ASIS_SQL:{self._hash_text(doc_key)[:24]}",
+                        space_nm=space_nm,
+                        sql_id=sql_id,
+                        tag_kind=self._lob_to_str(row[2]),
+                        target_table=self._lob_to_str(row[3]),
+                        fr_sql=fr_sql,
+                        edit_fr_sql=edit_fr_sql,
+                        content=self._sql_content(content_source),
+                        is_active=True,
+                        updated_at=self._lob_to_str(row[6]),
+                    )
+                )
+            return rows
+
     # Milvus에 저장할 공통 entity 구조를 만들고 metadata/hash를 함께 채운다.
     def _entity(self, **values: Any) -> dict[str, Any]:
         # 각 collection에는 자기 schema에 정의된 필드만 전달한다.
         # Milvus dynamic field를 꺼두었기 때문에 RAG rule row가 SQL job 컬럼을 섞어 넣을 수 없다.
         
         entity = dict(values)
-        for key in ("source_sql", "target_sql", "to_sql", "bind_sql", "test_sql", "mig_sql", "verify_sql", "content"):
+        for key in ("source_sql", "target_sql", "to_sql", "bind_sql", "test_sql", "mig_sql", "verify_sql", "fr_sql", "edit_fr_sql", "content"):
             if key in entity:
                 entity[key] = self._truncate(entity.get(key), TEXT_MAX)
         for key in ("guidance_text", "condition"):
@@ -705,6 +774,7 @@ class NewType04SaveVectorDB(Component):
             "rag_collection": self._clean_collection_name(getattr(self, "rag_collection_name", "") or os.getenv("MILVUS_RAG_COLLECTION") or RAG_COLLECTION),
             "correct_sql_conversion_collection": self._clean_collection_name(getattr(self, "correct_sql_conversion_collection_name", "") or os.getenv("MILVUS_CORRECT_SQL_CONVERSION_COLLECTION") or CORRECT_SQL_CONVERSION_COLLECTION),
             "correct_sql_migration_collection": self._clean_collection_name(getattr(self, "correct_sql_migration_collection_name", "") or os.getenv("MILVUS_CORRECT_SQL_MIGRATION_COLLECTION") or CORRECT_SQL_MIGRATION_COLLECTION),
+            "asis_sql_collection": self._clean_collection_name(getattr(self, "asis_sql_collection_name", "") or os.getenv("MILVUS_ASIS_SQL_COLLECTION") or ASIS_SQL_COLLECTION),
         }
 
     # embedding endpoint/model/timeout 설정을 모아 검증에 넘긴다.
