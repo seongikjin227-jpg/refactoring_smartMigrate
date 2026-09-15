@@ -18,7 +18,7 @@ Chat Input
 
 route:
 - GENERAL_CHAT: SmartMigrate 작업 실행/관리 조회와 무관한 일반 질문, 구조 설명, 개념 질문.
-- MANAGEMENT: Dashboard 조회, 상태/현황/건수/실패 현황/잔여 작업 조회, 남은 작업 목록 조회, 특정 작업의 결과/상태/로그/실패 원인 조회, SQL Conversion/Tuning/Formatting 최근 진행 상황 해석, priority/status/USE_YN/USER_EDITED 변경, SQL 컬럼 저장 또는 null 초기화, RAG Guide 관리, VectorDB/Milvus 동기화.
+- MANAGEMENT: Dashboard 조회, 상태/현황/건수/실패 현황/잔여 작업 조회, 남은 작업 목록 조회, 특정 작업의 결과/상태/로그/실패 원인 조회, SQL Conversion/Tuning/Formatting 최근 진행 상황 해석, priority/status/USE_YN/USER_EDITED 변경, SQL 컬럼 저장 또는 null 초기화, RAG Guide 관리, AS-IS SQL 유사도 검색과 그 결과의 재시도 상태 변경, VectorDB/Milvus 동기화.
 - JOB_EXECUTION: 실제 작업 실행 요청. 전체 실행, 도메인 전체 실행, map_id/sql_id/space_nm 기반 특정 작업 실행 또는 재실행 요청을 포함합니다.
 
 JOB_EXECUTION 구조화 규칙:
@@ -43,6 +43,9 @@ JOB_EXECUTION 구조화 규칙:
 - SQL 컬럼 저장, SQL 컬럼 null 초기화, 사용자 보정 SQL 저장 요청은 MANAGEMENT입니다.
 - 서로 다른 UPDATE 요청이 한 문장에 있어도 MANAGEMENT입니다. 예: "map id 101 USER_EDITED를 N으로 바꾸고 MIG_SQL을 null로 바꿔줘"
 - RAG Guide 조회/추가/수정/삭제/비활성화는 MANAGEMENT입니다.
+- "비슷한 AS-IS SQL", "유사 SQL", "유사한 실패 SQL", "AS-IS SQL 찾아줘", "유사도 검색" 요청은 MANAGEMENT입니다. SQL 본문 또는 sql_id/space_nm을 기준으로 후보를 찾는 요청은 실제 executor 실행이 아닙니다.
+- 유사 SQL 검색 결과의 `FAIL-*` 상태를 `NULL`로 바꾸거나 "재시도 상태로 바꿔줘"라는 요청도 MANAGEMENT입니다. 이 요청은 상태만 변경하며 실제 SQL Conversion/Tuning 실행은 포함하지 않습니다.
+- 유사 SQL 후보를 실제로 실행하는 요청은 상태 변경이 완료된 뒤의 별도 JOB_EXECUTION입니다. 예: "SQL_ID=Q001, SPACE_NM=SALES SQL Conversion 실행해줘."
 - VectorDB, Milvus, 벡터DB, vector upload, vector sync, RAG 벡터 동기화, 04_saveVectorDB 실행/업로드/동기화 요청은 MANAGEMENT입니다.
 - "실행해줘", "돌려줘", "재시도", "queue 등록", "처리해줘"처럼 실제 업무 작업을 시작하거나 재실행하는 요청만 JOB_EXECUTION입니다.
 - 단, "04 VectorDB 동기화 실행", "VectorDB 실행", "Milvus 업로드 실행"처럼 VectorDB/Milvus/04_saveVectorDB가 대상이면 "실행"이라는 단어가 있어도 MANAGEMENT입니다.
@@ -66,6 +69,20 @@ Markdown 코드블록, 설명 문장, 접두사, 접미사를 붙이지 마세�
 ```
 
 ## Examples
+
+```json
+{
+  "route": "MANAGEMENT",
+  "user_request": "SQL_ID=S001, SPACE_NM=PAYMENT와 비슷한 AS-IS SQL을 가진 실패 SQL 최대 20개 찾아줘",
+  "execution_scope": "targeted",
+  "requested_domain": "SQL_CONVERSION",
+  "target_filter": {
+    "map_ids": [],
+    "sql_ids": ["S001"],
+    "space_nms": ["PAYMENT"]
+  }
+}
+```
 
 ```json
 {
