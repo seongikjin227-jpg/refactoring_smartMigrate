@@ -198,7 +198,7 @@ FROM SQL에서 MyBatis bind parameter 값을 검증용으로 추출할 수 있�
 {bind_set_text}
 
 [Mapping Rule Context]
-{mapping_schema_text}
+- TEST_SQL 생성에서는 매핑룰 context를 임시 제외합니다.
 
 [Correct SQL 힌트]
 {correct_sql_hint_text}
@@ -215,11 +215,6 @@ FROM SQL에서 MyBatis bind parameter 값을 검증용으로 추출할 수 있�
 - 각 case는 SELECT <case_no> AS CASE_NO, (<source_count_query>) AS FROM_COUNT, (<target_count_query>) AS TO_COUNT FROM DUAL 형태를 따르십시오.
 - UNION ALL로 연결되는 각 SELECT block은 반드시 FROM DUAL로 끝나야 합니다.
 - FROM SQL은 from_schema, TO-BE SQL은 tobe_schema를 사용하십시오.
-- mapping_schema_text는 같은 conversion의 migration mapping rules입니다. TO_COL=__UNUSED__, NULL, blank, NONE, N/A, NA, '-'는 TO-BE에서 의도적으로 미사용되는 source column을 뜻합니다.
-- mapping rules에 없는 source table도 TO-BE에서 미사용 테이블입니다. TEST_SQL의 FROM_COUNT 쪽을 만들 때 TO-BE SQL에 더 이상 존재하지 않는 미사용 테이블 전용 join, filter, projection, MyBatis 동적 fragment는 제거하십시오.
-- mapping rules에 없는 source column도 TO-BE에서 미사용 컬럼입니다. TEST_SQL의 FROM_COUNT 쪽을 만들 때 TO-BE SQL에 더 이상 존재하지 않는 미사용 컬럼 전용 filter, join predicate, HAVING predicate, GROUP BY 항목, ORDER BY 항목, MyBatis 동적 fragment는 제거하십시오.
-- 제거된 AS-IS filter의 bind parameter가 남은 FROM_COUNT 또는 TO_COUNT SQL에서 사용되지 않으면 최종 TEST_SQL에서도 해당 parameter를 요구하지 마십시오.
-- mapped column과 unused column이 한 predicate에 섞여 있으면 안전하게 분리 가능한 unused 조건만 제거하고, 분리하기 어렵다면 FROM_COUNT 쪽에서 해당 predicate 전체를 제거해 TO-BE SQL과 비교 범위를 맞추십시오.
 - FROM SQL의 물리 테이블은 기존 schema가 있더라도 제거하고 from_schema.TABLE_NAME 형식으로 다시 붙이십시오.
 - TO-BE SQL의 물리 테이블은 기존 schema가 있더라도 제거하고 tobe_schema.TABLE_NAME 형식으로 다시 붙이십시오.
 - CTE 이름, inline view alias, subquery alias, table alias, DUAL에는 schema를 붙이지 마십시오.
@@ -956,7 +951,9 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             from_schema=db_config["source_schema"],
             tobe_schema=db_config["target_schema"],
             bind_set_text=self._bind_set_prompt_text(bind_set),
-            mapping_schema_text=self._mapping_prompt_text(mapping_rules or [], [], [], db_config),
+            # TEST_SQL prompt에서는 매핑룰을 임시 제외한다. 필요하면 아래 호출로 다시 되돌린다.
+            # mapping_schema_text=self._mapping_prompt_text(mapping_rules or [], [], [], db_config),
+            mapping_schema_text="- (mapping rules disabled for TEST_SQL prompt)",
             correct_sql_hint_text=correct_sql_hint_text if correct_sql_hint_text is not None else self._correct_sql_hint_text(db_config, source_sql, job.get("sql_id"), job.get("space_nm"), map_id, retry_count, "TEST_SQL", job.get("tag_kind")),
             last_error=last_error or "None",
         )
