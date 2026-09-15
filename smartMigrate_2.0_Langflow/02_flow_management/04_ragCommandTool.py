@@ -17,6 +17,11 @@ try:
 except Exception:
     DataInput = MessageTextInput
 
+try:
+    from lfx.io import FloatInput
+except Exception:
+    FloatInput = IntInput
+
 
 MAX_SIMILAR_SQL_RESULTS = 20
 MAX_SIMILAR_SQL_CANDIDATES = 100
@@ -54,6 +59,7 @@ class NewType04RagCommandTool(Component):
         SecretStrInput(name="rag_embed_api_key", display_name="RAG Embedding API Key", required=False),
         StrInput(name="rag_embed_model", display_name="RAG Embedding Model", value="BAAI/bge-m3", required=False),
         IntInput(name="rag_embed_timeout_seconds", display_name="RAG Embedding Timeout Seconds", value=60, required=False),
+        FloatInput(name="min_similarity", display_name="Minimum Similarity", value=0.7, required=False, info="AS-IS SQL similarity minimum (0.0 to 1.0). Command JSON min_similarity overrides this value."),
     ]
     outputs = [Output(display_name="Result", name="result", method="run_command")]
 
@@ -158,14 +164,17 @@ class NewType04RagCommandTool(Component):
         The AS-IS collection deliberately has no status metadata.  This avoids a
         sync delay accidentally offering a now-PASS job for retry.
         """
-        query_sql, query_source, query_identity = self._similarity_query_sql(conn, command)
+        query_sql, query_source, query_identity, query_target_table = self._similarity_query_sql(conn, command)
         status_filter = self._status_filter(command.get("status_filter") or command.get("filter"))
         status_scope = self._conversion_only_scope(command.get("status_scope") or command.get("domain"))
         # The management response is deliberately capped at 20 rows.  A larger
         # candidate pool is still read so FAIL-only filtering can fill the list.
         limit = max(1, min(self._positive_int(command.get("limit"), MAX_SIMILAR_SQL_RESULTS), MAX_SIMILAR_SQL_RESULTS))
         candidate_limit = max(limit, min(self._positive_int(command.get("candidate_limit"), max(limit * 5, 50)), MAX_SIMILAR_SQL_CANDIDATES))
-        min_similarity = self._similarity_threshold(command.get("min_similarity"))
+        requested_min_similarity = command.get("min_similarity")
+        if requested_min_similarity in (None, ""):
+            requested_min_similarity = getattr(self, "min_similarity", 0.7)
+        min_similarity = self._similarity_threshold(requested_min_similarity)
 
         vector = self._embed_texts([self._sql_content(query_sql)], self._embed_config())[0]
         client = self._milvus_client(self._milvus_config())
@@ -193,20 +202,26 @@ class NewType04RagCommandTool(Component):
             matched_statuses = self._matching_statuses(status, status_scope, status_filter)
             if not matched_statuses:
                 continue
+            overlapping_target_tables = self._overlapping_target_tables(query_target_table, candidate.get("target_table"))
             matches.append(
                 {
                     **candidate,
                     "status_conversion": status["status_conversion"],
                     "matched_statuses": matched_statuses,
-                    "retry_actions": self._retry_actions(candidate, matched_statuses) if status_filter == "FAIL_ONLY" else [],
+                    "target_table_overlap": bool(overlapping_target_tables),
+                    "overlapping_target_tables": overlapping_target_tables,
                 }
             )
-            if len(matches) >= limit:
-                break
+        # AS-IS SQL similarity remains the retrieval basis.  TARGET_TABLE is a
+        # deterministic tie/ranking signal: overlapping tables first, then the
+        # original dense-vector similarity within each group.
+        matches.sort(key=lambda item: (not item["target_table_overlap"], -item["similarity"]))
+        matches = matches[:limit]
         return {
             "ok": True,
             "action": "search_similar_asis_sql",
             "query_source": query_source,
+            "query_target_table": query_target_table,
             "status_filter": status_filter,
             "status_scope": status_scope,
             "min_similarity": min_similarity,
@@ -224,11 +239,11 @@ class NewType04RagCommandTool(Component):
             "execution_request_examples_after_status_reset": self._execution_request_examples(matches),
         }
 
-    def _similarity_query_sql(self, conn: Any, command: dict[str, Any]) -> tuple[str, str, tuple[str, str] | None]:
+    def _similarity_query_sql(self, conn: Any, command: dict[str, Any]) -> tuple[str, str, tuple[str, str] | None, str]:
         for field in ("query_sql", "sql", "fr_sql", "edit_fr_sql"):
             value = str(command.get(field) or "").strip()
             if value:
-                return value, field, None
+                return value, field, None, str(command.get("target_table") or "").strip()
         sql_id = str(command.get("sql_id") or "").strip()
         space_nm = str(command.get("space_nm") or "").strip()
         if not sql_id or not space_nm:
@@ -236,7 +251,7 @@ class NewType04RagCommandTool(Component):
         cur = conn.cursor()
         cur.execute(
             f"""
-            SELECT EDIT_FR_SQL, FR_SQL
+            SELECT EDIT_FR_SQL, FR_SQL, TARGET_TABLE
               FROM {self._qualify('NEXT_SQL_INFO')}
              WHERE UPPER(TRIM(SQL_ID)) = UPPER(TRIM(:sql_id))
                AND UPPER(TRIM(SPACE_NM)) = UPPER(TRIM(:space_nm))
@@ -249,7 +264,12 @@ class NewType04RagCommandTool(Component):
         sql_text = self._json_value(row[0]) or self._json_value(row[1]) or ""
         if not str(sql_text).strip():
             raise ValueError("The selected NEXT_SQL_INFO row has neither EDIT_FR_SQL nor FR_SQL")
-        return str(sql_text).strip(), "sql_id+space_nm", self._identity_key(sql_id, space_nm)
+        return (
+            str(sql_text).strip(),
+            "sql_id+space_nm",
+            self._identity_key(sql_id, space_nm),
+            str(self._json_value(row[2]) or "").strip(),
+        )
 
     def _load_sql_statuses(self, conn: Any, candidates: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, str]]:
         if not candidates:
@@ -349,17 +369,6 @@ class NewType04RagCommandTool(Component):
         prefix = "FAIL-" if status_filter == "FAIL_ONLY" else "PASS"
         return [name for name in selected if columns[name].startswith(prefix)]
 
-    def _retry_actions(self, candidate: dict[str, Any], matched_statuses: list[str]) -> list[dict[str, str]]:
-        return [
-            {
-                "action": "retry_failed_sql_conversion",
-                "sql_id": str(candidate["sql_id"]),
-                "space_nm": str(candidate["space_nm"]),
-            }
-            for status_name in matched_statuses
-            if status_name == "CONVERSION"
-        ]
-
     def _execution_request_examples(self, matches: list[dict[str, Any]]) -> list[str]:
         examples = []
         for match in matches:
@@ -371,6 +380,21 @@ class NewType04RagCommandTool(Component):
 
     def _identity_key(self, sql_id: Any, space_nm: Any) -> tuple[str, str]:
         return str(sql_id or "").strip().upper(), str(space_nm or "").strip().upper()
+
+    def _overlapping_target_tables(self, query_target_table: Any, candidate_target_table: Any) -> list[str]:
+        query_tables = self._target_table_tokens(query_target_table)
+        candidate_tables = self._target_table_tokens(candidate_target_table)
+        return sorted(query_tables & candidate_tables)
+
+    def _target_table_tokens(self, value: Any) -> set[str]:
+        """Normalise comma/space-delimited table scopes, including schema aliases."""
+        tokens: set[str] = set()
+        for raw in re.findall(r"[A-Za-z][A-Za-z0-9_$#.]*", str(value or "").upper()):
+            clean = raw.strip(".")
+            if clean:
+                tokens.add(clean)
+                tokens.add(clean.rsplit(".", 1)[-1])
+        return tokens
 
     def _insert(self, conn: Any, command: dict[str, Any]) -> dict[str, Any]:
         rule = self._normalized_rule(command, require_content=True, partial=False)
