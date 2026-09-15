@@ -213,7 +213,7 @@ class NewType18BFullWorkflowLoop2(Component):
             abort_reason = str(self.ctx.get(f"{self._id}_abort_reason", "") or "")
             skipped_plan_counts = dict(self.ctx.get(f"{self._id}_skipped_plan_counts", {}) or {})
             payload = {
-                "component": "18B_fullWorkflowLoop2",
+                "component": "18B_fullWorkflowLoop",
                 "job_route": "FULL_WORKFLOW",
                 "full_workflow": True,
                 "loop_done": True,
@@ -224,7 +224,6 @@ class NewType18BFullWorkflowLoop2(Component):
                 "workflow_aborted": workflow_aborted,
                 "abort_reason": abort_reason,
                 "skipped_plan_counts": skipped_plan_counts,
-                "dynamic_added_count": int(self.ctx.get(f"{self._id}_dynamic_added_count", 0) or 0),
                 "done_reason": self._done_reason(data_list, results, workflow_aborted, abort_reason, skipped_plan_counts),
                 "next_node": "18D_fullWorkflowDashboard",
             }
@@ -414,7 +413,7 @@ class NewType18BFullWorkflowLoop2(Component):
         if not db_config:
             return 0
 
-        pending_jobs = self._load_pending_jobs_from_db(db_config)
+        pending_jobs = self._load_pending_jobs_from_db(db_config, first_payload)
         remaining_keys = {
             self._job_key(self._data_dict(item))
             for item in data_list[cursor:]
@@ -442,7 +441,7 @@ class NewType18BFullWorkflowLoop2(Component):
         return added
 
     # Oracle 원본 테이블에서 현재 pending job을 다시 읽는다. USER_EDITED=Y FAIL-*는 pending으로 보지 않는다.
-    def _load_pending_jobs_from_db(self, db_config: dict[str, Any]) -> list[dict[str, Any]]:
+    def _load_pending_jobs_from_db(self, db_config: dict[str, Any], template_payload: dict[str, Any]) -> list[dict[str, Any]]:
         mig_table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
         sql_table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
         with self._connect(db_config) as conn:
@@ -461,6 +460,7 @@ class NewType18BFullWorkflowLoop2(Component):
                     "MIG",
                     ["map_id", "priority", "prior_map_id"],
                     db_config,
+                    template_payload,
                 )
             )
             jobs.extend(
@@ -475,6 +475,7 @@ class NewType18BFullWorkflowLoop2(Component):
                     "SQL_CONVERSION",
                     ["space_nm", "sql_id", "priority"],
                     db_config,
+                    template_payload,
                 )
             )
             jobs.extend(
@@ -490,6 +491,7 @@ class NewType18BFullWorkflowLoop2(Component):
                     "SQL_TUNING",
                     ["space_nm", "sql_id", "priority"],
                     db_config,
+                    template_payload,
                 )
             )
             jobs.extend(
@@ -505,6 +507,7 @@ class NewType18BFullWorkflowLoop2(Component):
                     "SQL_FORMATTING",
                     ["space_nm", "sql_id", "priority"],
                     db_config,
+                    template_payload,
                 )
             )
             return jobs
@@ -600,21 +603,23 @@ class NewType18BFullWorkflowLoop2(Component):
         route: str,
         columns: list[str],
         db_config: dict[str, Any],
+        template_payload: dict[str, Any],
     ) -> list[dict[str, Any]]:
         cur.execute(sql)
         jobs: list[dict[str, Any]] = []
         for row in cur.fetchall():
             job: dict[str, Any] = {
-                "component": "18B_fullWorkflowLoop2",
+                "component": "18A_fullWorkflowJobsToLoopTable",
                 "job_route": route,
                 "planned_job_route": route,
                 "job_name": self._job_name(route),
                 "job_type": "MIG" if route == "MIG" else "SQL",
                 "route_label": self._route_label(route),
-                "run_mode": "dynamic_pending",
+                "run_mode": template_payload.get("run_mode") or "all_pending",
                 "full_workflow": True,
                 "db_config": dict(db_config),
-                "dynamically_added": True,
+                "history": list(template_payload.get("history") or []),
+                "max_retry": template_payload.get("max_retry"),
             }
             for index, column in enumerate(columns):
                 job[column] = self._json_value(row[index])
