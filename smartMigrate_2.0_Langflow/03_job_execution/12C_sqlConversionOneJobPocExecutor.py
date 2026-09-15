@@ -318,6 +318,53 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                         logger.info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "INFO", "RUN_JOB", "END", 0]})
                         return __log_result
                 job = self._load_sql_job(db_config, payload)
+                current_status = self._status(job.get("status_conversion"))
+                if current_status in {"PASS", CONVERSION_PASS}:
+                    message = (
+                        f"SQL_ID={job.get('sql_id')}, SPACE_NM={job.get('space_nm')} "
+                        f"is already {current_status}; SQL Conversion skipped."
+                    )
+                    logger.info(
+                        message,
+                        extra={
+                            "workflow_log": [
+                                f"{job.get('sql_id') or ''} / {job.get('space_nm') or ''}"[:100],
+                                "SQL_CONVERSION",
+                                "SQL_CONVERSION",
+                                "INFO",
+                                "CHECK_CURRENT_STATUS",
+                                current_status,
+                                0,
+                                message,
+                            ]
+                        },
+                    )
+                    result = self._result(
+                        payload=payload,
+                        job=job,
+                        ok=True,
+                        status=current_status,
+                        elapsed=time.perf_counter() - started,
+                        attempts=[{"attempt": 0, "stage": "CHECK_CURRENT_STATUS", "status": current_status, "reason": message}],
+                        message=message,
+                        extra={
+                            "status_conversion": current_status,
+                            "conversion_status": current_status,
+                            "already_pass": True,
+                            "db_status_updated": False,
+                            "to_sql": job.get("to_sql"),
+                            "bind_sql": job.get("bind_sql"),
+                            "bind_set": job.get("bind_set"),
+                            "test_sql": job.get("test_sql"),
+                            "tuned_fr_sql": job.get("tuned_fr_sql"),
+                            "tag_kind": job.get("tag_kind"),
+                            "next_node": "15C_sqlTuningOneJobPocExecutor",
+                        },
+                    )
+                    self.status = result
+                    __log_result = Data(data=result)
+                    logger.info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "12C_SQL_CONV", "INFO", "RUN_JOB", "END", 0]})
+                    return __log_result
                 if bool(payload.get("full_workflow")):
                     readiness = self._mapping_rule_readiness(db_config, job)
                     if readiness.get("non_pass_count"):

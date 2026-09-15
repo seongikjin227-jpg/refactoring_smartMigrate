@@ -133,6 +133,8 @@ class NewType18BFullWorkflowLoop2(Component):
             cursor = int(self.ctx.get(f"{self._id}_index", 0) or 0)
             dynamic_added_count = int(self.ctx.get(f"{self._id}_dynamic_added_count", 0) or 0)
             while cursor < len(data_list):
+                next_payload = self._data_dict(data_list[cursor])
+                dynamic_added_count += self._refresh_dynamic_queue(data_list, cursor, self._route(next_payload))
                 index = cursor
                 item = data_list[cursor]
                 item_payload = self._data_dict(item)
@@ -159,7 +161,6 @@ class NewType18BFullWorkflowLoop2(Component):
 
                 cursor += 1
                 self.update_ctx({f"{self._id}_index": cursor})
-                dynamic_added_count += self._refresh_dynamic_queue(data_list, cursor, self._route(item_payload))
 
             self.update_ctx(
                 {
@@ -238,13 +239,13 @@ class NewType18BFullWorkflowLoop2(Component):
 
     # 입력 payload나 job item이 실행 가능한 구조인지 검증한다.
     def _validate_job(self, payload: dict[str, Any], index: int) -> None:
-        route = str(payload.get("planned_job_route") or payload.get("job_route") or "").upper()
+        route = self._route(payload)
         if route == "MIG":
-            if str(payload.get("map_id") or "").strip():
+            if str(self._payload_value(payload, "map_id") or "").strip():
                 return
             raise ValueError(f"18B MIG item {index} requires map_id")
         if route in {"SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"}:
-            if str(payload.get("space_nm") or "").strip() and str(payload.get("sql_id") or "").strip():
+            if str(self._payload_value(payload, "space_nm") or "").strip() and str(self._payload_value(payload, "sql_id") or "").strip():
                 return
             raise ValueError(f"18B {route} item {index} requires space_nm+sql_id")
         raise ValueError(f"18B item {index} has invalid job_route={route}")
@@ -405,7 +406,7 @@ class NewType18BFullWorkflowLoop2(Component):
         )
 
     # 실행 중 DB를 다시 조회해 현재 남은 큐에 없는 pending job을 phase 순서에 맞게 추가한다.
-    def _refresh_dynamic_queue(self, data_list: list[Data], cursor: int, current_route: str) -> int:
+    def _refresh_dynamic_queue(self, data_list: list[Data], cursor: int, next_route: str) -> int:
         if not data_list:
             return 0
         first_payload = self._data_dict(data_list[0])
@@ -425,11 +426,11 @@ class NewType18BFullWorkflowLoop2(Component):
             key = self._job_key(job)
             if key is None or key in remaining_keys or key in seen_new_keys:
                 continue
-            insert_at = self._insert_dynamic_job(data_list, cursor, current_route, Data(data=job))
+            insert_at = self._insert_dynamic_job(data_list, cursor, next_route, Data(data=job))
             remaining_keys.add(key)
             seen_new_keys.add(key)
             added += 1
-            self._log_dynamic_job_added(job, key, cursor, insert_at, current_route)
+            self._log_dynamic_job_added(job, key, cursor, insert_at, next_route)
 
         if added:
             self._reindex_jobs(data_list)
@@ -513,7 +514,7 @@ class NewType18BFullWorkflowLoop2(Component):
             return jobs
 
     # cursor가 이미 지난 앞 구간은 건드리지 않고, 새 job을 다음 실행 가능 위치에 삽입한다.
-    def _insert_dynamic_job(self, data_list: list[Data], cursor: int, current_route: str, item: Data) -> int:
+    def _insert_dynamic_job(self, data_list: list[Data], cursor: int, next_route: str, item: Data) -> int:
         payload = self._data_dict(item)
         new_phase = self._phase_index(self._route(payload))
         insert_at = len(data_list)
@@ -525,9 +526,9 @@ class NewType18BFullWorkflowLoop2(Component):
             if existing_phase > new_phase:
                 insert_at = pos
                 break
-                if self._priority_key(payload) < self._priority_key(existing_payload):
-                    insert_at = pos
-                    break
+            if self._priority_key(payload) < self._priority_key(existing_payload):
+                insert_at = pos
+                break
         data_list.insert(insert_at, item)
         return insert_at
 
@@ -538,13 +539,13 @@ class NewType18BFullWorkflowLoop2(Component):
         key: tuple[Any, ...],
         cursor: int,
         insert_at: int,
-        current_route: str,
+        next_route: str,
     ) -> None:
         route = self._route(job)
         priority = job.get("priority")
         message = (
             f"dynamic job added route={route}, key={key}, priority={priority}, "
-            f"cursor={cursor}, insert_at={insert_at}, current_route={current_route}"
+            f"cursor={cursor}, insert_at={insert_at}, next_route={next_route}"
         )
         logging.getLogger("smartmigrate.workflow").info(
             message,
@@ -565,18 +566,18 @@ class NewType18BFullWorkflowLoop2(Component):
     # route별 workflow log 첫 번째 식별자에 넣을 값을 고른다.
     def _workflow_log_job_id(self, job: dict[str, Any]) -> Any:
         if self._route(job) == "MIG":
-            return job.get("map_id") or 0
-        return job.get("sql_id") or 0
+            return self._payload_value(job, "map_id") or 0
+        return self._payload_value(job, "sql_id") or 0
 
     # cursor 이후 큐에 같은 job이 있는지 비교하기 위한 route별 고유 key를 만든다.
     def _job_key(self, payload: dict[str, Any]) -> tuple[Any, ...] | None:
         route = self._route(payload)
         if route == "MIG":
-            map_id = str(payload.get("map_id") or "").strip()
+            map_id = str(self._payload_value(payload, "map_id") or "").strip()
             return (route, map_id) if map_id else None
         if route in {"SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"}:
-            space_nm = str(payload.get("space_nm") or "").strip().upper()
-            sql_id = str(payload.get("sql_id") or "").strip().upper()
+            space_nm = str(self._payload_value(payload, "space_nm") or "").strip().upper()
+            sql_id = str(self._payload_value(payload, "sql_id") or "").strip().upper()
             return (route, space_nm, sql_id) if space_nm and sql_id else None
         return None
 
@@ -589,7 +590,7 @@ class NewType18BFullWorkflowLoop2(Component):
 
     # PRIORITY가 작을수록 먼저 실행되도록 정렬 key를 만든다.
     def _priority_key(self, payload: dict[str, Any]) -> tuple[int, str]:
-        priority = self._num(payload.get("priority"))
+        priority = self._num(self._payload_value(payload, "priority"))
         if priority <= 0:
             priority = 999999999
         key = self._job_key(payload)
@@ -680,7 +681,27 @@ class NewType18BFullWorkflowLoop2(Component):
 
     # payload에서 workflow route 값을 읽어 표준 route 이름으로 정규화한다.
     def _route(self, payload: dict[str, Any]) -> str:
-        return str(payload.get("planned_job_route") or payload.get("job_route") or "").upper()
+        route = str(self._payload_value(payload, "planned_job_route") or self._payload_value(payload, "job_route") or "").strip().upper()
+        aliases = {
+            "DB_MIGRATION": "MIG",
+            "MIGRATION": "MIG",
+            "SQL": "SQL_CONVERSION",
+            "CONVERSION": "SQL_CONVERSION",
+            "TUNING": "SQL_TUNING",
+            "FORMATTING": "SQL_FORMATTING",
+        }
+        return aliases.get(route, route)
+
+    # payload key가 대문자/소문자/혼합 표기로 들어와도 같은 값으로 읽는다.
+    def _payload_value(self, payload: dict[str, Any], key: str) -> Any:
+        for candidate in (key, key.upper(), key.lower()):
+            if candidate in payload:
+                return payload.get(candidate)
+        target = key.lower()
+        for candidate, value in payload.items():
+            if str(candidate).lower() == target:
+                return value
+        return None
 
     # 문자/숫자/NULL 값을 정수로 변환하고 실패하면 안전한 기본값을 반환한다.
     def _num(self, value: Any) -> int:

@@ -218,6 +218,21 @@ class NewType10CMigOneJobPocExecutor(Component):
                 raise ValueError("MIG job item requires map_id")
             max_retry = max(0, int(job.get("max_retry") if job.get("max_retry") is not None else (getattr(self, "max_retry", None) or 2)))
             db_config = self._db_config(job)
+            current_status = self._load_mig_status(db_config, map_id)
+            if current_status == "PASS":
+                elapsed = int(time.perf_counter() - started)
+                message = f"MAP_ID={map_id} is already PASS; migration execution skipped."
+                attempts = [{"attempt": 0, "stage": "CHECK_CURRENT_STATUS", "status": "PASS", "reason": message}]
+                logger.info(
+                    message,
+                    extra={"workflow_log": [map_id, "DB_MIGRATION", "JOB_SKIP", "INFO", "CHECK_CURRENT_STATUS", "PASS", 0, message]},
+                )
+                result = self._result(job, ok=True, status="PASS", elapsed=elapsed, attempts=attempts)
+                result.update({"already_pass": True, "db_status_updated": False, "message": message})
+                self.status = result
+                __log_result = Data(data=result)
+                logger.info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "END", 0]})
+                return __log_result
             attempts: list[dict[str, Any]] = []
             graph_result: dict[str, Any] = {}
             final_status = "FAIL-INSERT"
@@ -1063,6 +1078,15 @@ class NewType10CMigOneJobPocExecutor(Component):
     # ##############################
     # DB Migration 상태 저장
     # ##############################
+
+    # 실행 직전 NEXT_MIG_INFO의 현재 STATUS를 조회해 이미 완료된 job인지 확인한다.
+    def _load_mig_status(self, db_config: dict[str, Any], map_id: int) -> str:
+        table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(f"SELECT STATUS FROM {table} WHERE MAP_ID = :1", [map_id])
+            row = cur.fetchone()
+        return self._lob_to_str(row[0]).strip().upper() if row else ""
 
     # PRIOR_MAP_ID가 있으면 선행 migration 상태를 확인해 실행 가능 여부를 반환한다.
     def _dependency_status(self, db_config: dict[str, Any], map_id: int, prior_map_id: Any) -> str:
