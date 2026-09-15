@@ -234,11 +234,11 @@ flowchart LR
     C -->|no| X[상태 변경 없음]
 ```
 
-- 검색 기본값은 `status_filter=FAIL_ONLY`, `status_scope=CONVERSION`이며 사용자 반환 결과는 최대 20건이다. 내부 후보 pool은 FAIL 필터 후 결과를 보완하기 위해 더 크게 조회할 수 있다. `PASS_ONLY`, `ALL`, `TUNING`, `ANY`는 명시적으로 선택한다.
+- 검색 기본값은 `status_filter=FAIL_ONLY`이며 사용자 반환 결과는 최대 20건이다. 실패 판정과 상태 변경 대상은 항상 `STATUS_CONVERSION`이다. 내부 후보 pool은 FAIL 필터 후 결과를 보완하기 위해 더 크게 조회할 수 있다. `PASS_ONLY`, `ALL`은 명시적으로 선택할 수 있지만 `STATUS_TUNING` / Tuning 실패는 이 기능의 검색 대상이 아니다.
 - 최소 유사도 제한은 기본 적용하지 않는다. 예를 들어 `75.1%`도 후보에 포함될 수 있으며, 운영자가 필요하면 `min_similarity=0.8` 또는 `80`처럼 명시한다.
 - 검색은 read-only다. 반환한 후보라도 `SQL_ID`만으로 update하지 않고, 항상 `SQL_ID + SPACE_NM` 전체 식별자와 함께 명시적 확인을 받는다.
-- `retry_failed_sql_conversion` / `retry_failed_sql_tuning`은 `UPDATE`의 `WHERE STATUS LIKE 'FAIL-%'` 조건을 사용한다. 검색과 update 사이에 PASS로 바뀐 row는 0건 update로 skip되며 PASS를 NULL로 바꾸지 않는다. 이 action은 재실행 가능한 상태로 바꿀 뿐 executor를 실행하지 않는다.
-- 상태 변경 성공 후 실제 실행은 `SQL_ID={값}, SPACE_NM={값} SQL Conversion 실행해줘.` 또는 SQL Tuning 실행 요청으로 별도 수행한다.
+- `retry_failed_sql_conversion`은 `UPDATE`의 `WHERE STATUS_CONVERSION LIKE 'FAIL-%'` 조건을 사용한다. 검색과 update 사이에 PASS로 바뀐 row는 0건 update로 skip되며 PASS를 NULL로 바꾸지 않는다. 이 action은 재실행 가능한 상태로 바꿀 뿐 executor를 실행하지 않는다.
+- 상태 변경 성공 후 실제 실행은 `SQL_ID={값}, SPACE_NM={값} SQL Conversion 실행해줘.`로 별도 수행한다.
 - vector DB에는 상태를 저장하지 않는다. 동기화 시점과 무관하게 Oracle 상태가 최종 판단 기준이다.
 
 ## 5.11 최종 점검 Checklist
@@ -254,4 +254,3 @@ flowchart LR
 | Milvus sync 분리 | `04_saveVectorDB`는 운영 중 반복 실행이 아니라 maintenance one-shot sync |
 | Update Command 안전성 | 고정 action별 SQL만 update |
 | AS-IS 재시도 안전성 | 검색은 Oracle 상태 재확인, update는 `FAIL-%` predicate와 명시적 확인을 적용 |
-

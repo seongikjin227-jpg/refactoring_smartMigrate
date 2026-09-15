@@ -64,11 +64,11 @@ SQL 관련 단건 작업은 `SQL_ID`와 `SPACE_NM`을 모두 입력해야 한다
 
 | 단계 | 사용자 요청 예시 | 처리 |
 |---|---|---|
-| 유사 SQL 검색 | `아래 SQL과 비슷한 실패 SQL 최대 20개 찾아줘. SQL=...` | 사용자 반환 결과는 최대 20건이다. 기본값은 SQL Conversion의 `FAIL-*`만 검색하며, 최소 유사도 제한은 없다. 필요하면 `유사도 80% 이상`, `PASS만`, `전체`, `SQL Tuning`, `양쪽` 범위를 요청할 수 있다. |
+| 유사 SQL 검색 | `아래 SQL과 비슷한 실패 SQL 최대 20개 찾아줘. SQL=...` | 사용자 반환 결과는 최대 20건이다. 실패 판정은 항상 `STATUS_CONVERSION LIKE 'FAIL-%'`만 사용하며 SQL Tuning 실패 상태는 검색하지 않는다. 최소 유사도 제한은 없고 필요하면 `유사도 80% 이상`, `PASS만`, `전체`을 요청할 수 있다. |
 | 기준 job으로 검색 | `SQL_ID=S001, SPACE_NM=PAYMENT와 비슷한 실패 SQL 찾아줘.` | 기준 row의 `EDIT_FR_SQL` 우선, 없으면 `FR_SQL`을 임베딩한다. 기준 row 자신은 기본적으로 결과에서 제외한다. |
 | 후보 확인 | `찾은 실패 SQL들을 재시도 상태로 바꿔줘.` | Agent가 각 후보를 `SQL_ID={값}, SPACE_NM={값}`, 상태, 유사도와 함께 제시하고 `FAIL-* 상태를 재시도 상태(NULL)로 변경할까요?`라고 명시적 확인을 요청한다. |
 | 재시도 상태 변경 | `SQL_ID=Q001, SPACE_NM=SALES 재시도 상태로 바꿔줘.` | 확인된 후보만 `FAIL-*` 상태에서 DB `NULL`로 변경하고 `RETRY_COUNT`를 0으로 초기화한다. 이 단계는 작업을 실행하지 않는다. |
-| 실제 작업 실행 | `SQL_ID=Q001, SPACE_NM=SALES SQL Conversion 실행해줘.` | 재시도 상태 변경이 완료된 뒤 별도 요청으로 executor를 실행한다. |
+| 실제 작업 실행 | `SQL_ID=Q001, SPACE_NM=SALES SQL Conversion 실행해줘.` | `STATUS_CONVERSION` 재시도 상태 변경이 완료된 뒤 별도 요청으로 Conversion executor를 실행한다. |
 
 상태는 Milvus metadata가 아니라 검색 직후와 UPDATE 시점에 모두 Oracle `NEXT_SQL_INFO`에서 재확인한다. 따라서 동기화 이후 상태가 `PASS-*`로 바뀐 row는 검색 결과에 포함되거나 재시도 처리되지 않는다.
 

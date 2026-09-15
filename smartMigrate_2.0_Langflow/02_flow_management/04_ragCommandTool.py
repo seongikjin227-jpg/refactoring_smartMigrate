@@ -160,7 +160,7 @@ class NewType04RagCommandTool(Component):
         """
         query_sql, query_source, query_identity = self._similarity_query_sql(conn, command)
         status_filter = self._status_filter(command.get("status_filter") or command.get("filter"))
-        status_scope = self._status_scope(command.get("status_scope") or command.get("domain"))
+        status_scope = self._conversion_only_scope(command.get("status_scope") or command.get("domain"))
         # The management response is deliberately capped at 20 rows.  A larger
         # candidate pool is still read so FAIL-only filtering can fill the list.
         limit = max(1, min(self._positive_int(command.get("limit"), MAX_SIMILAR_SQL_RESULTS), MAX_SIMILAR_SQL_RESULTS))
@@ -197,7 +197,6 @@ class NewType04RagCommandTool(Component):
                 {
                     **candidate,
                     "status_conversion": status["status_conversion"],
-                    "status_tuning": status["status_tuning"],
                     "matched_statuses": matched_statuses,
                     "retry_actions": self._retry_actions(candidate, matched_statuses) if status_filter == "FAIL_ONLY" else [],
                 }
@@ -270,7 +269,7 @@ class NewType04RagCommandTool(Component):
         cur = conn.cursor()
         cur.execute(
             f"""
-            SELECT SQL_ID, SPACE_NM, STATUS_CONVERSION, STATUS_TUNING
+            SELECT SQL_ID, SPACE_NM, STATUS_CONVERSION
               FROM {self._qualify('NEXT_SQL_INFO')}
              WHERE {' OR '.join(conditions)}
             """,
@@ -279,7 +278,6 @@ class NewType04RagCommandTool(Component):
         return {
             self._identity_key(row[0], row[1]): {
                 "status_conversion": str(self._json_value(row[2]) or "").strip().upper(),
-                "status_tuning": str(self._json_value(row[3]) or "").strip().upper(),
             }
             for row in cur.fetchall()
         }
@@ -323,6 +321,13 @@ class NewType04RagCommandTool(Component):
             raise ValueError("status_scope must be CONVERSION, TUNING, or ANY")
         return normalized
 
+    def _conversion_only_scope(self, value: Any) -> str:
+        """AS-IS retry candidates are intentionally based on conversion status only."""
+        requested = self._status_scope(value)
+        if requested != "CONVERSION":
+            raise ValueError("AS-IS SQL similarity retry search supports STATUS_CONVERSION only; status_scope must be CONVERSION")
+        return requested
+
     def _similarity_threshold(self, value: Any) -> float | None:
         if value in (None, ""):
             return None
@@ -347,11 +352,12 @@ class NewType04RagCommandTool(Component):
     def _retry_actions(self, candidate: dict[str, Any], matched_statuses: list[str]) -> list[dict[str, str]]:
         return [
             {
-                "action": "retry_failed_sql_conversion" if status_name == "CONVERSION" else "retry_failed_sql_tuning",
+                "action": "retry_failed_sql_conversion",
                 "sql_id": str(candidate["sql_id"]),
                 "space_nm": str(candidate["space_nm"]),
             }
             for status_name in matched_statuses
+            if status_name == "CONVERSION"
         ]
 
     def _execution_request_examples(self, matches: list[dict[str, Any]]) -> list[str]:

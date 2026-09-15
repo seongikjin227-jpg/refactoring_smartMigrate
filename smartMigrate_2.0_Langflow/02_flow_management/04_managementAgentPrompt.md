@@ -43,12 +43,12 @@ Update Command Tool action 예:
 
 AS-IS SQL similarity search and safe retry:
 - For requests such as "find SQL_IDs with AS-IS SQL similar to this SQL", use RAG Command Tool action `search_similar_asis_sql`.
-- Provide either `query_sql` (the user supplied AS-IS SQL) or both `sql_id` and `space_nm` (the tool uses EDIT_FR_SQL first, then FR_SQL). Return at most 20 rows. Use `status_filter="FAIL_ONLY"` by default. `status_filter` can be `FAIL_ONLY`, `PASS_ONLY`, or `ALL`; `status_scope` can be `CONVERSION`, `TUNING`, or `ANY`. No minimum similarity is applied unless the user supplies `min_similarity` (for example `0.8` or `80`).
+- Provide either `query_sql` (the user supplied AS-IS SQL) or both `sql_id` and `space_nm` (the tool uses EDIT_FR_SQL first, then FR_SQL). Return at most 20 rows. Use `status_filter="FAIL_ONLY"` by default. `status_filter` can be `FAIL_ONLY`, `PASS_ONLY`, or `ALL`, but the status basis is always `STATUS_CONVERSION`; do not search or select candidates from `STATUS_TUNING`. No minimum similarity is applied unless the user supplies `min_similarity` (for example `0.8` or `80`).
 - Search is read-only. For every candidate, show the exact pair `SQL_ID={sql_id}, SPACE_NM={space_nm}`, its matched FAIL-* status, and the returned similarity percentage. Never present SQL_ID alone as a retry target.
 - Ask for explicit confirmation using the tool's `confirmation_targets` full identity list: "아래 SQL_ID + SPACE_NM 대상의 FAIL-* 상태를 재시도 상태(NULL)로 변경할까요?" Do not infer confirmation from a prior message or a vague reference such as "those".
-- After explicit confirmation, pass only the returned `retry_actions` to Update Command Tool. Use `retry_failed_sql_conversion` and/or `retry_failed_sql_tuning`, never `reset_sql_conversion_status` / `reset_sql_tuning_status` for this flow.
-- The retry actions include a database-side `FAIL-%` predicate. They set only a currently FAIL-* status to NULL and reset RETRY_COUNT; a PASS or changed row is skipped, never changed. This is only a status reset, not job execution.
-- After the status reset succeeds, show a separate executable request for each row, for example `SQL_ID=Q001, SPACE_NM=SALES SQL Conversion 실행해줘.` Do not call an executor as part of the status-reset request.
+- After explicit confirmation, pass only the returned `retry_failed_sql_conversion` actions to Update Command Tool. Never use `reset_sql_conversion_status`, `reset_sql_tuning_status`, or `retry_failed_sql_tuning` for this flow.
+- The retry action includes a database-side `STATUS_CONVERSION LIKE 'FAIL-%'` predicate. It sets only a currently FAIL-* conversion status to NULL and resets RETRY_COUNT; a PASS or changed row is skipped, never changed. This is only a status reset, not job execution.
+- After the status reset succeeds, show a separate executable request for each row: `SQL_ID=Q001, SPACE_NM=SALES SQL Conversion 실행해줘.` Do not call an executor as part of the status-reset request.
 
 RAG 변경 후 안내 규칙:
 - RAG add/update/disable/delete가 성공하면 VectorDB 동기화를 자동으로 실행하지 않습니다.
