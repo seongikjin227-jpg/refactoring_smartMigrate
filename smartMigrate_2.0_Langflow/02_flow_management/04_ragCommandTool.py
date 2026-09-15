@@ -66,6 +66,7 @@ class NewType04RagCommandTool(Component):
     CATEGORIES = {"SQL_CONVERSION", "SQL_TUNING"}
     RULE_TYPES = {"GENERAL", "SEARCH"}
 
+    # 명령 JSON을 해석하고 요청된 RAG 작업을 실행한다.
     def run_command(self) -> Data:
         logging.getLogger("smartmigrate.workflow").info(
             "04 RAG Command Tool started",
@@ -96,6 +97,7 @@ class NewType04RagCommandTool(Component):
             self.status = result
             return Data(data=result)
 
+    # 조건에 맞는 RAG 가이드 규칙을 Oracle에서 조회한다.
     def _query(self, conn: Any, command: dict[str, Any]) -> dict[str, Any]:
         rag_id = str(command.get("rag_id") or "").strip()
         category = self._optional_category(command.get("category"))
@@ -158,25 +160,34 @@ class NewType04RagCommandTool(Component):
         rows = [{names[index]: self._json_value(value) for index, value in enumerate(row)} for row in cur.fetchall()]
         return {"ok": True, "action": "query", "row_count": len(rows), "data": {"rules": rows}, "needs_vector_sync": False}
 
+    # AS-IS SQL과 유사한 SQL을 벡터 검색으로 찾고 상태 조건으로 필터링한다.
     def _search_similar_asis_sql(self, conn: Any, command: dict[str, Any]) -> dict[str, Any]:
         """Find AS-IS SQL neighbours, then filter with the authoritative Oracle status.
 
         The AS-IS collection deliberately has no status metadata.  This avoids a
         sync delay accidentally offering a now-PASS job for retry.
         """
+        # 기준 SQL을 직접 입력값에서 받거나 SQL_ID, SPACE_NM 기준으로 Oracle에서 조회한다.
         query_sql, query_source, query_identity, query_target_table = self._similarity_query_sql(conn, command)
+
+        # 상태 필터는 기본적으로 FAIL_ONLY이며, AS-IS 재시도 검색은 변환 상태만 허용한다.
         status_filter = self._status_filter(command.get("status_filter") or command.get("filter"))
         status_scope = self._conversion_only_scope(command.get("status_scope") or command.get("domain"))
-        # The management response is deliberately capped at 20 rows.  A larger
-        # candidate pool is still read so FAIL-only filtering can fill the list.
+
+        # 사용자에게 돌려줄 결과는 최대 20건으로 제한하고, 필터링 여유분을 위해 후보는 더 많이 가져온다.
         limit = max(1, min(self._positive_int(command.get("limit"), MAX_SIMILAR_SQL_RESULTS), MAX_SIMILAR_SQL_RESULTS))
         candidate_limit = max(limit, min(self._positive_int(command.get("candidate_limit"), max(limit * 5, 50)), MAX_SIMILAR_SQL_CANDIDATES))
+
+        # 명령에 min_similarity가 없으면 컴포넌트 기본값을 쓰고, 퍼센트 입력도 0~1 범위로 정규화한다.
         requested_min_similarity = command.get("min_similarity")
         if requested_min_similarity in (None, ""):
             requested_min_similarity = getattr(self, "min_similarity", 0.7)
         min_similarity = self._similarity_threshold(requested_min_similarity)
 
+        # 기준 SQL을 임베딩 API에 보내기 전에 정규화하고, 검색용 dense vector로 변환한다.
         vector = self._embed_texts([self._sql_content(query_sql)], self._embed_config())[0]
+
+        # Milvus AS-IS SQL 컬렉션에서 활성 문서만 대상으로 코사인 유사도 검색을 수행한다.
         client = self._milvus_client(self._milvus_config())
         hits = client.search(
             collection_name=self._milvus_config()["asis_sql_collection"],
@@ -187,21 +198,32 @@ class NewType04RagCommandTool(Component):
             output_fields=["sql_id", "space_nm", "tag_kind", "target_table"],
             search_params={"metric_type": "COSINE", "params": {}},
         )
+
+        # Milvus 응답을 후보 SQL 목록으로 변환하고, 후보들의 최신 변환 상태는 Oracle에서 다시 확인한다.
         candidates = self._milvus_hits(hits)
         statuses = self._load_sql_statuses(conn, candidates)
         matches: list[dict[str, Any]] = []
         for candidate in candidates:
+            # 임계 유사도보다 낮은 후보는 제외한다.
             if min_similarity is not None and candidate["similarity"] < min_similarity:
                 continue
+
+            # 기준 SQL 자신은 include_self 요청이 있을 때만 결과에 포함한다.
             identity = self._identity_key(candidate.get("sql_id"), candidate.get("space_nm"))
             if query_identity and identity == query_identity and not self._as_bool(command.get("include_self")):
                 continue
+
+            # Milvus에는 상태 메타데이터가 없으므로 Oracle에서 조회한 상태가 없는 후보는 제외한다.
             status = statuses.get(identity)
             if not status:
                 continue
+
+            # FAIL_ONLY, PASS_ONLY, ALL 조건에 맞는 상태만 최종 후보로 남긴다.
             matched_statuses = self._matching_statuses(status, status_scope, status_filter)
             if not matched_statuses:
                 continue
+
+            # 대상 테이블이 겹치는지 계산해 최종 정렬 우선순위에 활용한다.
             overlapping_target_tables = self._overlapping_target_tables(query_target_table, candidate.get("target_table"))
             matches.append(
                 {
@@ -212,11 +234,14 @@ class NewType04RagCommandTool(Component):
                     "overlapping_target_tables": overlapping_target_tables,
                 }
             )
-        # AS-IS SQL similarity remains the retrieval basis.  TARGET_TABLE is a
-        # deterministic tie/ranking signal: overlapping tables first, then the
-        # original dense-vector similarity within each group.
+
+        # 대상 테이블이 겹치는 후보를 먼저 보여주고, 같은 그룹 안에서는 벡터 유사도가 높은 순서로 정렬한다.
         matches.sort(key=lambda item: (not item["target_table_overlap"], -item["similarity"]))
+
+        # 정렬된 후보 중 사용자 응답 제한 건수만 남긴다.
         matches = matches[:limit]
+
+        # 상태 변경은 수행하지 않고, 후속 요청에 사용할 예시 문장과 검색 결과만 반환한다.
         return {
             "ok": True,
             "action": "search_similar_asis_sql",
@@ -229,16 +254,11 @@ class NewType04RagCommandTool(Component):
             "candidate_count": len(candidates),
             "row_count": len(matches),
             "data": {"similar_sqls": matches},
-            "confirmation_targets": [f"SQL_ID={item['sql_id']}, SPACE_NM={item['space_nm']}" for item in matches],
-            "confirmation_required": status_filter == "FAIL_ONLY" and bool(matches),
-            "confirmation_message": (
-                "Confirm whether every listed SQL_ID + SPACE_NM should be changed to retry-ready status (FAIL-* -> NULL). This only changes status; it does not execute SQL Conversion/Tuning."
-                if status_filter == "FAIL_ONLY" and matches
-                else "No status change has been made."
-            ),
+            "status_reset_request_examples": self._status_reset_request_examples(matches),
             "execution_request_examples_after_status_reset": self._execution_request_examples(matches),
         }
 
+    # 유사도 검색에 사용할 기준 SQL과 식별 정보를 명령 또는 DB에서 가져온다.
     def _similarity_query_sql(self, conn: Any, command: dict[str, Any]) -> tuple[str, str, tuple[str, str] | None, str]:
         for field in ("query_sql", "sql", "fr_sql", "edit_fr_sql"):
             value = str(command.get(field) or "").strip()
@@ -271,6 +291,7 @@ class NewType04RagCommandTool(Component):
             str(self._json_value(row[2]) or "").strip(),
         )
 
+    # Milvus 후보 SQL들의 변환 상태를 Oracle에서 일괄 조회한다.
     def _load_sql_statuses(self, conn: Any, candidates: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, str]]:
         if not candidates:
             return {}
@@ -302,6 +323,7 @@ class NewType04RagCommandTool(Component):
             for row in cur.fetchall()
         }
 
+    # Milvus 검색 응답을 화면과 후속 처리에 쓰기 쉬운 후보 목록으로 변환한다.
     def _milvus_hits(self, response: Any) -> list[dict[str, Any]]:
         raw_hits = response[0] if isinstance(response, list) and response and isinstance(response[0], list) else response
         if not isinstance(raw_hits, list):
@@ -325,6 +347,7 @@ class NewType04RagCommandTool(Component):
             })
         return result
 
+    # 상태 필터 입력값을 FAIL_ONLY, PASS_ONLY, ALL 중 하나로 정규화한다.
     def _status_filter(self, value: Any) -> str:
         normalized = str(value or "FAIL_ONLY").strip().upper().replace("-", "_")
         aliases = {"FAIL": "FAIL_ONLY", "FAILED": "FAIL_ONLY", "PASS": "PASS_ONLY", "ALL": "ALL", "ANY": "ALL"}
@@ -333,6 +356,7 @@ class NewType04RagCommandTool(Component):
             raise ValueError("status_filter must be FAIL_ONLY, PASS_ONLY, or ALL")
         return normalized
 
+    # 상태 확인 범위를 CONVERSION, TUNING, ANY 중 하나로 정규화한다.
     def _status_scope(self, value: Any) -> str:
         normalized = str(value or "CONVERSION").strip().upper().replace("-", "_")
         aliases = {"SQL_CONVERSION": "CONVERSION", "SQL_TUNING": "TUNING", "BOTH": "ANY", "ALL": "ANY"}
@@ -341,6 +365,7 @@ class NewType04RagCommandTool(Component):
             raise ValueError("status_scope must be CONVERSION, TUNING, or ANY")
         return normalized
 
+    # AS-IS SQL 재시도 검색이 변환 상태만 보도록 범위를 제한한다.
     def _conversion_only_scope(self, value: Any) -> str:
         """AS-IS retry candidates are intentionally based on conversion status only."""
         requested = self._status_scope(value)
@@ -348,6 +373,7 @@ class NewType04RagCommandTool(Component):
             raise ValueError("AS-IS SQL similarity retry search supports STATUS_CONVERSION only; status_scope must be CONVERSION")
         return requested
 
+    # 유사도 임계값을 0에서 1 사이의 실수로 변환한다.
     def _similarity_threshold(self, value: Any) -> float | None:
         if value in (None, ""):
             return None
@@ -361,6 +387,7 @@ class NewType04RagCommandTool(Component):
             raise ValueError("min_similarity must be between 0 and 1, or between 0 and 100 percent")
         return threshold
 
+    # 조회된 상태 중 요청한 범위와 필터에 일치하는 상태명을 반환한다.
     def _matching_statuses(self, status: dict[str, str], scope: str, status_filter: str) -> list[str]:
         columns = {"CONVERSION": status.get("status_conversion", ""), "TUNING": status.get("status_tuning", "")}
         selected = ("CONVERSION", "TUNING") if scope == "ANY" else (scope,)
@@ -369,6 +396,7 @@ class NewType04RagCommandTool(Component):
         prefix = "FAIL-" if status_filter == "FAIL_ONLY" else "PASS"
         return [name for name in selected if columns[name].startswith(prefix)]
 
+    # 유사 SQL 검색 결과로부터 실행 요청 예시 문장을 만든다.
     def _execution_request_examples(self, matches: list[dict[str, Any]]) -> list[str]:
         examples = []
         for match in matches:
@@ -378,14 +406,24 @@ class NewType04RagCommandTool(Component):
                 examples.append(f"SQL_ID={match['sql_id']}, SPACE_NM={match['space_nm']} {action} 실행해줘.")
         return examples
 
+    # 유사 SQL 검색 결과로부터 상태 초기화 요청 예시 문장을 만든다.
+    def _status_reset_request_examples(self, matches: list[dict[str, Any]]) -> list[str]:
+        return [
+            f"SQL_ID={match['sql_id']}, SPACE_NM={match['space_nm']} 재시도 상태로 변경해줘."
+            for match in matches
+        ]
+
+    # SQL_ID와 SPACE_NM을 비교용 대문자 식별 키로 만든다.
     def _identity_key(self, sql_id: Any, space_nm: Any) -> tuple[str, str]:
         return str(sql_id or "").strip().upper(), str(space_nm or "").strip().upper()
 
+    # 기준 SQL과 후보 SQL의 대상 테이블 교집합을 계산한다.
     def _overlapping_target_tables(self, query_target_table: Any, candidate_target_table: Any) -> list[str]:
         query_tables = self._target_table_tokens(query_target_table)
         candidate_tables = self._target_table_tokens(candidate_target_table)
         return sorted(query_tables & candidate_tables)
 
+    # 대상 테이블 문자열을 스키마명 포함 여부와 무관한 비교 토큰으로 분리한다.
     def _target_table_tokens(self, value: Any) -> set[str]:
         """Normalise comma/space-delimited table scopes, including schema aliases."""
         tokens: set[str] = set()
@@ -396,6 +434,7 @@ class NewType04RagCommandTool(Component):
                 tokens.add(clean.rsplit(".", 1)[-1])
         return tokens
 
+    # 새 RAG 가이드 규칙을 Oracle 테이블에 등록한다.
     def _insert(self, conn: Any, command: dict[str, Any]) -> dict[str, Any]:
         rule = self._normalized_rule(command, require_content=True, partial=False)
         cur = conn.cursor()
@@ -413,6 +452,7 @@ class NewType04RagCommandTool(Component):
         )
         return {"ok": True, "action": "add", "rag_id": int(rag_id_var.getvalue()[0]), "updated_rows": int(cur.rowcount), "needs_vector_sync": True}
 
+    # 지정한 RAG_ID의 RAG 가이드 규칙 필드를 수정한다.
     def _update(self, conn: Any, command: dict[str, Any]) -> dict[str, Any]:
         rag_id = self._required_rag_id(command)
         rule = self._normalized_rule(command, require_content=False, partial=True)
@@ -440,6 +480,7 @@ class NewType04RagCommandTool(Component):
             raise ValueError(f"RAG_ID={rag_id} row not found. rowcount={cur.rowcount}")
         return {"ok": True, "action": "update", "rag_id": rag_id, "updated_rows": int(cur.rowcount), "needs_vector_sync": True}
 
+    # 지정한 RAG_ID의 규칙을 비활성화 처리한다.
     def _disable(self, conn: Any, rag_id: int) -> dict[str, Any]:
         cur = conn.cursor()
         cur.execute(f"UPDATE {self._qualify('NEXT_MIG_RAG_INFO')} SET USE_YN = 'N', UPDATED_AT = SYSTIMESTAMP WHERE RAG_ID = :rag_id", {"rag_id": rag_id})
@@ -447,6 +488,7 @@ class NewType04RagCommandTool(Component):
             raise ValueError(f"RAG_ID={rag_id} row not found. rowcount={cur.rowcount}")
         return {"ok": True, "action": "disable", "rag_id": rag_id, "updated_rows": int(cur.rowcount), "needs_vector_sync": True}
 
+    # 작업 결과를 사용자가 읽기 쉬운 응답 문장으로 변환한다.
     def _answer(self, result: dict[str, Any]) -> str:
         action = result.get("action")
         if action == "query":
@@ -467,6 +509,7 @@ class NewType04RagCommandTool(Component):
             f"VectorDB 반영은 자동으로 실행하지 않았습니다. 반영하려면 \"{sync_sentence}\"라고 요청하세요."
         )
 
+    # 입력 명령에서 RAG 규칙 필드를 정규화하고 기본 검증을 수행한다.
     def _normalized_rule(self, command: dict[str, Any], *, require_content: bool, partial: bool) -> dict[str, Any]:
         result: dict[str, Any] = {}
         if not partial or "category" in command:
@@ -487,6 +530,7 @@ class NewType04RagCommandTool(Component):
             result["source_tables"] = ""
         return result
 
+    # 카테고리와 규칙 유형에 맞게 필수 필드 조합을 검증한다.
     def _validate_rule_shape(self, rule: dict[str, Any], *, require_complete: bool) -> None:
         category = str(rule.get("category") or "").strip().upper()
         rule_type = str(rule.get("rule_type") or "").strip().upper()
@@ -507,6 +551,7 @@ class NewType04RagCommandTool(Component):
         if rule_type == "GENERAL" and require_complete and not guidance_text:
             raise ValueError("GENERAL RAG requires guidance_text")
 
+    # Langflow 입력에서 명령 JSON을 읽어 딕셔너리로 파싱한다.
     def _parse_command(self) -> dict[str, Any]:
         raw = getattr(self, "command_json", "")
         if not raw:
@@ -525,6 +570,7 @@ class NewType04RagCommandTool(Component):
             return merged
         return parsed
 
+    # Oracle DB 연결을 생성하고 사용 후 닫는 컨텍스트를 제공한다.
     @contextmanager
     def _connect(self):
         import oracledb
@@ -543,6 +589,7 @@ class NewType04RagCommandTool(Component):
         finally:
             conn.close()
 
+    # 명령에서 필수 RAG_ID를 양의 정수로 추출한다.
     def _required_rag_id(self, command: dict[str, Any]) -> int:
         try:
             rag_id = int(str(command.get("rag_id") or "").strip())
@@ -552,45 +599,54 @@ class NewType04RagCommandTool(Component):
             raise ValueError("rag_id is required")
         return rag_id
 
+    # 필수 카테고리 값을 검증하고 반환한다.
     def _required_category(self, value: Any) -> str:
         category = self._optional_category(value)
         if not category:
             raise ValueError("category must be SQL_CONVERSION or SQL_TUNING")
         return category
 
+    # 선택 카테고리 값을 허용 목록 기준으로 정규화한다.
     def _optional_category(self, value: Any) -> str:
         category = str(value or "").strip().upper()
         return category if category in self.CATEGORIES else ""
 
+    # 필수 규칙 유형 값을 검증하고 반환한다.
     def _required_rule_type(self, value: Any) -> str:
         rule_type = self._optional_rule_type(value)
         if not rule_type:
             raise ValueError("rule_type must be GENERAL or SEARCH")
         return rule_type
 
+    # 선택 규칙 유형 값을 허용 목록 기준으로 정규화한다.
     def _optional_rule_type(self, value: Any) -> str:
         rule_type = str(value or "").strip().upper()
         return rule_type if rule_type in self.RULE_TYPES else ""
 
+    # 필수 사용 여부 값을 Y 또는 N으로 검증한다.
     def _required_use_yn(self, value: Any) -> str:
         use_yn = self._optional_use_yn(value)
         if not use_yn:
             raise ValueError("use_yn must be Y or N")
         return use_yn
 
+    # 선택 사용 여부 값을 Y 또는 N으로 정규화한다.
     def _optional_use_yn(self, value: Any) -> str:
         use_yn = str(value or "").strip().upper()
         return use_yn if use_yn in {"Y", "N"} else ""
 
+    # 소스 테이블 입력을 쉼표 구분 대문자 문자열로 정리한다.
     def _source_tables(self, value: Any) -> str:
         if isinstance(value, list):
             value = ",".join(str(item) for item in value)
         return str(value or "").strip().upper()
 
+    # 조회 제한 건수를 기본값과 최대값 범위 안으로 보정한다.
     def _limit(self, value: Any) -> int:
         default = self._positive_int(getattr(self, "default_limit", None), 10)
         return max(1, min(self._positive_int(value, default), 100))
 
+    # 입력값을 양의 정수로 변환하고 실패하면 기본값을 반환한다.
     def _positive_int(self, value: Any, default: int) -> int:
         try:
             parsed = int(value or 0)
@@ -598,11 +654,13 @@ class NewType04RagCommandTool(Component):
         except (TypeError, ValueError):
             return default
 
+    # 다양한 문자열 표현을 불리언 값으로 해석한다.
     def _as_bool(self, value: Any) -> bool:
         if isinstance(value, bool):
             return value
         return str(value or "").strip().lower() in {"1", "true", "t", "y", "yes", "on"}
 
+    # CLOB 등 직렬화하기 어려운 값을 JSON 친화적인 값으로 변환한다.
     def _json_value(self, value: Any) -> Any:
         if value is None:
             return None
@@ -610,6 +668,7 @@ class NewType04RagCommandTool(Component):
             value = value.read()
         return value if isinstance(value, (str, int, float, bool)) else str(value)
 
+    # 입력값과 환경변수에서 Milvus 접속 설정을 구성하고 검증한다.
     def _milvus_config(self) -> dict[str, str]:
         config = {
             "uri": str(getattr(self, "milvus_uri", "") or os.getenv("MILVUS_URI") or "").strip(),
@@ -625,6 +684,7 @@ class NewType04RagCommandTool(Component):
             raise ValueError("Invalid AS-IS SQL collection name")
         return config
 
+    # Milvus 검색에 사용할 클라이언트 객체를 생성한다.
     def _milvus_client(self, config: dict[str, str]) -> Any:
         from pymilvus import MilvusClient
 
@@ -636,6 +696,7 @@ class NewType04RagCommandTool(Component):
             timeout=10,
         )
 
+    # 임베딩 API 호출에 필요한 설정을 입력값과 환경변수에서 구성한다.
     def _embed_config(self) -> dict[str, Any]:
         config = {
             "base_url": str(getattr(self, "rag_embed_base_url", "") or os.getenv("RAG_EMBED_BASE_URL") or "").strip(),
@@ -647,6 +708,7 @@ class NewType04RagCommandTool(Component):
             raise ValueError("rag_embed_base_url and rag_embed_model are required for AS-IS SQL similarity search")
         return config
 
+    # 임베딩 API를 호출해 SQL 텍스트 목록을 벡터 목록으로 변환한다.
     def _embed_texts(self, texts: list[str], config: dict[str, Any]) -> list[list[float]]:
         base_url = str(config["base_url"]).rstrip("/")
         endpoint = base_url if base_url.endswith("/embeddings") else f"{base_url}/embeddings" if base_url.endswith("/v1") else f"{base_url}/v1/embeddings"
@@ -667,6 +729,7 @@ class NewType04RagCommandTool(Component):
             raise ValueError(f"embedding response count mismatch: expected={len(texts)}, actual={len(vectors)}")
         return vectors
 
+    # SQL에서 주석과 리터럴을 정리해 임베딩용 텍스트를 만든다.
     def _sql_content(self, sql_text: str) -> str:
         source = str(sql_text or "").strip()
         normalized = re.sub(r"/\*.*?\*/", " ", source, flags=re.DOTALL)
@@ -676,18 +739,21 @@ class NewType04RagCommandTool(Component):
         normalized = re.sub(r"\s+", " ", normalized).strip().upper()
         return "\n".join(part for part in (normalized, source) if part).strip()
 
+    # 시스템 스키마와 테이블명을 안전한 정규화된 전체 테이블명으로 조합한다.
     def _qualify(self, table: str) -> str:
         schema = str(getattr(self, "system_schema", "") or "").strip().upper()
         if not schema:
             raise ValueError("System Schema is required")
         return f"{self._clean_identifier(schema)}.{self._clean_identifier(table)}"
 
+    # SQL 식별자가 허용된 문자 규칙을 만족하는지 검증한다.
     def _clean_identifier(self, value: str) -> str:
         clean = str(value or "").strip().upper()
         if not re.fullmatch(r"[A-Z][A-Z0-9_$#]*", clean):
             raise ValueError(f"Invalid identifier: {clean}")
         return clean
 
+    # SecretStr 또는 일반 값을 안전하게 문자열 비밀번호로 변환한다.
     def _secret_to_str(self, value: Any) -> str:
         if value is None:
             return ""
@@ -695,11 +761,13 @@ class NewType04RagCommandTool(Component):
             return str(value.get_secret_value())
         return str(value)
 
+    # Oracle CLOB 바인딩에 사용할 타입 객체를 반환한다.
     def _clob_type(self) -> Any:
         import oracledb
 
         return getattr(oracledb, "DB_TYPE_CLOB", getattr(oracledb, "CLOB", None))
 
+    # Oracle NUMBER 바인딩에 사용할 타입 객체를 반환한다.
     def _number_type(self) -> Any:
         import oracledb
 

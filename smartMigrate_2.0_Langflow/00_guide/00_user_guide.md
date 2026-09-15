@@ -66,7 +66,7 @@ SQL 관련 단건 작업은 `SQL_ID`와 `SPACE_NM`을 모두 입력해야 한다
 |---|---|---|
 | 유사 SQL 검색 | `아래 SQL과 비슷한 실패 SQL 최대 20개 찾아줘. SQL=...` | 사용자 반환 결과는 최대 20건이다. 실패 판정은 항상 `STATUS_CONVERSION LIKE 'FAIL-%'`만 사용하며 SQL Tuning 실패 상태는 검색하지 않는다. 기본 최소 유사도는 Tool 입력의 70%다. 사용자가 유사도 조건을 말하지 않으면 command JSON의 `min_similarity`는 생략하며, `유사도 80% 이상` 요청 시에만 값을 전달한다. AS-IS SQL 유사도가 검색 기준이고, `TARGET_TABLE`이 겹치는 후보를 먼저 정렬한다. 결과 표에는 `SQL_ID`, `SPACE_NM`, `TARGET_TABLE`, `TARGET_TABLE 겹침`, `STATUS_CONVERSION`, 유사도가 포함된다. |
 | 기준 job으로 검색 | `SQL_ID=S001, SPACE_NM=PAYMENT와 비슷한 실패 SQL 찾아줘.` | 기준 row의 `EDIT_FR_SQL` 우선, 없으면 `FR_SQL`을 임베딩한다. 기준 row 자신은 기본적으로 결과에서 제외한다. |
-| 후보 확인 | `찾은 실패 SQL들을 재시도 상태로 바꿔줘.` | Agent가 각 후보를 `SQL_ID={값}, SPACE_NM={값}`, 상태, 유사도와 함께 제시하고 `FAIL-* 상태를 재시도 상태(NULL)로 변경할까요?`라고 명시적 확인을 요청한다. |
+| 다음 요청 안내 | 없음 | 채팅 기록을 사용하지 않으므로 Agent는 각 후보마다 완전한 요청 문장을 제공한다. 예: `SQL_ID=Q001, SPACE_NM=SALES 재시도 상태로 변경해줘.` `위 목록`, `그것들`처럼 이전 결과를 가리키는 요청은 사용하지 않는다. |
 | 재시도 상태 변경 | `SQL_ID=Q001, SPACE_NM=SALES 재시도 상태로 바꿔줘.` | 확인된 후보만 `FAIL-*` 상태에서 DB `NULL`로 변경하고 `RETRY_COUNT`를 0으로 초기화한다. 이 단계는 작업을 실행하지 않는다. |
 | 실제 작업 실행 | `SQL_ID=Q001, SPACE_NM=SALES SQL Conversion 실행해줘.` | `STATUS_CONVERSION` 재시도 상태 변경이 완료된 뒤 별도 요청으로 Conversion executor를 실행한다. |
 
