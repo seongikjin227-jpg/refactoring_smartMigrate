@@ -10,7 +10,8 @@
 | 실행 | DB Migration, SQL Conversion, SQL Tuning, SQL Formatting, 전체 workflow 실행 | 전체 잔여 작업 또는 특정 작업 | 실행 가능한 job을 DB에서 다시 조회한 뒤 도메인별 executor를 실행한다. |
 | 수정 | 실패 job 상태 초기화, priority 변경, 담당자 보정 SQL 저장, `USER_EDITED` 변경, DB Migration `USE_YN` 변경 | `MAP_ID` 또는 `SQL_ID` + `SPACE_NM` | 상태값, retry count, priority, `USER_EDITED`, `USE_YN` 또는 SQL CLOB를 DB에 반영한다. |
 | RAG Guide 관리 | Conversion/Tuning 가이드 조회, 추가, 수정, 비활성화 | `NEXT_MIG_RAG_INFO`, `RAG_ID` | RAG rule 원천 테이블을 관리한다. 신규/수정분은 VectorDB 동기화 후 검색에 반영된다. |
-| VectorDB 관리 | RAG Guide와 Correct SQL 동기화 | Oracle 원천 테이블, Milvus collection | Oracle snapshot 기준으로 Milvus 검색 인덱스를 갱신한다. |
+| AS-IS SQL 유사도 검색 | 유사한 원본 SQL 및 재시도 후보 조회 | SQL 본문 또는 `SQL_ID` + `SPACE_NM` | AS-IS SQL 벡터 검색 뒤 Oracle 최신 상태를 기준으로 후보를 반환한다. |
+| VectorDB 관리 | RAG Guide, Correct SQL, AS-IS SQL 동기화 | Oracle 원천 테이블, Milvus collection | Oracle snapshot 기준으로 Milvus 검색 인덱스를 갱신한다. |
 
 ## 1.2 조회 및 분석 요청
 
@@ -23,6 +24,7 @@
 | SQL job 상태 조회 | `SQL_ID`, `SPACE_NM` | 도메인 | `SQL_ID={SQL_ID}, SPACE_NM={SPACE_NM} 상태 알려줘.` | `NEXT_SQL_INFO` 기준 Conversion/Tuning/Formatting 상태와 로그를 조회한다. |
 | SQL job SQL 원문 조회 | `SQL_ID`, `SPACE_NM`, SQL 컬럼명 | 없음 | `SQL_ID={SQL_ID}, SPACE_NM={SPACE_NM}의 TO_SQL, BIND_SQL, TEST_SQL 보여줘.` | 요청한 SQL 컬럼의 CLOB 원문을 반환한다. |
 | 실패 원인 분석 | 없음 | 도메인, `MAP_ID`, `SQL_ID`, `SPACE_NM`, 건수 | `최근 SQL Conversion 실패 10건 원인 요약해줘.` | 상태, 로그, 저장 SQL을 근거로 실패 원인과 확인 포인트를 요약한다. |
+| AS-IS SQL 유사도 검색 | SQL 본문 또는 `SQL_ID`, `SPACE_NM` | 상태 필터, Conversion/Tuning 범위, 건수 | `SQL_ID=S001, SPACE_NM=PAYMENT와 비슷한 AS-IS SQL을 가진 실패 SQL ID를 찾아줘.` | `EDIT_FR_SQL` 우선, 없으면 `FR_SQL`을 임베딩해 유사 SQL 목록을 찾고 Oracle 최신 상태로 필터링한다. 검색만으로 상태는 변경하지 않는다. |
 | RAG Guide 조회 | 없음 | `CATEGORY`, `RULE_TYPE`, 검색어, 사용 여부, 조회 건수, 원문 포함 여부 | `SQL Conversion RAG Guide 중 CUSTOMER가 포함된 항목 20건 조회해줘.` | 조건에 맞는 `NEXT_MIG_RAG_INFO` row를 조회한다. 검색어는 `SOURCE_TABLES`, `GUIDANCE_TEXT`, `SOURCE_SQL`, `TARGET_SQL`에서 찾는다. |
 
 ## 1.3 실행 요청
@@ -56,6 +58,20 @@ SQL 관련 단건 작업은 `SQL_ID`와 `SPACE_NM`을 모두 입력해야 한다
 
 허용 SQL 컬럼은 DB Migration의 경우 `MIG_SQL`, `VERIFY_SQL`이고, SQL job의 경우 `TO_SQL`, `BIND_SQL`, `TEST_SQL`, `TUNED_TO_SQL`, `FORMATTED_SQL`이다.
 
+### AS-IS SQL 유사도 검색 및 실패 재시도
+
+`SM_ASIS_SQL`은 `NEXT_SQL_INFO`의 `SQL_ID`, `SPACE_NM`, `TAG_KIND`, `TARGET_TABLE`, `FR_SQL`, `EDIT_FR_SQL`만 보관하는 AS-IS 전용 Milvus 컬렉션이다. 검색 content는 `EDIT_FR_SQL`이 있으면 이를, 없으면 `FR_SQL`을 사용한다. TO-BE SQL이나 실행 상태는 벡터 DB에 저장하지 않는다.
+
+| 단계 | 사용자 요청 예시 | 처리 |
+|---|---|---|
+| 유사 SQL 검색 | `아래 SQL과 비슷한 실패 SQL 최대 20개 찾아줘. SQL=...` | 사용자 반환 결과는 최대 20건이다. 기본값은 SQL Conversion의 `FAIL-*`만 검색하며, 최소 유사도 제한은 없다. 필요하면 `유사도 80% 이상`, `PASS만`, `전체`, `SQL Tuning`, `양쪽` 범위를 요청할 수 있다. |
+| 기준 job으로 검색 | `SQL_ID=S001, SPACE_NM=PAYMENT와 비슷한 실패 SQL 찾아줘.` | 기준 row의 `EDIT_FR_SQL` 우선, 없으면 `FR_SQL`을 임베딩한다. 기준 row 자신은 기본적으로 결과에서 제외한다. |
+| 후보 확인 | `찾은 실패 SQL들을 재시도 상태로 바꿔줘.` | Agent가 각 후보를 `SQL_ID={값}, SPACE_NM={값}`, 상태, 유사도와 함께 제시하고 `FAIL-* 상태를 재시도 상태(NULL)로 변경할까요?`라고 명시적 확인을 요청한다. |
+| 재시도 상태 변경 | `SQL_ID=Q001, SPACE_NM=SALES 재시도 상태로 바꿔줘.` | 확인된 후보만 `FAIL-*` 상태에서 DB `NULL`로 변경하고 `RETRY_COUNT`를 0으로 초기화한다. 이 단계는 작업을 실행하지 않는다. |
+| 실제 작업 실행 | `SQL_ID=Q001, SPACE_NM=SALES SQL Conversion 실행해줘.` | 재시도 상태 변경이 완료된 뒤 별도 요청으로 executor를 실행한다. |
+
+상태는 Milvus metadata가 아니라 검색 직후와 UPDATE 시점에 모두 Oracle `NEXT_SQL_INFO`에서 재확인한다. 따라서 동기화 이후 상태가 `PASS-*`로 바뀐 row는 검색 결과에 포함되거나 재시도 처리되지 않는다.
+
 ## 1.5 RAG Guide 관리
 
 RAG Guide는 `NEXT_MIG_RAG_INFO`에 저장된다. 추가, 수정, 비활성화는 Oracle 원천 테이블을 변경하고, Milvus 검색에는 VectorDB 동기화 후 반영된다.
@@ -80,7 +96,7 @@ RAG Guide는 `NEXT_MIG_RAG_INFO`에 저장된다. 추가, 수정, 비활성화�
 | SQL Tuning 공통 가이드 추가 | `SQL Tuning GENERAL RAG Guide 추가해줘. GUIDANCE_TEXT=중복 조인은 서브쿼리로 분리하고 인덱스 사용 가능 컬럼을 우선 고려한다.` | `GUIDANCE_TEXT` 필수 |
 | SQL Tuning 검색 예시 추가 | `SQL Tuning SEARCH RAG 추가해줘. GUIDANCE_TEXT=인덱스 힌트는 조건이 넓은 테이블에 우선 적용한다. SOURCE_SQL=..., TARGET_SQL=...` | `GUIDANCE_TEXT` + `SOURCE_SQL` + `TARGET_SQL` |
 | RAG Guide 비활성화 | `RAG_ID=25 RAG Guide 비활성화해줘.` | `RAG_ID` |
-| VectorDB 동기화 | `RAG Guide와 Correct SQL을 VectorDB에 동기화해줘.` | 없음 |
+| VectorDB 동기화 | `RAG Guide, Correct SQL, AS-IS SQL을 VectorDB에 동기화해줘.` | 없음 |
 
 ### RAG Guide 관리 작업
 
@@ -89,7 +105,7 @@ RAG Guide는 `NEXT_MIG_RAG_INFO`에 저장된다. 추가, 수정, 비활성화�
 | 조회 | 없음 | `CATEGORY`, `RULE_TYPE`, 검색어, 사용 여부, 조회 건수, 원문 포함 여부 | `SQL Tuning GENERAL RAG Guide 전체 내용 조회해줘.` | 조건에 맞는 RAG Guide 목록과 본문을 조회한다. 검색어는 `SOURCE_TABLES`, `GUIDANCE_TEXT`, `SOURCE_SQL`, `TARGET_SQL`에서 찾는다. |
 | 수정 | `RAG_ID`, 수정할 필드 | 없음 | `RAG_ID={RAG_ID}의 SOURCE_TABLES를 CUSTOMER, ORDER로 수정해줘.` | 해당 row만 update한다. |
 | 비활성화 | `RAG_ID` | 없음 | `RAG_ID={RAG_ID} RAG Guide 비활성화해줘.` | 물리 삭제 대신 `USE_YN='N'`으로 변경한다. |
-| VectorDB 동기화 | 없음 | 없음 | `RAG Guide와 Correct SQL을 VectorDB에 동기화해줘.` | Oracle 원천 snapshot을 기준으로 Milvus collection을 갱신한다. |
+| VectorDB 동기화 | 없음 | 없음 | `RAG Guide, Correct SQL, AS-IS SQL을 VectorDB에 동기화해줘.` | Oracle 원천 snapshot을 기준으로 `SM_RAG_RULES`, Correct SQL collection, `SM_ASIS_SQL`을 갱신한다. |
 
 ### RAG Guide 입력 규칙
 
@@ -125,6 +141,7 @@ RAG Guide는 `NEXT_MIG_RAG_INFO`에 저장된다. 추가, 수정, 비활성화�
 | 실행성 요청은 DB를 변경할 수 있다. | `실행`, `진행`, `남은 작업 처리` 요청은 executor로 연결되어 상태, 로그, 결과 SQL 또는 target table이 변경될 수 있다. |
 | Update Command의 SQL 저장은 사용자가 제공한 SQL만 반영한다. | LLM이 보정 SQL을 새로 작성해 저장하지 않는다. |
 | 상태 초기화는 DB `NULL`이다. | 재실행 대상 조건은 상태 컬럼 `IS NULL` 기준이다. SQL 본문은 별도 요청이 없으면 유지한다. |
+| 유사 SQL 기반 재시도는 명시적 확인이 필요하다. | 검색은 read-only다. 재시도 action은 UPDATE 시점에도 해당 상태가 `FAIL-*`인지 검사하므로 PASS row는 변경하지 않고 skip한다. |
 | `USER_EDITED` 변경은 SQL 본문을 삭제하지 않는다. | `USER_EDITED='N'`으로 바꾸면 이후 실행에서 저장된 보정 SQL을 강제 재사용하지 않는다. |
 | DB Migration `USE_YN` 변경은 SQL 본문과 상태를 삭제하지 않는다. | `USE_YN='N'`이면 DB Migration 실행 대상에서 제외된다. `NEXT_SQL_INFO`에는 `USE_YN` 컬럼이 없다. |
 | RAG Guide 추가 후 VectorDB 동기화가 필요하다. | Oracle에는 즉시 저장되지만 Milvus 검색 결과에는 동기화 이후 반영된다. |

@@ -18,6 +18,10 @@ except Exception:
     DataInput = MessageTextInput
 
 
+MAX_SIMILAR_SQL_RESULTS = 20
+MAX_SIMILAR_SQL_CANDIDATES = 100
+
+
 class NewType04RagCommandTool(Component):
     display_name = "04 RAG Command Tool"
     description = "Tool-mode RAG Guide query/add/update/disable command component."
@@ -157,8 +161,11 @@ class NewType04RagCommandTool(Component):
         query_sql, query_source, query_identity = self._similarity_query_sql(conn, command)
         status_filter = self._status_filter(command.get("status_filter") or command.get("filter"))
         status_scope = self._status_scope(command.get("status_scope") or command.get("domain"))
-        limit = self._limit(command.get("limit"))
-        candidate_limit = max(limit, min(self._positive_int(command.get("candidate_limit"), max(limit * 5, 50)), 100))
+        # The management response is deliberately capped at 20 rows.  A larger
+        # candidate pool is still read so FAIL-only filtering can fill the list.
+        limit = max(1, min(self._positive_int(command.get("limit"), MAX_SIMILAR_SQL_RESULTS), MAX_SIMILAR_SQL_RESULTS))
+        candidate_limit = max(limit, min(self._positive_int(command.get("candidate_limit"), max(limit * 5, 50)), MAX_SIMILAR_SQL_CANDIDATES))
+        min_similarity = self._similarity_threshold(command.get("min_similarity"))
 
         vector = self._embed_texts([self._sql_content(query_sql)], self._embed_config())[0]
         client = self._milvus_client(self._milvus_config())
@@ -175,6 +182,8 @@ class NewType04RagCommandTool(Component):
         statuses = self._load_sql_statuses(conn, candidates)
         matches: list[dict[str, Any]] = []
         for candidate in candidates:
+            if min_similarity is not None and candidate["similarity"] < min_similarity:
+                continue
             identity = self._identity_key(candidate.get("sql_id"), candidate.get("space_nm"))
             if query_identity and identity == query_identity and not self._as_bool(command.get("include_self")):
                 continue
@@ -201,15 +210,19 @@ class NewType04RagCommandTool(Component):
             "query_source": query_source,
             "status_filter": status_filter,
             "status_scope": status_scope,
+            "min_similarity": min_similarity,
+            "result_limit": limit,
             "candidate_count": len(candidates),
             "row_count": len(matches),
             "data": {"similar_sqls": matches},
+            "confirmation_targets": [f"SQL_ID={item['sql_id']}, SPACE_NM={item['space_nm']}" for item in matches],
             "confirmation_required": status_filter == "FAIL_ONLY" and bool(matches),
             "confirmation_message": (
-                "The listed FAIL-* rows can be reset to NULL for retry. Confirm before running the supplied retry_actions; PASS rows are never included."
+                "Confirm whether every listed SQL_ID + SPACE_NM should be changed to retry-ready status (FAIL-* -> NULL). This only changes status; it does not execute SQL Conversion/Tuning."
                 if status_filter == "FAIL_ONLY" and matches
                 else "No status change has been made."
             ),
+            "execution_request_examples_after_status_reset": self._execution_request_examples(matches),
         }
 
     def _similarity_query_sql(self, conn: Any, command: dict[str, Any]) -> tuple[str, str, tuple[str, str] | None]:
@@ -290,6 +303,7 @@ class NewType04RagCommandTool(Component):
                 "tag_kind": str(entity.get("tag_kind") or "").strip(),
                 "target_table": str(entity.get("target_table") or "").strip(),
                 "similarity": float(hit.get("distance", hit.get("score", 0.0)) or 0.0),
+                "similarity_percent": round(float(hit.get("distance", hit.get("score", 0.0)) or 0.0) * 100, 1),
             })
         return result
 
@@ -309,6 +323,19 @@ class NewType04RagCommandTool(Component):
             raise ValueError("status_scope must be CONVERSION, TUNING, or ANY")
         return normalized
 
+    def _similarity_threshold(self, value: Any) -> float | None:
+        if value in (None, ""):
+            return None
+        try:
+            threshold = float(str(value).strip().rstrip("%"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("min_similarity must be a number between 0 and 1, or a percentage such as 80") from exc
+        if threshold > 1:
+            threshold /= 100
+        if not 0 <= threshold <= 1:
+            raise ValueError("min_similarity must be between 0 and 1, or between 0 and 100 percent")
+        return threshold
+
     def _matching_statuses(self, status: dict[str, str], scope: str, status_filter: str) -> list[str]:
         columns = {"CONVERSION": status.get("status_conversion", ""), "TUNING": status.get("status_tuning", "")}
         selected = ("CONVERSION", "TUNING") if scope == "ANY" else (scope,)
@@ -326,6 +353,15 @@ class NewType04RagCommandTool(Component):
             }
             for status_name in matched_statuses
         ]
+
+    def _execution_request_examples(self, matches: list[dict[str, Any]]) -> list[str]:
+        examples = []
+        for match in matches:
+            domains = match.get("matched_statuses") or []
+            for domain in domains:
+                action = "SQL Conversion" if domain == "CONVERSION" else "SQL Tuning"
+                examples.append(f"SQL_ID={match['sql_id']}, SPACE_NM={match['space_nm']} {action} 실행해줘.")
+        return examples
 
     def _identity_key(self, sql_id: Any, space_nm: Any) -> tuple[str, str]:
         return str(sql_id or "").strip().upper(), str(space_nm or "").strip().upper()
@@ -388,7 +424,8 @@ class NewType04RagCommandTool(Component):
         if action == "search_similar_asis_sql":
             return (
                 f"AS-IS SQL similarity search completed: {result.get('row_count', 0)} row(s) "
-                f"matched with status_filter={result.get('status_filter')}. "
+                f"matched with status_filter={result.get('status_filter')}, limit={result.get('result_limit')}, "
+                f"min_similarity={result.get('min_similarity')}. "
                 "No status was changed."
             )
         rag_id = result.get("rag_id")

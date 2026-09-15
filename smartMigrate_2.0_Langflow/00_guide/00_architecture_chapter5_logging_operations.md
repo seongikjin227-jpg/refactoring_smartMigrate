@@ -204,6 +204,7 @@ SELECT COUNT(*)
 | 로그 schema 변경 | `00A_logRuntimeStart.py`, `99.LogHelper.py`, `00_logging_rules.txt`, `04_currentProgress.py`, `04_selectCommandTool.py`, `11B` |
 | runnable 조건 변경 | `06_getRemainingJobs.py`, `10A/12A/15A/17A/18A`, `04_dashboard.py`, `11_finalDashboard.py` |
 | RAG collection 변경 | `04_saveVectorDB.py`, `10C`, `12C`, `15C`, environment/flow variables |
+| AS-IS SQL 유사도 검색 변경 | `04_saveVectorDB.py`, `04_ragCommandTool.py`, `04_updateCommandTool.py`, `04_managementRouter.py`, `04_managementAgentPrompt.md`, Milvus/embedding flow variables |
 
 ## 5.9 운영자가 자주 쓰는 Management Agent 질문
 
@@ -214,10 +215,33 @@ SELECT COUNT(*)
 | "sql id S001 space DDD의 BIND_SQL 보여줘" | `MANAGEMENT_AGENT` | `NEXT_SQL_INFO.BIND_SQL` full CLOB |
 | "전체 Fail 분석해줘" | `MANAGEMENT_AGENT` | 최근 100개 fail log |
 | "SQL Tuning만 분석해줘" | `MANAGEMENT_AGENT` | `MIG_KIND='SQL_TUNING'` fail/recent log |
+| "S001과 비슷한 AS-IS SQL을 가진 실패 SQL 찾아줘" | `MANAGEMENT_AGENT` | `SM_ASIS_SQL` dense search 후 `NEXT_SQL_INFO` 최신 상태 재조회 |
 | "대시보드 보여줘" | `DASHBOARD` | aggregate count |
 | "지금 진행 중인 작업 있어?" | `CURRENT_PROGRESS` | running status + recent 5 logs |
 
-## 5.10 최종 점검 Checklist
+## 5.10 AS-IS SQL 유사도 검색과 안전 재시도
+
+`SM_ASIS_SQL`은 관리용 검색 인덱스이며 실행용 Correct SQL 힌트 컬렉션이 아니다. Oracle `NEXT_SQL_INFO`의 `FR_SQL`, `EDIT_FR_SQL`을 대상으로 하고 `EDIT_FR_SQL`이 있으면 이를 우선 임베딩한다. 저장 metadata는 `SQL_ID`, `SPACE_NM`, `TAG_KIND`, `TARGET_TABLE`, `FR_SQL`, `EDIT_FR_SQL`로 제한한다.
+
+```mermaid
+flowchart LR
+    Q[AS-IS SQL 또는 SQL_ID + SPACE_NM] --> E[EDIT_FR_SQL 우선 임베딩]
+    E --> V[SM_ASIS_SQL dense search]
+    V --> O[NEXT_SQL_INFO 최신 상태 재조회]
+    O --> F[FAIL-* 후보만 반환]
+    F --> C{명시적 확인}
+    C -->|yes| U[FAIL-* predicate UPDATE: status NULL]
+    C -->|no| X[상태 변경 없음]
+```
+
+- 검색 기본값은 `status_filter=FAIL_ONLY`, `status_scope=CONVERSION`이며 사용자 반환 결과는 최대 20건이다. 내부 후보 pool은 FAIL 필터 후 결과를 보완하기 위해 더 크게 조회할 수 있다. `PASS_ONLY`, `ALL`, `TUNING`, `ANY`는 명시적으로 선택한다.
+- 최소 유사도 제한은 기본 적용하지 않는다. 예를 들어 `75.1%`도 후보에 포함될 수 있으며, 운영자가 필요하면 `min_similarity=0.8` 또는 `80`처럼 명시한다.
+- 검색은 read-only다. 반환한 후보라도 `SQL_ID`만으로 update하지 않고, 항상 `SQL_ID + SPACE_NM` 전체 식별자와 함께 명시적 확인을 받는다.
+- `retry_failed_sql_conversion` / `retry_failed_sql_tuning`은 `UPDATE`의 `WHERE STATUS LIKE 'FAIL-%'` 조건을 사용한다. 검색과 update 사이에 PASS로 바뀐 row는 0건 update로 skip되며 PASS를 NULL로 바꾸지 않는다. 이 action은 재실행 가능한 상태로 바꿀 뿐 executor를 실행하지 않는다.
+- 상태 변경 성공 후 실제 실행은 `SQL_ID={값}, SPACE_NM={값} SQL Conversion 실행해줘.` 또는 SQL Tuning 실행 요청으로 별도 수행한다.
+- vector DB에는 상태를 저장하지 않는다. 동기화 시점과 무관하게 Oracle 상태가 최종 판단 기준이다.
+
+## 5.11 최종 점검 Checklist
 
 | 항목 | 기준 |
 |---|---|
@@ -229,6 +253,5 @@ SELECT COUNT(*)
 | logging handler 정상 | `00A`가 flow 초반에 배치됨 |
 | Milvus sync 분리 | `04_saveVectorDB`는 운영 중 반복 실행이 아니라 maintenance one-shot sync |
 | Update Command 안전성 | 고정 action별 SQL만 update |
-
-
+| AS-IS 재시도 안전성 | 검색은 Oracle 상태 재확인, update는 `FAIL-%` predicate와 명시적 확인을 적용 |
 
