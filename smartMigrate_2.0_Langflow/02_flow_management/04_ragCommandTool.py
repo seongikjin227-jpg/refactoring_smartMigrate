@@ -24,7 +24,7 @@ except Exception:
 
 
 MAX_SIMILAR_SQL_RESULTS = 20
-MAX_SIMILAR_SQL_CANDIDATES = 100
+MAX_SIMILAR_SQL_CANDIDATES = 500
 
 
 class NewType04RagCommandTool(Component):
@@ -176,7 +176,7 @@ class NewType04RagCommandTool(Component):
 
         # 사용자에게 돌려줄 결과는 최대 20건으로 제한하고, 필터링 여유분을 위해 후보는 더 많이 가져온다.
         limit = max(1, min(self._positive_int(command.get("limit"), MAX_SIMILAR_SQL_RESULTS), MAX_SIMILAR_SQL_RESULTS))
-        candidate_limit = max(limit, min(self._positive_int(command.get("candidate_limit"), max(limit * 5, 50)), MAX_SIMILAR_SQL_CANDIDATES))
+        candidate_limit = max(limit, min(self._positive_int(command.get("candidate_limit"), MAX_SIMILAR_SQL_CANDIDATES), MAX_SIMILAR_SQL_CANDIDATES))
 
         # 명령에 min_similarity가 없으면 컴포넌트 기본값을 쓰고, 퍼센트 입력도 0~1 범위로 정규화한다.
         requested_min_similarity = command.get("min_similarity")
