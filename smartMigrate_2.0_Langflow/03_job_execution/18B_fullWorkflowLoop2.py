@@ -415,12 +415,15 @@ class NewType18BFullWorkflowLoop2(Component):
             return 0
 
         pending_jobs = self._load_pending_jobs_from_db(db_config, first_payload)
+        # cursor 위치의 "지금 실행할 job"과 그 뒤의 남은 job만 중복 기준으로 본다.
+        # cursor 앞쪽에서 이미 실행된 job은 사용자가 다시 STATUS=NULL로 바꾸면 새 요청으로 재추가될 수 있다.
         remaining_keys = {
             self._job_key(self._data_dict(item))
             for item in data_list[cursor:]
             if self._job_key(self._data_dict(item)) is not None
         }
         added = 0
+        added_jobs: list[dict[str, Any]] = []
         seen_new_keys: set[tuple[Any, ...]] = set()
         for job in pending_jobs:
             key = self._job_key(job)
@@ -430,15 +433,12 @@ class NewType18BFullWorkflowLoop2(Component):
             remaining_keys.add(key)
             seen_new_keys.add(key)
             added += 1
-            self._log_dynamic_job_added(job, key, cursor, insert_at, next_route)
+            added_jobs.append({"job": job, "key": key, "insert_at": insert_at})
 
         if added:
             self._reindex_jobs(data_list)
             self.update_ctx({f"{self._id}_data": data_list})
-            logging.getLogger("smartmigrate.workflow").info(
-                f"dynamic pending jobs added: {added}",
-                extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP2", "INFO", "DYNAMIC_QUEUE_REFRESH", "ADD", added]},
-            )
+            self._log_dynamic_jobs_added(added_jobs, cursor, next_route, len(data_list))
         return added
 
     # Oracle 원본 테이블에서 현재 pending job을 다시 읽는다. USER_EDITED=Y FAIL-*는 pending으로 보지 않는다.
@@ -532,32 +532,37 @@ class NewType18BFullWorkflowLoop2(Component):
         data_list.insert(insert_at, item)
         return insert_at
 
-    # 동적 큐에 새로 들어간 job의 식별자와 삽입 위치를 workflow log에 남긴다.
-    def _log_dynamic_job_added(
+    # refresh 한 번에 추가된 동적 job 목록을 한 줄의 workflow log로 남긴다.
+    def _log_dynamic_jobs_added(
         self,
-        job: dict[str, Any],
-        key: tuple[Any, ...],
+        added_jobs: list[dict[str, Any]],
         cursor: int,
-        insert_at: int,
         next_route: str,
+        queue_size: int,
     ) -> None:
-        route = self._route(job)
-        priority = job.get("priority")
+        summaries = []
+        for item in added_jobs:
+            job = dict(item.get("job") or {})
+            key = item.get("key")
+            insert_at = item.get("insert_at")
+            summaries.append(
+                f"{self._route(job)} key={key} priority={self._payload_value(job, 'priority')} insert_at={insert_at}"
+            )
         message = (
-            f"dynamic job added route={route}, key={key}, priority={priority}, "
-            f"cursor={cursor}, insert_at={insert_at}, next_route={next_route}"
+            f"dynamic pending jobs added count={len(added_jobs)}, cursor={cursor}, "
+            f"next_route={next_route}, queue_size={queue_size}, jobs=[{'; '.join(summaries)}]"
         )
         logging.getLogger("smartmigrate.workflow").info(
             message,
             extra={
                 "workflow_log": [
-                    self._workflow_log_job_id(job),
-                    route or "WORKFLOW",
+                    0,
+                    "WORKFLOW",
                     "18B_FULL_LOOP2",
                     "INFO",
                     "DYNAMIC_QUEUE_REFRESH",
-                    "JOB_ADDED",
-                    0,
+                    "ADD",
+                    len(added_jobs),
                     message,
                 ]
             },
