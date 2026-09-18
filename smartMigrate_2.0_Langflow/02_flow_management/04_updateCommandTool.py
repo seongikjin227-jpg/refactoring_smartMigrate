@@ -45,6 +45,8 @@ class NewType04UpdateCommandTool(Component):
 
     outputs = [Output(display_name="Result", name="result", method="run_command")]
 
+    # 관리 Agent가 만든 action 목록을 고정된 UPDATE 명령으로만 실행한다.
+    # 임의 SQL 문자열을 직접 실행하지 않는 것이 이 컴포넌트의 안전 경계다.
     def run_command(self) -> Data:
         logging.getLogger("smartmigrate.workflow").info(
             "04 Update Command Tool started",
@@ -60,6 +62,8 @@ class NewType04UpdateCommandTool(Component):
             self.status = result
             return Data(data=result)
 
+    # 모든 action을 먼저 statement로 검증한 뒤 하나의 transaction으로 실행한다.
+    # 중간 action 하나라도 실패하면 rollback하여 부분 갱신 상태를 남기지 않는다.
     def _apply_actions(self, command: dict[str, Any]) -> dict[str, Any]:
         actions = command.get("actions")
         if not isinstance(actions, list) or not actions:
@@ -110,6 +114,8 @@ class NewType04UpdateCommandTool(Component):
             "final": True,
         }
 
+    # action 이름을 허용 목록으로 해석해, 테이블/컬럼/SET 절이 모두 코드에서 결정되게 한다.
+    # raw command는 식별자와 값 바인딩만 제공할 수 있다.
     def _build_statement(self, raw: Any, index: int) -> dict[str, Any]:
         if not isinstance(raw, dict):
             raise ValueError(f"actions[{index}] must be an object")
@@ -216,6 +222,7 @@ class NewType04UpdateCommandTool(Component):
 
         raise ValueError(f"Unsupported update action: {action}")
 
+    # 명시적 reset은 상태를 NULL로 돌려 해당 단계의 자동 실행 대상 조건에 다시 맞게 만든다.
     def _sql_reset_statement(self, raw: dict[str, Any], action: str, status_column: str) -> dict[str, Any]:
         sql_id, space_nm = self._sql_identity(raw)
         retry_count = self._int_value(raw.get("retry_count", 0), "retry_count")
@@ -249,6 +256,7 @@ class NewType04UpdateCommandTool(Component):
             "skip_when_not_matched": True,
         }
 
+    # migration row는 MAP_ID 하나가 갱신 단위다. 실행 전 rowcount=1 검증은 _apply_actions가 담당한다.
     def _migration_statement(self, action: str, map_id: str, set_sql: str, params: dict[str, Any], summary: str) -> dict[str, Any]:
         params.setdefault("map_id", map_id)
         return {
@@ -259,6 +267,7 @@ class NewType04UpdateCommandTool(Component):
             "params": params,
         }
 
+    # SQL row의 안정적인 식별자는 SQL_ID 단독이 아니라 SPACE_NM + SQL_ID 조합이다.
     def _sql_statement(self, action: str, sql_id: str, space_nm: str, set_sql: str, params: dict[str, Any], summary: str) -> dict[str, Any]:
         params.setdefault("sql_id", sql_id)
         params.setdefault("space_nm", space_nm)
@@ -312,6 +321,7 @@ class NewType04UpdateCommandTool(Component):
         return "\n".join(lines)
 
     @contextmanager
+    # 쓰기 connection은 contextmanager 종료 시 닫고, commit/rollback은 호출자가 명시적으로 제어한다.
     def _connect(self):
         import oracledb
 

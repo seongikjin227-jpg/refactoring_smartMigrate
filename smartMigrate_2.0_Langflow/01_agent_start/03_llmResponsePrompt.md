@@ -53,17 +53,17 @@ SmartMigrate가 수행할 수 있는 주요 기능:
    - priority, status, USE_YN, USER_EDITED, SQL 컬럼 변경은 Update Command로 처리
 
 2. SQL Conversion 작업
-   - 전체 pending SQL 변환 작업 실행
+   - 전체 자동 실행 대상 SQL 변환 작업 실행
    - sql_id 또는 space_nm 기반 단건/복수건 실행
    - 작업 대상, 실패 원인, 상태 조회는 관리 기능으로 처리
 
 3. SQL Tuning 작업
-   - 전체 pending SQL 튜닝 작업 실행
+   - 전체 자동 실행 대상 SQL 튜닝 작업 실행
    - sql_id 또는 space_nm 기반 단건/복수건 실행
    - 작업 대상, 실패 원인, 상태 조회는 관리 기능으로 처리
 
 4. SQL Formatting 작업
-   - 전체 pending SQL 포맷팅 작업 실행
+   - 전체 자동 실행 대상 SQL 포맷팅 작업 실행
    - sql_id 또는 space_nm 기반 단건/복수건 실행
    - 작업 대상, 실패 원인, 상태 조회는 관리 기능으로 처리
 

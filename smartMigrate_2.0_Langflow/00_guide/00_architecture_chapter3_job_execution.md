@@ -43,9 +43,9 @@ flowchart TD
 
 | route | 테이블 | runnable 조건 |
 |---|---|---|
-| `MIG` | `NEXT_MIG_INFO` | `USE_YN='Y'` and `(STATUS IS NULL OR (USER_EDITED='Y' AND STATUS LIKE 'FAIL-%'))` |
-| `SQL_CONVERSION` | `NEXT_SQL_INFO` | `STATUS_CONVERSION IS NULL OR (USER_EDITED='Y' AND STATUS_CONVERSION LIKE 'FAIL-%')` |
-| `SQL_TUNING` | `NEXT_SQL_INFO` | `STATUS_CONVERSION IN ('PASS','PASS-CONVERSION')` and `(STATUS_TUNING IS NULL OR (USER_EDITED='Y' AND STATUS_TUNING LIKE 'FAIL-%'))` |
+| `MIG` | `NEXT_MIG_INFO` | `USE_YN='Y'` and `STATUS IS NULL` |
+| `SQL_CONVERSION` | `NEXT_SQL_INFO` | `STATUS_CONVERSION IS NULL` |
+| `SQL_TUNING` | `NEXT_SQL_INFO` | `STATUS_CONVERSION IN ('PASS','PASS-CONVERSION')` and `STATUS_TUNING IS NULL` |
 | `SQL_FORMATTING` | `NEXT_SQL_INFO` | `STATUS_TUNING IN ('PASS','PASS-TUNING')` and `FORMATTED_SQL IS NULL OR length=0` |
 
 ### 06 산출 구조
@@ -100,7 +100,7 @@ flowchart TD
 
 ### Full Workflow 내부 SQL Conversion gate
 
-`18A -> 18B` Full Workflow는 DB Migration을 먼저 모두 실행한 뒤 SQL Conversion phase로 넘어간다. SQL phase 진입 직전에 `18B_fullWorkflowLoop.py`가 전체 `NEXT_MIG_INFO` 상태를 확인하고, `USE_YN='Y'`인 DB Migration row 중 `STATUS IS NULL` 또는 `FAIL-%`가 하나라도 있으면 SQL Conversion/Tuning/Formatting을 시작하지 않고 Done payload로 종료한다. 이때 `18B_FULL_LOOP / DB_MIGRATION_GATE / ABORT` workflow log를 남긴다.
+`18A -> 18B` Full Workflow는 DB Migration을 먼저 모두 실행한 뒤 SQL Conversion phase로 넘어간다. 실제 운영 Loop는 `18B_fullWorkflowLoop2.py`이며, 매 item 직전 DB 자동 실행 대상 목록을 refresh해 아직 queue에 없는 job만 phase/priority 순서로 삽입한다. SQL phase 진입 직전에 Loop2가 전체 `NEXT_MIG_INFO` 상태를 확인하고, `USE_YN='Y'`인 DB Migration row 중 `STATUS IS NULL` 또는 `FAIL-%`가 하나라도 있으면 SQL Conversion/Tuning/Formatting을 시작하지 않고 Done payload로 종료한다. 이때 `18B_FULL_LOOP2 / DB_MIGRATION_GATE / ABORT` workflow log를 남긴다.
 
 `18B`는 Done output을 반환하기 직전에 항상 종료 사유를 workflow log로 남긴다. 종료 사유는 `NO_PLANNED_JOB`, `COMPLETED`, `ABORTED` 중 하나로 구분되며 Done payload의 `done_reason`에도 포함된다.
 
@@ -141,7 +141,7 @@ sequenceDiagram
     DB-->>G06: MIG/CONV/TUNING/FORMATTING counts
     G06-->>R08: enriched payload
     R08-->>A18: job_route=FULL_WORKFLOW, run_mode=all_pending
-    A18->>DB: pending rows per route
+    A18->>DB: 자동 실행 대상 row 조회
     DB-->>A18: ordered job rows
     A18-->>B18: Full Workflow DataFrame
     loop each row in route order
@@ -163,11 +163,11 @@ sequenceDiagram
 | 3 | `02_intentRouter.py` | classifier JSON | `JOB_EXECUTION` output만 활성화 | `payload_json` |
 | 4 | `06_getRemainingJobs.py` | payload + DB config | 네 도메인의 runnable count 조회 | `job_availability`, `remaining_summary` |
 | 5 | `08_jobExecutionRouter.py` | enriched payload + LLM config | route를 `FULL_WORKFLOW`, run mode를 `all_pending`으로 확정 | `next_node=18A_fullWorkflowJobsToLoopTable` |
-| 6 | `18A_fullWorkflowJobsToLoopTable.py` | payload + DB config | DB에서 전체 pending rows 조회, route order로 DataFrame 생성 | Full Workflow jobs DataFrame |
-| 7 | `18B_fullWorkflowLoop.py` | DataFrame | 한 row씩 item output. route 순서 보존 | `job_item` |
+| 6 | `18A_fullWorkflowJobsToLoopTable.py` | payload + DB config | DB에서 전체 자동 실행 대상 row 조회, route order로 DataFrame 생성 | Full Workflow jobs DataFrame |
+| 7 | `18B_fullWorkflowLoop2.py` | DataFrame | 매 item 전 DB 자동 실행 대상 refresh, 중복 제외 후 한 row씩 item output | `job_item` |
 | 8 | `10C/12C/15C/17C` | `job_item` | 각 도메인 단일 작업 실행, DB update, log insert | `job_result` |
 | 9 | `18D_fullWorkflowDashboard.py` | `job_result` | iteration progress 메시지와 loop feedback 생성 | `loop_result` |
-| 10 | `18B_fullWorkflowLoop.py` | loop feedback | 다음 row 진행, 끝나면 `loop_done=True` | done payload |
+| 10 | `18B_fullWorkflowLoop2.py` | loop feedback | 다음 row 전 refresh/삽입 후 진행, 끝나면 `loop_done=True` | done payload |
 | 11 | `18D_fullWorkflowDashboard.py` | done payload | route별 planned/completed/pass/fail/skipped summary | final chat output |
 
 ## 3.6 Domain 실행 흐름
@@ -189,11 +189,11 @@ flowchart LR
 
 | 파일 | route | 입력 | row key |
 |---|---|---|---|
-| `10A_migJobsToLoopTable.py` | `MIG` | selected jobs 또는 DB pending MIG | `map_id`, `priority`, `prior_map_id` |
-| `12A_sqlConversionJobsToLoopTable.py` | `SQL_CONVERSION` | selected jobs 또는 DB pending conversion | `space_nm`, `sql_id`, `priority` |
-| `15A_sqlTuningJobsToLoopTable.py` | `SQL_TUNING` | selected jobs 또는 DB pending tuning | `space_nm`, `sql_id`, `priority` |
-| `17A_sqlFormattingJobsToLoopTable.py` | `SQL_FORMATTING` | selected jobs 또는 DB pending formatting | `space_nm`, `sql_id`, `priority` |
-| `18A_fullWorkflowJobsToLoopTable.py` | `FULL_WORKFLOW` | all route pending jobs | `planned_job_route`, `phase_index`, route-level progress |
+| `10A_migJobsToLoopTable.py` | `MIG` | selected jobs 또는 DB 자동 실행 대상 MIG | `map_id`, `priority`, `prior_map_id` |
+| `12A_sqlConversionJobsToLoopTable.py` | `SQL_CONVERSION` | selected jobs 또는 DB 자동 실행 대상 conversion | `space_nm`, `sql_id`, `priority` |
+| `15A_sqlTuningJobsToLoopTable.py` | `SQL_TUNING` | selected jobs 또는 DB 자동 실행 대상 tuning | `space_nm`, `sql_id`, `priority` |
+| `17A_sqlFormattingJobsToLoopTable.py` | `SQL_FORMATTING` | selected jobs 또는 DB 자동 실행 대상 formatting | `space_nm`, `sql_id`, `priority` |
+| `18A_fullWorkflowJobsToLoopTable.py` | `FULL_WORKFLOW` | 모든 route의 자동 실행 대상 job | `planned_job_route`, `phase_index`, route-level progress |
 
 공통 row 필드:
 

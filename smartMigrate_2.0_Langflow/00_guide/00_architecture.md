@@ -1,8 +1,6 @@
 ﻿# SmartMigrate Final Architecture Guide
 
 이 문서는 `smartMigrate_2.0_Langflow` 프로젝트의 최종 아키텍처 진입점이다.
-`multiToolVersion_forTest`는 실험/POC 폴더이므로 본 문서의 운영 기준에서 제외한다.
-
 ## 문서 구성
 
 | 문서 | 목적 | 주요 독자 |
@@ -12,6 +10,7 @@
 | `00_architecture_chapter1_overview.md` | 시스템 목적, 컴포넌트 맵, 데이터 저장소, 외부 의존성 | 신규 개발자, 운영자 |
 | `00_architecture_chapter2_chat_management.md` | 사용자 채팅 분류, 02/04 라우팅, Dashboard/Progress/Management Agent + 3 tools | 프론트/플로우 운영자 |
 | `00_architecture_chapter3_job_execution.md` | "전체 작업 진행해줘" 포함 실행 라우팅, 잔여 작업 산정, Loop 구성 | 백엔드/플로우 개발자 |
+| `00_full_workflow_loop_guide.md` | 전체 실행의 queue 생성, Loop `item`/`done`, executor 복귀 조건과 phase gate | 신규 플로우 개발자 |
 | `00_architecture_chapter4_domain_executors.md` | 10C/12C/15C/17C 단일 작업 실행 로직, 상태 전이, RAG/LLM 처리 | 실행 엔진 개발자 |
 | `00_architecture_chapter5_logging_operations.md` | 로깅, `NEXT_MIG_LOG`, Select Command Tool, 장애 분석, 운영 Runbook | 운영자, 유지보수 담당 |
 | `00_architecture_chapter6_oracle_ddl.md` | Oracle 테이블 DDL, 컬럼 코멘트, 주요 인덱스 | DBA, 백엔드 개발자 |
@@ -65,7 +64,7 @@ flowchart TD
     A17 --> B17[17B SQL Formatting Loop] --> C17[17C SQL Formatting One Job Executor] --> D17[17D Iteration Dashboard] --> B17
     B17 -->|Done| F11
 
-    A18 --> B18[18B Full Workflow Loop]
+    A18 --> B18[18B Full Workflow Loop2\nDynamic Queue Refresh]
     B18 -->|Item| EXEC_DOMAIN[10C / 12C / 15C / 17C]
     EXEC_DOMAIN --> D18[18D Full Workflow Dashboard] --> B18
     B18 -->|Done| D18F[18D Final Summary]
@@ -110,7 +109,6 @@ flowchart TD
 | 규칙 | 설명 |
 |---|---|
 | 로그는 `NEXT_MIG_LOG`만 사용 | SQL 계열 로그도 `NEXT_SQL_LOG`가 아니라 `NEXT_MIG_LOG`에 저장한다. |
-| chat 기반 fail 분석은 Management Agent | `04_managementRouter.py`에는 `FAIL_ANALYSIS` output이 없다. |
 | `11B`는 실행 후 분석 | 사용자가 채팅으로 fail 분석을 요청할 때 직접 가는 route가 아니라, job execution 완료 뒤 final dashboard 흐름에서 사용한다. |
 | read-only 조회는 Select Command Tool | `04_selectCommandTool.py`는 SELECT 전용이다. |
 | 변경 작업은 Update Command Tool | `04_updateCommandTool.py`는 고정 action별 SQL만 transaction 단위로 UPDATE한다. |
@@ -123,7 +121,4 @@ flowchart TD
 2. 신규 개발자는 `00_architecture.md -> chapter1 -> chapter2 -> chapter3 -> chapter4 -> chapter5 -> chapter6` 순서로 읽는다.
 3. 운영 장애 대응자는 `00_user_guide.md -> chapter5 -> chapter2(Management Agent) -> chapter4(도메인 executor)` 순서가 빠르다.
 4. DBA/백엔드 개발자는 schema 확인이 필요할 때 `chapter6`을 먼저 확인한다.
-5. `00_job_execution_payload_plan.md`, `00_main_logic_components.md`, `00_logging_rules.txt`는 개발자용 세부 참고 문서로 필요할 때만 읽는다.
-
-
-
+5. Oracle/Milvus 구조는 `chapter6`을, 전체 실행 Loop 구현은 `00_full_workflow_loop_guide.md`를 참고한다.

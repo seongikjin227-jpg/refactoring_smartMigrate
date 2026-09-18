@@ -1,4 +1,4 @@
-# Chapter 6. Oracle DDL Reference
+# Chapter 6. Oracle & Milvus Schema Reference
 
 이 문서는 SmartMigrate가 사용하는 Oracle 기준 테이블과 sequence의 배포 DDL을 정리한다. 테이블명 앞에는 운영 환경의 `system_schema`를 붙여 사용할 수 있다.
 
@@ -257,3 +257,28 @@ CREATE INDEX IX_NEXT_MIG_LOG_STATUS ON NEXT_MIG_LOG (MIG_KIND, STATUS, CREATED_A
 | SQL Tuning RAG | `CATEGORY='SQL_TUNING'` row는 `GUIDANCE_TEXT`를 입력하고 `SOURCE_TABLES`를 비운다. |
 | 로그 단일화 | `NEXT_SQL_LOG`는 사용하지 않고 SQL 계열 로그도 `NEXT_MIG_LOG`에 저장한다. |
 | FK 적용 | 초기 적재, 보정, 재실행 편의성을 위해 DDL에는 FK를 기본 포함하지 않는다. 필요 시 운영 정책에 따라 `NEXT_MIG_INFO_DTL.MAP_ID -> NEXT_MIG_INFO.MAP_ID`만 별도 추가한다. |
+
+## 6.8 Milvus 컬렉션 구조
+
+Milvus는 Oracle 원천 데이터를 검색용으로 복제한 벡터 저장소다. 동기화는 `04_saveVectorDB.py`가 수행하며, `doc_id`를 primary key로 사용한다. 모든 컬렉션에는 아래 공통 필드가 있다.
+
+| 공통 필드 | 타입 | 설명 |
+|---|---|---|
+| `doc_id` | VARCHAR(256), PK | Oracle row key에서 생성한 안정적인 문서 식별자 |
+| `content` | VARCHAR | embedding 및 BM25 입력 텍스트 |
+| `content_hash` | VARCHAR(64) | 원천/metadata 변경 감지용 SHA-256 |
+| `is_active` | BOOL | 동기화 기준 활성 여부 |
+| `updated_at` | VARCHAR(64) | Oracle 원천 갱신 시각 |
+| `dense_vector` | FLOAT_VECTOR | `content`의 embedding, COSINE index |
+| `sparse_vector` | SPARSE_FLOAT_VECTOR, 선택 | Milvus BM25를 지원하는 환경에서만 생성 |
+
+| 컬렉션 | Oracle 원천 | 전용 metadata | 사용처 |
+|---|---|---|---|
+| `SM_RAG_RULES` | `NEXT_MIG_RAG_INFO` | `rag_id`, `category`, `rule_type`, `use_yn`, `source_tables`, `guidance_text`, `source_sql`, `target_sql` | 12C Conversion, 15C Tuning RAG 검색 |
+| `SM_CORRECT_SQL_CONVERSION` | `NEXT_SQL_INFO`의 user-edited/PASS conversion row | `space_nm`, `sql_id`, `status_conversion`, `user_edited`, `tag_kind`, `target_table`, `source_sql`, `to_sql`, `bind_sql`, `test_sql` | 12C correct SQL hint |
+| `SM_CORRECT_SQL_MIGRATION` | `NEXT_MIG_INFO`의 user-edited/PASS migration row | `map_id`, `fr_table`, `to_table`, `condition`, `mig_sql`, `verify_sql`, `user_edited`, `status` | 10C migration SQL hint |
+| `SM_ASIS_SQL` | `NEXT_SQL_INFO`의 `EDIT_FR_SQL` 또는 `FR_SQL` | `space_nm`, `sql_id`, `tag_kind`, `target_table`, `fr_sql`, `edit_fr_sql` | 04 유사 AS-IS SQL 검색 및 12C Correct SQL hint 검색의 query vector 재사용 |
+
+`SM_ASIS_SQL`에는 실행 status와 TO-BE 결과 SQL을 저장하지 않는다. 검색 결과의 재실행 가능 여부와 최신 status는 항상 Oracle `NEXT_SQL_INFO`를 다시 조회해 판단한다.
+
+`04_ragCommandTool`과 12C는 `SPACE_NM + SQL_ID`로 요청된 SQL만 `SM_ASIS_SQL.dense_vector`를 query vector로 재사용한다. 저장된 `EDIT_FR_SQL`/`FR_SQL`이 현재 source SQL과 정확히 같을 때만 사용하며, 직접 입력 SQL·동기화 누락·원문 불일치 시에는 embedding API로 새 벡터를 생성한다.

@@ -25,8 +25,6 @@ flowchart LR
 
 ## 1.2 최종 프로젝트 파일 맵
 
-`multiToolVersion_forTest`는 제외한다. 최종 운영 흐름에 직접 연결되는 파일은 아래와 같다.
-
 | Prefix | 파일 | 역할 |
 |---|---|---|
 | `00` | `00A_logRuntimeStart.py` | 모든 요청 시작 시 DB logging handler 등록 |
@@ -60,7 +58,7 @@ flowchart LR
 | Oracle DB | 거의 모든 `04`, `06`, `10C`, `12C`, `15C`, `17C`, `11`, `11B` | 작업 master/detail, SQL CLOB, 로그 저장 |
 | OpenAI-compatible Chat Completions API | `04_managementRouter.py`, `08_jobExecutionRouter.py`, `10C`, `12C`, `15C`, `17C` | route 판단 및 SQL 생성/변환/튜닝/포맷팅 |
 | Embedding API | `04_saveVectorDB`, `10C`, `12C`, `15C` | RAG/Correct SQL 검색용 embedding 생성 |
-| Milvus | `04_saveVectorDB`, `10C`, `12C`, `15C` | `SM_RAG_RULES`, `SM_CORRECT_SQL_*` vector search |
+| Milvus | `04_saveVectorDB`, `04_ragCommandTool`, `10C`, `12C`, `15C` | RAG, Correct SQL, AS-IS SQL vector search |
 | Langflow Loop | `10B`, `12B`, `15B`, `17B`, `18B` | DataFrame row 단위 반복 실행 |
 
 ## 1.4 데이터 저장소 상세
@@ -80,19 +78,23 @@ flowchart LR
 | `SM_RAG_RULES` | `NEXT_MIG_RAG_INFO` | `12C`, `15C` | SQL Conversion/Tuning rule 검색 |
 | `SM_CORRECT_SQL_CONVERSION` | `NEXT_SQL_INFO`의 user-edited pass row | `12C` | 과거 correct SQL 예시 검색 |
 | `SM_CORRECT_SQL_MIGRATION` | `NEXT_MIG_INFO`의 user-edited/pass migration row | `10C` | migration SQL/verify SQL 예시 검색 |
+| `SM_ASIS_SQL` | `NEXT_SQL_INFO`의 `EDIT_FR_SQL` 우선, 없으면 `FR_SQL` | `04_ragCommandTool` | 유사 AS-IS SQL 검색 |
 
 ```mermaid
 flowchart TD
     ORACLE_RAG[NEXT_MIG_RAG_INFO] --> B00[04 Sync Milvus Vector DB]
-    ORACLE_SQL[NEXT_SQL_INFO<br/>USER_EDITED='Y' pass rows] --> B00
+    ORACLE_CONV[NEXT_SQL_INFO<br/>USER_EDITED='Y' conversion pass rows] --> B00
+    ORACLE_ASIS[NEXT_SQL_INFO<br/>FR_SQL or EDIT_FR_SQL] --> B00
     ORACLE_MIG[NEXT_MIG_INFO<br/>USER_EDITED='Y' pass rows] --> B00
     B00 --> MRAG[SM_RAG_RULES]
     B00 --> MCONV[SM_CORRECT_SQL_CONVERSION]
     B00 --> MMIG[SM_CORRECT_SQL_MIGRATION]
+    B00 --> MASIS[SM_ASIS_SQL]
     MRAG --> C12[12C Conversion RAG]
     MRAG --> C15[15C Tuning RAG]
     MCONV --> C12
     MMIG --> C10[10C Migration Correct SQL Hint]
+    MASIS --> R04[04 RAG Command Tool]
 ```
 
 ## 1.6 상태 컬럼과 도메인
@@ -157,6 +159,4 @@ sequenceDiagram
         R02-->>User: 03 일반 답변
     end
 ```
-
-
 

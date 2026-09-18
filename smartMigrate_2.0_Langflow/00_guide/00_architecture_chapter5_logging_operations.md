@@ -246,7 +246,6 @@ flowchart LR
 | 항목 | 기준 |
 |---|---|
 | `NEXT_SQL_LOG` 참조 없음 | 최종 운영 flow는 `NEXT_MIG_LOG` only |
-| `FAIL_ANALYSIS` route 없음 | 04 chat fail 분석은 `MANAGEMENT_AGENT` |
 | Full Workflow route 정상 | 08에서 `FULL_WORKFLOW`가 prerequisite으로 막히지 않음 |
 | runnable count 일관성 | 06, A components, dashboard 조건이 같은 의미를 가짐 |
 | SQL CLOB 정책 명확 | 일반 조회 preview, 명시 원문 조회 full text |

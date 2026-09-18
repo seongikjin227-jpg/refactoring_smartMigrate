@@ -130,11 +130,23 @@ class NewType18BFullWorkflowLoop2(Component):
             migration_failed = False
             abort_reason = ""
             skipped_plan_counts = {route: 0 for route in ROUTE_ORDER}
+
+            # cursor는 "다음에 실행할 data_list index"다.
+            # 예: cursor=6이면 data_list[0]~data_list[5]는 이미 실행/스킵 판단이 끝났고,
+            # data_list[6]이 지금 실행 후보라는 뜻이다. 리스트에서 item을 pop하지 않고 cursor만 전진시킨다.
             cursor = int(self.ctx.get(f"{self._id}_index", 0) or 0)
             dynamic_added_count = int(self.ctx.get(f"{self._id}_dynamic_added_count", 0) or 0)
             while cursor < len(data_list):
+                # item을 loop body로 넘기기 전에 DB 자동 실행 대상 목록을 먼저 refresh한다.
+                # 이렇게 해야 "바로 다음에 실행할 job"도 data_list[cursor:]에 포함된 상태로 중복 비교된다.
+                # 예: 다음 job이 104이고 DB 자동 실행 대상 조회에도 104가 있으면, 새 job으로 added 처리하지 않는다.
                 next_payload = self._data_dict(data_list[cursor])
                 dynamic_added_count += self._refresh_dynamic_queue(data_list, cursor, self._route(next_payload))
+
+                # refresh 과정에서 cursor 위치에 더 앞 phase job이 삽입될 수 있다.
+                # 따라서 refresh 후에 다시 data_list[cursor]를 읽어 실제 실행할 item을 확정한다.
+                # 예: SQL_CONVERSION 104를 실행하려던 순간 MIG 101이 새 자동 실행 대상으로 들어오면,
+                # MIG 101이 cursor 위치에 삽입되고 이번 loop에서는 101이 실행된다.
                 index = cursor
                 item = data_list[cursor]
                 item_payload = self._data_dict(item)
@@ -184,7 +196,7 @@ class NewType18BFullWorkflowLoop2(Component):
 
     # Loop body로 전달할 현재 item payload를 반환한다.
     async def item_output(self) -> Data:
-        logging.getLogger("smartmigrate.workflow").info("before item_output", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "ITEM_OUTPUT", "START", 0]})
+        logging.getLogger("smartmigrate.workflow").info("before item_output", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP2", "INFO", "ITEM_OUTPUT", "START", 0]})
         try:
             self.stop("item")
             try:
@@ -194,15 +206,15 @@ class NewType18BFullWorkflowLoop2(Component):
                 self.stop("item")
             data_list = self.ctx.get(f"{self._id}_data", [])
             __log_result = Data(data={"count": len(data_list), "items": [self._data_dict(item) for item in data_list]})
-            logging.getLogger("smartmigrate.workflow").info("after item_output", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "ITEM_OUTPUT", "END", 0]})
+            logging.getLogger("smartmigrate.workflow").info("after item_output", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP2", "INFO", "ITEM_OUTPUT", "END", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error item_output: {exc}", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "ERROR", "ITEM_OUTPUT", "ERROR", 0]})
+            logging.getLogger("smartmigrate.workflow").error(f"error item_output: {exc}", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP2", "ERROR", "ITEM_OUTPUT", "ERROR", 0]})
             raise
 
     # Loop가 끝났을 때 dashboard/summary로 넘길 완료 payload를 반환한다.
     async def done_output(self) -> Data:
-        logging.getLogger("smartmigrate.workflow").info("before done_output", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "DONE_OUTPUT", "START", 0]})
+        logging.getLogger("smartmigrate.workflow").info("before done_output", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP2", "INFO", "DONE_OUTPUT", "START", 0]})
         try:
             if self._vertex is not None:
                 await self._iterate()
@@ -214,7 +226,7 @@ class NewType18BFullWorkflowLoop2(Component):
             abort_reason = str(self.ctx.get(f"{self._id}_abort_reason", "") or "")
             skipped_plan_counts = dict(self.ctx.get(f"{self._id}_skipped_plan_counts", {}) or {})
             payload = {
-                "component": "18B_fullWorkflowLoop",
+                "component": "18B_fullWorkflowLoop2",
                 "job_route": "FULL_WORKFLOW",
                 "full_workflow": True,
                 "loop_done": True,
@@ -231,10 +243,10 @@ class NewType18BFullWorkflowLoop2(Component):
             self.status = payload
             __log_result = Data(data=payload)
             self._log_done_output(payload)
-            logging.getLogger("smartmigrate.workflow").info("after done_output", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "INFO", "DONE_OUTPUT", "END", 0]})
+            logging.getLogger("smartmigrate.workflow").info("after done_output", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP2", "INFO", "DONE_OUTPUT", "END", 0]})
             return __log_result
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").error(f"error done_output: {exc}", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP", "ERROR", "DONE_OUTPUT", "ERROR", 0]})
+            logging.getLogger("smartmigrate.workflow").error(f"error done_output: {exc}", extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP2", "ERROR", "DONE_OUTPUT", "ERROR", 0]})
             raise
 
     # 입력 payload나 job item이 실행 가능한 구조인지 검증한다.
@@ -340,7 +352,7 @@ class NewType18BFullWorkflowLoop2(Component):
             "pending_null_count": pending_null_count,
             "fail_count": fail_count,
             "reason": (
-                f"DB Migration is not 100% PASS; pending={pending_null_count}, fail={fail_count}. SQL Conversion and downstream phases were not started."
+                f"DB Migration is not 100% PASS; auto_candidates={pending_null_count}, fail={fail_count}. SQL Conversion and downstream phases were not started."
                 if block_sql
                 else ""
             ),
@@ -378,7 +390,7 @@ class NewType18BFullWorkflowLoop2(Component):
                 "workflow_log": [
                     0,
                     "WORKFLOW",
-                    "18B_FULL_LOOP",
+                    "18B_FULL_LOOP2",
                     "WARN" if workflow_aborted else "INFO",
                     "DONE_OUTPUT",
                     "ABORTED" if workflow_aborted else "DONE",
@@ -395,17 +407,17 @@ class NewType18BFullWorkflowLoop2(Component):
                 "workflow_log": [
                     0,
                     "WORKFLOW",
-                    "18B_FULL_LOOP",
+                    "18B_FULL_LOOP2",
                     "WARN",
                     "DB_MIGRATION_GATE",
                     "ABORT",
                     0,
-                    f"pending={gate.get('pending_null_count', 0)}, fail={gate.get('fail_count', 0)}; {reason}",
+                    f"auto_candidates={gate.get('pending_null_count', 0)}, fail={gate.get('fail_count', 0)}; {reason}",
                 ]
             },
         )
 
-    # 실행 중 DB를 다시 조회해 현재 남은 큐에 없는 pending job을 phase 순서에 맞게 추가한다.
+    # 실행 중 DB를 다시 조회해 현재 남은 큐에 없는 자동 실행 대상 job을 phase 순서에 맞게 추가한다.
     def _refresh_dynamic_queue(self, data_list: list[Data], cursor: int, next_route: str) -> int:
         if not data_list:
             return 0
@@ -414,9 +426,17 @@ class NewType18BFullWorkflowLoop2(Component):
         if not db_config:
             return 0
 
+        # Oracle 원본 테이블에서 지금 시점의 자동 실행 대상 job을 다시 읽는다.
+        # 이 값은 "DB 기준으로 현재 새로 실행 가능해 보이는 후보"일 뿐이며,
+        # 이미 메모리 큐의 남은 구간에 있는 job은 아래 remaining_keys 비교로 제외한다.
         pending_jobs = self._load_pending_jobs_from_db(db_config, first_payload)
+
         # cursor 위치의 "지금 실행할 job"과 그 뒤의 남은 job만 중복 기준으로 본다.
         # cursor 앞쪽에서 이미 실행된 job은 사용자가 다시 STATUS=NULL로 바꾸면 새 요청으로 재추가될 수 있다.
+        # 따라서 전체 data_list가 아니라 data_list[cursor:]만 비교한다.
+        # 이 정책의 의미:
+        # - data_list[cursor:]에 있으면 이미 이번 run에서 실행 예정이므로 추가하지 않는다.
+        # - data_list[:cursor]에만 있으면 이미 지나간 작업이므로, DB가 다시 자동 실행 대상으로 선정되면 새 요청으로 본다.
         remaining_keys = {
             self._job_key(self._data_dict(item))
             for item in data_list[cursor:]
@@ -427,8 +447,15 @@ class NewType18BFullWorkflowLoop2(Component):
         seen_new_keys: set[tuple[Any, ...]] = set()
         for job in pending_jobs:
             key = self._job_key(job)
+
+            # key가 없으면 안전하게 무시한다.
+            # key가 remaining_keys에 있으면 "지금 실행할 job 또는 앞으로 실행할 job"이므로 중복 추가하지 않는다.
+            # key가 seen_new_keys에 있으면 같은 refresh 안에서 DB query 결과가 중복된 것이므로 한 번만 추가한다.
             if key is None or key in remaining_keys or key in seen_new_keys:
                 continue
+
+            # 새 자동 실행 대상 job은 route phase와 priority를 기준으로 cursor 이후 적절한 위치에 삽입한다.
+            # 삽입 후에는 remaining_keys에도 즉시 등록해 같은 refresh 안에서 다시 추가되지 않게 한다.
             insert_at = self._insert_dynamic_job(data_list, cursor, next_route, Data(data=job))
             remaining_keys.add(key)
             seen_new_keys.add(key)
@@ -436,18 +463,23 @@ class NewType18BFullWorkflowLoop2(Component):
             added_jobs.append({"job": job, "key": key, "insert_at": insert_at})
 
         if added:
+            # 삽입 때문에 job_index, total_jobs, route_total_jobs가 바뀌므로 전체 큐 metadata를 다시 계산한다.
+            # output payload 형식은 기존 18B와 맞춰야 하므로, 동적 큐 내부 상태는 로그로만 남긴다.
             self._reindex_jobs(data_list)
             self.update_ctx({f"{self._id}_data": data_list})
             self._log_dynamic_jobs_added(added_jobs, cursor, next_route, len(data_list))
         return added
 
-    # Oracle 원본 테이블에서 현재 pending job을 다시 읽는다. USER_EDITED=Y FAIL-*는 pending으로 보지 않는다.
+    # Oracle 원본 테이블에서 현재 자동 실행 대상 job을 다시 읽는다. USER_EDITED=Y FAIL-*는 자동 실행 대상으로 보지 않는다.
     def _load_pending_jobs_from_db(self, db_config: dict[str, Any], template_payload: dict[str, Any]) -> list[dict[str, Any]]:
         mig_table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
         sql_table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
         with self._connect(db_config) as conn:
             cur = conn.cursor()
             jobs: list[dict[str, Any]] = []
+
+            # MIG 자동 실행 대상 선정 조건: USE_YN='Y'이고 STATUS가 NULL인 row만 다시 실행 대상으로 본다.
+            # USER_EDITED='Y'이더라도 STATUS가 FAIL-*이면 이 동적 큐에서는 가져오지 않는다.
             jobs.extend(
                 self._query_pending_jobs(
                     cur,
@@ -464,6 +496,9 @@ class NewType18BFullWorkflowLoop2(Component):
                     template_payload,
                 )
             )
+
+            # SQL Conversion 자동 실행 대상 선정 조건: STATUS_CONVERSION이 NULL인 row만 대상이다.
+            # 사용자가 보정 SQL을 저장했더라도 재실행하려면 상태를 명시적으로 NULL로 초기화해야 한다.
             jobs.extend(
                 self._query_pending_jobs(
                     cur,
@@ -479,6 +514,9 @@ class NewType18BFullWorkflowLoop2(Component):
                     template_payload,
                 )
             )
+
+            # SQL Tuning 자동 실행 대상 선정 조건: Conversion이 PASS 계열이고 STATUS_TUNING이 NULL인 row만 대상이다.
+            # USER_EDITED='Y' AND STATUS_TUNING LIKE 'FAIL-%' 조건은 의도적으로 제외한다.
             jobs.extend(
                 self._query_pending_jobs(
                     cur,
@@ -495,6 +533,9 @@ class NewType18BFullWorkflowLoop2(Component):
                     template_payload,
                 )
             )
+
+            # SQL Formatting 자동 실행 대상 선정 조건: Tuning이 PASS 계열이고 FORMATTED_SQL이 비어 있는 row만 대상이다.
+            # Formatting은 별도 STATUS 컬럼이 없으므로 formatted SQL 존재 여부로 자동 실행 대상을 판단한다.
             jobs.extend(
                 self._query_pending_jobs(
                     cur,
@@ -521,11 +562,21 @@ class NewType18BFullWorkflowLoop2(Component):
         for pos in range(cursor, len(data_list)):
             existing_payload = self._data_dict(data_list[pos])
             existing_phase = self._phase_index(self._route(existing_payload))
+
+            # 새 job보다 앞 phase의 기존 job은 반드시 먼저 실행되어야 하므로 지나간다.
+            # 예: 새 job이 SQL_TUNING이면 남아 있는 MIG/SQL_CONVERSION 뒤에 배치한다.
             if existing_phase < new_phase:
                 continue
+
+            # 새 job보다 뒤 phase를 처음 만나면 그 직전에 삽입한다.
+            # 예: MIG 실행 중 새 SQL_CONVERSION이 들어오면 SQL_CONVERSION phase 시작 지점에 들어간다.
+            # 예: SQL_CONVERSION 실행 중 새 MIG가 들어오면 cursor 위치, 즉 다음 실행 대상으로 들어간다.
             if existing_phase > new_phase:
                 insert_at = pos
                 break
+
+            # 같은 phase에서는 PRIORITY ASC NULLS LAST 기준을 유지한다.
+            # priority 값이 더 작은 새 job은 기존 같은 phase job 앞에 들어간다.
             if self._priority_key(payload) < self._priority_key(existing_payload):
                 insert_at = pos
                 break
@@ -548,8 +599,11 @@ class NewType18BFullWorkflowLoop2(Component):
             summaries.append(
                 f"{self._route(job)} key={key} priority={self._payload_value(job, 'priority')} insert_at={insert_at}"
             )
+
+        # 동적 추가 로그는 job마다 여러 줄로 찍지 않고 refresh 1회당 한 줄로 남긴다.
+        # count/cursor/next_route/queue_size/jobs를 같이 남겨 테스트 중 큐 삽입 결과를 한눈에 확인한다.
         message = (
-            f"dynamic pending jobs added count={len(added_jobs)}, cursor={cursor}, "
+            f"dynamic automatic execution candidate jobs added count={len(added_jobs)}, cursor={cursor}, "
             f"next_route={next_route}, queue_size={queue_size}, jobs=[{'; '.join(summaries)}]"
         )
         logging.getLogger("smartmigrate.workflow").info(
@@ -578,9 +632,12 @@ class NewType18BFullWorkflowLoop2(Component):
     def _job_key(self, payload: dict[str, Any]) -> tuple[Any, ...] | None:
         route = self._route(payload)
         if route == "MIG":
+            # DB Migration은 MAP_ID 하나로 row가 식별된다.
             map_id = str(self._payload_value(payload, "map_id") or "").strip()
             return (route, map_id) if map_id else None
         if route in {"SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"}:
+            # SQL 계열은 SPACE_NM + SQL_ID가 row 식별자다.
+            # 같은 SQL_ID라도 conversion/tuning/formatting은 서로 다른 phase job이므로 route도 key에 포함한다.
             space_nm = str(self._payload_value(payload, "space_nm") or "").strip().upper()
             sql_id = str(self._payload_value(payload, "sql_id") or "").strip().upper()
             return (route, space_nm, sql_id) if space_nm and sql_id else None
@@ -614,6 +671,8 @@ class NewType18BFullWorkflowLoop2(Component):
         cur.execute(sql)
         jobs: list[dict[str, Any]] = []
         for row in cur.fetchall():
+            # 동적으로 조회한 row도 18A가 만든 DataFrame row와 같은 payload 형태로 맞춘다.
+            # 그래야 10C/12C/15C/17C가 기존 loop item과 동일하게 처리할 수 있다.
             job: dict[str, Any] = {
                 "component": "18A_fullWorkflowJobsToLoopTable",
                 "job_route": route,
@@ -634,6 +693,8 @@ class NewType18BFullWorkflowLoop2(Component):
 
     # 삽입 이후 전체 job index와 route별 계획 수를 다시 계산한다.
     def _reindex_jobs(self, data_list: list[Data]) -> None:
+        # 동적 insert가 발생하면 total_jobs, route_total_jobs, job_index가 모두 바뀔 수 있다.
+        # downstream dashboard와 summary가 기존 payload contract를 그대로 읽도록 모든 item metadata를 재계산한다.
         route_totals = self._plan_counts(data_list)
         route_seen = {route: 0 for route in ROUTE_ORDER}
         total = len(data_list)

@@ -22,7 +22,7 @@ MANAGEMENT_ROUTER_PROMPT = """당신은 SmartMigrate 04 관리 요청 라우터�
 반드시 Markdown 없이 JSON 객체 1개만 반환하세요.
 
 선택 가능한 route:
-- DASHBOARD: 전체/도메인 dashboard, 집계 현황, 성공/실패/대기 건수 요약 요청
+- DASHBOARD: 전체/도메인 dashboard, 집계 현황, 성공/실패/자동 실행 대상 건수 요약 요청
 - CURRENT_PROGRESS: 현재 실행 중인 작업, running 상태, 지금 돌고 있는지 확인하는 단순 요청
 - MANAGEMENT_AGENT: 조회/분석/잔여 작업 목록/상태 변경/SQL 저장 또는 비우기/RAG Guide 조회·추가·수정·비활성화 요청
 - VECTOR_DB_SYNC: Oracle 원천 데이터를 Milvus VectorDB에 업로드/동기화하는 요청
@@ -74,6 +74,8 @@ class NewType04ManagementRouter(Component):
         Output(display_name="Exception Message", name="exception", method="exception_response", group_outputs=True, types=["Message"]),
     ]
 
+    # group output은 하나만 실제 payload를 내보내고, 나머지 output은 stop 처리한다.
+    # 이 규칙으로 Langflow graph에서 의도하지 않은 관리 branch의 동시 실행을 막는다.
     def dashboard_response(self) -> Data:
         return self._route_output("DASHBOARD", "dashboard")
 
@@ -86,6 +88,7 @@ class NewType04ManagementRouter(Component):
     def vector_db_sync_response(self) -> Data:
         return self._route_output("VECTOR_DB_SYNC", "vector_db_sync")
 
+    # LLM이 route를 정할 수 없을 때만 사용자에게 보낼 최종 Message branch를 연다.
     def exception_response(self) -> Message:
         routed = self._get_routed_payload()
         if routed.get("management_route") != "EXCEPTION":
@@ -95,6 +98,7 @@ class NewType04ManagementRouter(Component):
         self.status = {**routed, "selected_output": "exception", "answer_text": answer, "final": True}
         return Message(text=answer)
 
+    # 선택된 route와 일치하는 Data output만 활성화하고, 다음 컴포넌트 이름을 payload에 명시한다.
     def _route_output(self, expected_route: str, output_name: str) -> Data:
         routed = self._get_routed_payload()
         if routed.get("management_route") != expected_route:
@@ -104,6 +108,7 @@ class NewType04ManagementRouter(Component):
         self.status = routed
         return Data(data=routed)
 
+    # 여러 group output이 같은 실행에서 호출되어도 LLM을 한 번만 호출하도록 route 결과를 캐시한다.
     def _get_routed_payload(self) -> dict[str, Any]:
         cached = getattr(self, "_cached_routed_payload", None)
         if cached is not None:
@@ -125,6 +130,7 @@ class NewType04ManagementRouter(Component):
         self._cached_routed_payload = routed
         return routed
 
+    # 자연어 요청은 여기서만 LLM에 전달한다. 이후 분기에서는 검증된 route 값만 사용한다.
     def _route_with_llm(self, payload: dict[str, Any]) -> dict[str, Any]:
         api_key = self._secret_to_str(getattr(self, "llm_api_key", None)).strip()
         model = str(getattr(self, "llm_model", "") or "").strip()
@@ -154,6 +160,7 @@ class NewType04ManagementRouter(Component):
             raise ValueError(f"04 Management Router LLM HTTP {exc.code}: {exc.read().decode('utf-8', errors='ignore')[:1000]}") from exc
         return self._parse_json_object((((raw.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip())
 
+    # LLM 응답을 허용된 route 집합으로 제한해, 임의의 component name으로 이어지는 것을 차단한다.
     def _normalize_decision(self, decision: dict[str, Any]) -> dict[str, Any]:
         route = str(decision.get("management_route") or "").upper()
         allowed = {"DASHBOARD", "CURRENT_PROGRESS", "MANAGEMENT_AGENT", "VECTOR_DB_SYNC", "EXCEPTION"}
@@ -165,6 +172,7 @@ class NewType04ManagementRouter(Component):
             "reason": str(decision.get("reason") or ""),
         }
 
+    # route는 논리 이름이고 next_node는 실제 Langflow 컴포넌트 이름이다.
     def _next_node(self, route: str) -> str:
         return {
             "DASHBOARD": "04_dashboard",
@@ -174,6 +182,7 @@ class NewType04ManagementRouter(Component):
             "EXCEPTION": "04_managementRouter",
         }.get(route, "04_managementAgent")
 
+    # Data/dict/JSON text 형태의 상위 payload를 동일한 dict 계약으로 정규화한다.
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
         if isinstance(raw, Data):
             return dict(raw.data or {})

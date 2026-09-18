@@ -43,7 +43,7 @@ class NewType15ASqlTuningJobsToLoopTable(Component):
             payload = self._parse_payload(getattr(self, "payload_json", ""))
             db_config = self._db_config(payload)
             self._require_db_config(db_config)
-            jobs = self._sql_jobs(payload, db_config)
+            jobs = self._dedupe_jobs(self._sql_jobs(payload, db_config))
             total = len(jobs)
             rows: list[dict[str, Any]] = []
             for index, job in enumerate(jobs, start=1):
@@ -85,6 +85,25 @@ class NewType15ASqlTuningJobsToLoopTable(Component):
                 out.append(dict(job))
         return out
 
+    # payload 목록에 같은 SQL job이 여러 번 들어와도 Tuning Loop에는 한 번만 넣는다.
+    def _dedupe_jobs(self, jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        unique: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for job in jobs:
+            key = (str(job.get("space_nm") or "").strip().upper(), str(job.get("sql_id") or "").strip().upper())
+            # 빈 식별자는 아래 validation에서 오류를 내므로 여기서 합치지 않는다.
+            if not all(key):
+                unique.append(job)
+                continue
+            if key in seen:
+                logging.getLogger("smartmigrate.workflow").warning(
+                    "Duplicate SQL Tuning job removed before loop execution: space_nm=%s sql_id=%s", *key
+                )
+                continue
+            seen.add(key)
+            unique.append(job)
+        return unique
+
     # 현재 payload 상태에서 이 단계가 실행되어야 하는지 판단한다.
     def _should_load_all_pending(self, payload: dict[str, Any], jobs: Any) -> bool:
         if str(payload.get("run_mode") or "").lower() != "all_pending":
@@ -101,7 +120,7 @@ class NewType15ASqlTuningJobsToLoopTable(Component):
                 SELECT TO_CHAR(SPACE_NM) AS SPACE_NM, TO_CHAR(SQL_ID) AS SQL_ID, PRIORITY
                   FROM {table}
                  WHERE UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')
-                   AND (STATUS_TUNING IS NULL OR (UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y' AND UPPER(TRIM(NVL(STATUS_TUNING, 'NULL'))) LIKE 'FAIL-%'))
+                   AND STATUS_TUNING IS NULL
                  ORDER BY PRIORITY ASC NULLS LAST, UPD_TS ASC NULLS FIRST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                 """
             )

@@ -246,20 +246,22 @@ SQL Formatting은 `STATUS_CONVERSION`, `STATUS_TUNING`을 변경하지 않는다
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Pending
-    Pending --> Running: selected by loop
+    [*] --> AutoCandidate
+    AutoCandidate --> Running: 자동 실행 대상으로 선정
     Running --> Pass: validation success
     Running --> Fail: validation/generation/execute error
-    Fail --> Pending: 04 Update Command Tool or USER_EDITED rerun condition
+    Fail --> AutoCandidate: 04 Update Command Tool로 status 초기화
     Pass --> [*]
 ```
 
-| 도메인 | Pending | Running | Pass | Fail |
+| 도메인 | 자동 실행 대상 선정 조건 | Running | Pass | Fail |
 |---|---|---|---|---|
-| MIG | `STATUS IS NULL` or user-edited fail | `RUNNING`, `RUNNING-FAIL-*` | `PASS` | `FAIL-TRUNCATE`, `FAIL-INSERT`, `FAIL-TEST`, `SKIP-PRIOR-FAIL` |
-| Conversion | `STATUS_CONVERSION IS NULL` or user-edited fail | `RUNNING` | `PASS-CONVERSION` | `FAIL-TOBE`, `FAIL-BIND`, `FAIL-TEST` |
-| Tuning | conversion pass and tuning null/user-edited fail | `RUNNING` | `PASS-TUNING` | `FAIL-TUNED`, `FAIL-TEST` |
+| MIG | `STATUS IS NULL` | `RUNNING`, `RUNNING-FAIL-*` | `PASS` | `FAIL-TRUNCATE`, `FAIL-INSERT`, `FAIL-TEST`, `SKIP-PRIOR-FAIL` |
+| Conversion | `STATUS_CONVERSION IS NULL` | `RUNNING` | `PASS-CONVERSION` | `FAIL-TOBE`, `FAIL-BIND`, `FAIL-TEST` |
+| Tuning | conversion pass and tuning null | `RUNNING` | `PASS-TUNING` | `FAIL-TUNED`, `FAIL-TEST` |
 | Formatting | tuning pass and `FORMATTED_SQL` empty | internal running result | `FORMATTED_SQL` saved | `FAIL-FORMATTING` |
+
+`USER_EDITED='Y'`는 executor 내부에서 저장 SQL 우선 사용을 뜻하며, `FAIL-*` row를 전체 실행에 자동 포함한다는 뜻은 아니다. 운영자가 재실행을 승인하면 status를 `NULL`로 초기화한다.
 
 ## 4.10 개발자가 수정할 때 우선 확인할 곳
 
@@ -272,6 +274,4 @@ stateDiagram-v2
 | 실행 가능 조건 변경 | `06_getRemainingJobs.py`, 각 `A` jobs table, `04_dashboard.py`, `11_finalDashboard.py` |
 | 상태값 추가 | executor, dashboard, Management Agent prompt/tool, failure analyzer 모두 함께 확인 |
 | 로그 컬럼/규칙 변경 | `00A_logRuntimeStart.py`, `00_logging_rules.txt`, `04_selectCommandTool.py`, `11B_failureCauseAnalyzer.py` |
-
-
 

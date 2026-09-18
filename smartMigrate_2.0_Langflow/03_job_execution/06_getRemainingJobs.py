@@ -112,19 +112,18 @@ class NewType06GetRemainingJobs(Component):
                 SELECT COUNT(*)
                   FROM {mig_table}
                  WHERE UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
-                   AND (STATUS IS NULL OR (UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y' AND UPPER(TRIM(NVL(STATUS, 'NULL'))) LIKE 'FAIL-%'))
+                   AND STATUS IS NULL
             """,
             "SQL_CONVERSION": f"""
                 SELECT COUNT(*)
                   FROM {sql_table}
                  WHERE STATUS_CONVERSION IS NULL
-                    OR (UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y' AND UPPER(TRIM(NVL(STATUS_CONVERSION, 'NULL'))) LIKE 'FAIL-%')
             """,
             "SQL_TUNING": f"""
                 SELECT COUNT(*)
                   FROM {sql_table}
                  WHERE UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')
-                   AND (STATUS_TUNING IS NULL OR (UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y' AND UPPER(TRIM(NVL(STATUS_TUNING, 'NULL'))) LIKE 'FAIL-%'))
+                   AND STATUS_TUNING IS NULL
             """,
             "SQL_FORMATTING": f"""
                 SELECT COUNT(*)
@@ -156,7 +155,7 @@ class NewType06GetRemainingJobs(Component):
                   FROM {mig_table}
                  WHERE MAP_ID IN ({placeholders})
                    AND UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
-                   AND (STATUS IS NULL OR (UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y' AND UPPER(TRIM(NVL(STATUS, 'NULL'))) LIKE 'FAIL-%'))
+                   AND STATUS IS NULL
                  ORDER BY PRIORITY ASC NULLS LAST, MAP_ID ASC
                 """,
                 map_ids,
@@ -172,7 +171,7 @@ class NewType06GetRemainingJobs(Component):
                 SELECT TO_CHAR(SPACE_NM) AS SPACE_NM, TO_CHAR(SQL_ID) AS SQL_ID, PRIORITY
                   FROM {sql_table}
                  WHERE ({sql_where})
-                   AND (STATUS_CONVERSION IS NULL OR (UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y' AND UPPER(TRIM(NVL(STATUS_CONVERSION, 'NULL'))) LIKE 'FAIL-%'))
+                   AND STATUS_CONVERSION IS NULL
                  ORDER BY PRIORITY ASC NULLS LAST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                 """,
                 sql_params,
@@ -186,7 +185,7 @@ class NewType06GetRemainingJobs(Component):
                   FROM {sql_table}
                  WHERE ({sql_where})
                    AND UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')
-                   AND (STATUS_TUNING IS NULL OR (UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y' AND UPPER(TRIM(NVL(STATUS_TUNING, 'NULL'))) LIKE 'FAIL-%'))
+                   AND STATUS_TUNING IS NULL
                  ORDER BY PRIORITY ASC NULLS LAST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                 """,
                 sql_params,

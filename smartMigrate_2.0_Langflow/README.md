@@ -90,7 +90,7 @@ smartMigrate_2.0_Langflow/
     17C_sqlFormattingOneJobPocExecutor.py
     17D_sqlFormattingIterationDashboard.py
     18A_fullWorkflowJobsToLoopTable.py
-    18B_fullWorkflowLoop.py
+    18B_fullWorkflowLoop2.py
     18D_fullWorkflowDashboard.py
 ```
 
@@ -250,4 +250,3 @@ python -m py_compile `
 | `00_guide/00_job_execution_payload_plan.md` | 개발자용 실행 요청 payload 전달 규칙 |
 | `00_guide/00_main_logic_components.md` | 개발자용 C 컴포넌트 중심 읽기 가이드 |
 | `00_guide/00_logging_rules.txt` | 개발자용 workflow logging 세부 규칙 |
-

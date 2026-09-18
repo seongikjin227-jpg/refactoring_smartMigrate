@@ -383,7 +383,7 @@ class NewType11BFailureCauseAnalyzer(Component):
             filtered.append(enriched)
         return filtered
 
-    # 현재 최종 status 목록을 성공/실패/대기/skip 개수로 요약한다.
+    # 현재 최종 status 목록을 성공/실패/자동 실행 대상/skip 개수로 요약한다.
     def _final_status_summary(self, final_statuses: dict[str, dict[str, Any]]) -> dict[str, int]:
         summary = {"total": len(final_statuses), "success": 0, "fail": 0, "pending": 0, "skipped": 0, "unknown": 0}
         for item in final_statuses.values():
@@ -397,7 +397,7 @@ class NewType11BFailureCauseAnalyzer(Component):
         normalized = f"UPPER(TRIM(NVL({clean}, '')))"
         return f"({normalized} IN ('FAIL', 'FAILED') OR {normalized} LIKE 'FAIL-%')"
 
-    # status 문자열을 success/fail/pending/skip/unknown 집계 class로 분류한다.
+    # status 문자열을 success/fail/자동 실행 대상/skip/unknown 집계 class로 분류한다.
     def _status_class(self, status: Any) -> str:
         value = self._status(status)
         if not value:
@@ -459,7 +459,7 @@ class NewType11BFailureCauseAnalyzer(Component):
             f"- Workflow aborted: {evidence.get('workflow_aborted')}\n"
             f"- Final status total: {summary.get('total', 0)}\n"
             f"- Final success: {summary.get('success', 0)}\n"
-            f"- Final pending: {summary.get('pending', 0)}\n"
+            f"- Final automatic execution candidates: {summary.get('pending', 0)}\n"
             f"- Final skipped: {summary.get('skipped', 0)}\n"
             f"- Final unknown: {summary.get('unknown', 0)}"
         )
@@ -492,7 +492,7 @@ class NewType11BFailureCauseAnalyzer(Component):
             f"- Workflow aborted: {evidence.get('workflow_aborted')}\n"
             f"- Final status total: {summary.get('total', 0)}\n"
             f"- Final success: {summary.get('success', 0)}\n"
-            f"- Final pending: {summary.get('pending', 0)}\n"
+            f"- Final automatic execution candidates: {summary.get('pending', 0)}\n"
             f"- Final skipped: {summary.get('skipped', 0)}\n"
             f"- Final unknown: {summary.get('unknown', 0)}"
         )

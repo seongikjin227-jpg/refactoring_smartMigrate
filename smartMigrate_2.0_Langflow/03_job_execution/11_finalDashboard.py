@@ -91,8 +91,7 @@ class NewType11FinalDashboard(Component):
         target_scope = "UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'"
         pending_where = f"{target_scope} AND STATUS IS NULL"
         fail_where = f"{target_scope} AND ({self._fail_status_condition('STATUS')})"
-        edited_fail_where = f"{target_scope} AND {self._user_edited_condition()} AND ({self._detailed_fail_status_condition('STATUS')})"
-        target_where = f"{pending_where} OR ({edited_fail_where})"
+        target_where = pending_where
         total = self._count(table, target_scope)
         target = self._count(table, target_where)
         pending = self._count(table, pending_where)
@@ -102,7 +101,7 @@ class NewType11FinalDashboard(Component):
         return self._stage_summary(
             agent="DB_MIGRATION",
             table=table,
-            target_condition="USE_YN='Y' AND (STATUS IS NULL OR (USER_EDITED='Y' AND STATUS LIKE 'FAIL-%'))",
+            target_condition="USE_YN='Y' AND STATUS IS NULL",
             total=total,
             target_count=target,
             pending_count=pending,
@@ -121,8 +120,7 @@ class NewType11FinalDashboard(Component):
         target_scope = self._sql_status_target_condition("STATUS_CONVERSION", ("PASS", "PASS-CONVERSION"))
         pending_where = "STATUS_CONVERSION IS NULL"
         fail_where = f"{target_scope} AND ({self._fail_status_condition('STATUS_CONVERSION')})"
-        edited_fail_where = f"{self._user_edited_condition()} AND ({self._detailed_fail_status_condition('STATUS_CONVERSION')})"
-        target_where = f"{pending_where} OR ({edited_fail_where})"
+        target_where = pending_where
         total = self._count(table, target_scope)
         target = self._count(table, target_where)
         pending = self._count(table, pending_where)
@@ -131,7 +129,7 @@ class NewType11FinalDashboard(Component):
         return self._stage_summary(
             agent="SQL_CONVERSION",
             table=table,
-            target_condition="total excludes STATUS_CONVERSION='NA'; remaining is NULL or USER_EDITED='Y' FAIL-*",
+            target_condition="total excludes STATUS_CONVERSION='NA'; remaining is NULL",
             total=total,
             target_count=target,
             pending_count=pending,
@@ -151,8 +149,7 @@ class NewType11FinalDashboard(Component):
         base_where = "UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')"
         pending_where = f"{base_where} AND STATUS_TUNING IS NULL"
         fail_where = f"{base_where} AND ({self._fail_status_condition('STATUS_TUNING')})"
-        edited_fail_where = f"{base_where} AND {self._user_edited_condition()} AND ({self._detailed_fail_status_condition('STATUS_TUNING')})"
-        target_where = f"{pending_where} OR ({edited_fail_where})"
+        target_where = pending_where
         total = self._count(table, total_scope)
         target = self._count(table, target_where)
         pending = self._count(table, pending_where)
@@ -161,7 +158,7 @@ class NewType11FinalDashboard(Component):
         return self._stage_summary(
             agent="SQL_TUNING",
             table=table,
-            target_condition="total excludes STATUS_TUNING='NA'; remaining requires conversion PASS and NULL or USER_EDITED='Y' FAIL-*",
+            target_condition="total excludes STATUS_TUNING='NA'; remaining requires conversion PASS and NULL",
             total=total,
             target_count=target,
             pending_count=pending,
@@ -174,7 +171,7 @@ class NewType11FinalDashboard(Component):
             status_counts=self._status_counts(table, "STATUS_TUNING", total_scope),
         )
 
-    # NEXT_SQL_INFO 기준 SQL Formatting 적용/대기 현황을 집계한다.
+    # NEXT_SQL_INFO 기준 SQL Formatting 적용 및 자동 실행 대상 현황을 집계한다.
     def _sql_formatting_summary(self) -> dict[str, Any]:
         table = self._qualify("NEXT_SQL_INFO")
         total_scope = self._sql_status_target_condition("STATUS_TUNING", ("PASS", "PASS-TUNING"))
@@ -316,7 +313,7 @@ class NewType11FinalDashboard(Component):
     def _detailed_fail_status_condition(self, status_column: str) -> str:
         return f"UPPER(TRIM(NVL({status_column}, 'NULL'))) LIKE 'FAIL-%'"
 
-    # SQL 단계에서 실행 대상이 되는 NULL/FAIL/USER_EDITED 상태 조건을 만든다.
+    # SQL 단계의 자동 실행 대상은 status가 NULL인 row뿐이다. 실패 재실행은 명시적 reset이 필요하다.
     def _sql_status_target_condition(self, status_column: str, pass_statuses: tuple[str, ...]) -> str:
         pass_list = ", ".join(f"'{status}'" for status in pass_statuses)
         normalized = f"UPPER(TRIM(NVL({status_column}, 'NULL')))"

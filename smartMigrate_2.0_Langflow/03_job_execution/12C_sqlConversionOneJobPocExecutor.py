@@ -271,6 +271,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         StrInput(name="milvus_db_name", display_name="Milvus DB Name", value="default", required=False),
         StrInput(name="rag_collection_name", display_name="RAG Collection Name", value="SM_RAG_RULES", required=False),
         StrInput(name="correct_sql_collection_name", display_name="Correct SQL Collection Name", value="SM_CORRECT_SQL_CONVERSION", required=False),
+        StrInput(name="asis_sql_collection_name", display_name="AS-IS SQL Collection Name", value="SM_ASIS_SQL", required=False),
         IntInput(name="rag_top_k", display_name="MIG RAG Top K", value=3, required=False),
         IntInput(name="correct_sql_top_k", display_name="Correct SQL Top K", value=1, required=False),
     ]
@@ -429,7 +430,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         index = int(payload.get("job_index") or 1)
         message = (
             "DB Migration 선행 작업이 남아 있어 SQL Conversion을 실행하지 않았습니다. "
-            f"pending={prereq.get('pending_count', 0)}, fail={prereq.get('fail_count', 0)}"
+            f"auto_candidates={prereq.get('pending_count', 0)}, fail={prereq.get('fail_count', 0)}"
         )
         return {
             **payload,
@@ -816,7 +817,9 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         if saved_tuned_fr_sql:
             return saved_tuned_fr_sql, saved_tuned_fr_sql, self._sql_length_kind(source_sql)
 
-        pretuning_enabled = str(os.getenv("TUNED_FR_SQL_PRETUNING_ENABLED", "false")).strip().lower() == "true"
+        # Last retry의 긴 SQL은 SQL_TUNING RAG로 먼저 다듬는 것이 기본 경로다.
+        # 운영 중 명시적으로 비활성화해야 할 때만 환경 변수에 false를 지정한다.
+        pretuning_enabled = str(os.getenv("TUNED_FR_SQL_PRETUNING_ENABLED", "true")).strip().lower() == "true"
         pretuning_min_length = self._tuned_fr_sql_pretuning_min_length()
         sql_length = self._sql_length_kind(source_sql, pretuning_min_length)
         if not allow_generate or not pretuning_enabled or len(source_sql) < pretuning_min_length:
@@ -1852,12 +1855,16 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
     # 이전 user-edited PASS SQL을 검색해 TO/BIND/TEST 생성 힌트 묶음을 만든다.
     def _correct_sql_hints_text(self, db_config: dict[str, Any], source_sql: str, current_sql_id: str | None, current_space_nm: str | None, map_id: str, retry_count: int, tag_kind: Any = "") -> dict[str, str]:
         hints = {column: "- (empty)" for column in ("TO_SQL", "BIND_SQL", "TEST_SQL")}
+        query_vector_source = "NOT_AVAILABLE"
         config = self._milvus_config()
         try:
             # Correct SQL 힌트는 현재 FROM SQL embedding을
             # SM_CORRECT_SQL_CONVERSION.dense_vector와 한 번 비교한 뒤,
             # 같은 ranking 결과를 TO_SQL/BIND_SQL/TEST_SQL 힌트에 재사용한다.
-            query_vector = self._embed_texts([self._normalize_sql_shape(source_sql)], self._rag_config())[0]
+            query_vector, query_vector_source = self._stored_asis_query_vector(source_sql, current_sql_id, current_space_nm)
+            if query_vector is None:
+                query_vector = self._embed_texts([self._sql_embedding_content(source_sql)], self._rag_config())[0]
+                query_vector_source = "EMBEDDING_API"
             filter_expr = 'user_edited == "Y" and is_active == true'
             tag_kind_value = str(tag_kind or "").strip().upper()
             if tag_kind_value:
@@ -1909,11 +1916,46 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                     "LOAD_SQL_HINTS",
                     "PASS" if loaded else "SKIP",
                     retry_count,
-                    f"loaded={','.join(loaded) if loaded else 'none'}",
+                    f"loaded={','.join(loaded) if loaded else 'none'}, query_vector={query_vector_source}",
                 ]
             },
         )
         return hints
+
+    def _sql_embedding_content(self, source_sql: str) -> str:
+        source = str(source_sql or "").strip()
+        return "\n".join(part for part in (self._normalize_sql_shape(source), source) if part)
+
+    def _stored_asis_query_vector(
+        self,
+        source_sql: str,
+        current_sql_id: str | None,
+        current_space_nm: str | None,
+    ) -> tuple[list[float] | None, str]:
+        """Reuse SM_ASIS_SQL only when it is the exact current source SQL."""
+        sql_id = str(current_sql_id or "").strip()
+        space_nm = str(current_space_nm or "").strip()
+        if not sql_id or not space_nm:
+            return None, "EMBEDDING_API"
+        try:
+            config = self._milvus_config()
+            rows = self._milvus_client().query(
+                collection_name=config["asis_sql_collection"],
+                filter=(
+                    f"sql_id == {self._milvus_string(sql_id)} "
+                    f"and space_nm == {self._milvus_string(space_nm)} and is_active == true"
+                ),
+                output_fields=["dense_vector", "fr_sql", "edit_fr_sql"],
+                limit=1,
+            )
+            row = rows[0] if isinstance(rows, list) and rows else {}
+            stored_sql = str(row.get("edit_fr_sql") or row.get("fr_sql") or "").strip() if isinstance(row, dict) else ""
+            vector = row.get("dense_vector") if isinstance(row, dict) else None
+            if stored_sql == str(source_sql or "").strip() and isinstance(vector, list) and vector:
+                return [float(value) for value in vector], "SM_ASIS_SQL"
+        except Exception as exc:
+            logging.getLogger("smartmigrate.workflow").warning("SM_ASIS_SQL vector reuse skipped: %s", exc)
+        return None, "EMBEDDING_API"
 
     # 특정 SQL 컬럼 하나에 대한 Correct SQL 힌트 텍스트를 만든다.
     def _correct_sql_hint_text(self, db_config: dict[str, Any], source_sql: str, current_sql_id: str | None, current_space_nm: str | None, map_id: str, retry_count: int, hint_column: str, tag_kind: Any = "") -> str:
@@ -2151,9 +2193,9 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         return max(0, min(10, int(getattr(self, "max_retry", None) or 2)))
 
     # SQL Conversion 시작 전에 DB Migration 완료 조건을 확인한다.
-    # SQL Conversion 전에 DB Migration 성공/실패/대기 상태를 집계한다.
+    # SQL Conversion 전에 DB Migration 성공/실패/자동 실행 대상 상태를 집계한다.
     def _migration_prerequisite_status(self, db_config: dict[str, Any]) -> dict[str, Any]:
-        """active DB Migration row가 대기/실패 상태이면 SQL Conversion을 막는다."""
+        """active DB Migration row가 자동 실행 대상/실패 상태이면 SQL Conversion을 막는다."""
         table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
         with self._connect(db_config) as conn:
             cur = conn.cursor()
@@ -2251,6 +2293,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "db_name": str(getattr(self, "milvus_db_name", "") or os.getenv("MILVUS_DB_NAME") or "default").strip(),
             "rag_collection": self._clean_collection_name(getattr(self, "rag_collection_name", "") or os.getenv("MILVUS_RAG_COLLECTION") or "SM_RAG_RULES"),
             "correct_sql_collection": self._clean_collection_name(getattr(self, "correct_sql_collection_name", "") or os.getenv("MILVUS_CORRECT_SQL_CONVERSION_COLLECTION") or "SM_CORRECT_SQL_CONVERSION"),
+            "asis_sql_collection": self._clean_collection_name(getattr(self, "asis_sql_collection_name", "") or os.getenv("MILVUS_ASIS_SQL_COLLECTION") or "SM_ASIS_SQL"),
         }
 
     # RAG/Correct SQL 검색에 사용할 Milvus client를 생성한다.

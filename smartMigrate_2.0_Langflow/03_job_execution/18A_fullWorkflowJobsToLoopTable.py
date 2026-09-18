@@ -53,7 +53,7 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
             payload = self._parse_payload(getattr(self, "payload_json", ""))
             db_config = self._db_config(payload)
             max_retry = max(0, int(getattr(self, "max_retry", None) or 2))
-            grouped = self._group_jobs(payload, db_config)
+            grouped = self._dedupe_grouped_jobs(self._group_jobs(payload, db_config))
             grouped["MIG"] = self._sort_migration_jobs(grouped["MIG"])
 
             total = sum(len(grouped[route]) for route in ROUTE_ORDER)
@@ -99,7 +99,7 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
                 "loop_job_count": total,
                 "workflow_plan_counts": route_totals,
                 "planned_jobs": rows,
-                "next_node": "18B_fullWorkflowLoop",
+                "next_node": "18B_fullWorkflowLoop2",
             }
             self.status = status
             __log_result = DataFrame(rows)
@@ -136,6 +136,32 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
             return self._load_all_pending_jobs(db_config)
         return grouped
 
+    # Full Workflow의 payload는 여러 job-source를 합칠 수 있으므로 route별 식별자를
+    # 기준으로 중복 제거한다. DB 조회 자체는 중복을 만들지 않지만 payload 중복을 막는다.
+    def _dedupe_grouped_jobs(self, grouped: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[str, Any]]]:
+        deduped: dict[str, list[dict[str, Any]]] = {}
+        for route, jobs in grouped.items():
+            seen: set[tuple[str, ...]] = set()
+            unique: list[dict[str, Any]] = []
+            for job in jobs:
+                if route == "MIG":
+                    key = (str(job.get("map_id") or "").strip(),)
+                else:
+                    key = (str(job.get("space_nm") or "").strip(), str(job.get("sql_id") or "").strip())
+                # 빈 식별자는 _validate_job에서 오류를 내므로 여기서 억지로 합치지 않는다.
+                if not all(key):
+                    unique.append(job)
+                    continue
+                if key in seen:
+                    logging.getLogger("smartmigrate.workflow").warning(
+                        "Duplicate Full Workflow job removed before loop execution: route=%s key=%s", route, key
+                    )
+                    continue
+                seen.add(key)
+                unique.append(job)
+            deduped[route] = unique
+        return deduped
+
     # DB 또는 payload에서 이 단계에 필요한 입력 데이터를 로드한다.
     def _load_all_pending_jobs(self, db_config: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
         self._require_db_config(db_config)
@@ -150,7 +176,7 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
                     SELECT MAP_ID, PRIORITY, PRIOR_MAP_ID
                       FROM {mig_table}
                      WHERE UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
-                       AND (STATUS IS NULL OR (UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y' AND UPPER(TRIM(NVL(STATUS, 'NULL'))) LIKE 'FAIL-%'))
+                       AND STATUS IS NULL
                      ORDER BY PRIORITY ASC NULLS LAST, MAP_ID ASC
                     """,
                     "MIG",
@@ -162,7 +188,6 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
                     SELECT TO_CHAR(SPACE_NM) AS SPACE_NM, TO_CHAR(SQL_ID) AS SQL_ID, PRIORITY
                       FROM {sql_table}
                      WHERE STATUS_CONVERSION IS NULL
-                        OR (UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y' AND UPPER(TRIM(NVL(STATUS_CONVERSION, 'NULL'))) LIKE 'FAIL-%')
                      ORDER BY PRIORITY ASC NULLS LAST, UPD_TS ASC NULLS FIRST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                     """,
                     "SQL_CONVERSION",
@@ -174,7 +199,7 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
                     SELECT TO_CHAR(SPACE_NM) AS SPACE_NM, TO_CHAR(SQL_ID) AS SQL_ID, PRIORITY
                       FROM {sql_table}
                      WHERE UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')
-                       AND (STATUS_TUNING IS NULL OR (UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y' AND UPPER(TRIM(NVL(STATUS_TUNING, 'NULL'))) LIKE 'FAIL-%'))
+                       AND STATUS_TUNING IS NULL
                      ORDER BY PRIORITY ASC NULLS LAST, UPD_TS ASC NULLS FIRST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                     """,
                     "SQL_TUNING",

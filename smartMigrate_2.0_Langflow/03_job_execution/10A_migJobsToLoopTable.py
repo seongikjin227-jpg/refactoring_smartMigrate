@@ -44,7 +44,9 @@ class NewType10AMigJobsToLoopTable(Component):
             payload = self._parse_payload(getattr(self, "payload_json", ""))
             db_config = self._db_config(payload)
             self._require_db_config(db_config)
-            jobs = self._sort_by_dependency(self._mig_jobs(payload, db_config))
+            # DB 조회는 MAP_ID 당 한 행이지만, selected/requested payload는 상위
+            # 컴포넌트에서 합쳐질 수 있으므로 Loop 투입 전에 한 번 더 제거한다.
+            jobs = self._sort_by_dependency(self._dedupe_jobs(self._mig_jobs(payload, db_config)))
             total = len(jobs)
             rows: list[dict[str, Any]] = []
             for index, job in enumerate(jobs, start=1):
@@ -91,6 +93,25 @@ class NewType10AMigJobsToLoopTable(Component):
                 out.append(dict(job))
         return out
 
+    # payload에서 같은 MAP_ID가 여러 번 전달되어도 DB Migration을 한 번만 실행한다.
+    def _dedupe_jobs(self, jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        unique: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for job in jobs:
+            map_id = str(job.get("map_id") or "").strip()
+            # 식별자가 없는 row는 이후 validation에서 명확하게 실패하게 그대로 둔다.
+            if not map_id:
+                unique.append(job)
+                continue
+            if map_id in seen:
+                logging.getLogger("smartmigrate.workflow").warning(
+                    "Duplicate MIG job removed before loop execution: map_id=%s", map_id
+                )
+                continue
+            seen.add(map_id)
+            unique.append(job)
+        return unique
+
     # 현재 payload 상태에서 이 단계가 실행되어야 하는지 판단한다.
     def _should_load_all_pending(self, payload: dict[str, Any], jobs: Any) -> bool:
         if str(payload.get("run_mode") or "").lower() != "all_pending":
@@ -107,7 +128,7 @@ class NewType10AMigJobsToLoopTable(Component):
                 SELECT MAP_ID, PRIORITY, PRIOR_MAP_ID
                   FROM {table}
                  WHERE UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
-                   AND (STATUS IS NULL OR (UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y' AND UPPER(TRIM(NVL(STATUS, 'NULL'))) LIKE 'FAIL-%'))
+                   AND STATUS IS NULL
                  ORDER BY PRIORITY ASC NULLS LAST, MAP_ID ASC
                 """
             )

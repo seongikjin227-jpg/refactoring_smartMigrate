@@ -185,12 +185,16 @@ class NewType04RagCommandTool(Component):
         min_similarity = self._similarity_threshold(requested_min_similarity)
 
         # 기준 SQL을 임베딩 API에 보내기 전에 정규화하고, 검색용 dense vector로 변환한다.
-        vector = self._embed_texts([self._sql_content(query_sql)], self._embed_config())[0]
+        config = self._milvus_config()
+        client = self._milvus_client(config)
+        vector, query_vector_source = self._stored_asis_query_vector(client, config, query_sql, query_identity)
+        if vector is None:
+            vector = self._embed_texts([self._sql_content(query_sql)], self._embed_config())[0]
+            query_vector_source = "EMBEDDING_API"
 
         # Milvus AS-IS SQL 컬렉션에서 활성 문서만 대상으로 코사인 유사도 검색을 수행한다.
-        client = self._milvus_client(self._milvus_config())
         hits = client.search(
-            collection_name=self._milvus_config()["asis_sql_collection"],
+            collection_name=config["asis_sql_collection"],
             data=[vector],
             anns_field="dense_vector",
             limit=candidate_limit,
@@ -246,6 +250,7 @@ class NewType04RagCommandTool(Component):
             "ok": True,
             "action": "search_similar_asis_sql",
             "query_source": query_source,
+            "query_vector_source": query_vector_source,
             "query_target_table": query_target_table,
             "status_filter": status_filter,
             "status_scope": status_scope,
@@ -257,6 +262,36 @@ class NewType04RagCommandTool(Component):
             "status_reset_request_examples": self._status_reset_request_examples(matches),
             "execution_request_examples_after_status_reset": self._execution_request_examples(matches),
         }
+
+    def _stored_asis_query_vector(
+        self,
+        client: Any,
+        config: dict[str, str],
+        query_sql: str,
+        query_identity: tuple[str, str] | None,
+    ) -> tuple[list[float] | None, str]:
+        """Reuse the synced AS-IS vector only for the exact current SQL row."""
+        if not query_identity:
+            return None, "EMBEDDING_API"
+        sql_id, space_nm = query_identity
+        try:
+            rows = client.query(
+                collection_name=config["asis_sql_collection"],
+                filter=(
+                    f"sql_id == {json.dumps(sql_id, ensure_ascii=False)} "
+                    f"and space_nm == {json.dumps(space_nm, ensure_ascii=False)} and is_active == true"
+                ),
+                output_fields=["dense_vector", "fr_sql", "edit_fr_sql"],
+                limit=1,
+            )
+            row = rows[0] if isinstance(rows, list) and rows else {}
+            stored_sql = str(row.get("edit_fr_sql") or row.get("fr_sql") or "").strip() if isinstance(row, dict) else ""
+            vector = row.get("dense_vector") if isinstance(row, dict) else None
+            if stored_sql == str(query_sql or "").strip() and isinstance(vector, list) and vector:
+                return [float(value) for value in vector], "SM_ASIS_SQL"
+        except Exception as exc:
+            logging.getLogger("smartmigrate.workflow").warning("SM_ASIS_SQL vector reuse skipped: %s", exc)
+        return None, "EMBEDDING_API"
 
     # 유사도 검색에 사용할 기준 SQL과 식별 정보를 명령 또는 DB에서 가져온다.
     def _similarity_query_sql(self, conn: Any, command: dict[str, Any]) -> tuple[str, str, tuple[str, str] | None, str]:

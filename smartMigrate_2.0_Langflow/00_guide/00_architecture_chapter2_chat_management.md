@@ -82,7 +82,7 @@ flowchart TD
 
 | 도메인 | 기준 테이블 | 주요 계산 |
 |---|---|---|
-| DB Migration | `NEXT_MIG_INFO` | total, pending, pass, fail, user-edited fail retry 대상 |
+| DB Migration | `NEXT_MIG_INFO` | total, 자동 실행 대상, pass, fail. `USER_EDITED='Y'` 실패는 자동 재실행 대상이 아님 |
 | SQL Conversion | `NEXT_SQL_INFO.STATUS_CONVERSION` | NULL, PASS/PASS-CONVERSION, FAIL-* |
 | SQL Tuning | `NEXT_SQL_INFO.STATUS_TUNING` | conversion pass 대상 중 NULL, PASS/PASS-TUNING, FAIL-* |
 | SQL Formatting | `NEXT_SQL_INFO.FORMATTED_SQL` | tuning pass 대상 중 CLOB empty/non-empty |
@@ -270,7 +270,5 @@ GUIDANCE_TEXT=대량 테이블 조인에서는 필터 조건이 강한 테이블
 ```text
 RAG_ID 25 튜닝 가이드 비활성화해줘.
 ```
-
-
 
 

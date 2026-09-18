@@ -93,6 +93,7 @@ class NewType04SelectCommandTool(Component):
         "TARGET_SQL",
     }
 
+    # 이 컴포넌트는 조회 전용이다. command action을 dispatch한 결과만 반환하며 DB 상태는 바꾸지 않는다.
     def run_command(self) -> Data:
         logging.getLogger("smartmigrate.workflow").info(
             "04 Select Command Tool started",
@@ -108,6 +109,7 @@ class NewType04SelectCommandTool(Component):
             self.status = result
             return Data(data=result)
 
+    # 자연어 Agent가 사용할 수 있는 조회 범위를 allow-list action으로 제한한다.
     def _dispatch(self, command: dict[str, Any]) -> dict[str, Any]:
         action = str(command.get("action") or "").strip().lower()
         if action == "get_migration_job":
@@ -138,6 +140,7 @@ class NewType04SelectCommandTool(Component):
             return {"ok": True, "action": "help", "supported_actions": self._supported_actions()}
         raise ValueError(f"Unsupported action: {action}")
 
+    # migration 한 건은 헤더, 상세 mapping, 실행 log를 함께 읽어야 원인 분석 문맥이 완성된다.
     def _get_migration_job(self, command: dict[str, Any]) -> dict[str, Any]:
         map_id = self._required_text(command, "map_id")
         limit = self._limit(command.get("limit"))
@@ -171,6 +174,7 @@ class NewType04SelectCommandTool(Component):
             "data": {"job": job, "details": details, "logs": logs},
         }
 
+    # SQL 한 건의 식별자는 SPACE_NM + SQL_ID이며, 관련 mapping과 log를 묶어 반환한다.
     def _get_sql_job(self, command: dict[str, Any]) -> dict[str, Any]:
         sql_id = self._required_text(command, "sql_id")
         space_nm = str(command.get("space_nm") or "").strip()
@@ -223,6 +227,7 @@ class NewType04SelectCommandTool(Component):
             "data": {"sql_info": sql_info, "mapping_rules": self._sql_mapping_rules(sql_info)},
         }
 
+    # 대용량 SQL text는 명시 요청한 컬럼만 반환한다. 일반 조회가 CLOB 전체를 무제한 전달하지 않게 한다.
     def _get_sql_text(self, command: dict[str, Any]) -> dict[str, Any]:
         sql_id = self._required_text(command, "sql_id")
         space_nm = str(command.get("space_nm") or "").strip()
@@ -332,6 +337,7 @@ class NewType04SelectCommandTool(Component):
             "full_text": True,
         }
 
+    # 로그는 NEXT_MIG_LOG만 단일 기준으로 사용한다. MIG와 SQL 실행 로그를 같은 조회 계약으로 다룬다.
     def _search_logs(self, command: dict[str, Any]) -> dict[str, Any]:
         return {
             "ok": True,
@@ -466,6 +472,7 @@ class NewType04SelectCommandTool(Component):
             "data": data,
         }
 
+    # 관리 화면용 작업 목록이다. 실제 Loop queue를 만드는 10A/12A/15A/18A와는 역할이 다르다.
     def _list_remaining_jobs(self, command: dict[str, Any]) -> dict[str, Any]:
         domain = self._normalize_domain(command.get("domain") or command.get("mig_kind") or "ALL")
         keyword = str(command.get("keyword") or "").strip()
@@ -491,9 +498,9 @@ class NewType04SelectCommandTool(Component):
             "action": "list_remaining_jobs",
             "target": {"domain": domain, "keyword": keyword, "limit_per_domain": limit},
             "definition": {
-                "DB_MIGRATION": "(UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y' AND (STATUS IS NULL OR (UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y' AND UPPER(TRIM(NVL(STATUS, 'NULL'))) LIKE 'FAIL-%')))",
-                "SQL_CONVERSION": "(STATUS_CONVERSION IS NULL OR (UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y' AND UPPER(TRIM(NVL(STATUS_CONVERSION, 'NULL'))) LIKE 'FAIL-%'))",
-                "SQL_TUNING": "(UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION') AND (STATUS_TUNING IS NULL OR (UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y' AND UPPER(TRIM(NVL(STATUS_TUNING, 'NULL'))) LIKE 'FAIL-%')))",
+                "DB_MIGRATION": "(UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y' AND STATUS IS NULL)",
+                "SQL_CONVERSION": "(STATUS_CONVERSION IS NULL)",
+                "SQL_TUNING": "(UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION') AND STATUS_TUNING IS NULL)",
                 "SQL_FORMATTING": "(UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING') AND (FORMATTED_SQL IS NULL OR NVL(DBMS_LOB.GETLENGTH(FORMATTED_SQL), 0) = 0))",
             },
             "data": data,
@@ -745,6 +752,8 @@ class NewType04SelectCommandTool(Component):
             table_name="NEXT_SQL_INFO",
         )
 
+    # 작업 단계별 조회 조건을 한 곳에 둔다. 이 조건은 '조회 가능한 잔여/재시도 후보'의 정의다.
+    # 전체 실행 queue의 자동 실행 대상 선정 조건 자체를 변경하는 함수는 아니다.
     def _remaining_where(self, domain: str) -> str:
         domain = self._normalize_domain(domain)
         user_edited = "UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y'"
@@ -823,6 +832,7 @@ class NewType04SelectCommandTool(Component):
         )
         return {str(row.get("status")): int(row.get("count") or 0) for row in rows}
 
+    # 모든 SELECT는 이 경로를 거친다. CLOB은 _select_list에서 길이를 제한하고 여기서는 JSON-safe 값으로 바꾼다.
     def _query_rows(
         self,
         sql: str,
@@ -841,6 +851,7 @@ class NewType04SelectCommandTool(Component):
         _ = table_name
         return result
 
+    # 테이블별 실제 컬럼을 DB metadata에서 읽어 SELECT 목록을 만들므로 schema 차이를 안전하게 흡수한다.
     def _select_list(
         self,
         table_name: str,
@@ -865,6 +876,7 @@ class NewType04SelectCommandTool(Component):
                 expressions.append(column)
         return ", ".join(expressions)
 
+    # include_sql_text=false이면 SQL/CLOB 계열 컬럼을 제외해 관리 응답의 크기와 노출 범위를 줄인다.
     def _include_column(self, column: str, *, include_text: bool | None = None) -> bool:
         if include_text is None:
             include_text = self._as_bool(getattr(self, "include_sql_text", True))
@@ -914,6 +926,7 @@ class NewType04SelectCommandTool(Component):
             return "STATUS_TUNING"
         return "STATUS_CONVERSION"
 
+    # static SQL을 가정하지 않고 ALL_TAB_COLUMNS를 확인해 선택 가능한 컬럼과 CLOB 여부를 결정한다.
     def _available_column_types(self, table_name: str) -> dict[str, str]:
         table = self._clean_identifier(table_name)
         schema = str(getattr(self, "system_schema", "") or "").strip().upper()
@@ -952,6 +965,7 @@ class NewType04SelectCommandTool(Component):
         finally:
             conn.close()
 
+    # tool-mode Message/Data/dict 입력을 command JSON object 하나로 정규화한다.
     def _parse_command(self) -> dict[str, Any]:
         raw = getattr(self, "command_json", "")
         if isinstance(raw, dict):
@@ -1011,6 +1025,7 @@ class NewType04SelectCommandTool(Component):
         default = self._positive_int(getattr(self, "full_text_row_limit", None), 3)
         return max(1, min(self._positive_int(value, default), 10))
 
+    # full text action은 allow-list 컬럼만 허용하고, 행 수는 별도 full_text_row_limit로 제한한다.
     def _requested_columns(
         self,
         raw_columns: Any,
