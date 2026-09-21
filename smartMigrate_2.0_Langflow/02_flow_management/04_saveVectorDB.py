@@ -56,6 +56,13 @@ class NewType04SaveVectorDB(Component):
     icon = "Database"
 
     inputs = [
+        MessageTextInput(
+            name="command_json",
+            display_name="Tool Command JSON",
+            required=False,
+            tool_mode=True,
+            info='Use {"action":"sync_correct_sql"} after save_correct_sql, or {"action":"sync_all"} for a full sync.',
+        ),
         DataInput(name="payload_json", display_name="Payload JSON", required=False),
         StrInput(name="db_host", display_name="DB Host", required=True),
         IntInput(name="db_port", display_name="DB Port", value=1521, required=False),
@@ -77,7 +84,58 @@ class NewType04SaveVectorDB(Component):
         IntInput(name="rag_embed_timeout_seconds", display_name="RAG Embedding Timeout Seconds", value=60, required=False),
     ]
 
-    outputs = [Output(display_name="Result Message", name="result", method="run", types=["Message"])]
+    outputs = [
+        Output(display_name="Result Message", name="result", method="run", types=["Message"]),
+        Output(display_name="Tool Result", name="tool_result", method="run_tool", types=["Data"]),
+    ]
+
+    def run_tool(self) -> Data:
+        """Expose VectorDB sync directly to the Management Agent as a Tool."""
+        try:
+            command = self._parse_payload(getattr(self, "command_json", ""))
+            action = str(command.get("action") or "sync_correct_sql").strip().lower()
+            if action in {"sync_correct_sql", "sync_correct", "correct_sql_sync"}:
+                result = self._sync_correct_sql_only(command)
+            elif action in {"sync_all", "sync_vector_db", "sync"}:
+                message = self.run()
+                result = {**dict(getattr(self, "status", {}) or {}), "message": str(getattr(message, "text", ""))}
+            else:
+                raise ValueError(f"Unsupported sync action: {action}")
+            self.status = result
+            return Data(data=result)
+        except Exception as exc:
+            result = {"ok": False, "component": "04_syncMilvusVectorDB", "error": str(exc), "final": True}
+            self.status = result
+            return Data(data=result)
+
+    def _sync_correct_sql_only(self, command: dict[str, Any]) -> dict[str, Any]:
+        """Sync just SM_CORRECT_SQL_CONVERSION after an explicit Correct SQL save."""
+        started = time.perf_counter()
+        db_config = self._db_config()
+        milvus_config = self._milvus_config()
+        embed_config = self._embed_config()
+        self._require_db_config(db_config)
+        self._require_milvus_config(milvus_config)
+        self._require_embed_config(embed_config)
+        rows = self._load_correct_sql_rows(db_config)
+        active_rows = [row for row in rows if row.get("is_active")]
+        if not active_rows:
+            raise ValueError("No user-entered Correct SQL is available to sync")
+        vector_dim = self._detect_vector_dim(active_rows, embed_config)
+        client = self._milvus_client(milvus_config)
+        collection = milvus_config["correct_sql_conversion_collection"]
+        created = self._ensure_collection(client, collection, vector_dim, "conversion")
+        sync = self._sync_collection(client, collection, rows, embed_config)
+        return {
+            "ok": not sync["failures"],
+            "component": "04_syncMilvusVectorDB",
+            "action": "sync_correct_sql",
+            "collection": collection,
+            "collection_created": created,
+            "correct_sql_conversion": sync,
+            "elapsed_seconds": round(time.perf_counter() - started, 3),
+            "final": True,
+        }
 
     # Langflow output 진입점에서 입력을 검증하고 이 컴포넌트의 주요 실행 흐름을 시작한다.
     def run(self) -> Message:
@@ -138,7 +196,7 @@ class NewType04SaveVectorDB(Component):
             "embedding_model": embed_config["model"],
             "source_scope": {
                 RAG_TABLE: "all rows synced; USE_YN='Y' and SOURCE_SQL present become active",
-                SQL_TABLE: "Correct SQL uses USER_EDITED='Y' and PASS rows; AS-IS SQL indexes FR_SQL / EDIT_FR_SQL rows for similarity search",
+                SQL_TABLE: "Correct SQL uses explicitly user-entered USER_EDITED='Y' rows; AS-IS SQL indexes FR_SQL / EDIT_FR_SQL rows for similarity search",
             },
             "rag": rag_result,
             "correct_sql_conversion": conversion_result,
@@ -531,7 +589,7 @@ class NewType04SaveVectorDB(Component):
                 # 사람이 보정했고 성공한 conversion row만 correct SQL 힌트로 사용한다.
                 # 실패 row나 손대지 않은 row는 모델에 나쁜 예시를 주지 않도록 제외한다.
                 
-                is_active = bool(source_sql) and user_edited == "Y" and status in {"PASS", "PASS-CONVERSION"} and bool(to_sql or bind_sql or test_sql)
+                is_active = bool(source_sql) and user_edited == "Y" and bool(to_sql or bind_sql or test_sql)
                 if not space_nm or not sql_id or sql_seq is None:
                     continue
                 doc_key = f"{space_nm}:{sql_id}"

@@ -56,7 +56,7 @@ flowchart LR
 
 ## 2.4 04 Management Router
 
-`04_managementRouter.py`는 관리성 요청을 다시 일곱 route로 나눈다.
+`04_managementRouter.py`는 관리성 요청을 네 route로 나눈다.
 
 ```mermaid
 flowchart TD
@@ -66,7 +66,7 @@ flowchart TD
     QA --> TOOL_SELECT[04 Select Command Tool]
     QA --> TOOL_UPDATE[04 Update Command Tool]
     QA --> TOOL_RAG[04 RAG Command Tool]
-    M -->|VECTOR_DB_SYNC| VDB[04 Sync Milvus Vector DB]
+    QA --> TOOL_SYNC[04 Sync Milvus Vector DB Tool]
     M -->|EXCEPTION| EX[Exception Message]
 ```
 
@@ -74,11 +74,10 @@ flowchart TD
 |---|---|---|
 | `DASHBOARD` | "대시보드 보여줘", "전체 현황" | 정해진 DB aggregate 조회 후 메시지 생성 |
 | `CURRENT_PROGRESS` | "지금 돌고 있는 작업 있어?" | running 상태와 최근 5개 로그 조회 |
-| `MANAGEMENT_AGENT` | "DB Migration 남은 작업 목록 보여줘", "map id 101 왜 실패했어?", "전체 Fail 분석해줘" | Management Agent가 3개의 tool을 조합해서 조회/분석/수정/가이드 관리 수행 |
-| `VECTOR_DB_SYNC` | "VectorDB 업로드해줘", "방금 추가한 RAG 가이드를 Milvus에 반영해줘" | `04_saveVectorDB.py`로 Oracle 원천 데이터를 Milvus collection에 동기화 |
+| `MANAGEMENT_AGENT` | "DB Migration 남은 작업 목록 보여줘", "map id 101 왜 실패했어?", "VectorDB 업로드해줘" | Management Agent가 Select/Update/RAG/Sync Tool을 조합해서 처리 |
 | `EXCEPTION` | 필수 target 누락 | 구체적인 한국어 에러 메시지 |
 
-중요한 결정: `SELECT_AGENT`, `UPDATE_COMMAND`, `RAG_GUIDE_MANAGEMENT`는 독립 agent가 아니라 `04 Management Agent`의 내부 sub-route/tool 호출로 통합되었다. 채팅으로 들어오는 조회/수정/가이드 관리는 모두 Management Agent가 3개 tool을 순서대로 활용한다. 단, 실행 완료 후 자동 분석인 `11B_failureCauseAnalyzer.py`는 여전히 실행 workflow 후단에서 사용한다.
+중요한 결정: `SELECT_AGENT`, `UPDATE_COMMAND`, `RAG_GUIDE_MANAGEMENT`, `VECTOR_DB_SYNC`는 독립 route가 아니라 `04 Management Agent`의 내부 Tool 호출로 통합되었다. 채팅으로 들어오는 조회/수정/가이드/동기화 관리는 모두 Management Agent가 Tool을 순서대로 활용한다. 단, 실행 완료 후 자동 분석인 `11B_failureCauseAnalyzer.py`는 여전히 실행 workflow 후단에서 사용한다.
 
 ## 2.5 Dashboard
 
@@ -242,17 +241,18 @@ RAG 가이드 테이블 자체를 조회/추가/수정/비활성화하려는 요
 
 ## 2.10 VectorDB Sync
 
-`VECTOR_DB_SYNC`는 04 관리 요청에서 `04_saveVectorDB.py`를 실행하기 위한 route다. RAG 가이드나 Correct SQL을 DB에 추가한 뒤 Milvus 검색에 반영해야 할 때 사용한다.
+VectorDB 동기화는 별도 `VECTOR_DB_SYNC` route가 아니다. `04_saveVectorDB.py`의 `Tool Result`가 Management Agent에 연결되어 있으며, Agent가 Tool command로 호출한다.
 
 | 요청 예 | route | 실행 컴포넌트 |
 |---|---|---|
-| "VectorDB 업로드해줘" | `VECTOR_DB_SYNC` | `04_saveVectorDB.py` |
-| "방금 추가한 튜닝 가이드 Milvus에 반영해줘" | `VECTOR_DB_SYNC` | `04_saveVectorDB.py` |
-| "04 VectorDB 동기화 실행해줘" | `VECTOR_DB_SYNC` | `04_saveVectorDB.py` |
+| "VectorDB 업로드해줘" | `MANAGEMENT_AGENT` | Sync Tool `{"action":"sync_all"}` |
+| "방금 저장한 Correct SQL을 반영해줘" | `MANAGEMENT_AGENT` | Sync Tool `{"action":"sync_correct_sql"}` |
 
 현재 04_saveVectorDB는 특정 `RAG_ID`만 부분 업로드하지 않고 Oracle 원천 테이블 snapshot 기준으로 전체 동기화한다. 변경되지 않은 row는 `content_hash`로 건너뛰고, Oracle 기준 active가 아닌 문서는 Milvus에서 inactive 처리한다.
 
-04_saveVectorDB output은 Chat Output에 직접 연결할 수 있는 `Message`다. 성공 시 "Correct SQL 및 Conversion / Tuning Guide를 Milvus Vector DB에 동기화 완료했습니다." 문구와 함께 RAG/Correct SQL별 active, upserted, skipped, deactivated 건수를 출력한다.
+Correct SQL 저장 흐름에서는 `04_saveVectorDB`의 `Tool Result`를 Management Agent의 Tool로 연결한다. Agent는 먼저 Update Command Tool의 `save_correct_sql`로 `TO_SQL`/`BIND_SQL`/`TEST_SQL`과 `USER_EDITED='Y'`를 저장하고, 성공한 경우에만 이 Tool에 `{"action":"sync_correct_sql"}`을 호출한다. 상태 재시도·상태 초기화·priority 변경은 VectorDB 동기화를 호출하지 않는다. Update Tool에서 파일 경로로 `04_saveVectorDB.py`를 import해서는 안 된다.
+
+캔버스에서는 Management Router의 `Vector DB Sync` 출력 및 `04_saveVectorDB`로 향하던 직접 선을 제거한다. `04_saveVectorDB`의 `Tool Result`만 Management Agent의 Tool 입력에 연결한다.
 
 ### 요청 예시
 
@@ -274,4 +274,3 @@ GUIDANCE_TEXT=대량 테이블 조인에서는 필터 조건이 강한 테이블
 ```text
 RAG_ID 25 튜닝 가이드 비활성화해줘.
 ```
-

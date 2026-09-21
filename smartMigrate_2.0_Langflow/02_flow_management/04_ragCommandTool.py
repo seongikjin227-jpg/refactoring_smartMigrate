@@ -259,8 +259,6 @@ class NewType04RagCommandTool(Component):
             "candidate_count": len(candidates),
             "row_count": len(matches),
             "data": {"similar_sqls": matches},
-            "status_reset_request_examples": self._status_reset_request_examples(matches),
-            "execution_request_examples_after_status_reset": self._execution_request_examples(matches),
         }
 
     def _stored_asis_query_vector(

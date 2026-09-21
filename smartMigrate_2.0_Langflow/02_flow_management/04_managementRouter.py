@@ -25,7 +25,6 @@ MANAGEMENT_ROUTER_PROMPT = """당신은 SmartMigrate 04 관리 요청 라우터�
 - DASHBOARD: 전체/도메인 dashboard, 집계 현황, 성공/실패/자동 실행 대상 건수 요약 요청
 - CURRENT_PROGRESS: 현재 실행 중인 작업, running 상태, 지금 돌고 있는지 확인하는 단순 요청
 - MANAGEMENT_AGENT: 조회/분석/잔여 작업 목록/상태 변경/SQL 저장 또는 비우기/RAG Guide 조회·추가·수정·비활성화 요청
-- VECTOR_DB_SYNC: Oracle 원천 데이터를 Milvus VectorDB에 업로드/동기화하는 요청
 - EXCEPTION: 필수 정보가 없거나 모호해서 route를 고를 수 없는 경우
 
 라우팅 규칙:
@@ -38,15 +37,15 @@ MANAGEMENT_ROUTER_PROMPT = """당신은 SmartMigrate 04 관리 요청 라우터�
 - RAG Guide 조회/추가/수정/비활성화 요청은 MANAGEMENT_AGENT입니다.
 - "비슷한 AS-IS SQL", "유사 SQL", "유사한 실패 SQL", "Fail-* 재시도 후보"처럼 AS-IS SQL 벡터 검색 또는 그 결과의 재시도 요청은 MANAGEMENT_AGENT입니다.
 - 유사 SQL 검색 결과로 FAIL-* 상태를 NULL로 바꾸는 요청도 MANAGEMENT_AGENT입니다. 검색만 요청한 경우에는 상태를 변경하지 않습니다.
-- VectorDB, Milvus, 벡터DB, vector upload, vector sync, 04_saveVectorDB 실행 요청은 VECTOR_DB_SYNC입니다.
-- RAG Guide를 추가/수정/비활성화한 직후라도 VectorDB 동기화를 자동으로 이어서 실행하지 않습니다. 사용자가 VectorDB 동기화를 별도로 요청한 경우에만 VECTOR_DB_SYNC입니다.
+- VectorDB, Milvus, 벡터DB, vector upload, vector sync 요청도 MANAGEMENT_AGENT입니다. Agent가 연결된 Sync Milvus Vector DB Tool을 직접 호출합니다.
+- RAG Guide를 추가/수정/비활성화한 직후라도 VectorDB 동기화를 자동으로 이어서 실행하지 않습니다. 사용자가 별도로 요청한 경우에만 Agent가 sync_all Tool command를 호출합니다.
 
 필수 정보 누락 규칙:
 - route 자체를 판단할 수 없으면 EXCEPTION으로 보내고 exception_message에 필요한 정보를 한국어로 적으세요.
 - MANAGEMENT_AGENT가 세부 파라미터 누락을 직접 물어볼 수 있으므로, route가 명확하면 EXCEPTION으로 보내지 마세요.
 
 JSON schema:
-{"management_route":"DASHBOARD|CURRENT_PROGRESS|MANAGEMENT_AGENT|VECTOR_DB_SYNC|EXCEPTION","exception_message":"","reason":""}"""
+{"management_route":"DASHBOARD|CURRENT_PROGRESS|MANAGEMENT_AGENT|EXCEPTION","exception_message":"","reason":""}"""
 
 
 EXCEPTION_MESSAGE = "Management 요청을 처리할 수 없습니다. 어떤 관리 작업인지 다시 알려주세요."
@@ -54,7 +53,7 @@ EXCEPTION_MESSAGE = "Management 요청을 처리할 수 없습니다. 어떤 관
 
 class NewType04ManagementRouter(Component):
     display_name = "04 Management LLM Router"
-    description = "Routes management requests to dashboard, current progress, management agent, vector sync, or exception."
+    description = "Routes management requests to dashboard, current progress, management agent, or exception."
     name = "NewType04ManagementRouter"
     icon = "Route"
 
@@ -70,7 +69,6 @@ class NewType04ManagementRouter(Component):
         Output(display_name="Dashboard", name="dashboard", method="dashboard_response", group_outputs=True),
         Output(display_name="Current Progress", name="current_progress", method="current_progress_response", group_outputs=True),
         Output(display_name="Management Agent", name="management_agent", method="management_agent_response", group_outputs=True),
-        Output(display_name="Vector DB Sync", name="vector_db_sync", method="vector_db_sync_response", group_outputs=True),
         Output(display_name="Exception Message", name="exception", method="exception_response", group_outputs=True, types=["Message"]),
     ]
 
@@ -84,9 +82,6 @@ class NewType04ManagementRouter(Component):
 
     def management_agent_response(self) -> Data:
         return self._route_output("MANAGEMENT_AGENT", "management_agent")
-
-    def vector_db_sync_response(self) -> Data:
-        return self._route_output("VECTOR_DB_SYNC", "vector_db_sync")
 
     # LLM이 route를 정할 수 없을 때만 사용자에게 보낼 최종 Message branch를 연다.
     def exception_response(self) -> Message:
@@ -187,7 +182,7 @@ class NewType04ManagementRouter(Component):
     # LLM 응답을 허용된 route 집합으로 제한해, 임의의 component name으로 이어지는 것을 차단한다.
     def _normalize_decision(self, decision: dict[str, Any]) -> dict[str, Any]:
         route = str(decision.get("management_route") or "").upper()
-        allowed = {"DASHBOARD", "CURRENT_PROGRESS", "MANAGEMENT_AGENT", "VECTOR_DB_SYNC", "EXCEPTION"}
+        allowed = {"DASHBOARD", "CURRENT_PROGRESS", "MANAGEMENT_AGENT", "EXCEPTION"}
         if route not in allowed:
             raise ValueError(f"Invalid management_route: {route}")
         return {
@@ -202,7 +197,6 @@ class NewType04ManagementRouter(Component):
             "DASHBOARD": "04_dashboard",
             "CURRENT_PROGRESS": "04_currentProgress",
             "MANAGEMENT_AGENT": "04_managementAgent",
-            "VECTOR_DB_SYNC": "04_saveVectorDB",
             "EXCEPTION": "04_managementRouter",
         }.get(route, "04_managementAgent")
 

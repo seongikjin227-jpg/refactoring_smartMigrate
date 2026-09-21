@@ -4,9 +4,7 @@ import json
 import logging
 import os
 import re
-import importlib.util
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
@@ -55,10 +53,6 @@ class NewType04UpdateCommandTool(Component):
             required=False,
             advanced=True,
         ),
-        StrInput(name="rag_embed_base_url", display_name="RAG Embedding Base URL", required=False, advanced=True),
-        SecretStrInput(name="rag_embed_api_key", display_name="RAG Embedding API Key", required=False, advanced=True),
-        StrInput(name="rag_embed_model", display_name="RAG Embedding Model", value="BAAI/bge-m3", required=False, advanced=True),
-        IntInput(name="rag_embed_timeout_seconds", display_name="RAG Embedding Timeout Seconds", value=60, required=False, advanced=True),
     ]
 
     outputs = [Output(display_name="Result", name="result", method="run_command")]
@@ -121,13 +115,7 @@ class NewType04UpdateCommandTool(Component):
                 conn.rollback()
                 raise
 
-        vector_sync = None
-        if self._requires_correct_sql_sync(actions):
-            vector_sync = self._sync_correct_sql_vector_db()
-
         answer = self._answer(results)
-        if vector_sync:
-            answer += f"\n- Correct SQL VectorDB sync: {vector_sync['summary']}"
         logging.getLogger("smartmigrate.workflow").info(
             answer,
             extra={"workflow_log": [0, "WORKFLOW", "04_UPDATE_TOOL", "INFO", "UPDATE", "PASS", len(results)]},
@@ -140,7 +128,6 @@ class NewType04UpdateCommandTool(Component):
             "updated_count": sum(int(item["updated_rows"]) for item in results),
             "actions": results,
             "answer_text": answer,
-            "vector_sync": vector_sync,
             "final": True,
         }
 
@@ -229,6 +216,9 @@ class NewType04UpdateCommandTool(Component):
             sql_id, space_nm = self._sql_identity(raw)
             value = self._int_value(raw.get("priority"), "priority")
             return self._sql_statement(action, sql_id, space_nm, "PRIORITY = :priority", {"sql_id": sql_id, "space_nm": space_nm, "priority": value}, f"PRIORITY={value}")
+
+        if action == "save_correct_sql":
+            return self._save_correct_sql_statement(raw, action)
 
         if action in {"set_sql_ref_seq", "set_sql_reference_seq"}:
             return self._sql_ref_seq_statement(raw, action, clear=False)
@@ -323,6 +313,37 @@ class NewType04UpdateCommandTool(Component):
             "params": params,
         }
 
+    def _save_correct_sql_statement(self, raw: dict[str, Any], action: str) -> dict[str, Any]:
+        """Persist an explicitly user-approved Correct SQL and mark it edited.
+
+        VectorDB sync is intentionally not performed here.  The Management Agent
+        calls the separate Sync Correct SQL tool after this Oracle transaction
+        succeeds, avoiding a filesystem dependency between Langflow components.
+        """
+        target_where, target_params, identity = self._sql_target_locator(raw)
+        column_inputs = {
+            "to_sql": "TO_SQL",
+            "bind_sql": "BIND_SQL",
+            "test_sql": "TEST_SQL",
+        }
+        assignments = ["USER_EDITED = 'Y'"]
+        params = dict(target_params)
+        saved = []
+        for key, column in column_inputs.items():
+            if key in raw and raw.get(key) is not None:
+                assignments.append(f"{column} = :{key}")
+                params[key] = str(raw.get(key))
+                saved.append(column)
+        if not saved:
+            raise ValueError("save_correct_sql requires at least one of to_sql, bind_sql, test_sql")
+        return {
+            "action": action,
+            "identity": identity,
+            "summary": f"USER_EDITED=Y; saved {', '.join(saved)}. Call sync_correct_sql next.",
+            "sql": f"UPDATE {self._qualify('NEXT_SQL_INFO')} SET {', '.join(assignments)} WHERE {target_where}",
+            "params": params,
+        }
+
     def _validate_ref_seq_in_correct_sql(self, raw: dict[str, Any]) -> None:
         """Require REF_SEQ to identify an active, already-indexed Correct SQL doc.
 
@@ -385,54 +406,6 @@ class NewType04UpdateCommandTool(Component):
         missing = [key for key in ("uri", "username", "password", "db_name") if not config.get(key)]
         if missing:
             raise ValueError(f"REF_SEQ 검증에 필요한 Milvus 설정이 없습니다: {', '.join(missing)}")
-
-    def _requires_correct_sql_sync(self, actions: list[Any]) -> bool:
-        """Return true only when an action can add, modify, or deactivate a hint."""
-        relevant_actions = {
-            "set_sql_user_edited",
-            "reset_sql_conversion_status",
-            "retry_failed_sql_conversion",
-            "clear_sql_to_sql",
-            "clear_sql_bind_sql",
-            "clear_sql_test_sql",
-            "save_sql_to_sql",
-            "save_sql_bind_sql",
-            "save_sql_test_sql",
-        }
-        return any(
-            isinstance(raw, dict) and str(raw.get("action") or "").strip().lower() in relevant_actions
-            for raw in actions
-        )
-
-    def _sync_correct_sql_vector_db(self) -> dict[str, Any]:
-        """Run the existing one-shot sync after the Oracle transaction has committed.
-
-        This is deliberately best-effort: Oracle and Milvus do not share one
-        transaction, so a sync failure is reported without pretending the DB write
-        was rolled back.
-        """
-        try:
-            source = Path(__file__).with_name("04_saveVectorDB.py")
-            spec = importlib.util.spec_from_file_location("smartmigrate_save_vector_db", source)
-            if not spec or not spec.loader:
-                raise RuntimeError("04_saveVectorDB.py module could not be loaded")
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            sync_component = module.NewType04SaveVectorDB()
-            for name in (
-                "db_host", "db_port", "db_service_name", "db_username", "db_password", "system_schema",
-                "milvus_uri", "milvus_username", "milvus_password", "milvus_db_name",
-                "correct_sql_conversion_collection_name", "rag_embed_base_url", "rag_embed_api_key",
-                "rag_embed_model", "rag_embed_timeout_seconds",
-            ):
-                setattr(sync_component, name, getattr(self, name, None))
-            message = sync_component.run()
-            status = dict(getattr(sync_component, "status", {}) or {})
-            if status.get("ok"):
-                return {"ok": True, "summary": "completed", "details": status, "message": str(getattr(message, "text", ""))}
-            return {"ok": False, "summary": "failed; Oracle update was committed", "details": status, "message": str(getattr(message, "text", ""))}
-        except Exception as exc:
-            return {"ok": False, "summary": f"failed; Oracle update was committed ({exc})"}
 
     def _sql_target_locator(self, raw: dict[str, Any]) -> tuple[str, dict[str, Any], str]:
         """Allow SQL_SEQ for new management actions while retaining the PK path."""

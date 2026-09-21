@@ -121,7 +121,7 @@ smartMigrate_2.0_Langflow/
 | `18A`-`18D` | DB Migration부터 Formatting까지 전체 Workflow 실행 |
 | `99` | 공통 workflow log 작성 예시 |
 
-`04_saveVectorDB.py`는 Vector DB 동기화 기능을 04 관리 영역으로 옮긴 파일입니다. 이제 Vector DB 동기화는 업무 실행이 아니라 04 관리 기능의 `VECTOR_DB_SYNC` route로 처리합니다.
+`04_saveVectorDB.py`는 Management Agent가 직접 호출하는 Vector DB Sync Tool입니다. 별도 `VECTOR_DB_SYNC` route나 Management Router의 직접 연결은 사용하지 않습니다.
 
 ## Langflow 공통 설계 특징
 
@@ -193,7 +193,7 @@ map_id, mig_kind, log_type, log_level, step_name, status, retry_count, generate_
 2. 각 컴포넌트의 `inputs`에 Oracle 접속 정보, system schema, LLM endpoint/model/api key, Milvus 설정을 연결합니다.
 3. 사용자 입력은 00A와 01을 지나 02에서 `GENERAL_CHAT`, `MANAGEMENT`, `JOB_EXECUTION`으로 나뉩니다.
 4. 관리 요청은 `02_flow_management`의 04 계열 컴포넌트가 처리합니다.
-5. Vector DB 동기화 요청은 `VECTOR_DB_SYNC` route로 `04_saveVectorDB.py`에 연결합니다.
+5. `04_saveVectorDB.py`의 `Tool Result`를 Management Agent의 Tool 입력에 연결합니다. Management Router에서 이 컴포넌트로 가는 직접 연결은 만들지 않습니다.
 6. 실행 요청은 `03_job_execution`의 06/08을 거쳐 10/12/15/17/18 계열 실행 flow로 들어갑니다.
 7. C 컴포넌트가 DB row 한 건을 다시 조회하고, LLM/RAG/SQL 실행/검증/retry/status update를 수행합니다.
 8. D 컴포넌트와 11 계열 컴포넌트가 반복 결과와 최종 결과를 사용자 메시지로 만듭니다.
