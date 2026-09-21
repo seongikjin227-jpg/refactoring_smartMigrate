@@ -351,6 +351,10 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
 
     # SPACE_NM/SQL_ID 기반으로 로그 식별자를 만든다. 12C/15C와 같은 SQL row 기준이다.
     def _sql_log_identity(self, *sources: dict[str, Any]) -> str:
+        for source in sources:
+            sql_seq = source.get("sql_seq")
+            if not self._is_blank_log_value(sql_seq):
+                return f"SQL_SEQ={sql_seq}"[:100]
         sql_id = ""
         space_nm = ""
         for source in sources:
@@ -381,15 +385,21 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
 
     # SPACE_NM/SQL_ID 기반 UPDATE/SELECT where 절과 bind 값을 만든다. 12C/15C와 같은 구조다.
     def _sql_key_where(self, item: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        sql_seq = item.get("sql_seq")
+        if not self._is_blank_log_value(sql_seq):
+            try:
+                return "SQL_SEQ = :sql_seq", {"sql_seq": int(sql_seq)}
+            except (TypeError, ValueError) as exc:
+                raise ValueError("NEXT_SQL_INFO formatting item sql_seq must be an integer") from exc
         space_nm = str(item.get("space_nm") or "").strip()
         sql_id = str(item.get("sql_id") or "").strip()
         if self._is_blank_log_value(space_nm) or self._is_blank_log_value(sql_id):
-            raise ValueError("NEXT_SQL_INFO formatting item requires space_nm+sql_id")
+            raise ValueError("NEXT_SQL_INFO formatting item requires sql_seq or space_nm+sql_id")
         return "TO_CHAR(SPACE_NM) = :space_nm AND TO_CHAR(SQL_ID) = :sql_id", {"space_nm": space_nm, "sql_id": sql_id}
 
     # payload/job에 SQL row를 특정할 key가 있는지 확인한다.
     def _has_sql_key(self, item: dict[str, Any]) -> bool:
-        return bool(self._sql_item_key(item))
+        return not self._is_blank_log_value(item.get("sql_seq")) or bool(self._sql_item_key(item))
 
     # 로그에 의미 없는 빈 값, NaN, null 문자열을 판별한다.
     def _is_blank_log_value(self, value: Any) -> bool:
@@ -690,6 +700,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
     def _load_sql_job(self, db_config: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
         aliases = [
+            ("SQL_SEQ", "sql_seq", "NUMBER"),
             ("SPACE_NM", "space_nm", "VARCHAR2(4000)"),
             ("SQL_ID", "sql_id", "VARCHAR2(4000)"),
             ("TO_SQL", "to_sql", "CLOB"),
@@ -707,7 +718,10 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             cur.execute(query, params)
             row = cur.fetchone()
             if not row:
-                raise ValueError(f"NEXT_SQL_INFO row not found: space_nm={payload.get('space_nm')}, sql_id={payload.get('sql_id')}")
+                raise ValueError(
+                    "NEXT_SQL_INFO row not found: "
+                    f"sql_seq={payload.get('sql_seq')}, space_nm={payload.get('space_nm')}, sql_id={payload.get('sql_id')}"
+                )
             keys = [alias for _, alias, _ in aliases]
             loaded = {key: self._lob_to_str(row[index]) for index, key in enumerate(keys)}
         return {**payload, **loaded}
