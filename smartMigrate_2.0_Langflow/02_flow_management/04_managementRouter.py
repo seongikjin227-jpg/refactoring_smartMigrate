@@ -122,6 +122,7 @@ class NewType04ManagementRouter(Component):
         routed = {
             **payload,
             "component": "04_managementRouter",
+            "effective_user_request": self._effective_user_request(payload),
             "management_route": decision["management_route"],
             "exception_message": decision.get("exception_message", ""),
             "management_routing_reason": decision.get("reason", ""),
@@ -141,7 +142,20 @@ class NewType04ManagementRouter(Component):
             "model": model,
             "messages": [
                 {"role": "system", "content": MANAGEMENT_ROUTER_PROMPT},
-                {"role": "user", "content": json.dumps({"user_request": payload.get("user_request") or ""}, ensure_ascii=False)},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "user_request": self._effective_user_request(payload),
+                            "original_user_request": payload.get("user_request") or "",
+                            "is_follow_up": bool(payload.get("is_follow_up", False)),
+                            "confirmation": payload.get("confirmation") or "NOT_REQUIRED",
+                            "clarification_required": bool(payload.get("clarification_required", False)),
+                        },
+                        ensure_ascii=False,
+                        default=str,
+                    ),
+                },
             ],
             "temperature": 0,
             "max_tokens": int(getattr(self, "llm_max_tokens", None) or 800),
@@ -159,6 +173,16 @@ class NewType04ManagementRouter(Component):
         except urllib.error.HTTPError as exc:
             raise ValueError(f"04 Management Router LLM HTTP {exc.code}: {exc.read().decode('utf-8', errors='ignore')[:1000]}") from exc
         return self._parse_json_object((((raw.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip())
+
+    def _effective_user_request(self, payload: dict[str, Any]) -> str:
+        """Use the canonical request produced by the history-aware 01 classifier."""
+        return str(
+            payload.get("resolved_user_request")
+            or payload.get("user_request")
+            or payload.get("original_request")
+            or payload.get("input")
+            or ""
+        ).strip()
 
     # LLM 응답을 허용된 route 집합으로 제한해, 임의의 component name으로 이어지는 것을 차단한다.
     def _normalize_decision(self, decision: dict[str, Any]) -> dict[str, Any]:

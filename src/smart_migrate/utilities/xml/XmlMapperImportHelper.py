@@ -457,6 +457,13 @@ def upsert_json_to_next_sql_info(data_dir: str | None = None) -> dict[str, int]:
     table = get_result_table()
     available_columns = _get_available_columns(table)
     fr_sql_column = "FR_SQL"
+    # SQL_SEQ는 기존 SPACE_NM + SQL_ID PK를 대체하지 않는 사용자용 immutable 번호다.
+    # 구 스키마에도 import가 가능하도록 컬럼이 실제로 존재할 때만 신규 row에 채번한다.
+    has_sql_seq = "SQL_SEQ" in available_columns
+    schema_prefix = table.rsplit(".", 1)[0] if "." in table else ""
+    sql_seq_sequence = f"{schema_prefix}.NEXT_SQL_INFO_SQL_SEQ" if schema_prefix else "NEXT_SQL_INFO_SQL_SEQ"
+    sql_seq_columns = "SQL_SEQ, " if has_sql_seq else ""
+    sql_seq_values = f"{sql_seq_sequence}.NEXTVAL, " if has_sql_seq else ""
     json_file_count = _count_json_files(data_dir)
     payloads = _load_json_payloads(data_dir)
     logger.info(
@@ -486,10 +493,10 @@ def upsert_json_to_next_sql_info(data_dir: str | None = None) -> dict[str, int]:
                 T.UPD_TS = CURRENT_TIMESTAMP
         WHEN NOT MATCHED THEN
             INSERT (
-                TAG_KIND, SPACE_NM, SQL_ID, {fr_sql_column}, TARGET_TABLE, UPD_TS
+                {sql_seq_columns}TAG_KIND, SPACE_NM, SQL_ID, {fr_sql_column}, TARGET_TABLE, UPD_TS
             )
             VALUES (
-                S.TAG_KIND, S.SPACE_NM, S.SQL_ID, S.FR_SQL, S.TARGET_TABLE, CURRENT_TIMESTAMP
+                {sql_seq_values}S.TAG_KIND, S.SPACE_NM, S.SQL_ID, S.FR_SQL, S.TARGET_TABLE, CURRENT_TIMESTAMP
             )
     """
 

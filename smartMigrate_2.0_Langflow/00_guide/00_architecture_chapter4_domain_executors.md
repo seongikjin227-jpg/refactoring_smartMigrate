@@ -21,6 +21,27 @@ flowchart TD
     LOG --> RESULT[Job Result Data]
 ```
 
+### 가로형 흐름
+
+세로 차트는 상세 분기 확인용으로 유지한다. 아래 가로 차트는 한 화면에서 실행의 시작과 종료를 빠르게 파악하는 용도다.
+
+```mermaid
+flowchart LR
+    ITEM[Loop Item] --> LOAD[Load target row] --> PRE[Prerequisite / input check] --> RUN[Mark RUNNING] --> AI[RAG / Hint / LLM] --> VALIDATE[Execute or validate SQL]
+    VALIDATE -->|PASS| PASS[Save CLOB + PASS status] --> LOG[NEXT_MIG_LOG] --> RESULT[Job Result Data]
+    VALIDATE -->|FAIL| RETRY{retry left?}
+    RETRY -->|yes| AI
+    RETRY -->|no| FAIL[Save FAIL-* status] --> LOG
+```
+
+### 한눈에 보는 실행 파이프라인
+
+| 입력 | 준비 | 생성 보조 | 생성 | 검증 | 종료 |
+|---|---|---|---|---|---|
+| `Loop item` | 대상 row 로드, 선행 조건 확인, `RUNNING` 기록 | RAG rule / Correct SQL hint | LLM SQL 생성 또는 저장 SQL 재사용 | SQL 실행·count 비교·형식 확인 | CLOB 및 상태 저장 → `NEXT_MIG_LOG` → `Job Result` |
+
+실패 시에는 retry가 남으면 **생성 보조** 단계로 돌아가고, 모두 소진되면 `FAIL-*` 상태를 저장한 뒤 동일하게 log/result로 종료한다.
+
 ## 4.2 DB Migration Executor: 10C
 
 `10C_migOneJobPocExecutor.py`는 `NEXT_MIG_INFO.MAP_ID` 한 건을 처리한다.
@@ -56,6 +77,20 @@ flowchart TD
     EXEC -->|ok| VERIFY[Execute VERIFY_SQL]
     VERIFY -->|row/count mismatch| FAILT[FAIL-TEST]
     VERIFY -->|ok| PASS[STATUS=PASS]
+```
+
+#### 가로형 흐름
+
+```mermaid
+flowchart LR
+    J[MAP_ID] --> PRIOR[Check PRIOR_MAP_ID] --> META[Load header + DTL] --> RUNNING[Mark RUNNING]
+    PRIOR -->|prior fail/skip| SKIP[SKIP-PRIOR-FAIL]
+    RUNNING --> USER{Edited MIG_SQL exists?}
+    USER -->|yes| REUSE[Reuse / complete VERIFY_SQL] --> EXEC[Execute migration SQL] --> VERIFY[Execute VERIFY_SQL]
+    USER -->|no| HINT[Correct SQL hint] --> GEN[Generate MIG_SQL + VERIFY_SQL] --> SAVE[Persist SQL] --> EXEC
+    VERIFY -->|PASS| PASS[STATUS=PASS]
+    EXEC -->|error| FAILI[FAIL-TRUNCATE / FAIL-INSERT]
+    VERIFY -->|mismatch| FAILT[FAIL-TEST]
 ```
 
 ### DB update
@@ -97,9 +132,9 @@ DBA mapping rule 작성 기준은 `12C_sql_conversion_mapping_rule_contract.md`�
 | 항목 | 내용 |
 |---|---|
 | 대상 key | `SPACE_NM`, `SQL_ID` |
-| 입력 SQL | `FR_SQL` 또는 `EDIT_FR_SQL` |
+| 입력 SQL | 기본 `EDIT_FR_SQL`(없으면 `FR_SQL`), 저장된 `TUNED_FR_SQL`이 있으면 그것을 우선 사용 |
 | 필수 mapping | `TARGET_TABLE`이 있어야 mapping rule 조회 가능 |
-| 생성 CLOB | `TO_SQL`, `BIND_SQL`, `BIND_SET`, `TEST_SQL` |
+| 생성 CLOB | `TO_SQL`, `BIND_SQL`, `BIND_SET`, `TEST_SQL`, 마지막 재시도 사전 튜닝 결과인 `TUNED_FR_SQL` |
 | 상태 컬럼 | `STATUS_CONVERSION` |
 | 성공 상태 | `PASS-CONVERSION` |
 | 실패 상태 | `FAIL-TOBE`, `FAIL-BIND`, `FAIL-TEST` |
@@ -108,12 +143,16 @@ DBA mapping rule 작성 기준은 `12C_sql_conversion_mapping_rule_contract.md`�
 
 ```mermaid
 flowchart TD
-    J[SQL_ID + SPACE_NM] --> LOAD[Load NEXT_SQL_INFO row]
+    J[SQL_ID + SPACE_NM or SQL_SEQ] --> LOAD[Load NEXT_SQL_INFO row]
     LOAD --> CHECK{TARGET_TABLE exists?}
     CHECK -->|no| FTOBE[FAIL-TOBE]
     CHECK -->|yes| RUN[STATUS_CONVERSION=RUNNING]
-    RUN --> RAG[Load GENERAL / SEARCH rules<br/>NEXT_MIG_RAG_INFO + Milvus]
-    RAG --> HINT[Search SM_CORRECT_SQL_CONVERSION]
+    RUN --> SOURCE[Use saved TUNED_FR_SQL<br/>or EDIT_FR_SQL / FR_SQL]
+    SOURCE --> RAG[Load GENERAL / SEARCH rules<br/>NEXT_MIG_RAG_INFO + Milvus]
+    RAG --> REF{REF_SEQ set?}
+    REF -->|yes| EXACT[Load exact active Correct SQL<br/>from SM_CORRECT_SQL_CONVERSION]
+    REF -->|no| HINT[Search SM_CORRECT_SQL_CONVERSION]
+    EXACT --> TOBE
     HINT --> TOBE[Generate TO_SQL]
     TOBE --> BIND[Generate BIND_SQL]
     BIND --> EXBIND[Execute BIND_SQL]
@@ -123,9 +162,45 @@ flowchart TD
     EXTEST --> VAL{CASE_NO, FROM_COUNT, TO_COUNT valid and equal?}
     VAL -->|yes| PASS[STATUS_CONVERSION=PASS-CONVERSION]
     VAL -->|no| FTEST[FAIL-TEST]
-    TOBE -->|empty/error| FTOBE
+    TOBE -->|empty/error| RETRY{retry left?}
+    RETRY -->|no| FTOBE
+    RETRY -->|yes, final attempt and long SQL| TUNEFR[SQL_TUNING RAG<br/>Generate TUNED_FR_SQL]
+    TUNEFR -->|success| TUNEDSOURCE[Use TUNED_FR_SQL as source]
+    TUNEDSOURCE --> TOBE
+    TUNEFR -->|empty/error| FTOBE
+    RETRY -->|yes, otherwise| TOBE
     BIND -->|empty/error| FBIND[FAIL-BIND]
 ```
+
+#### 가로형 흐름
+
+```mermaid
+flowchart LR
+    J[SPACE_NM + SQL_ID] --> LOAD[Load SQL row] --> CHECK{TARGET_TABLE?} --> RUN[Mark RUNNING] --> SOURCE[Saved TUNED_FR_SQL or original source]
+    CHECK -->|no| FTOBE[FAIL-TOBE]
+    SOURCE --> RAG[RAG rules] --> HINT[Correct SQL hint] --> TOBE[Generate TO_SQL] --> BIND[Generate + execute BIND_SQL] --> SET[Build BIND_SET] --> TEST[Generate + execute TEST_SQL] --> VAL{Counts valid and equal?}
+    VAL -->|yes| PASS[PASS-CONVERSION]
+    VAL -->|no| FTEST[FAIL-TEST]
+    TOBE -->|empty/error| RETRY{Retry left?}
+    RETRY -->|no| FTOBE
+    RETRY -->|final attempt + long SQL| TUNEFR[SQL_TUNING RAG → TUNED_FR_SQL] --> TUNEDSOURCE[Use tuned source] --> TOBE
+    RETRY -->|otherwise| TOBE
+    TUNEFR -->|error| FTOBE
+    BIND -->|empty/error| FBIND[FAIL-BIND]
+```
+
+### 마지막 재시도: `TUNED_FR_SQL` 사전 튜닝
+
+`TUNED_FR_SQL`은 15C의 `TUNED_TO_SQL`과 다르다. 이는 **TO-BE 변환 전에 FROM SQL을 다듬어 주는 12C 내부 산출물**이며, 생성에 성공하면 즉시 `NEXT_SQL_INFO.TUNED_FR_SQL`에 저장하고 이후 `TO_SQL` 생성의 source SQL로 사용한다.
+
+| 조건 | 동작 |
+|---|---|
+| 이미 `TUNED_FR_SQL`이 저장됨 | 시도 횟수와 무관하게 이를 source SQL로 우선 사용 |
+| 일반 시도 또는 `TO_SQL` 이외 단계의 retry | `EDIT_FR_SQL`(없으면 `FR_SQL`)로 기존 변환 경로를 수행 |
+| `GENERATE_TOBE_SQL` 실패 뒤 마지막 시도이며 긴 SQL | SQL_TUNING RAG와 LLM으로 `TUNED_FR_SQL` 생성 후 이를 source SQL로 `TO_SQL` 생성을 재시도 |
+| 사전 튜닝 실패 또는 튜닝 결과가 비어 있음 | `FAIL-TOBE`로 종료 |
+
+기본 설정은 `TUNED_FR_SQL_PRETUNING_ENABLED=true`, 긴 SQL 기준은 `TUNED_FR_SQL_PRETUNING_MIN_LENGTH=8000`자다. 운영 환경에서는 두 환경 변수로 사전 튜닝 사용 여부와 기준 길이를 조정할 수 있다.
 
 ### 검증 기준
 
@@ -173,6 +248,18 @@ flowchart TD
     TUNE -->|empty/error| FTUNED[FAIL-TUNED]
 ```
 
+#### 가로형 흐름
+
+```mermaid
+flowchart LR
+    J[SPACE_NM + SQL_ID] --> LOAD[Load SQL row] --> PRE{Conversion PASS?}
+    PRE -->|no| THROUGH[Pass-through]
+    PRE -->|yes| RUN[Mark RUNNING] --> SPLIT[Split TO_SQL blocks] --> RAG[SQL_TUNING RAG] --> TUNE[Generate tuned SQL + result] --> SAVE[Persist partial result] --> TEST[Generate + execute tuned test SQL] --> VAL{Baseline count = tuned count?}
+    VAL -->|yes| PASS[PASS-TUNING]
+    VAL -->|no| FTEST[FAIL-TEST]
+    TUNE -->|empty/error| FTUNED[FAIL-TUNED]
+```
+
 ### RAG 검색 방식
 
 | 단계 | 설명 |
@@ -206,6 +293,17 @@ flowchart TD
     VALID -->|yes| SAVE[Save FORMATTED_SQL or target column]
     VALID -->|no| FAIL
     SAVE --> DONE[status=FORMATTED]
+```
+
+#### 가로형 흐름
+
+```mermaid
+flowchart LR
+    J[Formatting item] --> LOAD[Load source SQL] --> CHECK{Source exists?}
+    CHECK -->|no| FAIL[FAIL-FORMATTING]
+    CHECK -->|yes| PROMPT[Build prompt] --> LLM[Batch formatting] --> VALID{Formatted SQL non-empty?}
+    VALID -->|yes| SAVE[Save target column] --> DONE[FORMATTED]
+    VALID -->|no| FAIL
 ```
 
 SQL Formatting은 `STATUS_CONVERSION`, `STATUS_TUNING`을 변경하지 않는다. standalone formatting 성공 여부는 `FORMATTED_SQL` 존재로 판단한다.
@@ -274,4 +372,3 @@ stateDiagram-v2
 | 실행 가능 조건 변경 | `06_getRemainingJobs.py`, 각 `A` jobs table, `04_dashboard.py`, `11_finalDashboard.py` |
 | 상태값 추가 | executor, dashboard, Management Agent prompt/tool, failure analyzer 모두 함께 확인 |
 | 로그 컬럼/규칙 변경 | `00A_logRuntimeStart.py`, `00_logging_rules.txt`, `04_selectCommandTool.py`, `11B_failureCauseAnalyzer.py` |
-

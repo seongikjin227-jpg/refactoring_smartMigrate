@@ -61,6 +61,13 @@ class NewType02IntentRouter(Component):
             payload = self._parse_payload(getattr(self, "payload_json", ""))
             route = str(payload.get("route") or (payload.get("classification") or {}).get("route") or "GENERAL_CHAT").upper()
 
+            # A history-aware classifier must never let an unresolved "네" or a
+            # rejected confirmation reach an execution branch.  Route it to the
+            # conversational response path, which can show clarification_message.
+            if payload.get("clarification_required") or str(payload.get("confirmation") or "").upper() == "REJECTED":
+                payload["classified_route"] = route
+                route = "GENERAL_CHAT"
+
             # route 값은 뒤쪽 graph 구성과 사람이 보는 status에서 같이 쓰인다.
             # route가 추가되면 output 정의와 next_node 매핑도 함께 늘려야 한다.
             next_node = {

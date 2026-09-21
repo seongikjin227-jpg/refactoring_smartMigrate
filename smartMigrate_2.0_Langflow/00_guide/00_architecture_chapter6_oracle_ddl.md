@@ -99,8 +99,10 @@ CREATE INDEX IX_NEXT_MIG_INFO_DTL_MAP ON NEXT_MIG_INFO_DTL (MAP_ID);
 
 ```sql
 CREATE TABLE NEXT_SQL_INFO (
+    SQL_SEQ           NUMBER          NOT NULL,
     SPACE_NM          VARCHAR2(200)   NOT NULL,
     SQL_ID            VARCHAR2(200)   NOT NULL,
+    REF_SEQ           NUMBER,
     TAG_KIND          VARCHAR2(100),
     FR_SQL            CLOB,
     EDIT_FR_SQL       CLOB,
@@ -125,14 +127,18 @@ CREATE TABLE NEXT_SQL_INFO (
     REG_TS            TIMESTAMP       DEFAULT CURRENT_TIMESTAMP,
     UPD_TS            TIMESTAMP       DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT PK_NEXT_SQL_INFO PRIMARY KEY (SPACE_NM, SQL_ID),
+    CONSTRAINT UQ_NEXT_SQL_INFO_SQL_SEQ UNIQUE (SQL_SEQ),
+    CONSTRAINT CK_NEXT_SQL_INFO_REF_SEQ CHECK (REF_SEQ IS NULL OR REF_SEQ <> SQL_SEQ),
     CONSTRAINT CK_NEXT_SQL_INFO_USER_EDITED CHECK (USER_EDITED IN ('Y', 'N'))
 );
 ```
 
 ```sql
 COMMENT ON TABLE NEXT_SQL_INFO IS 'SQL Conversion, SQL Tuning, SQL Formatting 대상 SQL과 산출물을 저장한다.';
+COMMENT ON COLUMN NEXT_SQL_INFO.SQL_SEQ IS '사용자 지정 SQL 단건 번호. 최초 backfill은 SQL_ID, SPACE_NM 정렬 순번으로 부여하며 이후 변경하지 않는다.';
 COMMENT ON COLUMN NEXT_SQL_INFO.SPACE_NM IS 'SQL job 업무 영역 또는 namespace. SQL_ID와 함께 단건 식별 key로 사용한다.';
 COMMENT ON COLUMN NEXT_SQL_INFO.SQL_ID IS 'SQL job 식별자. SPACE_NM과 함께 단건 식별 key로 사용한다.';
+COMMENT ON COLUMN NEXT_SQL_INFO.REF_SEQ IS '사용자 지정 Correct SQL 참고 대상으로 선택한 NEXT_SQL_INFO.SQL_SEQ. 지정 전 해당 row가 기존 Correct SQL 컬렉션에 존재하는지 검증한다.';
 COMMENT ON COLUMN NEXT_SQL_INFO.TAG_KIND IS 'SQL 유형 또는 처리 태그.';
 COMMENT ON COLUMN NEXT_SQL_INFO.FR_SQL IS 'AS-IS 원본 SQL.';
 COMMENT ON COLUMN NEXT_SQL_INFO.EDIT_FR_SQL IS '담당자가 보정한 AS-IS 원본 SQL. 존재하면 FR_SQL보다 우선한다.';
@@ -162,7 +168,79 @@ COMMENT ON COLUMN NEXT_SQL_INFO.UPD_TS IS 'row 마지막 갱신 시각.';
 CREATE INDEX IX_NEXT_SQL_INFO_CONV ON NEXT_SQL_INFO (STATUS_CONVERSION, USER_EDITED, PRIORITY);
 CREATE INDEX IX_NEXT_SQL_INFO_TUNING ON NEXT_SQL_INFO (STATUS_TUNING, USER_EDITED, PRIORITY);
 CREATE INDEX IX_NEXT_SQL_INFO_TARGET ON NEXT_SQL_INFO (SUBSTR(TARGET_TABLE, 1, 200));
+CREATE INDEX IX_NEXT_SQL_INFO_REF_SEQ ON NEXT_SQL_INFO (REF_SEQ);
 ```
+
+```sql
+-- 신규 설치: importer가 신규 row INSERT 시 NEXTVAL을 사용한다.
+CREATE SEQUENCE NEXT_SQL_INFO_SQL_SEQ START WITH 1 INCREMENT BY 1 NOCACHE;
+```
+
+### 기존 운영 테이블 적용 순서
+
+`SQL_SEQ`는 참조 key이므로 초기 부여 후 재번호를 금지한다. 아래 backfill은 기존 row에만 한 번 실행하며, 요청한 대로 `SQL_ID`, `SPACE_NM` 오름차순으로 번호를 부여한다. 이후 신규 적재는 다음 값만 부여하고 기존 번호를 바꾸지 않는다.
+
+```sql
+ALTER TABLE NEXT_SQL_INFO ADD (SQL_SEQ NUMBER, REF_SEQ NUMBER);
+
+MERGE INTO NEXT_SQL_INFO target
+USING (
+    SELECT ROWID AS row_id,
+           ROW_NUMBER() OVER (ORDER BY SQL_ID ASC, SPACE_NM ASC) AS sql_seq
+      FROM NEXT_SQL_INFO
+) source
+ON (target.ROWID = source.row_id)
+WHEN MATCHED THEN UPDATE SET target.SQL_SEQ = source.sql_seq;
+
+ALTER TABLE NEXT_SQL_INFO MODIFY (SQL_SEQ NOT NULL);
+ALTER TABLE NEXT_SQL_INFO ADD CONSTRAINT UQ_NEXT_SQL_INFO_SQL_SEQ UNIQUE (SQL_SEQ);
+ALTER TABLE NEXT_SQL_INFO ADD CONSTRAINT CK_NEXT_SQL_INFO_REF_SEQ CHECK (REF_SEQ IS NULL OR REF_SEQ <> SQL_SEQ);
+CREATE INDEX IX_NEXT_SQL_INFO_REF_SEQ ON NEXT_SQL_INFO (REF_SEQ);
+
+SELECT MAX(SQL_SEQ) + 1 AS NEXT_SQL_SEQ FROM NEXT_SQL_INFO;
+-- 위 조회 결과를 <NEXT_SQL_SEQ>에 넣어 한 번 실행한다.
+CREATE SEQUENCE NEXT_SQL_INFO_SQL_SEQ START WITH <NEXT_SQL_SEQ> INCREMENT BY 1 NOCACHE;
+```
+
+### `NEXT_SQL_INFO_BACKUP_260921`에서 신규 테이블로 복원
+
+`NEXT_SQL_INFO`를 새로 만들었고 아직 비어 있는 경우에만 아래 INSERT를 실행한다. 백업의 기존 PK인 `SPACE_NM + SQL_ID`와 모든 업무 데이터는 보존하고, `SQL_SEQ`만 요청한 기준인 `SQL_ID ASC, SPACE_NM ASC` 순서로 새로 부여한다. 백업 테이블에는 새 기능 컬럼이 없으므로 `REF_SEQ`는 처음에는 모두 `NULL`이다.
+
+```sql
+-- 반드시 0인지 확인한 뒤에만 아래 INSERT를 실행한다.
+SELECT COUNT(*) AS NEXT_SQL_INFO_COUNT FROM NEXT_SQL_INFO;
+
+INSERT INTO NEXT_SQL_INFO (
+    SQL_SEQ, SPACE_NM, SQL_ID, REF_SEQ,
+    TAG_KIND, FR_SQL, EDIT_FR_SQL, TARGET_TABLE,
+    TO_SQL, BIND_SQL, BIND_SET, TEST_SQL,
+    TUNED_TO_SQL, TUNED_RESULT, TUNED_FR_SQL,
+    FORMATTED_SQL, BLOCK_RAG_CONTENT,
+    STATUS_CONVERSION, STATUS_TUNING, USER_EDITED,
+    PRIORITY, BATCH_CNT, RETRY_COUNT, ELAPSED_SECONDS,
+    LOG, REG_TS, UPD_TS
+)
+SELECT
+    ROW_NUMBER() OVER (ORDER BY SQL_ID ASC, SPACE_NM ASC) AS SQL_SEQ,
+    SPACE_NM, SQL_ID, NULL AS REF_SEQ,
+    TAG_KIND, FR_SQL, EDIT_FR_SQL, TARGET_TABLE,
+    TO_SQL, BIND_SQL, BIND_SET, TEST_SQL,
+    TUNED_TO_SQL, TUNED_RESULT, TUNED_FR_SQL,
+    FORMATTED_SQL, BLOCK_RAG_CONTENT,
+    STATUS_CONVERSION, STATUS_TUNING, USER_EDITED,
+    PRIORITY, BATCH_CNT, RETRY_COUNT, ELAPSED_SECONDS,
+    LOG, REG_TS, UPD_TS
+  FROM NEXT_SQL_INFO_BACKUP_260921;
+
+COMMIT;
+
+SELECT MAX(SQL_SEQ) + 1 AS NEXT_SQL_SEQ FROM NEXT_SQL_INFO;
+-- 위 조회 결과를 <NEXT_SQL_SEQ>에 넣어 생성한다.
+-- 이 복원 절차를 택한 경우, 앞의 START WITH 1 시퀀스 생성 대신 아래 구문을 사용한다.
+CREATE SEQUENCE NEXT_SQL_INFO_SQL_SEQ START WITH <NEXT_SQL_SEQ> INCREMENT BY 1 NOCACHE;
+```
+
+`REF_SEQ`에는 존재하는 다른 `SQL_SEQ`만 입력한다. 운영 편의를 위해 물리 FK는 추가하지 않고 Update Tool이 존재 여부와 자기 참조를 검증한다.
 
 ## 6.5 NEXT_MIG_RAG_INFO
 
@@ -251,7 +329,8 @@ CREATE INDEX IX_NEXT_MIG_LOG_STATUS ON NEXT_MIG_LOG (MIG_KIND, STATUS, CREATED_A
 
 | 항목 | 기준 |
 |---|---|
-| SQL job 단건 식별 | `NEXT_SQL_INFO`는 `SPACE_NM + SQL_ID`를 단건 key로 사용한다. |
+| SQL job 단건 식별 | `NEXT_SQL_INFO`의 PK는 계속 `SPACE_NM + SQL_ID`다. `SQL_SEQ`는 사용자 입력, 조회, 실행 대상 지정에 쓰는 immutable unique 번호다. |
+| Correct SQL 지정 | 어떤 row의 `REF_SEQ`는 기존 `SM_CORRECT_SQL_CONVERSION`에 이미 존재하는 `SQL_SEQ`만 가리킬 수 있다. 지정 시 원본 row나 기존 Correct SQL 문서를 복제·수정하지 않는다. |
 | DB Migration 단건 식별 | `NEXT_MIG_INFO`는 `MAP_ID`를 단건 key로 사용한다. |
 | SQL Conversion RAG | `CATEGORY='SQL_CONVERSION'` row는 `SOURCE_TABLES`를 반드시 입력하고, `GUIDANCE_TEXT`는 비운다. |
 | SQL Tuning RAG | `CATEGORY='SQL_TUNING'` row는 `GUIDANCE_TEXT`를 입력하고 `SOURCE_TABLES`를 비운다. |
@@ -275,10 +354,12 @@ Milvus는 Oracle 원천 데이터를 검색용으로 복제한 벡터 저장소�
 | 컬렉션 | Oracle 원천 | 전용 metadata | 사용처 |
 |---|---|---|---|
 | `SM_RAG_RULES` | `NEXT_MIG_RAG_INFO` | `rag_id`, `category`, `rule_type`, `use_yn`, `source_tables`, `guidance_text`, `source_sql`, `target_sql` | 12C Conversion, 15C Tuning RAG 검색 |
-| `SM_CORRECT_SQL_CONVERSION` | `NEXT_SQL_INFO`의 user-edited/PASS conversion row | `space_nm`, `sql_id`, `status_conversion`, `user_edited`, `tag_kind`, `target_table`, `source_sql`, `to_sql`, `bind_sql`, `test_sql` | 12C correct SQL hint |
+| `SM_CORRECT_SQL_CONVERSION` | `NEXT_SQL_INFO`의 user-edited/PASS conversion row | `sql_seq`, `space_nm`, `sql_id`, `status_conversion`, `user_edited`, `tag_kind`, `target_table`, `source_sql`, `to_sql`, `bind_sql`, `test_sql` | 12C correct SQL hint 및 REF_SEQ 지정 대상 |
 | `SM_CORRECT_SQL_MIGRATION` | `NEXT_MIG_INFO`의 user-edited/PASS migration row | `map_id`, `fr_table`, `to_table`, `condition`, `mig_sql`, `verify_sql`, `user_edited`, `status` | 10C migration SQL hint |
 | `SM_ASIS_SQL` | `NEXT_SQL_INFO`의 `EDIT_FR_SQL` 또는 `FR_SQL` | `space_nm`, `sql_id`, `tag_kind`, `target_table`, `fr_sql`, `edit_fr_sql` | 04 유사 AS-IS SQL 검색 및 12C Correct SQL hint 검색의 query vector 재사용 |
 
 `SM_ASIS_SQL`에는 실행 status와 TO-BE 결과 SQL을 저장하지 않는다. 검색 결과의 재실행 가능 여부와 최신 status는 항상 Oracle `NEXT_SQL_INFO`를 다시 조회해 판단한다.
+
+`SM_CORRECT_SQL_CONVERSION` 기존 컬렉션에는 최초 VectorDB sync 때 nullable `sql_seq`(INT64) 필드를 추가하고, 활성 Correct SQL 문서를 upsert하여 값을 채운다. 이 스키마 확장은 Milvus/pymilvus 2.6 이상이 필요하다.
 
 `04_ragCommandTool`과 12C는 `SPACE_NM + SQL_ID`로 요청된 SQL만 `SM_ASIS_SQL.dense_vector`를 query vector로 재사용한다. 저장된 `EDIT_FR_SQL`/`FR_SQL`이 현재 source SQL과 정확히 같을 때만 사용하며, 직접 입력 SQL·동기화 누락·원문 불일치 시에는 embedding API로 새 벡터를 생성한다.

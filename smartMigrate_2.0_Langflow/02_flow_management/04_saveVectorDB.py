@@ -202,6 +202,8 @@ class NewType04SaveVectorDB(Component):
         # Milvus 환경이 analyzer/functions를 허용하지 않으면 dense-only collection으로 생성한다.
         
         if client.has_collection(collection_name):
+            if schema_kind == "conversion":
+                self._ensure_sql_seq_field(client, collection_name)
             client.load_collection(collection_name=collection_name)
             return False
         try:
@@ -241,6 +243,7 @@ class NewType04SaveVectorDB(Component):
         elif schema_kind == "conversion":
             schema.add_field("space_nm", DataType.VARCHAR, max_length=512)
             schema.add_field("sql_id", DataType.VARCHAR, max_length=512)
+            schema.add_field("sql_seq", DataType.INT64)
             schema.add_field("status_conversion", DataType.VARCHAR, max_length=100)
             schema.add_field("user_edited", DataType.VARCHAR, max_length=8)
             schema.add_field("tag_kind", DataType.VARCHAR, max_length=100)
@@ -287,6 +290,38 @@ class NewType04SaveVectorDB(Component):
         if with_bm25:
             index_params.add_index(field_name="sparse_vector", index_type="SPARSE_INVERTED_INDEX", metric_type="BM25", params={"inverted_index_algo": "DAAT_MAXSCORE", "bm25_k1": 1.2, "bm25_b": 0.75})
         client.create_collection(collection_name=collection_name, schema=schema, index_params=index_params, consistency_level="Bounded")
+
+    def _ensure_sql_seq_field(self, client: Any, collection_name: str) -> None:
+        """Add SQL_SEQ metadata to a pre-existing Correct SQL collection.
+
+        Milvus requires fields added after collection creation to be nullable.
+        A subsequent normal sync upserts active documents with their SQL_SEQ.
+        """
+        description = client.describe_collection(collection_name=collection_name) or {}
+        fields = (
+            description.get("fields") or (description.get("schema") or {}).get("fields")
+            if isinstance(description, dict)
+            else getattr(description, "fields", [])
+        )
+        names = {
+            str((field.get("name") or field.get("field_name") or "") if isinstance(field, dict) else getattr(field, "name", ""))
+            for field in (fields or [])
+        }
+        if "sql_seq" in names:
+            return
+        from pymilvus import DataType
+
+        if not hasattr(client, "add_collection_field"):
+            raise RuntimeError(
+                "Milvus client does not support adding sql_seq to an existing collection. "
+                "Use Milvus/pymilvus 2.6 or later, then run VectorDB sync again."
+            )
+        client.add_collection_field(
+            collection_name=collection_name,
+            field_name="sql_seq",
+            data_type=DataType.INT64,
+            nullable=True,
+        )
 
     # Oracle snapshot과 Milvus 문서를 비교해 변경분 upsert와 stale 비활성화를 수행한다.
     def _sync_collection(self, client: Any, collection_name: str, rows: list[dict[str, Any]], embed_config: dict[str, Any]) -> dict[str, Any]:
@@ -461,6 +496,7 @@ class NewType04SaveVectorDB(Component):
         sql = f"""
             SELECT SPACE_NM,
                    SQL_ID,
+                   SQL_SEQ,
                    FR_SQL,
                    EDIT_FR_SQL,
                    STATUS_CONVERSION,
@@ -483,19 +519,20 @@ class NewType04SaveVectorDB(Component):
             for row in cur.fetchall():
                 space_nm = self._lob_to_str(row[0]).strip()
                 sql_id = self._lob_to_str(row[1]).strip()
-                fr_sql = self._lob_to_str(row[2]).strip()
-                edit_fr_sql = self._lob_to_str(row[3]).strip()
+                sql_seq = self._num(row[2])
+                fr_sql = self._lob_to_str(row[3]).strip()
+                edit_fr_sql = self._lob_to_str(row[4]).strip()
                 source_sql = edit_fr_sql or fr_sql
-                to_sql = self._lob_to_str(row[8]).strip()
-                bind_sql = self._lob_to_str(row[9]).strip()
-                test_sql = self._lob_to_str(row[10]).strip()
-                status = self._lob_to_str(row[4]).strip().upper()
-                user_edited = self._lob_to_str(row[5]).strip().upper()
+                to_sql = self._lob_to_str(row[9]).strip()
+                bind_sql = self._lob_to_str(row[10]).strip()
+                test_sql = self._lob_to_str(row[11]).strip()
+                status = self._lob_to_str(row[5]).strip().upper()
+                user_edited = self._lob_to_str(row[6]).strip().upper()
                 # 사람이 보정했고 성공한 conversion row만 correct SQL 힌트로 사용한다.
                 # 실패 row나 손대지 않은 row는 모델에 나쁜 예시를 주지 않도록 제외한다.
                 
                 is_active = bool(source_sql) and user_edited == "Y" and status in {"PASS", "PASS-CONVERSION"} and bool(to_sql or bind_sql or test_sql)
-                if not space_nm or not sql_id:
+                if not space_nm or not sql_id or sql_seq is None:
                     continue
                 doc_key = f"{space_nm}:{sql_id}"
                 rows.append(
@@ -503,10 +540,11 @@ class NewType04SaveVectorDB(Component):
                         doc_id=f"SQL:{self._hash_text(doc_key)[:24]}",
                         space_nm=space_nm,
                         sql_id=sql_id,
+                        sql_seq=sql_seq,
                         status_conversion=status,
                         user_edited=user_edited,
-                        tag_kind=self._lob_to_str(row[6]),
-                        target_table=self._lob_to_str(row[7]),
+                        tag_kind=self._lob_to_str(row[7]),
+                        target_table=self._lob_to_str(row[8]),
                         source_sql=source_sql,
                         to_sql=to_sql,
                         bind_sql=bind_sql,
@@ -514,7 +552,7 @@ class NewType04SaveVectorDB(Component):
                         # correct SQL 힌트 검색용 dense_vector는 EDIT_FR_SQL을 우선 사용하고, 없으면 FR_SQL을 사용한다.
                         content=self._sql_content(source_sql),
                         is_active=is_active,
-                        updated_at=self._lob_to_str(row[11]),
+                        updated_at=self._lob_to_str(row[12]),
                     )
                 )
             return rows
@@ -862,6 +900,12 @@ class NewType04SaveVectorDB(Component):
         if hasattr(value, "get_secret_value"):
             return str(value.get_secret_value() or "")
         return str(value or "")
+
+    def _num(self, value: Any) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
 
     # 숫자 입력을 양의 정수로 변환하고 실패하면 기본값을 사용한다.
     def _positive_int(self, value: Any, default: int) -> int:

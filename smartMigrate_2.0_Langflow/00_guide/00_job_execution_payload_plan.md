@@ -16,6 +16,12 @@
 {
   "route": "JOB_EXECUTION",
   "user_request": "사용자 원문",
+  "resolved_user_request": "chat history를 반영한 완전한 실행 요청",
+  "is_follow_up": false,
+  "confirmation": "NOT_REQUIRED|CONFIRMED",
+  "clarification_required": false,
+  "clarification_message": "",
+  "should_execute": true,
   "target_filter": {
     "map_ids": [],
     "sql_ids": [],
@@ -25,6 +31,8 @@
   "requested_domain": "MIG|SQL_CONVERSION|SQL_TUNING|SQL_FORMATTING|FULL_WORKFLOW|UNKNOWN"
 }
 ```
+
+`user_request`가 `네`처럼 짧은 후속 발화일 수 있으므로 06/08과 후속 실행 컴포넌트는 자연어 fallback이 필요할 때 반드시 `resolved_user_request`를 먼저 사용한다. `target_filter`, `requested_domain`, `execution_scope`는 01이 복원한 값이므로 중간 Data 연결에서 제거하거나 원문 기준으로 다시 해석하지 않는다. 전체 계약과 Langflow 연결 방법은 `00_follow_up_payload_contract.md`를 따른다.
 
 ## 특정 Job 요청
 

@@ -6,8 +6,8 @@ SmartMigrate의 채팅 요청은 먼저 01 분류를 통과한다. 이후 02가 
 
 ```mermaid
 flowchart TD
-    IN[User Request] --> C01[01 Request Classifier]
-    C01 --> JSON01[intent_route JSON]
+    IN[User Request + Chat History] --> C01[01 Request Classifier]
+    C01 --> JSON01[resolved request JSON]
     JSON01 --> R02[02 Intent Conditional Router]
     R02 -->|GENERAL_CHAT| G03[03 LLM Response]
     R02 -->|MANAGEMENT| M04[04 Management Router]
@@ -28,13 +28,17 @@ flowchart TD
 |---|---|---|
 | `intent_route` | `JOB_EXECUTION` | `02_intentRouter.py` branch 선택 |
 | `user_request` | `전체 작업 진행해줘` | 모든 후속 route 판단의 원문 |
+| `resolved_user_request` | `map_id=101 SQL Conversion 실행해줘` | 후속 발화까지 복원한 표준 요청문; 04/06/08/Agent 입력 |
+| `confirmation` | `CONFIRMED` | `네`/`아니` 같은 확인 응답의 실행 허용 여부 |
+| `clarification_required` | `false` | true이면 02가 실행 branch를 열지 않음 |
+| `should_execute` | `true` | 06/08의 방어용 실행 guard |
 | `requested_domain` | `FULL_WORKFLOW`, `MIG`, `SQL_CONVERSION` | `06`, `08` |
 | `execution_scope` | `all`, `domain`, `targeted`, `unknown` | `08`의 run mode 판단 |
 | `target_filter.map_ids` | `[101]` | target migration 조회/실행 |
 | `target_filter.sql_ids` | `["S001"]` | target SQL 조회/실행 |
 | `target_filter.space_nms` | `["DDD"]` | target SQL 조회/실행 |
 | `should_execute` | `true` | `06`에서 실행 여부 guard |
-| `history` | `[{"step":"classify",...}]` | 추적성 |
+| `history` | `[{"step":"classify",...}]` | workflow 추적성. chat history와 다른 필드 |
 
 `VectorDB`, `Milvus`, `벡터DB`, `04_saveVectorDB` 동기화/업로드/반영 요청은 "실행해줘"라는 표현이 있어도 `JOB_EXECUTION`이 아니라 `MANAGEMENT`다. 실제 업무 job을 수행하는 요청이 아니라 운영성 동기화 요청이기 때문이다.
 
@@ -270,5 +274,4 @@ GUIDANCE_TEXT=대량 테이블 조인에서는 필터 조건이 강한 테이블
 ```text
 RAG_ID 25 튜닝 가이드 비활성화해줘.
 ```
-
 

@@ -69,6 +69,7 @@ class NewType06GetRemainingJobs(Component):
                 payload.update(
                     {
                         "component": "06_getRemainingJobs",
+                        "effective_user_request": self._effective_user_request(payload),
                         "job_availability": summary,
                         "requested_jobs": requested_jobs,
                         "requested_target_status": target_statuses,
@@ -300,23 +301,41 @@ class NewType06GetRemainingJobs(Component):
     # 문자열이나 payload에서 후속 로직에 필요한 값을 추출한다.
     def _extract_targets(self, payload: dict[str, Any]) -> dict[str, list[Any]]:
         existing = payload.get("target_filter") if isinstance(payload.get("target_filter"), dict) else {}
-        text = str(payload.get("user_request") or payload.get("original_request") or payload.get("input") or "")
+        text = self._effective_user_request(payload)
         return {
             "map_ids": self._merge_lists(self._normalize_int_list(existing.get("map_ids")), self._extract_map_ids(text)),
+            "sql_seqs": self._merge_lists(self._normalize_int_list(existing.get("sql_seqs")), self._normalize_int_list(self._extract_text_values(text, r"sql[_\s-]*seq|sqlseq"))),
             "sql_ids": self._merge_lists(self._normalize_str_list(existing.get("sql_ids")), self._extract_text_values(text, r"sql[_\s-]*id|sqlid")),
             "space_nms": self._merge_lists(self._normalize_str_list(existing.get("space_nms")), self._extract_text_values(text, r"space[_\s-]*nm|spacenm|space")),
         }
 
+    def _effective_user_request(self, payload: dict[str, Any]) -> str:
+        """Prefer 01's history-resolved request for legacy regex fallback."""
+        return str(
+            payload.get("resolved_user_request")
+            or payload.get("user_request")
+            or payload.get("original_request")
+            or payload.get("input")
+            or ""
+        ).strip()
+
     # 사용자가 MAP_ID 또는 SPACE_NM/SQL_ID 같은 특정 작업을 지정했는지 확인한다.
     def _has_exact_target(self, targets: dict[str, list[Any]]) -> bool:
-        return bool(targets.get("map_ids") or targets.get("sql_ids") or targets.get("space_nms"))
+        return bool(targets.get("map_ids") or targets.get("sql_seqs") or targets.get("sql_ids") or targets.get("space_nms"))
 
     # SPACE_NM/SQL_ID target 조건을 SQL WHERE 절과 bind 값으로 변환한다.
     def _sql_target_where(self, targets: dict[str, list[Any]]) -> tuple[str, list[Any]]:
         clauses: list[str] = []
         params: list[Any] = []
+        sql_seqs = [item for item in (self._to_int(v) for v in targets.get("sql_seqs", [])) if item is not None]
         sql_ids = [str(v).strip() for v in targets.get("sql_ids", []) if str(v).strip()]
         space_nms = [str(v).strip() for v in targets.get("space_nms", []) if str(v).strip()]
+        if sql_seqs:
+            placeholders = []
+            for value in sql_seqs:
+                params.append(value)
+                placeholders.append(f":{len(params)}")
+            clauses.append(f"SQL_SEQ IN ({', '.join(placeholders)})")
         if sql_ids:
             placeholders = []
             for value in sql_ids:

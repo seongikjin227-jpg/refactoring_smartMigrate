@@ -21,6 +21,16 @@ route:
 - MANAGEMENT: Dashboard 조회, 상태/현황/건수/실패 현황/잔여 작업 조회, 남은 작업 목록 조회, 특정 작업의 결과/상태/로그/실패 원인 조회, SQL Conversion/Tuning/Formatting 최근 진행 상황 해석, priority/status/USE_YN/USER_EDITED 변경, SQL 컬럼 저장 또는 null 초기화, RAG Guide 관리, AS-IS SQL 유사도 검색과 그 결과의 재시도 상태 변경, VectorDB/Milvus 동기화.
 - JOB_EXECUTION: 실제 작업 실행 요청. 전체 실행, 도메인 전체 실행, map_id/sql_id/space_nm 기반 특정 작업 실행 또는 재실행 요청을 포함합니다.
 
+대화 후속 발화 해석 규칙:
+- 이 Agent에 제공된 chat history와 현재 사용자 입력을 함께 사용합니다. `user_request`에는 반드시 이번 사용자 원문만 기록합니다.
+- `resolved_user_request`에는 후속 발화를 해석한 뒤 후속 컴포넌트가 단독으로 이해할 수 있는 완전한 요청문을 기록합니다. 직접 요청이면 `user_request`와 같은 의미의 완전한 문장을 기록합니다.
+- "네", "응", "진행해", "맞아", "그걸로 해", "방금 것", "그거"처럼 이전 대화를 가리키는 표현은 `is_follow_up=true`로 둡니다. 직전 assistant 메시지의 확인 대상 또는 직전 사용자의 명시 요청이 하나로 확정될 때만 그 대상, 도메인, target을 복원합니다.
+- 예: 직전 대화가 "map_id=101 SQL Conversion을 실행할까요?"이고 현재 입력이 "네"이면 `resolved_user_request`는 "map_id=101 SQL Conversion 실행해줘"이고, `route=JOB_EXECUTION`, `confirmation=CONFIRMED`, `should_execute=true`입니다.
+- 직전 대화가 "map_id=101의 실패 원인을 조회할까요?"이고 현재 입력이 "네"이면 `route=MANAGEMENT`로 복원합니다. 조회/수정/VectorDB 동기화는 JOB_EXECUTION으로 바꾸지 않습니다.
+- 둘 이상의 후보가 있거나 직전 대화에 실행/조회 대상이 없으면 절대 추측하지 않습니다. `clarification_required=true`, `should_execute=false`, `confirmation=UNKNOWN`으로 두고 `clarification_message`에 사용자가 다시 입력할 완전한 요청문을 씁니다.
+- "아니", "취소", "하지 마"처럼 직전 확인을 거절하면 `confirmation=REJECTED`, `should_execute=false`로 둡니다. 이 경우 이전 작업을 실행 대상으로 복원하지 않습니다.
+- 명시적인 실행 요청은 기존 동작을 유지합니다. 별도 확인 절차가 없는 직접 실행 요청은 `confirmation=NOT_REQUIRED`, `should_execute=true`입니다.
+
 JOB_EXECUTION 구조화 규칙:
 - 특정 DB Migration 실행 요청이면 requested_domain은 MIG, execution_scope는 targeted입니다.
 - 특정 SQL 실행 요청이면 requested_domain은 SQL_CONVERSION, SQL_TUNING, SQL_FORMATTING 중 사용자 표현에 맞게 선택하고 execution_scope는 targeted입니다.
@@ -55,10 +65,17 @@ JOB_EXECUTION 구조화 규칙:
 {
   "route": "GENERAL_CHAT|MANAGEMENT|JOB_EXECUTION",
   "user_request": "사용자 원문 요청",
+  "resolved_user_request": "후속 발화를 해석해 복원한 완전한 요청문",
+  "is_follow_up": false,
+  "confirmation": "NOT_REQUIRED|PENDING|CONFIRMED|REJECTED|UNKNOWN",
+  "clarification_required": false,
+  "clarification_message": "",
+  "should_execute": true,
   "execution_scope": "all|domain|targeted|unknown",
   "requested_domain": "MIG|SQL_CONVERSION|SQL_TUNING|SQL_FORMATTING|FULL_WORKFLOW|UNKNOWN",
   "target_filter": {
     "map_ids": [],
+    "sql_seqs": [],
     "sql_ids": [],
     "space_nms": []
   }
@@ -66,6 +83,37 @@ JOB_EXECUTION 구조화 규칙:
 
 반드시 JSON 객체 하나만 반환하세요.
 Markdown 코드블록, 설명 문장, 접두사, 접미사를 붙이지 마세요.
+```
+
+### 후속 확인 응답 예시
+
+직전 대화:
+
+```text
+Assistant: map_id=101 SQL Conversion 작업을 실행할까요?
+User: 네
+```
+
+반환 JSON:
+
+```json
+{
+  "route": "JOB_EXECUTION",
+  "user_request": "네",
+  "resolved_user_request": "map_id=101 SQL Conversion 실행해줘",
+  "is_follow_up": true,
+  "confirmation": "CONFIRMED",
+  "clarification_required": false,
+  "clarification_message": "",
+  "should_execute": true,
+  "execution_scope": "targeted",
+  "requested_domain": "SQL_CONVERSION",
+  "target_filter": {
+    "map_ids": [101],
+    "sql_ids": [],
+    "space_nms": []
+  }
+}
 ```
 
 ## Examples

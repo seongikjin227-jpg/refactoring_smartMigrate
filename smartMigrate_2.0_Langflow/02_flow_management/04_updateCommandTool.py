@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import importlib.util
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
@@ -41,6 +44,21 @@ class NewType04UpdateCommandTool(Component):
         StrInput(name="db_username", display_name="DB Username", required=True),
         SecretStrInput(name="db_password", display_name="DB Password", required=True),
         StrInput(name="system_schema", display_name="System Schema", required=True),
+        StrInput(name="milvus_uri", display_name="Milvus URI", required=False, advanced=True),
+        StrInput(name="milvus_username", display_name="Milvus Username", required=False, advanced=True),
+        SecretStrInput(name="milvus_password", display_name="Milvus Password", required=False, advanced=True),
+        StrInput(name="milvus_db_name", display_name="Milvus DB Name", value="default", required=False, advanced=True),
+        StrInput(
+            name="correct_sql_conversion_collection_name",
+            display_name="Correct SQL Conversion Collection Name",
+            value="SM_CORRECT_SQL_CONVERSION",
+            required=False,
+            advanced=True,
+        ),
+        StrInput(name="rag_embed_base_url", display_name="RAG Embedding Base URL", required=False, advanced=True),
+        SecretStrInput(name="rag_embed_api_key", display_name="RAG Embedding API Key", required=False, advanced=True),
+        StrInput(name="rag_embed_model", display_name="RAG Embedding Model", value="BAAI/bge-m3", required=False, advanced=True),
+        IntInput(name="rag_embed_timeout_seconds", display_name="RAG Embedding Timeout Seconds", value=60, required=False, advanced=True),
     ]
 
     outputs = [Output(display_name="Result", name="result", method="run_command")]
@@ -68,6 +86,11 @@ class NewType04UpdateCommandTool(Component):
         actions = command.get("actions")
         if not isinstance(actions, list) or not actions:
             raise ValueError("actions must be a non-empty list")
+
+        for raw in actions:
+            action = str(raw.get("action") or "").strip().lower() if isinstance(raw, dict) else ""
+            if action in {"set_sql_ref_seq", "set_sql_reference_seq"}:
+                self._validate_ref_seq_in_correct_sql(raw)
 
         statements = [self._build_statement(item, index) for index, item in enumerate(actions)]
         results: list[dict[str, Any]] = []
@@ -98,7 +121,13 @@ class NewType04UpdateCommandTool(Component):
                 conn.rollback()
                 raise
 
+        vector_sync = None
+        if self._requires_correct_sql_sync(actions):
+            vector_sync = self._sync_correct_sql_vector_db()
+
         answer = self._answer(results)
+        if vector_sync:
+            answer += f"\n- Correct SQL VectorDB sync: {vector_sync['summary']}"
         logging.getLogger("smartmigrate.workflow").info(
             answer,
             extra={"workflow_log": [0, "WORKFLOW", "04_UPDATE_TOOL", "INFO", "UPDATE", "PASS", len(results)]},
@@ -111,6 +140,7 @@ class NewType04UpdateCommandTool(Component):
             "updated_count": sum(int(item["updated_rows"]) for item in results),
             "actions": results,
             "answer_text": answer,
+            "vector_sync": vector_sync,
             "final": True,
         }
 
@@ -200,6 +230,12 @@ class NewType04UpdateCommandTool(Component):
             value = self._int_value(raw.get("priority"), "priority")
             return self._sql_statement(action, sql_id, space_nm, "PRIORITY = :priority", {"sql_id": sql_id, "space_nm": space_nm, "priority": value}, f"PRIORITY={value}")
 
+        if action in {"set_sql_ref_seq", "set_sql_reference_seq"}:
+            return self._sql_ref_seq_statement(raw, action, clear=False)
+
+        if action in {"clear_sql_ref_seq", "clear_sql_reference_seq"}:
+            return self._sql_ref_seq_statement(raw, action, clear=True)
+
         sql_text_actions = {
             "clear_sql_to_sql": ("TO_SQL", None),
             "clear_sql_bind_sql": ("BIND_SQL", None),
@@ -256,6 +292,160 @@ class NewType04UpdateCommandTool(Component):
             "skip_when_not_matched": True,
         }
 
+    def _sql_ref_seq_statement(self, raw: dict[str, Any], action: str, *, clear: bool) -> dict[str, Any]:
+        """Set or clear a user-selected Correct SQL reference by SQL_SEQ.
+
+        REF_SEQ points to an already indexed Correct SQL row.  It neither copies
+        the source row nor changes the Correct SQL collection membership.
+        """
+        target_where, target_params, identity = self._sql_target_locator(raw)
+        if clear:
+            return {
+                "action": action,
+                "identity": identity,
+                "summary": "REF_SEQ=NULL",
+                "sql": f"UPDATE {self._qualify('NEXT_SQL_INFO')} SET REF_SEQ = NULL WHERE {target_where}",
+                "params": target_params,
+            }
+
+        ref_seq = self._positive_int_value(raw.get("ref_seq"), "ref_seq")
+        params = {**target_params, "ref_seq": ref_seq}
+        table = self._qualify("NEXT_SQL_INFO")
+        return {
+            "action": action,
+            "identity": identity,
+            "summary": f"REF_SEQ={ref_seq}; existing Correct SQL reference selected",
+            "sql": (
+                f"UPDATE {table} T SET REF_SEQ = :ref_seq "
+                f"WHERE {target_where} "
+                "AND T.SQL_SEQ <> :ref_seq"
+            ),
+            "params": params,
+        }
+
+    def _validate_ref_seq_in_correct_sql(self, raw: dict[str, Any]) -> None:
+        """Require REF_SEQ to identify an active, already-indexed Correct SQL doc.
+
+        The DB row alone is intentionally insufficient: the actual retrieval path
+        is the Milvus collection, so a reference is accepted only after that
+        collection contains the exact source row.
+        """
+        ref_seq = self._positive_int_value(raw.get("ref_seq"), "ref_seq")
+        table = self._qualify("NEXT_SQL_INFO")
+        with self._connect() as conn:
+            cur = conn.cursor()
+            cur.execute(f"SELECT 1 FROM {table} WHERE SQL_SEQ = :ref_seq", {"ref_seq": ref_seq})
+            row = cur.fetchone()
+        if not row:
+            raise ValueError(f"REF_SEQ={ref_seq} 대상 SQL_SEQ를 찾을 수 없습니다.")
+        if not self._correct_sql_document_exists(ref_seq):
+            raise ValueError(
+                "지정한 Correct SQL이 벡터 DB에 존재하지 않습니다. "
+                "먼저 Correct SQL을 저장하고 VectorDB 동기화를 완료해 주세요."
+            )
+
+    def _correct_sql_document_exists(self, sql_seq: int) -> bool:
+        config = self._milvus_config()
+        self._require_milvus_config(config)
+        from pymilvus import MilvusClient
+
+        client = MilvusClient(
+            uri=config["uri"],
+            user=config["username"],
+            password=config["password"],
+            db_name=config["db_name"],
+            timeout=10,
+        )
+        collection = config["correct_sql_conversion_collection"]
+        if not client.has_collection(collection_name=collection):
+            return False
+        filter_expression = f"sql_seq == {sql_seq} and is_active == true"
+        rows = client.query(
+            collection_name=collection,
+            filter=filter_expression,
+            output_fields=["doc_id"],
+            limit=1,
+        )
+        return bool(rows)
+
+    def _milvus_config(self) -> dict[str, str]:
+        return {
+            "uri": str(getattr(self, "milvus_uri", "") or os.getenv("MILVUS_URI") or "").strip(),
+            "username": str(getattr(self, "milvus_username", "") or os.getenv("MILVUS_USERNAME") or "").strip(),
+            "password": self._secret_to_str(getattr(self, "milvus_password", None)) or str(os.getenv("MILVUS_PASSWORD") or ""),
+            "db_name": str(getattr(self, "milvus_db_name", "") or os.getenv("MILVUS_DB_NAME") or "default").strip(),
+            "correct_sql_conversion_collection": self._clean_identifier(
+                getattr(self, "correct_sql_conversion_collection_name", "")
+                or os.getenv("MILVUS_CORRECT_SQL_CONVERSION_COLLECTION")
+                or "SM_CORRECT_SQL_CONVERSION"
+            ),
+        }
+
+    def _require_milvus_config(self, config: dict[str, str]) -> None:
+        missing = [key for key in ("uri", "username", "password", "db_name") if not config.get(key)]
+        if missing:
+            raise ValueError(f"REF_SEQ 검증에 필요한 Milvus 설정이 없습니다: {', '.join(missing)}")
+
+    def _requires_correct_sql_sync(self, actions: list[Any]) -> bool:
+        """Return true only when an action can add, modify, or deactivate a hint."""
+        relevant_actions = {
+            "set_sql_user_edited",
+            "reset_sql_conversion_status",
+            "retry_failed_sql_conversion",
+            "clear_sql_to_sql",
+            "clear_sql_bind_sql",
+            "clear_sql_test_sql",
+            "save_sql_to_sql",
+            "save_sql_bind_sql",
+            "save_sql_test_sql",
+        }
+        return any(
+            isinstance(raw, dict) and str(raw.get("action") or "").strip().lower() in relevant_actions
+            for raw in actions
+        )
+
+    def _sync_correct_sql_vector_db(self) -> dict[str, Any]:
+        """Run the existing one-shot sync after the Oracle transaction has committed.
+
+        This is deliberately best-effort: Oracle and Milvus do not share one
+        transaction, so a sync failure is reported without pretending the DB write
+        was rolled back.
+        """
+        try:
+            source = Path(__file__).with_name("04_saveVectorDB.py")
+            spec = importlib.util.spec_from_file_location("smartmigrate_save_vector_db", source)
+            if not spec or not spec.loader:
+                raise RuntimeError("04_saveVectorDB.py module could not be loaded")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            sync_component = module.NewType04SaveVectorDB()
+            for name in (
+                "db_host", "db_port", "db_service_name", "db_username", "db_password", "system_schema",
+                "milvus_uri", "milvus_username", "milvus_password", "milvus_db_name",
+                "correct_sql_conversion_collection_name", "rag_embed_base_url", "rag_embed_api_key",
+                "rag_embed_model", "rag_embed_timeout_seconds",
+            ):
+                setattr(sync_component, name, getattr(self, name, None))
+            message = sync_component.run()
+            status = dict(getattr(sync_component, "status", {}) or {})
+            if status.get("ok"):
+                return {"ok": True, "summary": "completed", "details": status, "message": str(getattr(message, "text", ""))}
+            return {"ok": False, "summary": "failed; Oracle update was committed", "details": status, "message": str(getattr(message, "text", ""))}
+        except Exception as exc:
+            return {"ok": False, "summary": f"failed; Oracle update was committed ({exc})"}
+
+    def _sql_target_locator(self, raw: dict[str, Any]) -> tuple[str, dict[str, Any], str]:
+        """Allow SQL_SEQ for new management actions while retaining the PK path."""
+        if raw.get("sql_seq") not in (None, ""):
+            sql_seq = self._positive_int_value(raw.get("sql_seq"), "sql_seq")
+            return "SQL_SEQ = :target_sql_seq", {"target_sql_seq": sql_seq}, f"SQL_SEQ={sql_seq}"
+        sql_id, space_nm = self._sql_identity(raw)
+        return (
+            "UPPER(TRIM(SQL_ID)) = UPPER(TRIM(:sql_id)) AND UPPER(TRIM(SPACE_NM)) = UPPER(TRIM(:space_nm))",
+            {"sql_id": sql_id, "space_nm": space_nm},
+            f"SQL_ID={sql_id}, SPACE_NM={space_nm}",
+        )
+
     # migration row는 MAP_ID 하나가 갱신 단위다. 실행 전 rowcount=1 검증은 _apply_actions가 담당한다.
     def _migration_statement(self, action: str, map_id: str, set_sql: str, params: dict[str, Any], summary: str) -> dict[str, Any]:
         params.setdefault("map_id", map_id)
@@ -290,6 +480,18 @@ class NewType04UpdateCommandTool(Component):
         return value
 
     def _sql_identity(self, raw: dict[str, Any]) -> tuple[str, str]:
+        if raw.get("sql_seq") not in (None, ""):
+            sql_seq = self._positive_int_value(raw.get("sql_seq"), "sql_seq")
+            with self._connect() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    f"SELECT SQL_ID, SPACE_NM FROM {self._qualify('NEXT_SQL_INFO')} WHERE SQL_SEQ = :sql_seq",
+                    {"sql_seq": sql_seq},
+                )
+                row = cur.fetchone()
+            if not row:
+                raise ValueError(f"SQL_SEQ={sql_seq} 대상 SQL을 찾을 수 없습니다.")
+            return str(row[0] or "").strip(), str(row[1] or "").strip()
         sql_id = str(raw.get("sql_id") or "").strip()
         space_nm = str(raw.get("space_nm") or "").strip()
         if not sql_id or not space_nm:
@@ -307,6 +509,12 @@ class NewType04UpdateCommandTool(Component):
             return int(value)
         except (TypeError, ValueError) as exc:
             raise ValueError(f"{name} must be a number") from exc
+
+    def _positive_int_value(self, value: Any, name: str) -> int:
+        parsed = self._int_value(value, name)
+        if parsed <= 0:
+            raise ValueError(f"{name} must be a positive number")
+        return parsed
 
     def _text_value(self, raw: dict[str, Any], *names: str) -> str:
         for name in names:

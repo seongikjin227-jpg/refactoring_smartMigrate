@@ -18,7 +18,7 @@ LLM에는 아래 값을 전달합니다.
 
 ```text
 system prompt = 이 문서의 "System Prompt"
-user message = payload.user_request
+user message = payload.resolved_user_request (없으면 payload.user_request)
 ```
 
 가능하면 `01 Request Classifier LLM`이 생성한 JSON payload 전체를 context로 함께 전달합니다.
@@ -26,8 +26,11 @@ user message = payload.user_request
 ```json
 {
   "user_request": "...",
+  "resolved_user_request": "후속 발화를 해석한 완전한 요청문",
   "route": "GENERAL_CHAT",
   "reason": "일반 기능 설명 요청입니다.",
+  "is_follow_up": false,
+  "clarification_required": false,
   "history": []
 }
 ```

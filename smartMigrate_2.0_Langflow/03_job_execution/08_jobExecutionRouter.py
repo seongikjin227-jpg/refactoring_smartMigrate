@@ -167,6 +167,21 @@ class NewType08JobExecutionRouter(Component):
         logging.getLogger("smartmigrate.workflow").info("08 Job Execution Router started", extra={"workflow_log": [0, "WORKFLOW", "08_JOB_ROUTER", "INFO", "ROUTE", "START", 0]})
 
         payload = self._parse_payload(getattr(self, "payload_json", ""))
+        if not payload.get("should_execute", True):
+            reason = str(payload.get("clarification_message") or "실행 요청을 확정할 수 없습니다. 대상과 작업을 포함해 다시 요청해 주세요.")
+            routed = {
+                **payload,
+                "component": "08_jobExecutionRouter",
+                "effective_user_request": self._effective_user_request(payload),
+                "job_route": "NO_RUNNABLE_JOB",
+                "run_mode": "none",
+                "run_all_pending": False,
+                "target_filter": payload.get("target_filter") or {"map_ids": [], "sql_ids": [], "space_nms": []},
+                "selected_jobs": [],
+                "routing_reason": reason,
+            }
+            self._cached_routed_payload = routed
+            return routed
         decision_hint = self._normalize_llm_hint(self._route_with_llm(payload), payload)
         targets = decision_hint["target_filter"]
         route = decision_hint["job_route"]
@@ -202,6 +217,7 @@ class NewType08JobExecutionRouter(Component):
         routed = {
             **payload,
             "component": "08_jobExecutionRouter",
+            "effective_user_request": self._effective_user_request(payload),
             "job_route": decision["job_route"],
             "run_mode": decision["run_mode"],
             "run_all_pending": decision["run_all_pending"],
@@ -241,7 +257,10 @@ class NewType08JobExecutionRouter(Component):
                     "role": "user",
                     "content": json.dumps(
                         {
-                            "user_request": payload.get("user_request") or payload.get("original_request") or payload.get("input") or "",
+                            "user_request": self._effective_user_request(payload),
+                            "original_user_request": payload.get("user_request") or "",
+                            "is_follow_up": bool(payload.get("is_follow_up", False)),
+                            "confirmation": payload.get("confirmation") or "NOT_REQUIRED",
                             "execution_scope": payload.get("execution_scope") or "unknown",
                             "requested_domain": payload.get("requested_domain") or "UNKNOWN",
                             "target_filter": payload.get("target_filter") or {},
@@ -273,10 +292,20 @@ class NewType08JobExecutionRouter(Component):
         content = (((raw.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
         return self._parse_json_object(content)
 
+    def _effective_user_request(self, payload: dict[str, Any]) -> str:
+        """Prefer 01's history-resolved request over an isolated follow-up utterance."""
+        return str(
+            payload.get("resolved_user_request")
+            or payload.get("user_request")
+            or payload.get("original_request")
+            or payload.get("input")
+            or ""
+        ).strip()
+
     # 비교와 검색이 안정적으로 동작하도록 입력 값을 정규화한다.
     def _normalize_llm_hint(self, hint: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         # target_filter는 01이 제공해야 한다. 여기의 로컬 텍스트 추출은 예전 01 출력 호환용이다.
-        extracted_targets = self._extract_targets(str(payload.get("user_request") or payload.get("original_request") or payload.get("input") or ""))
+        extracted_targets = self._extract_targets(self._effective_user_request(payload))
         payload_targets = payload.get("target_filter") if isinstance(payload.get("target_filter"), dict) else {}
         llm_targets = hint.get("target_filter") if isinstance(hint.get("target_filter"), dict) else {}
         route = str(hint.get("job_route") or "").upper() or self._route_from_payload(payload, payload_targets)
@@ -290,6 +319,11 @@ class NewType08JobExecutionRouter(Component):
                 self._normalize_list(payload_targets.get("map_ids"), int),
                 self._normalize_list(llm_targets.get("map_ids"), int),
                 self._normalize_list(extracted_targets.get("map_ids"), int),
+            ),
+            "sql_seqs": self._merge_lists(
+                self._normalize_list(payload_targets.get("sql_seqs"), int),
+                self._normalize_list(llm_targets.get("sql_seqs"), int),
+                self._normalize_list(extracted_targets.get("sql_seqs"), int),
             ),
             "sql_ids": self._merge_lists(
                 self._normalize_list(payload_targets.get("sql_ids"), str),
@@ -352,7 +386,7 @@ class NewType08JobExecutionRouter(Component):
             return domain
         if targets.get("map_ids"):
             return "MIG"
-        if targets.get("sql_ids") or targets.get("space_nms"):
+        if targets.get("sql_seqs") or targets.get("sql_ids") or targets.get("space_nms"):
             return "SQL_CONVERSION"
         scope = str(payload.get("execution_scope") or "").lower()
         return "FULL_WORKFLOW" if scope == "all" else None
@@ -360,7 +394,7 @@ class NewType08JobExecutionRouter(Component):
     # 전체 실행인지 특정 작업 실행인지 run_mode를 결정한다.
     def _run_mode_from_payload(self, payload: dict[str, Any], targets: dict[str, Any]) -> str:
         scope = str(payload.get("execution_scope") or "").lower()
-        if scope == "targeted" or any(targets.get(key) for key in ("map_ids", "sql_ids", "space_nms")):
+        if scope == "targeted" or any(targets.get(key) for key in ("map_ids", "sql_seqs", "sql_ids", "space_nms")):
             return "targeted"
         return "all_pending"
 
@@ -437,10 +471,13 @@ class NewType08JobExecutionRouter(Component):
     # 사용자가 지정한 target 범위를 status 메시지에 넣을 짧은 label로 만든다.
     def _target_label(self, targets: dict[str, Any]) -> str:
         map_ids = targets.get("map_ids") or []
+        sql_seqs = targets.get("sql_seqs") or []
         sql_ids = targets.get("sql_ids") or []
         space_nms = targets.get("space_nms") or []
         if map_ids:
             return f"map_id={', '.join(str(item) for item in map_ids)}"
+        if sql_seqs:
+            return f"sql_seq={', '.join(str(item) for item in sql_seqs)}"
         if sql_ids and space_nms:
             return f"space_nm={', '.join(str(item) for item in space_nms)}, sql_id={', '.join(str(item) for item in sql_ids)}"
         if sql_ids:
@@ -467,6 +504,7 @@ class NewType08JobExecutionRouter(Component):
     def _extract_targets(self, text: str) -> dict[str, list[Any]]:
         return {
             "map_ids": self._extract_map_ids(text),
+            "sql_seqs": [int(item) for item in self._extract_text_values(text, r"sql[_\s-]*seq|sqlseq") if item.isdigit()],
             "sql_ids": self._extract_text_values(text, r"sql[_\s-]*id|sqlid"),
             "space_nms": self._extract_text_values(text, r"space[_\s-]*nm|spacenm|space"),
         }

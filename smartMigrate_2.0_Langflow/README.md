@@ -152,7 +152,7 @@ smartMigrate_2.0_Langflow/
 ```text
 User Chat
   -> 01_agent_start/00A Runtime Logging Start
-  -> 01_agent_start/01 Request Classifier Prompt
+  -> 01_agent_start/01 Request Classifier Agent (chat history + current input -> resolved payload)
   -> 01_agent_start/02 Intent Router
   -> 01_agent_start/03 또는 02_flow_management/04 또는 03_job_execution/06/08
 ```
@@ -248,5 +248,6 @@ python -m py_compile `
 | `00_guide/00_architecture_chapter5_logging_operations.md` | logging, 운영, 장애 확인 |
 | `00_guide/00_architecture_chapter6_oracle_ddl.md` | Oracle 테이블 DDL, 컬럼 코멘트, 주요 인덱스 |
 | `00_guide/00_job_execution_payload_plan.md` | 개발자용 실행 요청 payload 전달 규칙 |
+| `00_guide/00_follow_up_payload_contract.md` | 후속 발화 해석, 확인 응답, payload/연결 계약 |
 | `00_guide/00_main_logic_components.md` | 개발자용 C 컴포넌트 중심 읽기 가이드 |
 | `00_guide/00_logging_rules.txt` | 개발자용 workflow logging 세부 규칙 |

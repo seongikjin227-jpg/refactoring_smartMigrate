@@ -174,25 +174,21 @@ class NewType04SelectCommandTool(Component):
             "data": {"job": job, "details": details, "logs": logs},
         }
 
-    # SQL 한 건의 식별자는 SPACE_NM + SQL_ID이며, 관련 mapping과 log를 묶어 반환한다.
+    # SQL 한 건은 기존 PK 또는 사용자용 SQL_SEQ로 조회할 수 있으며, 관련 mapping과 log를 묶어 반환한다.
     def _get_sql_job(self, command: dict[str, Any]) -> dict[str, Any]:
-        sql_id = self._required_text(command, "sql_id")
-        space_nm = str(command.get("space_nm") or "").strip()
+        conditions, params, target = self._sql_conditions(command)
         limit = self._limit(command.get("limit"))
-        conditions = ["UPPER(TRIM(SQL_ID)) = UPPER(TRIM(:sql_id))"]
-        params: dict[str, Any] = {"sql_id": sql_id}
-        if space_nm:
-            conditions.append("UPPER(TRIM(SPACE_NM)) = UPPER(TRIM(:space_nm))")
-            params["space_nm"] = space_nm
         sql_info = self._query_rows(
             f"SELECT {self._select_list('NEXT_SQL_INFO')} FROM {self._qualify('NEXT_SQL_INFO')} WHERE {' AND '.join(conditions)}",
             params,
             table_name="NEXT_SQL_INFO",
         )
+        resolved_sql_id = str((sql_info[0] if sql_info else {}).get("sql_id") or target.get("sql_id") or "").strip()
+        resolved_space_nm = str((sql_info[0] if sql_info else {}).get("space_nm") or target.get("space_nm") or "").strip()
         log_command = {
             "mig_kind": command.get("mig_kind") or list(self.SQL_DOMAINS),
-            "sql_id": sql_id,
-            "space_nm": space_nm,
+            "sql_id": resolved_sql_id,
+            "space_nm": resolved_space_nm,
             "limit": limit,
             "fail_only": bool(command.get("fail_only", False)),
         }
@@ -202,18 +198,12 @@ class NewType04SelectCommandTool(Component):
             "ok": True,
             "component": "04_selectCommandTool",
             "action": "get_sql_job",
-            "target": {"sql_id": sql_id, "space_nm": space_nm},
+            "target": target,
             "data": {"sql_info": sql_info, "mapping_rules": mapping_rules, "logs": logs},
         }
 
     def _get_sql_mapping_rules(self, command: dict[str, Any]) -> dict[str, Any]:
-        sql_id = self._required_text(command, "sql_id")
-        space_nm = str(command.get("space_nm") or "").strip()
-        conditions = ["UPPER(TRIM(SQL_ID)) = UPPER(TRIM(:sql_id))"]
-        params: dict[str, Any] = {"sql_id": sql_id}
-        if space_nm:
-            conditions.append("UPPER(TRIM(SPACE_NM)) = UPPER(TRIM(:space_nm))")
-            params["space_nm"] = space_nm
+        conditions, params, target = self._sql_conditions(command)
         sql_info = self._query_rows(
             f"SELECT SPACE_NM, SQL_ID, TARGET_TABLE FROM {self._qualify('NEXT_SQL_INFO')} WHERE {' AND '.join(conditions)}",
             params,
@@ -223,25 +213,20 @@ class NewType04SelectCommandTool(Component):
             "ok": True,
             "component": "04_selectCommandTool",
             "action": "get_sql_mapping_rules",
-            "target": {"sql_id": sql_id, "space_nm": space_nm},
+            "target": target,
             "data": {"sql_info": sql_info, "mapping_rules": self._sql_mapping_rules(sql_info)},
         }
 
     # 대용량 SQL text는 명시 요청한 컬럼만 반환한다. 일반 조회가 CLOB 전체를 무제한 전달하지 않게 한다.
     def _get_sql_text(self, command: dict[str, Any]) -> dict[str, Any]:
-        sql_id = self._required_text(command, "sql_id")
-        space_nm = str(command.get("space_nm") or "").strip()
+        conditions, params, target = self._sql_conditions(command)
         columns = self._requested_columns(
             command.get("columns"),
             default=self._ordered_allowed_sql_text_columns(),
             allowed=self.FULL_SQL_INFO_COLUMNS,
             table_name="NEXT_SQL_INFO",
         )
-        conditions = ["UPPER(TRIM(SQL_ID)) = UPPER(TRIM(:sql_id))"]
-        params: dict[str, Any] = {"sql_id": sql_id, "limit": self._full_text_limit(command.get("limit"))}
-        if space_nm:
-            conditions.append("UPPER(TRIM(SPACE_NM)) = UPPER(TRIM(:space_nm))")
-            params["space_nm"] = space_nm
+        params["limit"] = self._full_text_limit(command.get("limit"))
         select_columns = ["SPACE_NM", "SQL_ID", *columns]
         rows = self._query_rows(
             f"""
@@ -260,7 +245,7 @@ class NewType04SelectCommandTool(Component):
             "ok": True,
             "component": "04_selectCommandTool",
             "action": "get_sql_text",
-            "target": {"sql_id": sql_id, "space_nm": space_nm, "columns": columns},
+            "target": {**target, "columns": columns},
             "data": {"rows": rows},
             "full_text": True,
         }
@@ -1009,6 +994,25 @@ class NewType04SelectCommandTool(Component):
             "": "ALL",
         }
         return aliases.get(text, text)
+
+    def _sql_conditions(self, command: dict[str, Any]) -> tuple[list[str], dict[str, Any], dict[str, Any]]:
+        """Build one-row SQL lookup conditions from SQL_SEQ or the legacy PK."""
+        if command.get("sql_seq") not in (None, ""):
+            try:
+                sql_seq = int(command.get("sql_seq"))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("sql_seq must be a number") from exc
+            if sql_seq <= 0:
+                raise ValueError("sql_seq must be a positive number")
+            return ["SQL_SEQ = :sql_seq"], {"sql_seq": sql_seq}, {"sql_seq": sql_seq}
+        sql_id = self._required_text(command, "sql_id")
+        space_nm = str(command.get("space_nm") or "").strip()
+        conditions = ["UPPER(TRIM(SQL_ID)) = UPPER(TRIM(:sql_id))"]
+        params: dict[str, Any] = {"sql_id": sql_id}
+        if space_nm:
+            conditions.append("UPPER(TRIM(SPACE_NM)) = UPPER(TRIM(:space_nm))")
+            params["space_nm"] = space_nm
+        return conditions, params, {"sql_id": sql_id, "space_nm": space_nm}
 
     def _required_text(self, command: dict[str, Any], key: str) -> str:
         value = str(command.get(key) or "").strip()

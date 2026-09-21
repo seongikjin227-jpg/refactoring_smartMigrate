@@ -536,7 +536,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         sql_conversion_general_rules = self._load_rag_general_rules(db_config, "SQL_CONVERSION", source_tables, map_id)
         sql_conversion_examples = self._retrieve_rag_examples(db_config, rag_config, "SQL_CONVERSION", source_sql, source_tables, map_id)
         correct_sql_hints = {
-            **self._correct_sql_hints_text(db_config, source_sql, job.get("sql_id"), job.get("space_nm"), map_id, 0, tag_kind)
+            **self._correct_sql_hints_text(db_config, source_sql, job.get("sql_id"), job.get("space_nm"), map_id, 0, tag_kind, job.get("ref_seq"))
         }
         self._log_rag_context(map_id, "SQL_CONVERSION", sql_conversion_general_rules, sql_conversion_examples, 0)
         logger = logging.getLogger("smartmigrate.workflow")
@@ -1299,6 +1299,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             ("TAG_KIND", "tag_kind", "VARCHAR2(100)"),
             ("SPACE_NM", "space_nm", "VARCHAR2(4000)"),
             ("SQL_ID", "sql_id", "VARCHAR2(4000)"),
+            ("SQL_SEQ", "sql_seq", "NUMBER"),
+            ("REF_SEQ", "ref_seq", "NUMBER"),
             ("FR_SQL", "fr_sql", "CLOB"),
             ("TARGET_TABLE", "target_table", "VARCHAR2(4000)"),
             ("EDIT_FR_SQL", "edit_fr_sql", "CLOB"),
@@ -1853,8 +1855,12 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
     # 유사한 user-edited PASS row가 있으면 그 row의 TO_SQL/BIND_SQL/TEST_SQL을
     # 각 생성 프롬프트의 힌트로 주입한다.
     # 이전 user-edited PASS SQL을 검색해 TO/BIND/TEST 생성 힌트 묶음을 만든다.
-    def _correct_sql_hints_text(self, db_config: dict[str, Any], source_sql: str, current_sql_id: str | None, current_space_nm: str | None, map_id: str, retry_count: int, tag_kind: Any = "") -> dict[str, str]:
+    def _correct_sql_hints_text(self, db_config: dict[str, Any], source_sql: str, current_sql_id: str | None, current_space_nm: str | None, map_id: str, retry_count: int, tag_kind: Any = "", ref_seq: Any = None) -> dict[str, str]:
         hints = {column: "- (empty)" for column in ("TO_SQL", "BIND_SQL", "TEST_SQL")}
+        if ref_seq not in (None, ""):
+            # An explicit user reference takes precedence over semantic similarity.
+            # Falling back to a different hit would violate the selected REF_SEQ.
+            return self._referenced_correct_sql_hints(db_config, ref_seq)
         query_vector_source = "NOT_AVAILABLE"
         config = self._milvus_config()
         try:
@@ -1876,7 +1882,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 anns_field="dense_vector",
                 filter=filter_expr,
                 limit=max(top_k * 10, 10),
-                output_fields=["space_nm", "sql_id", "source_sql", "to_sql", "bind_sql", "test_sql", "status_conversion", "user_edited", "tag_kind"],
+                output_fields=["sql_seq", "space_nm", "sql_id", "source_sql", "to_sql", "bind_sql", "test_sql", "status_conversion", "user_edited", "tag_kind"],
                 search_params={"metric_type": "COSINE"},
             )
             hits = rows[0] if rows else []
@@ -1922,6 +1928,30 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         )
         return hints
 
+    def _referenced_correct_sql_hints(self, db_config: dict[str, Any], ref_seq: Any) -> dict[str, str]:
+        """Load the exact active Correct SQL selected by REF_SEQ, without ranking."""
+        try:
+            reference_seq = int(ref_seq)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid REF_SEQ: {ref_seq}") from exc
+        if reference_seq <= 0:
+            raise ValueError(f"Invalid REF_SEQ: {ref_seq}")
+        rows = self._milvus_client().query(
+            collection_name=self._milvus_config()["correct_sql_collection"],
+            filter=f"sql_seq == {reference_seq} and is_active == true",
+            output_fields=["sql_seq", "space_nm", "sql_id", "source_sql", "to_sql", "bind_sql", "test_sql"],
+            limit=1,
+        )
+        entity = dict(rows[0]) if isinstance(rows, list) and rows and isinstance(rows[0], dict) else {}
+        if not entity:
+            raise ValueError("지정한 Correct SQL이 벡터 DB에 존재하지 않습니다.")
+        hints = {column: "- (empty)" for column in ("TO_SQL", "BIND_SQL", "TEST_SQL")}
+        for column, field in {"TO_SQL": "to_sql", "BIND_SQL": "bind_sql", "TEST_SQL": "test_sql"}.items():
+            hint_sql = str(entity.get(field) or "").strip()
+            if hint_sql:
+                hints[column] = self._format_correct_sql_hint(column, 1.0, entity, hint_sql, method="ref_seq")
+        return hints
+
     def _sql_embedding_content(self, source_sql: str) -> str:
         source = str(source_sql or "").strip()
         return "\n".join(part for part in (self._normalize_sql_shape(source), source) if part)
@@ -1965,9 +1995,9 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         return self._correct_sql_hints_text(db_config, source_sql, current_sql_id, current_space_nm, map_id, retry_count, tag_kind).get(hint_column, "- (empty)")
 
     # 검색된 Correct SQL row를 프롬프트에 넣을 readable block으로 포맷한다.
-    def _format_correct_sql_hint(self, hint_column: str, score: float, hint: dict[str, Any], hint_sql: str) -> str:
+    def _format_correct_sql_hint(self, hint_column: str, score: float, hint: dict[str, Any], hint_sql: str, method: str = "milvus_dense_vector") -> str:
         lines = [
-            f"- SCORE={round(score, 6)} | METHOD=milvus_dense_vector | SPACE_NM={hint.get('space_nm') or ''} | SQL_ID={hint.get('sql_id') or ''}",
+            f"- SCORE={round(score, 6)} | METHOD={method} | SQL_SEQ={hint.get('sql_seq') or ''} | SPACE_NM={hint.get('space_nm') or ''} | SQL_ID={hint.get('sql_id') or ''}",
             f"  FROM_SQL: {hint.get('source_sql') or ''}",
             f"  {hint_column}: {hint_sql}",
         ]
