@@ -100,7 +100,7 @@ flowchart TD
 
 ### Full Workflow 내부 SQL Conversion gate
 
-`18A -> 18B` Full Workflow는 DB Migration을 먼저 모두 실행한 뒤 SQL Conversion phase로 넘어간다. 실제 운영 Loop는 `18B_fullWorkflowLoop2.py`이며, 매 item 직전 DB 자동 실행 대상 목록을 refresh해 아직 queue에 없는 job만 phase/priority 순서로 삽입한다. SQL phase 진입 직전에 Loop2가 전체 `NEXT_MIG_INFO` 상태를 확인하고, `USE_YN='Y'`인 DB Migration row 중 `STATUS IS NULL` 또는 `FAIL-%`가 하나라도 있으면 SQL Conversion/Tuning/Formatting을 시작하지 않고 Done payload로 종료한다. 이때 `18B_FULL_LOOP2 / DB_MIGRATION_GATE / ABORT` workflow log를 남긴다.
+`18A -> 18B` Full Workflow는 DB Migration을 먼저 모두 실행한 뒤 SQL Conversion phase로 넘어간다. 실제 운영 Loop는 `18B_fullWorkflowLoop2.py`이며, 매 item 직전 DB 자동 실행 대상 목록을 refresh해 아직 queue에 없는 job만 phase/priority 순서로 삽입한다. 동적으로 추가하는 SQL Conversion/Tuning/Formatting job은 `SQL_ID + SPACE_NM` 대신 `SQL_SEQ` 하나로 식별하며, route까지 포함해 중복을 제거한다. SQL phase 진입 직전에 Loop2가 전체 `NEXT_MIG_INFO` 상태를 확인하고, `USE_YN='Y'`인 DB Migration row 중 `STATUS IS NULL` 또는 `FAIL-%`가 하나라도 있으면 SQL Conversion/Tuning/Formatting을 시작하지 않고 Done payload로 종료한다. 이때 `18B_FULL_LOOP2 / DB_MIGRATION_GATE / ABORT` workflow log를 남긴다.
 
 `18B`는 Done output을 반환하기 직전에 항상 종료 사유를 workflow log로 남긴다. 종료 사유는 `NO_PLANNED_JOB`, `COMPLETED`, `ABORTED` 중 하나로 구분되며 Done payload의 `done_reason`에도 포함된다.
 

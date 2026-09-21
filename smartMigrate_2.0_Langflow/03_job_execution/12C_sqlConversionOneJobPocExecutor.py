@@ -1949,7 +1949,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         for column, field in {"TO_SQL": "to_sql", "BIND_SQL": "bind_sql", "TEST_SQL": "test_sql"}.items():
             hint_sql = str(entity.get(field) or "").strip()
             if hint_sql:
-                hints[column] = self._format_correct_sql_hint(column, 1.0, entity, hint_sql, method="ref_seq")
+                hints[column] = self._format_correct_sql_hint(column, None, entity, hint_sql, method="ref_seq")
         return hints
 
     def _sql_embedding_content(self, source_sql: str) -> str:
@@ -1995,9 +1995,10 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         return self._correct_sql_hints_text(db_config, source_sql, current_sql_id, current_space_nm, map_id, retry_count, tag_kind).get(hint_column, "- (empty)")
 
     # 검색된 Correct SQL row를 프롬프트에 넣을 readable block으로 포맷한다.
-    def _format_correct_sql_hint(self, hint_column: str, score: float, hint: dict[str, Any], hint_sql: str, method: str = "milvus_dense_vector") -> str:
+    def _format_correct_sql_hint(self, hint_column: str, score: float | None, hint: dict[str, Any], hint_sql: str, method: str = "milvus_dense_vector") -> str:
+        score_text = "N/A" if score is None else str(round(score, 6))
         lines = [
-            f"- SCORE={round(score, 6)} | METHOD={method} | SQL_SEQ={hint.get('sql_seq') or ''} | SPACE_NM={hint.get('space_nm') or ''} | SQL_ID={hint.get('sql_id') or ''}",
+            f"- SCORE={score_text} | METHOD={method} | SQL_SEQ={hint.get('sql_seq') or ''} | SPACE_NM={hint.get('space_nm') or ''} | SQL_ID={hint.get('sql_id') or ''}",
             f"  FROM_SQL: {hint.get('source_sql') or ''}",
             f"  {hint_column}: {hint_sql}",
         ]

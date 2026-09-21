@@ -83,7 +83,12 @@ class NewType04UpdateCommandTool(Component):
 
         for raw in actions:
             action = str(raw.get("action") or "").strip().lower() if isinstance(raw, dict) else ""
-            if action in {"set_sql_ref_seq", "set_sql_reference_seq"}:
+            if action in {
+                "set_sql_ref_seq",
+                "set_sql_reference_seq",
+                "apply_correct_sql_to_failed_job",
+                "apply_correct_sql_and_retry",
+            }:
                 self._validate_ref_seq_in_correct_sql(raw)
 
         statements = [self._build_statement(item, index) for index, item in enumerate(actions)]
@@ -231,6 +236,9 @@ class NewType04UpdateCommandTool(Component):
                 "STATUS_CONVERSION=PASS-CONVERSION; Correct SQL approved",
             )
 
+        if action in {"apply_correct_sql_to_failed_job", "apply_correct_sql_and_retry"}:
+            return self._apply_correct_sql_to_failed_statement(raw, action)
+
         if action in {"set_sql_ref_seq", "set_sql_reference_seq"}:
             return self._sql_ref_seq_statement(raw, action, clear=False)
 
@@ -322,6 +330,37 @@ class NewType04UpdateCommandTool(Component):
                 "AND T.SQL_SEQ <> :ref_seq"
             ),
             "params": params,
+        }
+
+    def _apply_correct_sql_to_failed_statement(self, raw: dict[str, Any], action: str) -> dict[str, Any]:
+        """Attach an indexed Correct SQL to a current FAIL-* row and retry it.
+
+        REF_SEQ assignment and the retry-state transition share one UPDATE so a
+        selected candidate cannot be left half-applied if a later action fails.
+        The FAIL-* predicate is evaluated at write time to protect rows that
+        completed after the similarity search.
+        """
+        target_where, target_params, identity = self._sql_target_locator(raw)
+        ref_seq = self._positive_int_value(raw.get("ref_seq"), "ref_seq")
+        retry_count = self._int_value(raw.get("retry_count", 0), "retry_count")
+        params = {**target_params, "ref_seq": ref_seq, "retry_count": retry_count}
+        return {
+            "action": action,
+            "identity": identity,
+            "summary": (
+                f"REF_SEQ={ref_seq}; STATUS_CONVERSION=NULL, RETRY_COUNT reset "
+                "(only if current status is FAIL-*)"
+            ),
+            "sql": (
+                f"UPDATE {self._qualify('NEXT_SQL_INFO')} "
+                "SET REF_SEQ = :ref_seq, STATUS_CONVERSION = NULL, "
+                "RETRY_COUNT = :retry_count "
+                f"WHERE {target_where} "
+                "AND UPPER(TRIM(NVL(STATUS_CONVERSION, 'NULL'))) LIKE 'FAIL-%' "
+                "AND SQL_SEQ <> :ref_seq"
+            ),
+            "params": params,
+            "skip_when_not_matched": True,
         }
 
     def _save_correct_sql_statement(self, raw: dict[str, Any], action: str) -> dict[str, Any]:

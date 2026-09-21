@@ -107,7 +107,7 @@ RAG Guide는 `NEXT_MIG_RAG_INFO`에 저장된다. 추가, 수정, 비활성화�
 | 비활성화 | `RAG_ID` | 없음 | `RAG_ID={RAG_ID} RAG Guide 비활성화해줘.` | 물리 삭제 대신 `USE_YN='N'`으로 변경한다. |
 | VectorDB 동기화 | 없음 | 없음 | `RAG Guide, Correct SQL, AS-IS SQL을 VectorDB에 동기화해줘.` | Oracle 원천 snapshot을 기준으로 `SM_RAG_RULES`, Correct SQL collection, `SM_ASIS_SQL`을 갱신한다. |
 
-Correct SQL을 입력하면 Agent는 우선 SQL과 `USER_EDITED='Y'`만 저장한다. 이어 사용자는 다음 중 하나를 선택한다: (1) `PASS-CONVERSION`으로 확정하고 Vector DB 동기화, 유사 `FAIL-*` 후보 조회 및 `REF_SEQ` 추천을 진행하거나, (2) `STATUS_CONVERSION`을 `NULL`로 초기화하여 Conversion 재실행을 준비한다. 2번에서는 Vector DB 동기화·유사도 검색·`REF_SEQ` 추천을 수행하지 않는다. 1번에서만 후보를 보여주고, 사용자가 확인한 후보에만 저장 Correct SQL의 `SQL_SEQ`를 `REF_SEQ`로 기록한다.
+Correct SQL을 입력하면 Agent는 우선 SQL과 `USER_EDITED='Y'`만 저장한다. 이어 사용자는 다음 중 하나를 선택한다: (1) `PASS-CONVERSION`으로 확정하고 Vector DB 동기화 및 유사 `FAIL-*` 작업 반영을 진행하거나, (2) `STATUS_CONVERSION`을 `NULL`로 초기화하여 Conversion 재실행을 준비한다. 2번에서는 Vector DB 동기화·유사도 검색·`REF_SEQ` 반영을 수행하지 않는다. 1번에서는 유사도 80% 초과 `FAIL-*` 후보를 자동으로 찾아 저장 Correct SQL의 `SQL_SEQ`를 `REF_SEQ`로 기록하고, 해당 후보의 `STATUS_CONVERSION`을 `NULL`, `RETRY_COUNT`를 0으로 바꾼다. 사용자는 결과를 검토한 뒤 SQL Conversion 실행만 요청하면 된다.
 
 ### RAG Guide 입력 규칙
 

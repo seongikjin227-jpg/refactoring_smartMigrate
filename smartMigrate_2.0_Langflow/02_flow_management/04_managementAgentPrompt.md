@@ -78,6 +78,13 @@ AS-IS SQL similarity search and safe retry:
 - The retry action includes a database-side `STATUS_CONVERSION LIKE 'FAIL-%'` predicate. It sets only a currently FAIL-* conversion status to NULL and resets RETRY_COUNT; a PASS or changed row is skipped, never changed. This is only a status reset, not job execution.
 - After the status reset succeeds, state that the target is ready to retry. Use remembered context if the user confirms; do not call an executor as part of the status-reset request.
 
+Correct SQL PASS automation (this rule overrides any earlier Correct SQL candidate-confirmation rule):
+- After a user selects the PASS-CONVERSION path for a saved Correct SQL with SQL_SEQ=R, call these tools in this exact order: `approve_correct_sql_conversion` for R, `sync_correct_sql`, then `search_similar_asis_sql` with `sql_seq=R`, `status_filter="FAIL_ONLY"`, `min_similarity=0.8`, and `limit=20`.
+- From that search result, select only rows whose returned similarity is strictly greater than 0.8. Do not ask the user to approve individual candidates.
+- In one Update Command Tool call, create one `apply_correct_sql_to_failed_job` action per selected candidate, with that candidate's `sql_seq` and `ref_seq=R`. This action atomically writes REF_SEQ=R, STATUS_CONVERSION=NULL, and RETRY_COUNT=0 only when the row is still FAIL-*.
+- Show the affected rows and similarity percentages. The human's next step is only to request SQL Conversion execution. If there are no rows above 80%, report that no job was changed.
+- Do not run an executor as part of this automation. The reset/test path still performs neither sync, similarity search, nor REF_SEQ update.
+
 RAG 변경 후 안내 규칙:
 - RAG add/update/disable/delete가 성공하면 VectorDB 동기화를 자동으로 실행하지 않습니다.
 - 대신 다음처럼 완전한 요청 문장을 안내합니다.

@@ -250,7 +250,7 @@ VectorDB 동기화는 별도 `VECTOR_DB_SYNC` route가 아니다. `04_saveVector
 
 현재 `04_saveVectorDB.py`는 특정 `RAG_ID`만 부분 업로드하지 않는다. `sync_all`은 Oracle 원천 테이블을 읽어 변경된 활성 row만 `content_hash` 기준으로 upsert하고, 기존 Milvus 문서를 자동 비활성화하거나 삭제하지 않는다. `sync_correct_sql`은 Correct SQL Conversion 컬렉션만 같은 방식으로 동기화한다.
 
-Correct SQL 입력은 저장과 확정을 분리한다. Agent는 `save_correct_sql`로 SQL과 `USER_EDITED='Y'`만 저장한 뒤, (1) `PASS-CONVERSION`으로 확정해 Vector DB 동기화 및 유사 FAIL SQL의 `REF_SEQ` 추천을 진행할지, 또는 (2) `STATUS_CONVERSION=NULL`로 초기화해 Conversion 재실행을 준비할지 사용자에게 묻는다. 1번을 선택한 경우에만 `approve_correct_sql_conversion` → `sync_correct_sql` → `search_similar_asis_sql(sql_seq, FAIL_ONLY)` 순서로 실행하고 후보의 `REF_SEQ` 지정 여부를 다시 확인한다. 2번을 선택한 경우에는 상태 초기화만 수행하며 Vector DB 동기화·유사도 검색·REF_SEQ 추천을 하지 않는다. 기존 Milvus 문서를 자동 비활성화하거나 삭제하지 않으며, Update Tool에서 파일 경로로 `04_saveVectorDB.py`를 import해서는 안 된다.
+Correct SQL 입력은 저장과 확정을 분리한다. Agent는 `save_correct_sql`로 SQL과 `USER_EDITED='Y'`만 저장한 뒤, (1) `PASS-CONVERSION`으로 확정해 Vector DB 동기화 및 유사 FAIL SQL 반영을 진행할지, 또는 (2) `STATUS_CONVERSION=NULL`로 초기화해 Conversion 재실행을 준비할지 사용자에게 묻는다. 1번을 선택한 경우에만 `approve_correct_sql_conversion` → `sync_correct_sql` → `search_similar_asis_sql(sql_seq, FAIL_ONLY, min_similarity=0.8)` 순서로 실행한다. 검색 결과 중 80%를 초과한 FAIL row에는 `apply_correct_sql_to_failed_job`으로 저장 Correct SQL의 `SQL_SEQ`를 `REF_SEQ`에 기록하고 `STATUS_CONVERSION=NULL`, `RETRY_COUNT=0`을 하나의 UPDATE로 적용한다. 사용자는 반영 결과를 보고 SQL Conversion 실행만 요청한다. 2번을 선택한 경우에는 상태 초기화만 수행하며 Vector DB 동기화·유사도 검색·REF_SEQ 반영을 하지 않는다. 기존 Milvus 문서를 자동 비활성화하거나 삭제하지 않으며, Update Tool에서 파일 경로로 `04_saveVectorDB.py`를 import해서는 안 된다.
 
 캔버스에서는 Management Router의 `Vector DB Sync` 출력 및 `04_saveVectorDB`로 향하던 직접 선을 제거한다. `04_saveVectorDB`의 `Tool Result`만 Management Agent의 Tool 입력에 연결한다.
 
