@@ -125,7 +125,7 @@ class NewType04SaveVectorDB(Component):
                 "upserted": 0,
                 "skipped": 0,
                 "failures": [],
-                "reason": "No Correct SQL meets USER_EDITED='Y', PASS conversion, and PASS tuning",
+                "reason": "No Correct SQL meets USER_EDITED='Y' and PASS conversion",
             }
             self.status = result
             return {
@@ -212,7 +212,7 @@ class NewType04SaveVectorDB(Component):
             "embedding_model": embed_config["model"],
             "source_scope": {
                 RAG_TABLE: "all rows synced; USE_YN='Y' and SOURCE_SQL present become active",
-                SQL_TABLE: "Correct SQL requires USER_EDITED='Y', PASS conversion, and PASS tuning; AS-IS SQL indexes FR_SQL / EDIT_FR_SQL rows for similarity search",
+                SQL_TABLE: "Correct SQL requires USER_EDITED='Y' and PASS conversion; AS-IS SQL indexes FR_SQL / EDIT_FR_SQL rows for similarity search",
             },
             "rag": rag_result,
             "correct_sql_conversion": conversion_result,
@@ -520,7 +520,6 @@ class NewType04SaveVectorDB(Component):
                    FR_SQL,
                    EDIT_FR_SQL,
                    STATUS_CONVERSION,
-                   STATUS_TUNING,
                    USER_EDITED,
                    TAG_KIND,
                    TARGET_TABLE,
@@ -544,12 +543,11 @@ class NewType04SaveVectorDB(Component):
                 fr_sql = self._lob_to_str(row[3]).strip()
                 edit_fr_sql = self._lob_to_str(row[4]).strip()
                 source_sql = edit_fr_sql or fr_sql
-                to_sql = self._lob_to_str(row[10]).strip()
-                bind_sql = self._lob_to_str(row[11]).strip()
-                test_sql = self._lob_to_str(row[12]).strip()
+                to_sql = self._lob_to_str(row[9]).strip()
+                bind_sql = self._lob_to_str(row[10]).strip()
+                test_sql = self._lob_to_str(row[11]).strip()
                 status = self._lob_to_str(row[5]).strip().upper()
-                status_tuning = self._lob_to_str(row[6]).strip().upper()
-                user_edited = self._lob_to_str(row[7]).strip().upper()
+                user_edited = self._lob_to_str(row[6]).strip().upper()
                 # 사람이 보정했고 성공한 conversion row만 correct SQL 힌트로 사용한다.
                 # 실패 row나 손대지 않은 row는 모델에 나쁜 예시를 주지 않도록 제외한다.
                 
@@ -557,7 +555,6 @@ class NewType04SaveVectorDB(Component):
                     bool(source_sql)
                     and user_edited == "Y"
                     and status in {"PASS", "PASS-CONVERSION"}
-                    and status_tuning in {"PASS", "PASS-TUNING"}
                 )
                 if not space_nm or not sql_id or sql_seq is None:
                     continue
@@ -570,8 +567,8 @@ class NewType04SaveVectorDB(Component):
                         sql_seq=sql_seq,
                         status_conversion=status,
                         user_edited=user_edited,
-                        tag_kind=self._lob_to_str(row[8]),
-                        target_table=self._lob_to_str(row[9]),
+                        tag_kind=self._lob_to_str(row[7]),
+                        target_table=self._lob_to_str(row[8]),
                         source_sql=source_sql,
                         to_sql=to_sql,
                         bind_sql=bind_sql,
@@ -579,7 +576,7 @@ class NewType04SaveVectorDB(Component):
                         # correct SQL 힌트 검색용 dense_vector는 EDIT_FR_SQL을 우선 사용하고, 없으면 FR_SQL을 사용한다.
                         content=self._sql_content(source_sql),
                         is_active=is_active,
-                        updated_at=self._lob_to_str(row[13]),
+                        updated_at=self._lob_to_str(row[12]),
                     )
                 )
             return rows

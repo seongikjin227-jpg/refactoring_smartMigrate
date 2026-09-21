@@ -211,7 +211,7 @@ map_id, mig_kind, log_type, log_level, step_name, status, retry_count, generate_
 | Milvus `SM_CORRECT_SQL_CONVERSION` | 보정된 SQL Conversion 예시 검색 |
 | Milvus `SM_CORRECT_SQL_MIGRATION` | 보정된 Migration SQL 예시 검색 |
 
-`02_flow_management/04_saveVectorDB.py`는 Oracle의 RAG Guide(`NEXT_MIG_RAG_INFO`), Correct SQL(`NEXT_SQL_INFO`/`NEXT_MIG_INFO`), AS-IS SQL 원천을 읽어 Milvus collection에 동기화하는 관리 Tool입니다. Correct SQL Conversion은 `USER_EDITED='Y'`, Conversion PASS, Tuning PASS를 모두 만족하는 row만 upsert합니다. 동기화는 기존 Milvus 문서를 자동 비활성화·삭제하거나 collection schema를 자동 변경하지 않습니다.
+`02_flow_management/04_saveVectorDB.py`는 Oracle의 RAG Guide(`NEXT_MIG_RAG_INFO`), Correct SQL(`NEXT_SQL_INFO`/`NEXT_MIG_INFO`), AS-IS SQL 원천을 읽어 Milvus collection에 동기화하는 관리 Tool입니다. Correct SQL Conversion은 `USER_EDITED='Y'`와 Conversion PASS를 만족하는 row만 upsert합니다. 동기화는 기존 Milvus 문서를 자동 비활성화·삭제하거나 collection schema를 자동 변경하지 않습니다.
 
 ## 최소 검증
 

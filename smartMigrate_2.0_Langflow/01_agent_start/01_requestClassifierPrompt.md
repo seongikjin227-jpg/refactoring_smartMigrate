@@ -26,6 +26,7 @@ route:
 - `resolved_user_request`에는 후속 발화를 해석한 뒤 후속 컴포넌트가 단독으로 이해할 수 있는 완전한 요청문을 기록합니다. 직접 요청이면 `user_request`와 같은 의미의 완전한 문장을 기록합니다.
 - "네", "응", "진행해", "맞아", "그걸로 해", "방금 것", "그거"처럼 이전 대화를 가리키는 표현은 `is_follow_up=true`로 둡니다. 직전 assistant 메시지의 확인 대상 또는 직전 사용자의 명시 요청이 하나로 확정될 때만 그 대상, 도메인, target을 복원합니다.
 - 예: 직전 대화가 "map_id=101 SQL Conversion을 실행할까요?"이고 현재 입력이 "네"이면 `resolved_user_request`는 "map_id=101 SQL Conversion 실행해줘"이고, `route=JOB_EXECUTION`, `confirmation=CONFIRMED`, `should_execute=true`입니다.
+- 예: 직전 대화가 "Correct SQL SQL_SEQ=42를 실패 후보 SQL_SEQ=7, 9의 REF_SEQ로 지정할까요?"이고 현재 입력이 "네"이면 `resolved_user_request`는 "SQL_SEQ=7, 9의 REF_SEQ를 42로 지정해줘"이고, `route=MANAGEMENT`, `confirmation=CONFIRMED`, `target_filter.sql_seqs=[7,9]`입니다.
 - 직전 대화가 "map_id=101의 실패 원인을 조회할까요?"이고 현재 입력이 "네"이면 `route=MANAGEMENT`로 복원합니다. 조회/수정/VectorDB 동기화는 JOB_EXECUTION으로 바꾸지 않습니다.
 - 둘 이상의 후보가 있거나 직전 대화에 실행/조회 대상이 없으면 절대 추측하지 않습니다. `clarification_required=true`, `should_execute=false`, `confirmation=UNKNOWN`으로 두고 `clarification_message`에 사용자가 다시 입력할 완전한 요청문을 씁니다.
 - "아니", "취소", "하지 마"처럼 직전 확인을 거절하면 `confirmation=REJECTED`, `should_execute=false`로 둡니다. 이 경우 이전 작업을 실행 대상으로 복원하지 않습니다.
@@ -36,6 +37,7 @@ JOB_EXECUTION 구조화 규칙:
 - 특정 SQL 실행 요청이면 requested_domain은 SQL_CONVERSION, SQL_TUNING, SQL_FORMATTING 중 사용자 표현에 맞게 선택하고 execution_scope는 targeted입니다.
 - "맵 아이디 101번", "map id 101", "map_id=101", "101번 맵"은 모두 target_filter.map_ids=[101]로 추출합니다.
 - "SQL ID Q001", "sql_id=Q001", "Q001 SQL"은 target_filter.sql_ids=["Q001"]로 추출합니다.
+- "SQL 순번 42", "SQL_SEQ=42", "42번 SQL"은 target_filter.sql_seqs=[42]로 추출합니다.
 - "space SALES", "space_nm=SALES", "SALES 스페이스"는 target_filter.space_nms=["SALES"]로 추출합니다.
 - "전체 작업", "전체 진행", "남은 작업 다 실행", "DB Migration부터 Formatting까지"는 requested_domain=FULL_WORKFLOW, execution_scope=all입니다.
 - "DB Migration 전체", "DB Migration 남은 건 실행"은 requested_domain=MIG, execution_scope=domain입니다.

@@ -67,7 +67,7 @@ flowchart LR
 |---|---|---|
 | `NEXT_MIG_INFO` | `MAP_ID`, `MAP_TYPE`, `FR_TABLE`, `TO_TABLE`, `USE_YN`, `PRIORITY`, `PRIOR_MAP_ID`, `STATUS`, `USER_EDITED`, `MIG_SQL`, `VERIFY_SQL`, `BATCH_CNT`, `RETRY_COUNT`, `ELAPSED_SECONDS`, `UPD_TS` | DB Migration 작업 master. SQL 생성 결과와 최종 상태를 저장한다. |
 | `NEXT_MIG_INFO_DTL` | `MAP_ID`, `FR_COL`, `TO_COL` | DB Migration column mapping detail. |
-| `NEXT_SQL_INFO` | `SQL_SEQ`, `SPACE_NM`, `SQL_ID`, `REF_SEQ`, `STATUS_CONVERSION`, `STATUS_TUNING`, `PRIORITY`, `USER_EDITED`, `TARGET_TABLE`, `FR_SQL`, `EDIT_FR_SQL`, `TO_SQL`, `BIND_SQL`, `BIND_SET`, `TEST_SQL`, `TUNED_TO_SQL`, `TUNED_RESULT`, `TUNED_FR_SQL`, `FORMATTED_SQL`, `RETRY_COUNT`, `LOG`, `UPD_TS` | SQL Conversion/Tuning/Formatting 대상과 결과를 저장한다. Correct SQL 벡터 검색은 사용자 보정 및 Conversion/Tuning PASS를 모두 만족한 row만 활성화한다. |
+| `NEXT_SQL_INFO` | `SQL_SEQ`, `SPACE_NM`, `SQL_ID`, `REF_SEQ`, `STATUS_CONVERSION`, `STATUS_TUNING`, `PRIORITY`, `USER_EDITED`, `TARGET_TABLE`, `FR_SQL`, `EDIT_FR_SQL`, `TO_SQL`, `BIND_SQL`, `BIND_SET`, `TEST_SQL`, `TUNED_TO_SQL`, `TUNED_RESULT`, `TUNED_FR_SQL`, `FORMATTED_SQL`, `RETRY_COUNT`, `LOG`, `UPD_TS` | SQL Conversion/Tuning/Formatting 대상과 결과를 저장한다. Correct SQL 벡터 검색은 사용자 보정 및 Conversion PASS를 만족한 row만 활성화한다. |
 | `NEXT_MIG_LOG` | `LOG_ID`, `MAP_ID`, `MIG_KIND`, `LOG_TYPE`, `LOG_LEVEL`, `STEP_NAME`, `STATUS`, `MESSAGE`, `RETRY_COUNT`, `GENERATE_SQL`, `CREATED_AT` | 모든 runtime/event/job 로그의 단일 저장소. SQL 계열 로그도 여기에 저장한다. |
 | `NEXT_MIG_RAG_INFO` | `RAG_ID`, `CATEGORY`, `RULE_TYPE`, `SOURCE_TABLES`, `USE_YN`, `GUIDANCE_TEXT`, `SOURCE_SQL`, `TARGET_SQL`, `HIT_CNT`, `CREATED_AT`, `UPDATED_AT` | SQL Conversion/Tuning rule/guidance/example 원천. |
 
@@ -76,7 +76,7 @@ flowchart LR
 | 컬렉션 | 원천 | 사용 위치 | 목적 |
 |---|---|---|---|
 | `SM_RAG_RULES` | `NEXT_MIG_RAG_INFO` | `12C`, `15C` | SQL Conversion/Tuning rule 검색 |
-| `SM_CORRECT_SQL_CONVERSION` | `NEXT_SQL_INFO`의 `USER_EDITED='Y'` + Conversion PASS + Tuning PASS row | `12C` | 과거 correct SQL 예시 검색 및 `REF_SEQ` 대상 |
+| `SM_CORRECT_SQL_CONVERSION` | `NEXT_SQL_INFO`의 `USER_EDITED='Y'` + Conversion PASS row | `12C` | 과거 correct SQL 예시 검색 및 `REF_SEQ` 대상 |
 | `SM_CORRECT_SQL_MIGRATION` | `NEXT_MIG_INFO`의 user-edited/pass migration row | `10C` | migration SQL/verify SQL 예시 검색 |
 | `SM_ASIS_SQL` | `NEXT_SQL_INFO`의 `EDIT_FR_SQL` 우선, 없으면 `FR_SQL` | `04_ragCommandTool` | 유사 AS-IS SQL 검색 |
 

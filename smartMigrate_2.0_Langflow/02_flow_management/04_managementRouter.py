@@ -145,6 +145,7 @@ class NewType04ManagementRouter(Component):
                             "original_user_request": payload.get("user_request") or "",
                             "is_follow_up": bool(payload.get("is_follow_up", False)),
                             "confirmation": payload.get("confirmation") or "NOT_REQUIRED",
+                            "target_filter": payload.get("target_filter") or {},
                             "clarification_required": bool(payload.get("clarification_required", False)),
                         },
                         ensure_ascii=False,

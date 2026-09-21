@@ -107,6 +107,8 @@ RAG Guide는 `NEXT_MIG_RAG_INFO`에 저장된다. 추가, 수정, 비활성화�
 | 비활성화 | `RAG_ID` | 없음 | `RAG_ID={RAG_ID} RAG Guide 비활성화해줘.` | 물리 삭제 대신 `USE_YN='N'`으로 변경한다. |
 | VectorDB 동기화 | 없음 | 없음 | `RAG Guide, Correct SQL, AS-IS SQL을 VectorDB에 동기화해줘.` | Oracle 원천 snapshot을 기준으로 `SM_RAG_RULES`, Correct SQL collection, `SM_ASIS_SQL`을 갱신한다. |
 
+Correct SQL을 저장하면 Agent는 저장한 row의 AS-IS SQL과 유사한 `FAIL-*` SQL Conversion 후보를 보여주고, “방금 등록한 Correct SQL을 이 후보들의 참고 SQL로 지정할까요?”라고 확인한다. 사용자가 확인하기 전에는 어떤 `REF_SEQ`도 변경하지 않는다. 확인하면 선택된 후보들의 `REF_SEQ`에 저장 Correct SQL의 `SQL_SEQ`를 기록한다.
+
 ### RAG Guide 입력 규칙
 
 | 규칙 | 설명 |

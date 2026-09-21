@@ -39,7 +39,7 @@ class NewType04RagCommandTool(Component):
             display_name="Command JSON",
             required=False,
             tool_mode=True,
-            info='Examples: {"action":"query","category":"SQL_CONVERSION","limit":10}, {"action":"query_correct_sql","sql_seq":42}',
+            info='Examples: {"action":"query","category":"SQL_CONVERSION","limit":10}, {"action":"query_correct_sql","sql_seq":42}, {"action":"search_similar_asis_sql","sql_seq":42,"status_filter":"FAIL_ONLY"}',
         ),
         DataInput(name="payload_json", display_name="Payload JSON", required=False),
         StrInput(name="db_host", display_name="DB Host", required=True),
@@ -343,6 +343,33 @@ class NewType04RagCommandTool(Component):
             value = str(command.get(field) or "").strip()
             if value:
                 return value, field, None, str(command.get("target_table") or "").strip()
+        sql_seq = command.get("sql_seq")
+        if sql_seq not in (None, ""):
+            try:
+                sql_seq = int(sql_seq)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("sql_seq must be an integer") from exc
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                SELECT SQL_ID, SPACE_NM, EDIT_FR_SQL, FR_SQL, TARGET_TABLE
+                  FROM {self._qualify('NEXT_SQL_INFO')}
+                 WHERE SQL_SEQ = :sql_seq
+                """,
+                {"sql_seq": sql_seq},
+            )
+            row = cur.fetchone()
+            if not row:
+                raise ValueError(f"NEXT_SQL_INFO row not found: SQL_SEQ={sql_seq}")
+            sql_text = self._json_value(row[2]) or self._json_value(row[3]) or ""
+            if not str(sql_text).strip():
+                raise ValueError("The selected NEXT_SQL_INFO row has neither EDIT_FR_SQL nor FR_SQL")
+            return (
+                str(sql_text).strip(),
+                "sql_seq",
+                self._identity_key(row[0], row[1]),
+                str(self._json_value(row[4]) or "").strip(),
+            )
         sql_id = str(command.get("sql_id") or "").strip()
         space_nm = str(command.get("space_nm") or "").strip()
         if not sql_id or not space_nm:
@@ -417,6 +444,7 @@ class NewType04RagCommandTool(Component):
             if not sql_id or not space_nm:
                 continue
             result.append({
+                "sql_seq": entity.get("sql_seq"),
                 "sql_id": sql_id,
                 "space_nm": space_nm,
                 "tag_kind": str(entity.get("tag_kind") or "").strip(),
