@@ -221,7 +221,7 @@ SELECT COUNT(*)
 
 ## 5.10 AS-IS SQL 유사도 검색과 안전 재시도
 
-`SM_ASIS_SQL`은 관리용 검색 인덱스이며 실행용 Correct SQL 힌트 컬렉션이 아니다. Oracle `NEXT_SQL_INFO`의 `FR_SQL`, `EDIT_FR_SQL`을 대상으로 하고 `EDIT_FR_SQL`이 있으면 이를 우선 임베딩한다. 저장 metadata는 `SQL_ID`, `SPACE_NM`, `TAG_KIND`, `TARGET_TABLE`, `FR_SQL`, `EDIT_FR_SQL`로 제한한다.
+`SM_ASIS_SQL`은 관리용 검색 인덱스이며 실행용 Correct SQL 힌트 컬렉션이 아니다. Oracle `NEXT_SQL_INFO`의 `FR_SQL`, `EDIT_FR_SQL`을 대상으로 하고 `EDIT_FR_SQL`이 있으면 이를 우선 임베딩한다. 저장 metadata는 `SQL_SEQ`, `SQL_ID`, `SPACE_NM`, `TAG_KIND`, `TARGET_TABLE`, `FR_SQL`, `EDIT_FR_SQL`이다.
 
 ```mermaid
 flowchart LR

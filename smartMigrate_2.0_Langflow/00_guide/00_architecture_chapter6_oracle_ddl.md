@@ -318,12 +318,12 @@ Milvus는 Oracle 원천 데이터를 검색용으로 복제한 벡터 저장소�
 | 컬렉션 | Oracle 원천 | 전용 metadata | 사용처 |
 |---|---|---|---|
 | `SM_RAG_RULES` | `NEXT_MIG_RAG_INFO` | `rag_id`, `category`, `rule_type`, `use_yn`, `source_tables`, `guidance_text`, `source_sql`, `target_sql` | 12C Conversion, 15C Tuning RAG 검색 |
-| `SM_CORRECT_SQL_CONVERSION` | `save_correct_sql`로 저장되어 `USER_EDITED='Y'`인 SQL row | `sql_seq`, `space_nm`, `sql_id`, `status_conversion`, `user_edited`, `tag_kind`, `target_table`, `source_sql`, `to_sql`, `bind_sql`, `test_sql` | 12C correct SQL hint 및 REF_SEQ 지정 대상 |
+| `SM_CORRECT_SQL_CONVERSION` | `save_correct_sql`로 저장되고 `USER_EDITED='Y'`, Conversion PASS, Tuning PASS를 모두 만족한 SQL row | `sql_seq`, `space_nm`, `sql_id`, `status_conversion`, `user_edited`, `tag_kind`, `target_table`, `source_sql`, `to_sql`, `bind_sql`, `test_sql` | 12C correct SQL hint 및 REF_SEQ 지정 대상 |
 | `SM_CORRECT_SQL_MIGRATION` | `NEXT_MIG_INFO`의 user-edited/PASS migration row | `map_id`, `fr_table`, `to_table`, `condition`, `mig_sql`, `verify_sql`, `user_edited`, `status` | 10C migration SQL hint |
 | `SM_ASIS_SQL` | `NEXT_SQL_INFO`의 `EDIT_FR_SQL` 또는 `FR_SQL` | `sql_seq`, `space_nm`, `sql_id`, `tag_kind`, `target_table`, `fr_sql`, `edit_fr_sql` | 04 유사 AS-IS SQL 검색 및 12C Correct SQL hint 검색의 query vector 재사용 |
 
 `SM_ASIS_SQL`에는 실행 status와 TO-BE 결과 SQL을 저장하지 않는다. 검색 결과의 재실행 가능 여부와 최신 status는 항상 Oracle `NEXT_SQL_INFO`를 다시 조회해 판단한다.
 
-`SM_CORRECT_SQL_CONVERSION` 기존 컬렉션에는 최초 VectorDB sync 때 nullable `sql_seq`(INT64) 필드를 추가하고, 활성 Correct SQL 문서를 upsert하여 값을 채운다. 이 스키마 확장은 Milvus/pymilvus 2.6 이상이 필요하다.
+`SM_CORRECT_SQL_CONVERSION`과 `SM_ASIS_SQL`은 최초 생성 시부터 `sql_seq`(INT64) 필드를 포함해야 한다. 기존 컬렉션의 schema를 VectorDB sync가 자동 변경하지 않으므로, 구형 컬렉션은 운영자가 `sql_seq` 필드를 포함한 schema로 사전 마이그레이션해야 한다.
 
 `04_ragCommandTool`과 12C는 `SPACE_NM + SQL_ID`로 요청된 SQL만 `SM_ASIS_SQL.dense_vector`를 query vector로 재사용한다. 저장된 `EDIT_FR_SQL`/`FR_SQL`이 현재 source SQL과 정확히 같을 때만 사용하며, 직접 입력 SQL·동기화 누락·원문 불일치 시에는 embedding API로 새 벡터를 생성한다.

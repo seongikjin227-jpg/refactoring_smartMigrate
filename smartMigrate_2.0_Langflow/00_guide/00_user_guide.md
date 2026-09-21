@@ -11,7 +11,7 @@
 | 수정 | 실패 job 상태 초기화, priority 변경, 담당자 보정 SQL 저장, `USER_EDITED` 변경, DB Migration `USE_YN` 변경 | `MAP_ID` 또는 `SQL_ID` + `SPACE_NM` | 상태값, retry count, priority, `USER_EDITED`, `USE_YN` 또는 SQL CLOB를 DB에 반영한다. |
 | RAG Guide 관리 | Conversion/Tuning 가이드 조회, 추가, 수정, 비활성화 | `NEXT_MIG_RAG_INFO`, `RAG_ID` | RAG rule 원천 테이블을 관리한다. 신규/수정분은 VectorDB 동기화 후 검색에 반영된다. |
 | AS-IS SQL 유사도 검색 | 유사한 원본 SQL 및 재시도 후보 조회 | SQL 본문 또는 `SQL_ID` + `SPACE_NM` | AS-IS SQL 벡터 검색 뒤 Oracle 최신 상태를 기준으로 후보를 반환한다. |
-| VectorDB 관리 | RAG Guide, Correct SQL, AS-IS SQL 동기화 | Oracle 원천 테이블, Milvus collection | Oracle snapshot 기준으로 Milvus 검색 인덱스를 갱신한다. |
+| VectorDB 관리 | RAG Guide, Correct SQL, AS-IS SQL 동기화 | Oracle 원천 테이블, Milvus collection | 조건을 만족하는 원천 row를 Milvus에 upsert한다. 기존 문서는 자동 삭제·비활성화하지 않는다. |
 
 ## 1.2 조회 및 분석 요청
 
@@ -22,7 +22,7 @@
 | DB Migration 상태 조회 | `MAP_ID` | 조회할 SQL 컬럼, 로그 범위 | `MAP_ID={MAP_ID} 상태와 최근 로그 보여줘.` | `NEXT_MIG_INFO` 기준 상태, 대상 테이블, 최근 로그를 조회한다. |
 | DB Migration SQL 원문 조회 | `MAP_ID`, SQL 컬럼명 | 없음 | `MAP_ID={MAP_ID}의 MIG_SQL과 VERIFY_SQL 원문 보여줘.` | `MIG_SQL`, `VERIFY_SQL` 등 요청한 CLOB 원문을 반환한다. |
 | SQL job 상태 조회 | `SQL_ID`, `SPACE_NM` | 도메인 | `SQL_ID={SQL_ID}, SPACE_NM={SPACE_NM} 상태 알려줘.` | `NEXT_SQL_INFO` 기준 Conversion/Tuning/Formatting 상태와 로그를 조회한다. |
-| SQL job SQL 원문 조회 | `SQL_ID`, `SPACE_NM`, SQL 컬럼명 | 없음 | `SQL_ID={SQL_ID}, SPACE_NM={SPACE_NM}의 TO_SQL, BIND_SQL, TEST_SQL 보여줘.` | 요청한 SQL 컬럼의 CLOB 원문을 반환한다. |
+| SQL job SQL 원문 조회 | `SQL_SEQ` 또는 `SQL_ID`, `SPACE_NM`, SQL 컬럼명 | 없음 | `SQL_SEQ=42의 TO_SQL, BIND_SQL, TEST_SQL 보여줘.` | 요청한 SQL 컬럼의 CLOB 원문을 반환한다. |
 | 실패 원인 분석 | 없음 | 도메인, `MAP_ID`, `SQL_ID`, `SPACE_NM`, 건수 | `최근 SQL Conversion 실패 10건 원인 요약해줘.` | 상태, 로그, 저장 SQL을 근거로 실패 원인과 확인 포인트를 요약한다. |
 | AS-IS SQL 유사도 검색 | SQL 본문 또는 `SQL_ID`, `SPACE_NM` | 상태 필터, Conversion/Tuning 범위, 건수 | `SQL_ID=S001, SPACE_NM=PAYMENT와 비슷한 AS-IS SQL을 가진 실패 SQL ID를 찾아줘.` | `EDIT_FR_SQL` 우선, 없으면 `FR_SQL`을 임베딩해 유사 SQL 목록을 찾고 Oracle 최신 상태로 필터링한다. 검색만으로 상태는 변경하지 않는다. |
 | RAG Guide 조회 | 없음 | `CATEGORY`, `RULE_TYPE`, 검색어, 사용 여부, 조회 건수, 원문 포함 여부 | `SQL Conversion RAG Guide 중 CUSTOMER가 포함된 항목 20건 조회해줘.` | 조건에 맞는 `NEXT_MIG_RAG_INFO` row를 조회한다. 검색어는 `SOURCE_TABLES`, `GUIDANCE_TEXT`, `SOURCE_SQL`, `TARGET_SQL`에서 찾는다. |

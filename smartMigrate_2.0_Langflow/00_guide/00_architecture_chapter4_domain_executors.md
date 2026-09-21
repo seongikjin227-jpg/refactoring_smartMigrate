@@ -315,7 +315,7 @@ SQL Formatting은 `STATUS_CONVERSION`, `STATUS_TUNING`을 변경하지 않는다
 | 도메인 | `MIG_KIND` | `MAP_ID` 저장 방식 | `GENERATE_SQL` |
 |---|---|---|---|
 | DB Migration | `DB_MIGRATION` | 실제 `MAP_ID` | prompt, MIG_SQL, VERIFY_SQL, 실패 SQL |
-| SQL Conversion | `SQL_CONVERSION` | `sql_id / space_nm` | `TO_SQL`, `BIND_SQL`, `TEST_SQL`, prompt |
+| SQL Conversion | `SQL_CONVERSION` | `sql_seq` 또는 `sql_id / space_nm` | `TO_SQL`, `BIND_SQL`, `TEST_SQL`, prompt |
 | SQL Tuning | `SQL_TUNING` | `sql_id / space_nm` | `TUNED_TO_SQL`, tuned test SQL, prompt |
 | SQL Formatting | `SQL_FORMATTING` | `sql_id / space_nm` 또는 formatting item key | formatted SQL/prompt |
 

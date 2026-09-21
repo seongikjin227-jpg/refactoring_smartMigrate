@@ -119,11 +119,27 @@ class NewType04SaveVectorDB(Component):
         self._require_embed_config(embed_config)
         rows = self._load_correct_sql_rows(db_config)
         active_rows = [row for row in rows if row.get("is_active")]
-        if not active_rows:
-            raise ValueError("No user-entered Correct SQL is available to sync")
-        vector_dim = self._detect_vector_dim(active_rows, embed_config)
-        client = self._milvus_client(milvus_config)
         collection = milvus_config["correct_sql_conversion_collection"]
+        if not active_rows:
+            result = {
+                "upserted": 0,
+                "skipped": 0,
+                "failures": [],
+                "reason": "No Correct SQL meets USER_EDITED='Y', PASS conversion, and PASS tuning",
+            }
+            self.status = result
+            return {
+                "ok": True,
+                "component": "04_syncMilvusVectorDB",
+                "action": "sync_correct_sql",
+                "collection": collection,
+                "collection_created": False,
+                "correct_sql_conversion": result,
+                "elapsed_seconds": round(time.perf_counter() - started, 3),
+                "final": True,
+            }
+        client = self._milvus_client(milvus_config)
+        vector_dim = self._detect_vector_dim(active_rows, embed_config)
         created = self._ensure_collection(client, collection, vector_dim, "conversion")
         sync = self._sync_collection(client, collection, rows, embed_config)
         return {
@@ -196,7 +212,7 @@ class NewType04SaveVectorDB(Component):
             "embedding_model": embed_config["model"],
             "source_scope": {
                 RAG_TABLE: "all rows synced; USE_YN='Y' and SOURCE_SQL present become active",
-                SQL_TABLE: "Correct SQL uses explicitly user-entered USER_EDITED='Y' rows; AS-IS SQL indexes FR_SQL / EDIT_FR_SQL rows for similarity search",
+                SQL_TABLE: "Correct SQL requires USER_EDITED='Y', PASS conversion, and PASS tuning; AS-IS SQL indexes FR_SQL / EDIT_FR_SQL rows for similarity search",
             },
             "rag": rag_result,
             "correct_sql_conversion": conversion_result,
@@ -223,10 +239,10 @@ class NewType04SaveVectorDB(Component):
         asis_sql = result.get("asis_sql") or {}
         return (
             "Correct SQL 및 Conversion / Tuning Guide를 Milvus Vector DB에 동기화 완료했습니다.\n"
-            f"- RAG Guide: active={rag.get('active_count', 0)}, upserted={rag.get('upserted_count', 0)}, skipped={rag.get('skipped_count', 0)}, deactivated={rag.get('deactivated_count', 0)}\n"
-            f"- Correct SQL Conversion: active={conversion.get('active_count', 0)}, upserted={conversion.get('upserted_count', 0)}, skipped={conversion.get('skipped_count', 0)}, deactivated={conversion.get('deactivated_count', 0)}\n"
-            f"- Correct SQL Migration: active={migration.get('active_count', 0)}, upserted={migration.get('upserted_count', 0)}, skipped={migration.get('skipped_count', 0)}, deactivated={migration.get('deactivated_count', 0)}\n"
-            f"- AS-IS SQL: active={asis_sql.get('active_count', 0)}, upserted={asis_sql.get('upserted_count', 0)}, skipped={asis_sql.get('skipped_count', 0)}, deactivated={asis_sql.get('deactivated_count', 0)}\n"
+            f"- RAG Guide: active={rag.get('active_count', 0)}, upserted={rag.get('upserted_count', 0)}, skipped={rag.get('skipped_count', 0)}\n"
+            f"- Correct SQL Conversion: active={conversion.get('active_count', 0)}, upserted={conversion.get('upserted_count', 0)}, skipped={conversion.get('skipped_count', 0)}\n"
+            f"- Correct SQL Migration: active={migration.get('active_count', 0)}, upserted={migration.get('upserted_count', 0)}, skipped={migration.get('skipped_count', 0)}\n"
+            f"- AS-IS SQL: active={asis_sql.get('active_count', 0)}, upserted={asis_sql.get('upserted_count', 0)}, skipped={asis_sql.get('skipped_count', 0)}\n"
             f"- Milvus DB: {result.get('milvus_db_name')}\n"
             f"- Embedding Model: {result.get('embedding_model')}\n"
             f"- Elapsed: {result.get('elapsed_seconds')}s"
@@ -260,8 +276,6 @@ class NewType04SaveVectorDB(Component):
         # Milvus 환경이 analyzer/functions를 허용하지 않으면 dense-only collection으로 생성한다.
         
         if client.has_collection(collection_name):
-            if schema_kind in {"conversion", "asis_sql"}:
-                self._ensure_sql_seq_field(client, collection_name)
             client.load_collection(collection_name=collection_name)
             return False
         try:
@@ -350,38 +364,6 @@ class NewType04SaveVectorDB(Component):
             index_params.add_index(field_name="sparse_vector", index_type="SPARSE_INVERTED_INDEX", metric_type="BM25", params={"inverted_index_algo": "DAAT_MAXSCORE", "bm25_k1": 1.2, "bm25_b": 0.75})
         client.create_collection(collection_name=collection_name, schema=schema, index_params=index_params, consistency_level="Bounded")
 
-    def _ensure_sql_seq_field(self, client: Any, collection_name: str) -> None:
-        """Add SQL_SEQ metadata to a pre-existing SQL collection.
-
-        Milvus requires fields added after collection creation to be nullable.
-        A subsequent normal sync upserts active documents with their SQL_SEQ.
-        """
-        description = client.describe_collection(collection_name=collection_name) or {}
-        fields = (
-            description.get("fields") or (description.get("schema") or {}).get("fields")
-            if isinstance(description, dict)
-            else getattr(description, "fields", [])
-        )
-        names = {
-            str((field.get("name") or field.get("field_name") or "") if isinstance(field, dict) else getattr(field, "name", ""))
-            for field in (fields or [])
-        }
-        if "sql_seq" in names:
-            return
-        from pymilvus import DataType
-
-        if not hasattr(client, "add_collection_field"):
-            raise RuntimeError(
-                "Milvus client does not support adding sql_seq to an existing collection. "
-                "Use Milvus/pymilvus 2.6 or later, then run VectorDB sync again."
-            )
-        client.add_collection_field(
-            collection_name=collection_name,
-            field_name="sql_seq",
-            data_type=DataType.INT64,
-            nullable=True,
-        )
-
     # Oracle snapshot과 Milvus 문서를 비교해 변경분 upsert와 stale 비활성화를 수행한다.
     def _sync_collection(self, client: Any, collection_name: str, rows: list[dict[str, Any]], embed_config: dict[str, Any]) -> dict[str, Any]:
         # ---------------------------------------------------------------------
@@ -416,13 +398,11 @@ class NewType04SaveVectorDB(Component):
             except Exception as exc:
                 failures.append({"doc_ids": [row["doc_id"] for row in batch], "error": str(exc)})
 
-        deactivated = self._deactivate_missing_docs(client, collection_name, existing, active_doc_ids)
         return {
             "loaded_count": len(rows),
             "active_count": len(active_doc_ids),
             "upserted_count": upserted,
             "skipped_count": max(skipped, 0),
-            "deactivated_count": deactivated,
             "failed_batch_count": len(failures),
             "failures": failures[:10],
         }
@@ -441,25 +421,6 @@ class NewType04SaveVectorDB(Component):
             if row.get("is_active"):
                 result[str(row.get("doc_id"))] = str(row.get("content_hash") or "")
         return result
-
-    # Oracle snapshot에서 사라진 문서를 Milvus에서 물리 삭제하지 않고 inactive로 바꾼다.
-    def _deactivate_missing_docs(self, client: Any, collection_name: str, existing: dict[str, str], active_doc_ids: set[str]) -> int:
-        # stale 문서는 Milvus에는 active로 남아 있지만 최신 Oracle snapshot에서는 active가 아닌 문서다.
-        # 보통 USE_YN, status, active 조건이 바뀐 경우다.
-        
-        stale_doc_ids = sorted(set(existing) - active_doc_ids)
-        if not stale_doc_ids:
-            return 0
-        count = 0
-        for batch in self._chunks([{"doc_id": item} for item in stale_doc_ids], 256):
-            entities = [{"doc_id": item["doc_id"], "is_active": False} for item in batch]
-            try:
-                client.upsert(collection_name=collection_name, data=entities, partial_update=True)
-            except Exception:
-                quoted = ", ".join(json.dumps(item["doc_id"]) for item in batch)
-                client.delete(collection_name=collection_name, filter=f"doc_id in [{quoted}]")
-            count += len(batch)
-        return count
 
     # 첫 active 문서 embedding으로 Milvus FLOAT_VECTOR dimension을 결정한다.
     def _detect_vector_dim(self, rows: list[dict[str, Any]], embed_config: dict[str, Any]) -> int:
@@ -559,6 +520,7 @@ class NewType04SaveVectorDB(Component):
                    FR_SQL,
                    EDIT_FR_SQL,
                    STATUS_CONVERSION,
+                   STATUS_TUNING,
                    USER_EDITED,
                    TAG_KIND,
                    TARGET_TABLE,
@@ -582,15 +544,21 @@ class NewType04SaveVectorDB(Component):
                 fr_sql = self._lob_to_str(row[3]).strip()
                 edit_fr_sql = self._lob_to_str(row[4]).strip()
                 source_sql = edit_fr_sql or fr_sql
-                to_sql = self._lob_to_str(row[9]).strip()
-                bind_sql = self._lob_to_str(row[10]).strip()
-                test_sql = self._lob_to_str(row[11]).strip()
+                to_sql = self._lob_to_str(row[10]).strip()
+                bind_sql = self._lob_to_str(row[11]).strip()
+                test_sql = self._lob_to_str(row[12]).strip()
                 status = self._lob_to_str(row[5]).strip().upper()
-                user_edited = self._lob_to_str(row[6]).strip().upper()
+                status_tuning = self._lob_to_str(row[6]).strip().upper()
+                user_edited = self._lob_to_str(row[7]).strip().upper()
                 # 사람이 보정했고 성공한 conversion row만 correct SQL 힌트로 사용한다.
                 # 실패 row나 손대지 않은 row는 모델에 나쁜 예시를 주지 않도록 제외한다.
                 
-                is_active = bool(source_sql) and user_edited == "Y" and bool(to_sql or bind_sql or test_sql)
+                is_active = (
+                    bool(source_sql)
+                    and user_edited == "Y"
+                    and status in {"PASS", "PASS-CONVERSION"}
+                    and status_tuning in {"PASS", "PASS-TUNING"}
+                )
                 if not space_nm or not sql_id or sql_seq is None:
                     continue
                 doc_key = f"{space_nm}:{sql_id}"
@@ -602,8 +570,8 @@ class NewType04SaveVectorDB(Component):
                         sql_seq=sql_seq,
                         status_conversion=status,
                         user_edited=user_edited,
-                        tag_kind=self._lob_to_str(row[7]),
-                        target_table=self._lob_to_str(row[8]),
+                        tag_kind=self._lob_to_str(row[8]),
+                        target_table=self._lob_to_str(row[9]),
                         source_sql=source_sql,
                         to_sql=to_sql,
                         bind_sql=bind_sql,
@@ -611,7 +579,7 @@ class NewType04SaveVectorDB(Component):
                         # correct SQL 힌트 검색용 dense_vector는 EDIT_FR_SQL을 우선 사용하고, 없으면 FR_SQL을 사용한다.
                         content=self._sql_content(source_sql),
                         is_active=is_active,
-                        updated_at=self._lob_to_str(row[12]),
+                        updated_at=self._lob_to_str(row[13]),
                     )
                 )
             return rows

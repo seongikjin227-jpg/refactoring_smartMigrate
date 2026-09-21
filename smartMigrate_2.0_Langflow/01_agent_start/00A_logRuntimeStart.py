@@ -89,10 +89,6 @@ class SmartMigrateDBHandler(logging.Handler):
 
             # 일부 이전 컴포넌트는 message와 retry_count 위치가 서로 다른 payload를 남겼다.
             # 기존 로그 호출을 깨지 않도록 int 여부를 기준으로 legacy payload도 받아준다.
-            if len(event) > 7 and not self._is_int_like(event[6]) and self._is_int_like(event[7]):
-                message = event[6]
-                retry_count = event[7]
-                generate_sql = event[8] if len(event) > 8 else None
             return {
                 "map_id": event[0] if len(event) > 0 else 0,
                 "mig_kind": event[1] if len(event) > 1 else "WORKFLOW",
@@ -169,13 +165,6 @@ class SmartMigrateDBHandler(logging.Handler):
         return f"{schema}.{object_name}"
 
     # 상태나 값이 특정 조건에 해당하는지 boolean으로 판단한다.
-    def _is_int_like(self, value: Any) -> bool:
-        try:
-            int(value)
-            return True
-        except Exception:
-            return False
-
     # 문자/숫자/NULL 값을 정수로 변환하고 실패하면 안전한 기본값을 반환한다.
     def _to_int(self, value: Any, default: int = 0) -> int:
         try:

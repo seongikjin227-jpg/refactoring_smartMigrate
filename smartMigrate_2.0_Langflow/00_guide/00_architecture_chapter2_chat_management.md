@@ -235,7 +235,7 @@ RAG 가이드 테이블 자체를 조회/추가/수정/비활성화하려는 요
 | 모든 Tuning에 필수 적용할 가이드는 `SQL_TUNING + GENERAL`로 입력한다. | `GENERAL` 튜닝 가이드는 특정 SQL 예시 검색 결과와 무관하게 공통 규칙으로 로드된다. |
 | `SQL_TUNING` 추가는 `GUIDANCE_TEXT`가 필수다. | 튜닝은 SQL 예시만으로 적용 의도가 모호하므로 규칙 의도와 적용 기준을 함께 남긴다. |
 | `SQL_CONVERSION + SEARCH`는 `GUIDANCE_TEXT`를 비워 둔다. | 변환 예시는 테이블 범위와 SQL 예시를 중심으로 검색하고, 설명 텍스트는 별도 가이드로 다룬다. |
-| 추가/수정/비활성화 후에는 `04_saveVectorDB.py`를 실행한다. | Milvus RAG 검색 인덱스에 DB 변경분을 반영해야 한다. |
+| RAG Guide의 추가/수정/비활성화 후 필요할 때 `04_saveVectorDB.py`의 `sync_all`을 호출한다. | RAG Guide 동기화는 자동 실행하지 않는다. |
 
 조회에서 `limit`는 최대 몇 건을 가져올지 정하는 값이다. 예를 들어 "user_info 테이블과 관련된 SQL Conversion RAG 조회해줘"라고 요청하면 `category=SQL_CONVERSION`, `keyword=user_info`로 조회하고, `SOURCE_TABLES`, `GUIDANCE_TEXT`, `SOURCE_SQL`, `TARGET_SQL` 중 `user_info`가 포함된 row를 반환한다.
 
@@ -248,9 +248,9 @@ VectorDB 동기화는 별도 `VECTOR_DB_SYNC` route가 아니다. `04_saveVector
 | "VectorDB 업로드해줘" | `MANAGEMENT_AGENT` | Sync Tool `{"action":"sync_all"}` |
 | "방금 저장한 Correct SQL을 반영해줘" | `MANAGEMENT_AGENT` | Sync Tool `{"action":"sync_correct_sql"}` |
 
-현재 04_saveVectorDB는 특정 `RAG_ID`만 부분 업로드하지 않고 Oracle 원천 테이블 snapshot 기준으로 전체 동기화한다. 변경되지 않은 row는 `content_hash`로 건너뛰고, Oracle 기준 active가 아닌 문서는 Milvus에서 inactive 처리한다.
+현재 `04_saveVectorDB.py`는 특정 `RAG_ID`만 부분 업로드하지 않는다. `sync_all`은 Oracle 원천 테이블을 읽어 변경된 활성 row만 `content_hash` 기준으로 upsert하고, 기존 Milvus 문서를 자동 비활성화하거나 삭제하지 않는다. `sync_correct_sql`은 Correct SQL Conversion 컬렉션만 같은 방식으로 동기화한다.
 
-Correct SQL 저장 흐름에서는 `04_saveVectorDB`의 `Tool Result`를 Management Agent의 Tool로 연결한다. Agent는 먼저 Update Command Tool의 `save_correct_sql`로 `TO_SQL`/`BIND_SQL`/`TEST_SQL`과 `USER_EDITED='Y'`를 저장하고, 성공한 경우에만 이 Tool에 `{"action":"sync_correct_sql"}`을 호출한다. 상태 재시도·상태 초기화·priority 변경은 VectorDB 동기화를 호출하지 않는다. Update Tool에서 파일 경로로 `04_saveVectorDB.py`를 import해서는 안 된다.
+Correct SQL 저장 흐름에서는 `04_saveVectorDB`의 `Tool Result`를 Management Agent의 Tool로 연결한다. Agent는 먼저 Update Command Tool의 `save_correct_sql`로 Correct SQL과 `USER_EDITED='Y'`를 저장하고, 성공한 경우에만 이 Tool에 `{"action":"sync_correct_sql"}`을 호출한다. `USER_EDITED='Y'`, Conversion PASS, Tuning PASS를 모두 만족하는 row만 upsert한다. 상태 재시도·상태 초기화·priority 변경은 VectorDB 동기화를 호출하지 않는다. 기존 Milvus 문서를 자동 비활성화하거나 삭제하지 않으며, Update Tool에서 파일 경로로 `04_saveVectorDB.py`를 import해서는 안 된다.
 
 캔버스에서는 Management Router의 `Vector DB Sync` 출력 및 `04_saveVectorDB`로 향하던 직접 선을 제거한다. `04_saveVectorDB`의 `Tool Result`만 Management Agent의 Tool 입력에 연결한다.
 

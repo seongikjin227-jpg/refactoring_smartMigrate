@@ -206,12 +206,12 @@ map_id, mig_kind, log_type, log_level, step_name, status, retry_count, generate_
 | `NEXT_MIG_INFO` | DB Migration 대상 row, MIG SQL, VERIFY SQL, migration status |
 | `NEXT_SQL_INFO` | SQL Conversion/Tuning/Formatting 대상 row와 생성 SQL/status |
 | `NEXT_MIG_INFO_DTL` | migration column mapping detail |
-| `NEXT_MIG_RAG_INFO` | RAG guide와 correct SQL 원천 데이터 |
+| `NEXT_MIG_RAG_INFO` | Conversion/Tuning RAG Guide 원천 데이터. Correct SQL 원천이 아니다. |
 | Milvus `SM_RAG_RULES` | SQL Conversion/Tuning RAG 검색 |
 | Milvus `SM_CORRECT_SQL_CONVERSION` | 보정된 SQL Conversion 예시 검색 |
 | Milvus `SM_CORRECT_SQL_MIGRATION` | 보정된 Migration SQL 예시 검색 |
 
-`02_flow_management/04_saveVectorDB.py`는 Oracle의 RAG/Correct SQL 원천 데이터를 읽어 Milvus collection에 동기화하는 관리 컴포넌트입니다. 런타임 C 컴포넌트들은 Oracle 전체 row를 매번 임베딩하지 않고, 이미 동기화된 Milvus collection을 검색해 prompt hint로 사용합니다.
+`02_flow_management/04_saveVectorDB.py`는 Oracle의 RAG Guide(`NEXT_MIG_RAG_INFO`), Correct SQL(`NEXT_SQL_INFO`/`NEXT_MIG_INFO`), AS-IS SQL 원천을 읽어 Milvus collection에 동기화하는 관리 Tool입니다. Correct SQL Conversion은 `USER_EDITED='Y'`, Conversion PASS, Tuning PASS를 모두 만족하는 row만 upsert합니다. 동기화는 기존 Milvus 문서를 자동 비활성화·삭제하거나 collection schema를 자동 변경하지 않습니다.
 
 ## 최소 검증
 
