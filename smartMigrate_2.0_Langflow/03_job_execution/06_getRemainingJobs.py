@@ -52,6 +52,7 @@ class NewType06GetRemainingJobs(Component):
 
                 # 자연어 target 추출은 01 LLM이 담당한다. 여기의 regex 추출은 예전 payload 호환용이다.
                 targets = self._extract_targets(payload)
+                self._validate_sql_target_identity(targets)
                 with self._connect() as conn:
                     counts = self._load_counts(conn)
                     requested_jobs = self._empty_requested_jobs()
@@ -169,7 +170,7 @@ class NewType06GetRemainingJobs(Component):
             sql_conversion_jobs = self._query_jobs(
                 cur,
                 f"""
-                SELECT TO_CHAR(SPACE_NM) AS SPACE_NM, TO_CHAR(SQL_ID) AS SQL_ID, PRIORITY
+                SELECT SQL_SEQ, TO_CHAR(SQL_ID) AS SQL_ID, TO_CHAR(SPACE_NM) AS SPACE_NM, PRIORITY
                   FROM {sql_table}
                  WHERE ({sql_where})
                    AND STATUS_CONVERSION IS NULL
@@ -177,12 +178,12 @@ class NewType06GetRemainingJobs(Component):
                 """,
                 sql_params,
                 "SQL_CONVERSION",
-                ["space_nm", "sql_id", "priority"],
+                ["sql_seq", "sql_id", "space_nm", "priority"],
             )
             sql_tuning_jobs = self._query_jobs(
                 cur,
                 f"""
-                SELECT TO_CHAR(SPACE_NM) AS SPACE_NM, TO_CHAR(SQL_ID) AS SQL_ID, PRIORITY
+                SELECT SQL_SEQ, TO_CHAR(SQL_ID) AS SQL_ID, TO_CHAR(SPACE_NM) AS SPACE_NM, PRIORITY
                   FROM {sql_table}
                  WHERE ({sql_where})
                    AND UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')
@@ -191,12 +192,12 @@ class NewType06GetRemainingJobs(Component):
                 """,
                 sql_params,
                 "SQL_TUNING",
-                ["space_nm", "sql_id", "priority"],
+                ["sql_seq", "sql_id", "space_nm", "priority"],
             )
             sql_formatting_jobs = self._query_jobs(
                 cur,
                 f"""
-                SELECT TO_CHAR(SPACE_NM) AS SPACE_NM, TO_CHAR(SQL_ID) AS SQL_ID, PRIORITY
+                SELECT SQL_SEQ, TO_CHAR(SQL_ID) AS SQL_ID, TO_CHAR(SPACE_NM) AS SPACE_NM, PRIORITY
                   FROM {sql_table}
                  WHERE ({sql_where})
                    AND UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING')
@@ -205,7 +206,7 @@ class NewType06GetRemainingJobs(Component):
                 """,
                 sql_params,
                 "SQL_FORMATTING",
-                ["space_nm", "sql_id", "priority"],
+                ["sql_seq", "sql_id", "space_nm", "priority"],
             )
 
         all_jobs = [*migration_jobs, *sql_conversion_jobs, *sql_tuning_jobs, *sql_formatting_jobs]
@@ -322,6 +323,14 @@ class NewType06GetRemainingJobs(Component):
     # 사용자가 MAP_ID 또는 SPACE_NM/SQL_ID 같은 특정 작업을 지정했는지 확인한다.
     def _has_exact_target(self, targets: dict[str, list[Any]]) -> bool:
         return bool(targets.get("map_ids") or targets.get("sql_seqs") or targets.get("sql_ids") or targets.get("space_nms"))
+
+    def _validate_sql_target_identity(self, targets: dict[str, list[Any]]) -> None:
+        if targets.get("sql_seqs"):
+            return
+        has_sql_id = bool(targets.get("sql_ids"))
+        has_space_nm = bool(targets.get("space_nms"))
+        if has_sql_id != has_space_nm:
+            raise ValueError("SQL target requires sql_seq or both sql_id and space_nm")
 
     # SPACE_NM/SQL_ID target 조건을 SQL WHERE 절과 bind 값으로 변환한다.
     def _sql_target_where(self, targets: dict[str, list[Any]]) -> tuple[str, list[Any]]:

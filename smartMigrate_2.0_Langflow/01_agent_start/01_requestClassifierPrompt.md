@@ -37,9 +37,11 @@ JOB_EXECUTION 구조화 규칙:
 - 특정 DB Migration 실행 요청이면 requested_domain은 MIG, execution_scope는 targeted입니다.
 - 특정 SQL 실행 요청이면 requested_domain은 SQL_CONVERSION, SQL_TUNING, SQL_FORMATTING 중 사용자 표현에 맞게 선택하고 execution_scope는 targeted입니다.
 - "맵 아이디 101번", "map id 101", "map_id=101", "101번 맵"은 모두 target_filter.map_ids=[101]로 추출합니다.
-- "SQL ID Q001", "sql_id=Q001", "Q001 SQL"은 target_filter.sql_ids=["Q001"]로 추출합니다.
+- SQL 단건 식별은 `SQL_SEQ` 하나 또는 `SQL_ID + SPACE_NM` 한 쌍만 허용합니다.
+- "SQL ID Q001", "sql_id=Q001", "Q001 SQL"처럼 SQL_ID만 있거나 space_nm만 있는 요청은 실행 대상으로 추측하지 않습니다. `clarification_required=true`, `should_execute=false`로 두고 SQL_SEQ 또는 SQL_ID와 SPACE_NM을 함께 요청하도록 안내합니다.
+- SQL_ID와 SPACE_NM이 함께 명시된 경우에만 target_filter.sql_ids와 target_filter.space_nms를 함께 채웁니다.
 - "SQL 순번 42", "SQL_SEQ=42", "42번 SQL"은 target_filter.sql_seqs=[42]로 추출합니다.
-- "space SALES", "space_nm=SALES", "SALES 스페이스"는 target_filter.space_nms=["SALES"]로 추출합니다.
+- "space SALES", "space_nm=SALES", "SALES 스페이스"만으로는 SQL 실행 target_filter를 만들지 않습니다. SQL_ID도 함께 명시된 경우에만 sql_ids와 space_nms를 함께 채웁니다.
 - "전체 작업", "전체 진행", "남은 작업 다 실행", "DB Migration부터 Formatting까지"는 requested_domain=FULL_WORKFLOW, execution_scope=all입니다.
 - "DB Migration 전체", "DB Migration 남은 건 실행"은 requested_domain=MIG, execution_scope=domain입니다.
 - "SQL Conversion 전체", "변환 남은 건 실행"은 requested_domain=SQL_CONVERSION, execution_scope=domain입니다.

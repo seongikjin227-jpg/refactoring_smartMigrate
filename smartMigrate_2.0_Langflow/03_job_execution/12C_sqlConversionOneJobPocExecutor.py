@@ -744,7 +744,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         # 종료 노드: 최종 NEXT_SQL_INFO 상태를 저장하고 Langflow 결과 payload를 만든다.
         def finalize_node(state: dict[str, Any]) -> dict[str, Any]:
             if state.get("status") == CONVERSION_PASS:
-                final_log = f"FINAL SUCCESS stage=SQL_CONVERSION status={CONVERSION_PASS} job={state['job'].get('space_nm')}.{state['job'].get('sql_id')} reason=TAG_KIND:{state['tag_kind'] or 'UNKNOWN'}"
+                final_log = f"FINAL SUCCESS stage=SQL_CONVERSION status={CONVERSION_PASS} SQL_SEQ={state['job'].get('sql_seq')} SQL_ID={state['job'].get('sql_id')} SPACE_NM={state['job'].get('space_nm')} reason=TAG_KIND:{state['tag_kind'] or 'UNKNOWN'}"
                 values = {"TO_SQL": state.get("to_sql"), "BIND_SQL": state.get("bind_sql"), "BIND_SET": state.get("bind_set"), "TEST_SQL": state.get("test_sql"), "STATUS_CONVERSION": CONVERSION_PASS, "LOG": final_log, "RETRY_COUNT": state["retry_count"]}
                 if state.get("tuned_fr_sql"):
                     values["TUNED_FR_SQL"] = state["tuned_fr_sql"]
@@ -1048,7 +1048,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             update_values.update(
                 {
                     "STATUS_CONVERSION": status,
-                    "LOG": f"FINAL FAILURE stage=SQL_CONVERSION status={status} error={message}",
+                    "LOG": f"FINAL FAILURE stage=SQL_CONVERSION status={status} SQL_SEQ={job.get('sql_seq')} SQL_ID={job.get('sql_id')} SPACE_NM={job.get('space_nm')} error={message}",
                     "RETRY_COUNT": self._configured_retry_limit() if retry_count_override is None else retry_count_override,
                 }
             )
@@ -1170,6 +1170,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "component": "12C_sqlConversionOneJobPocExecutor",
             "job_route": payload.get("job_route") or "SQL_CONVERSION",
             "job_type": "SQL",
+            "sql_seq": job.get("sql_seq") or payload.get("sql_seq"),
             "space_nm": job.get("space_nm") or payload.get("space_nm"),
             "sql_id": job.get("sql_id") or payload.get("sql_id"),
             "ok": ok,
@@ -1388,22 +1389,28 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             job,
             {
                 status_column: status,
-                "LOG": f"RUNNING stage=SQL_CONVERSION status={status} message={message}",
+                "LOG": f"RUNNING stage=SQL_CONVERSION status={status} SQL_SEQ={job.get('sql_seq')} SQL_ID={job.get('sql_id')} SPACE_NM={job.get('space_nm')} message={message}",
                 "RETRY_COUNT": retry_count,
             },
         )
 
     # SPACE_NM/SQL_ID 기반 UPDATE/SELECT where 절과 bind 값을 만든다.
     def _sql_key_where(self, job: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        sql_seq = job.get("sql_seq")
+        if sql_seq not in (None, ""):
+            try:
+                return "SQL_SEQ = :sql_seq", {"sql_seq": int(sql_seq)}
+            except (TypeError, ValueError) as exc:
+                raise ValueError("SQL job item sql_seq must be an integer") from exc
         space_nm = str(job.get("space_nm") or "").strip()
         sql_id = str(job.get("sql_id") or "").strip()
         if not space_nm or not sql_id:
-            raise ValueError("SQL job item requires space_nm+sql_id")
+            raise ValueError("SQL job item requires sql_seq or space_nm+sql_id")
         return "TO_CHAR(SPACE_NM) = :space_nm AND TO_CHAR(SQL_ID) = :sql_id", {"space_nm": space_nm, "sql_id": sql_id}
 
     # payload/job에 SQL row를 특정할 key가 있는지 확인한다.
     def _has_sql_key(self, job: dict[str, Any]) -> bool:
-        return bool(str(job.get("space_nm") or "").strip() and str(job.get("sql_id") or "").strip())
+        return bool(job.get("sql_seq") not in (None, "") or (str(job.get("space_nm") or "").strip() and str(job.get("sql_id") or "").strip()))
 
     # EDIT_FR_SQL을 먼저 사용하고 없으면 원본 FR_SQL을 사용한다.
     # EDIT_FR_SQL 우선, 없으면 FR_SQL 기준으로 변환 source SQL을 선택한다.

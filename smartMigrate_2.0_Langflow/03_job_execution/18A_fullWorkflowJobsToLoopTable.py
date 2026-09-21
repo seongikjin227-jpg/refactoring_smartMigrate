@@ -147,7 +147,10 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
                 if route == "MIG":
                     key = (str(job.get("map_id") or "").strip(),)
                 else:
-                    key = (str(job.get("sql_seq") or "").strip(),)
+                    sql_seq = str(job.get("sql_seq") or "").strip()
+                    space_nm = str(job.get("space_nm") or "").strip().upper()
+                    sql_id = str(job.get("sql_id") or "").strip().upper()
+                    key = ("SQL_SEQ", sql_seq) if sql_seq else (("SQL_KEY", space_nm, sql_id) if space_nm and sql_id else ())
                 # 빈 식별자는 _validate_job에서 오류를 내므로 여기서 억지로 합치지 않는다.
                 if not all(key):
                     unique.append(job)
@@ -185,37 +188,37 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
                 "SQL_CONVERSION": self._query_jobs(
                     cur,
                     f"""
-                    SELECT SQL_SEQ, PRIORITY
+                    SELECT SQL_SEQ, TO_CHAR(SQL_ID) AS SQL_ID, TO_CHAR(SPACE_NM) AS SPACE_NM, PRIORITY
                       FROM {sql_table}
                      WHERE STATUS_CONVERSION IS NULL
                      ORDER BY PRIORITY ASC NULLS LAST, UPD_TS ASC NULLS FIRST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                     """,
                     "SQL_CONVERSION",
-                    ["sql_seq", "priority"],
+                    ["sql_seq", "sql_id", "space_nm", "priority"],
                 ),
                 "SQL_TUNING": self._query_jobs(
                     cur,
                     f"""
-                    SELECT SQL_SEQ, PRIORITY
+                    SELECT SQL_SEQ, TO_CHAR(SQL_ID) AS SQL_ID, TO_CHAR(SPACE_NM) AS SPACE_NM, PRIORITY
                       FROM {sql_table}
                      WHERE UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')
                        AND STATUS_TUNING IS NULL
                      ORDER BY PRIORITY ASC NULLS LAST, UPD_TS ASC NULLS FIRST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                     """,
                     "SQL_TUNING",
-                    ["sql_seq", "priority"],
+                    ["sql_seq", "sql_id", "space_nm", "priority"],
                 ),
                 "SQL_FORMATTING": self._query_jobs(
                     cur,
                     f"""
-                    SELECT SQL_SEQ, PRIORITY
+                    SELECT SQL_SEQ, TO_CHAR(SQL_ID) AS SQL_ID, TO_CHAR(SPACE_NM) AS SPACE_NM, PRIORITY
                       FROM {sql_table}
                      WHERE UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING')
                        AND (FORMATTED_SQL IS NULL OR NVL(DBMS_LOB.GETLENGTH(FORMATTED_SQL), 0) = 0)
                      ORDER BY PRIORITY ASC NULLS LAST, UPD_TS ASC NULLS FIRST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                     """,
                     "SQL_FORMATTING",
-                    ["sql_seq", "priority"],
+                    ["sql_seq", "sql_id", "space_nm", "priority"],
                 ),
             }
 
@@ -236,9 +239,9 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
             if str(job.get("map_id") or "").strip():
                 return
             raise ValueError(f"18A MIG job row {index} requires map_id")
-        if str(job.get("sql_seq") or "").strip():
+        if str(job.get("sql_seq") or "").strip() or (str(job.get("space_nm") or "").strip() and str(job.get("sql_id") or "").strip()):
             return
-        raise ValueError(f"18A {route} job row {index} requires sql_seq")
+        raise ValueError(f"18A {route} job row {index} requires sql_seq or space_nm+sql_id")
 
     # PRIOR_MAP_ID 의존성을 반영해 migration job 실행 순서를 정렬한다.
     def _sort_migration_jobs(self, jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:

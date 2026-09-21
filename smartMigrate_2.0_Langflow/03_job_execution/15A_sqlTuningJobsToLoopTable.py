@@ -88,16 +88,19 @@ class NewType15ASqlTuningJobsToLoopTable(Component):
     # payload 목록에 같은 SQL job이 여러 번 들어와도 Tuning Loop에는 한 번만 넣는다.
     def _dedupe_jobs(self, jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         unique: list[dict[str, Any]] = []
-        seen: set[tuple[str, str]] = set()
+        seen: set[tuple[str, ...]] = set()
         for job in jobs:
-            key = (str(job.get("space_nm") or "").strip().upper(), str(job.get("sql_id") or "").strip().upper())
+            sql_seq = str(job.get("sql_seq") or "").strip()
+            space_nm = str(job.get("space_nm") or "").strip().upper()
+            sql_id = str(job.get("sql_id") or "").strip().upper()
+            key = ("SQL_SEQ", sql_seq) if sql_seq else (("SQL_KEY", space_nm, sql_id) if space_nm and sql_id else ())
             # 빈 식별자는 아래 validation에서 오류를 내므로 여기서 합치지 않는다.
             if not all(key):
                 unique.append(job)
                 continue
             if key in seen:
                 logging.getLogger("smartmigrate.workflow").warning(
-                    "Duplicate SQL Tuning job removed before loop execution: space_nm=%s sql_id=%s", *key
+                    "Duplicate SQL Tuning job removed before loop execution: key=%s", key
                 )
                 continue
             seen.add(key)
@@ -117,7 +120,7 @@ class NewType15ASqlTuningJobsToLoopTable(Component):
             cur = conn.cursor()
             cur.execute(
                 f"""
-                SELECT TO_CHAR(SPACE_NM) AS SPACE_NM, TO_CHAR(SQL_ID) AS SQL_ID, PRIORITY
+                SELECT SQL_SEQ, TO_CHAR(SQL_ID) AS SQL_ID, TO_CHAR(SPACE_NM) AS SPACE_NM, PRIORITY
                   FROM {table}
                  WHERE UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')
                    AND STATUS_TUNING IS NULL
@@ -128,18 +131,19 @@ class NewType15ASqlTuningJobsToLoopTable(Component):
                 {
                     "job_route": "SQL_TUNING",
                     "job_type": "SQL",
-                    "space_nm": self._json_value(row[0]),
+                    "sql_seq": self._json_value(row[0]),
                     "sql_id": self._json_value(row[1]),
-                    "priority": self._json_value(row[2]),
+                    "space_nm": self._json_value(row[2]),
+                    "priority": self._json_value(row[3]),
                 }
                 for row in cur.fetchall()
             ]
 
     # 입력 payload나 job item이 실행 가능한 구조인지 검증한다.
     def _validate_sql_key(self, job: dict[str, Any], index: int) -> None:
-        if str(job.get("space_nm") or "").strip() and str(job.get("sql_id") or "").strip():
+        if str(job.get("sql_seq") or "").strip() or (str(job.get("space_nm") or "").strip() and str(job.get("sql_id") or "").strip()):
             return
-        raise ValueError(f"15A SQL Tuning job row {index} requires space_nm+sql_id")
+        raise ValueError(f"15A SQL Tuning job row {index} requires sql_seq or space_nm+sql_id")
 
     # payload와 Langflow 입력에서 Oracle 접속 및 schema 설정을 모은다.
     def _db_config(self, payload: dict[str, Any]) -> dict[str, Any]:

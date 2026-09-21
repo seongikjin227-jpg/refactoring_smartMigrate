@@ -207,6 +207,7 @@ class NewType04CurrentProgress(Component):
         table = self._qualify("NEXT_SQL_INFO")
         select_sql = ", ".join(
             [
+                "TO_CHAR(SQL_SEQ) AS SQL_SEQ",
                 "TO_CHAR(SPACE_NM) AS SPACE_NM",
                 "TO_CHAR(SQL_ID) AS SQL_ID",
                 "TO_CHAR(PRIORITY) AS PRIORITY",
@@ -227,13 +228,14 @@ class NewType04CurrentProgress(Component):
             {
                 "route": route,
                 "label": ROUTE_LABELS[route],
-                "job_id": self._join_detail([row.get("sql_id"), row.get("space_nm")]),
+                "job_id": self._join_detail([row.get("sql_seq"), row.get("sql_id"), row.get("space_nm")]),
+                "sql_seq": row.get("sql_seq"),
                 "space_nm": row.get("space_nm"),
                 "sql_id": row.get("sql_id"),
                 "status": row.get("status_value") or "RUNNING",
                 "stage": status_column,
                 "source": "STATUS_RUNNING",
-                "detail": self._join_detail([row.get("space_nm"), row.get("sql_id")]),
+                "detail": self._join_detail([row.get("sql_seq"), row.get("sql_id"), row.get("space_nm")]),
                 "last_log_age_seconds": None,
                 "message": "",
             }

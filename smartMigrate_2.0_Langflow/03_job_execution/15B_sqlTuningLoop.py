@@ -174,9 +174,9 @@ class NewType15BSqlTuningLoop(Component):
 
     # 입력 payload나 job item이 실행 가능한 구조인지 검증한다.
     def _validate_sql_key(self, payload: dict[str, Any], index: int) -> None:
-        if str(payload.get("space_nm") or "").strip() and str(payload.get("sql_id") or "").strip():
+        if str(payload.get("sql_seq") or "").strip() or (str(payload.get("space_nm") or "").strip() and str(payload.get("sql_id") or "").strip()):
             return
-        raise ValueError(f"15B SQL Tuning item {index} requires space_nm+sql_id")
+        raise ValueError(f"15B SQL Tuning item {index} requires sql_seq or space_nm+sql_id")
 
     # Loop item/Data/Message 값을 dict로 변환해 공통 처리한다.
     def _data_dict(self, item: Any) -> dict[str, Any]:

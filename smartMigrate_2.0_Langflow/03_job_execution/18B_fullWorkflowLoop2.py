@@ -257,9 +257,12 @@ class NewType18BFullWorkflowLoop2(Component):
                 return
             raise ValueError(f"18B MIG item {index} requires map_id")
         if route in {"SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"}:
-            if str(self._payload_value(payload, "sql_seq") or "").strip():
+            if str(self._payload_value(payload, "sql_seq") or "").strip() or (
+                str(self._payload_value(payload, "space_nm") or "").strip()
+                and str(self._payload_value(payload, "sql_id") or "").strip()
+            ):
                 return
-            raise ValueError(f"18B {route} item {index} requires sql_seq")
+            raise ValueError(f"18B {route} item {index} requires sql_seq or space_nm+sql_id")
         raise ValueError(f"18B item {index} has invalid job_route={route}")
 
     # 단계별 실행 결과를 dashboard용 집계 구조로 요약한다.
@@ -503,13 +506,13 @@ class NewType18BFullWorkflowLoop2(Component):
                 self._query_pending_jobs(
                     cur,
                     f"""
-                    SELECT SQL_SEQ, PRIORITY
+                    SELECT SQL_SEQ, TO_CHAR(SQL_ID) AS SQL_ID, TO_CHAR(SPACE_NM) AS SPACE_NM, PRIORITY
                       FROM {sql_table}
                      WHERE STATUS_CONVERSION IS NULL
                      ORDER BY PRIORITY ASC NULLS LAST, UPD_TS ASC NULLS FIRST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                     """,
                     "SQL_CONVERSION",
-                    ["sql_seq", "priority"],
+                    ["sql_seq", "sql_id", "space_nm", "priority"],
                     db_config,
                     template_payload,
                 )
@@ -521,14 +524,14 @@ class NewType18BFullWorkflowLoop2(Component):
                 self._query_pending_jobs(
                     cur,
                     f"""
-                    SELECT SQL_SEQ, PRIORITY
+                    SELECT SQL_SEQ, TO_CHAR(SQL_ID) AS SQL_ID, TO_CHAR(SPACE_NM) AS SPACE_NM, PRIORITY
                       FROM {sql_table}
                      WHERE UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')
                        AND STATUS_TUNING IS NULL
                      ORDER BY PRIORITY ASC NULLS LAST, UPD_TS ASC NULLS FIRST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                     """,
                     "SQL_TUNING",
-                    ["sql_seq", "priority"],
+                    ["sql_seq", "sql_id", "space_nm", "priority"],
                     db_config,
                     template_payload,
                 )
@@ -540,14 +543,14 @@ class NewType18BFullWorkflowLoop2(Component):
                 self._query_pending_jobs(
                     cur,
                     f"""
-                    SELECT SQL_SEQ, PRIORITY
+                    SELECT SQL_SEQ, TO_CHAR(SQL_ID) AS SQL_ID, TO_CHAR(SPACE_NM) AS SPACE_NM, PRIORITY
                       FROM {sql_table}
                      WHERE UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING')
                        AND (FORMATTED_SQL IS NULL OR NVL(DBMS_LOB.GETLENGTH(FORMATTED_SQL), 0) = 0)
                      ORDER BY PRIORITY ASC NULLS LAST, UPD_TS ASC NULLS FIRST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                     """,
                     "SQL_FORMATTING",
-                    ["sql_seq", "priority"],
+                    ["sql_seq", "sql_id", "space_nm", "priority"],
                     db_config,
                     template_payload,
                 )
@@ -626,7 +629,10 @@ class NewType18BFullWorkflowLoop2(Component):
     def _workflow_log_job_id(self, job: dict[str, Any]) -> Any:
         if self._route(job) == "MIG":
             return self._payload_value(job, "map_id") or 0
-        return self._payload_value(job, "sql_seq") or 0
+        sql_seq = self._payload_value(job, "sql_seq")
+        if str(sql_seq or "").strip():
+            return sql_seq
+        return f"{self._payload_value(job, 'sql_id') or ''} / {self._payload_value(job, 'space_nm') or ''}"[:100]
 
     # cursor 이후 큐에 같은 job이 있는지 비교하기 위한 route별 고유 key를 만든다.
     def _job_key(self, payload: dict[str, Any]) -> tuple[Any, ...] | None:
@@ -636,10 +642,14 @@ class NewType18BFullWorkflowLoop2(Component):
             map_id = str(self._payload_value(payload, "map_id") or "").strip()
             return (route, map_id) if map_id else None
         if route in {"SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"}:
-            # SQL 계열은 SPACE_NM + SQL_ID가 row 식별자다.
+            # SQL 계열은 SQL_SEQ 또는 SPACE_NM + SQL_ID로 row를 식별한다.
             # 같은 SQL_ID라도 conversion/tuning/formatting은 서로 다른 phase job이므로 route도 key에 포함한다.
             sql_seq = str(self._payload_value(payload, "sql_seq") or "").strip()
-            return (route, sql_seq) if sql_seq else None
+            if sql_seq:
+                return (route, "SQL_SEQ", sql_seq)
+            space_nm = str(self._payload_value(payload, "space_nm") or "").strip().upper()
+            sql_id = str(self._payload_value(payload, "sql_id") or "").strip().upper()
+            return (route, "SQL_KEY", space_nm, sql_id) if space_nm and sql_id else None
         return None
 
     # route를 phase 비교용 숫자로 변환한다.

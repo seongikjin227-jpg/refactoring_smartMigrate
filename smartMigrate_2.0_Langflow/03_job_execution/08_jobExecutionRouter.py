@@ -26,7 +26,7 @@ JOB_EXECUTION_ROUTER_PROMPT = """당신은 SmartMigrate 작업 실행 라우터�
 - user_request: 사용자 원문 요청
 - execution_scope: 01 LLM이 판단한 범위. all, domain, targeted, unknown 중 하나
 - requested_domain: 01 LLM이 판단한 도메인. MIG, SQL_CONVERSION, SQL_TUNING, SQL_FORMATTING, FULL_WORKFLOW, UNKNOWN 중 하나
-- target_filter: 01 LLM이 추출한 map_ids, sql_ids, space_nms
+- target_filter: 01 LLM이 추출한 map_ids, sql_seqs, sql_ids, space_nms
 - job_availability: 06이 DB에서 조회한 실행 가능 카운트
 - requested_target_status: 특정 target 요청이 있을 때 해당 target의 현재 상태
 - requested_job_identifiers: 특정 target 요청이 있을 때 현재 실행 가능한 대상 식별자
@@ -37,6 +37,7 @@ JOB_EXECUTION_ROUTER_PROMPT = """당신은 SmartMigrate 작업 실행 라우터�
   "run_mode": "all_pending|targeted",
   "target_filter": {
     "map_ids": [],
+    "sql_seqs": [],
     "sql_ids": [],
     "space_nms": []
   },
@@ -48,7 +49,7 @@ JOB_EXECUTION_ROUTER_PROMPT = """당신은 SmartMigrate 작업 실행 라우터�
 - execution_scope가 all이면 job_route는 FULL_WORKFLOW, run_mode는 all_pending입니다.
 - execution_scope가 domain이면 requested_domain을 job_route로 사용하고 run_mode는 all_pending입니다.
 - target_filter.map_ids가 있으면 기본 job_route는 MIG입니다.
-- target_filter.sql_ids 또는 target_filter.space_nms가 있으면 requested_domain을 우선 사용합니다. UNKNOWN이면 SQL_CONVERSION으로 둡니다.
+- target_filter.sql_seqs 또는 target_filter.sql_ids + target_filter.space_nms가 있으면 requested_domain을 우선 사용합니다. UNKNOWN이면 SQL_CONVERSION으로 둡니다. sql_ids 또는 space_nms 하나만 있으면 실행 대상으로 추측하지 않습니다.
 - 사용자가 "전체 작업", "전체 진행", "남은 작업 다", "처음부터 끝까지"처럼 전체 흐름을 요청하면 FULL_WORKFLOW입니다.
 - 사용자가 특정 도메인 없이 "작업 실행", "진행", "잔여 작업 실행"만 요청하면 FULL_WORKFLOW입니다.
 
@@ -176,7 +177,7 @@ class NewType08JobExecutionRouter(Component):
                 "job_route": "NO_RUNNABLE_JOB",
                 "run_mode": "none",
                 "run_all_pending": False,
-                "target_filter": payload.get("target_filter") or {"map_ids": [], "sql_ids": [], "space_nms": []},
+                "target_filter": payload.get("target_filter") or {"map_ids": [], "sql_seqs": [], "sql_ids": [], "space_nms": []},
                 "selected_jobs": [],
                 "routing_reason": reason,
             }

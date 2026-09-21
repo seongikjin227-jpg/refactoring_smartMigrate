@@ -168,6 +168,11 @@ class NewType04RagCommandTool(Component):
             collections.append(("MIGRATION", config["correct_sql_migration_collection"]))
         documents = []
         limit = self._limit(command.get("limit"))
+        has_sql_seq = command.get("sql_seq") not in (None, "")
+        has_sql_id = bool(str(command.get("sql_id") or "").strip())
+        has_space_nm = bool(str(command.get("space_nm") or "").strip())
+        if not has_sql_seq and has_sql_id != has_space_nm:
+            raise ValueError("Correct SQL lookup requires sql_seq or both sql_id and space_nm")
         for kind, collection in collections:
             if not client.has_collection(collection_name=collection):
                 continue
@@ -178,9 +183,9 @@ class NewType04RagCommandTool(Component):
                     if not sql_seq:
                         raise ValueError("sql_seq must be a positive number")
                     clauses.append(f"sql_seq == {sql_seq}")
-                for key, field in (("sql_id", "sql_id"), ("space_nm", "space_nm")):
-                    value = str(command.get(key) or "").strip()
-                    if value:
+                if has_sql_id and has_space_nm:
+                    for key, field in (("sql_id", "sql_id"), ("space_nm", "space_nm")):
+                        value = str(command.get(key) or "").strip()
                         clauses.append(f"{field} == {json.dumps(value, ensure_ascii=False)}")
                 fields = ["doc_id", "sql_seq", "space_nm", "sql_id", "status_conversion", "user_edited", "tag_kind", "target_table", "source_sql", "to_sql", "bind_sql", "test_sql", "is_active", "updated_at"]
             else:

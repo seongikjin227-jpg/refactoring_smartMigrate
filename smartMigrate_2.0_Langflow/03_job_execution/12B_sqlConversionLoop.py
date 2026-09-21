@@ -199,12 +199,15 @@ class NewType12BSqlConversionLoop(Component):
 
     # 입력 payload나 job item이 실행 가능한 구조인지 검증한다.
     def _validate_sql_key(self, payload: dict[str, Any], index: int) -> None:
-        if str(payload.get("space_nm") or "").strip() and str(payload.get("sql_id") or "").strip():
+        if str(payload.get("sql_seq") or "").strip() or (str(payload.get("space_nm") or "").strip() and str(payload.get("sql_id") or "").strip()):
             return
-        raise ValueError(f"12B SQL Conversion item {index} requires space_nm+sql_id")
+        raise ValueError(f"12B SQL Conversion item {index} requires sql_seq or space_nm+sql_id")
 
     # route별 작업을 중복 없이 비교할 수 있는 식별 key를 만든다.
     def _job_key(self, payload: dict[str, Any]) -> str:
+        sql_seq = str(payload.get("sql_seq") or "").strip()
+        if sql_seq:
+            return f"sql_seq={sql_seq}"
         return f"space_nm={payload.get('space_nm')}, sql_id={payload.get('sql_id')}"
 
     # Loop item/Data/Message 값을 dict로 변환해 공통 처리한다.

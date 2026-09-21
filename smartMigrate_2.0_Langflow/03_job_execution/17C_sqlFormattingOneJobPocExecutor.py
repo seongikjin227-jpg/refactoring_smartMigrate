@@ -351,20 +351,17 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
 
     # SPACE_NM/SQL_ID 기반으로 로그 식별자를 만든다. 12C/15C와 같은 SQL row 기준이다.
     def _sql_log_identity(self, *sources: dict[str, Any]) -> str:
-        for source in sources:
-            sql_seq = source.get("sql_seq")
-            if not self._is_blank_log_value(sql_seq):
-                return f"SQL_SEQ={sql_seq}"[:100]
+        sql_seq = ""
         sql_id = ""
         space_nm = ""
         for source in sources:
+            if not sql_seq and not self._is_blank_log_value(source.get("sql_seq")):
+                sql_seq = str(source.get("sql_seq")).strip()
             if not sql_id and not self._is_blank_log_value(source.get("sql_id")):
                 sql_id = str(source.get("sql_id")).strip()
             if not space_nm and not self._is_blank_log_value(source.get("space_nm")):
                 space_nm = str(source.get("space_nm")).strip()
-        if sql_id and space_nm:
-            return f"{sql_id} / {space_nm}"[:100]
-        return ""
+        return f"SQL_SEQ={sql_seq} / SQL_ID={sql_id} / SPACE_NM={space_nm}"[:100]
 
     # formatting 대상 항목을 중복 없이 구분할 table/row/column key를 만든다.
     def _formatting_item_key(self, table_name: str, item: dict[str, Any]) -> str:
@@ -659,6 +656,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             "component": "17C_sqlFormattingOneJobPocExecutor",
             "job_route": payload.get("job_route") or "SQL_FORMATTING",
             "job_type": "SQL",
+            "sql_seq": job.get("sql_seq") or payload.get("sql_seq"),
             "space_nm": job.get("space_nm") or payload.get("space_nm"),
             "sql_id": job.get("sql_id") or payload.get("sql_id"),
             "ok": ok,

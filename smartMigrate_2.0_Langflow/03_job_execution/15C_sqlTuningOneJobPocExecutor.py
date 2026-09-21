@@ -375,7 +375,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         # graph 최종 상태를 DB와 Langflow payload에 반영하는 종료 노드다.
         def finalize_node(state: dict[str, Any]) -> dict[str, Any]:
             if state.get("status") == TUNING_PASS:
-                final_log = f"FINAL SUCCESS stage=SQL_TUNING status={TUNING_PASS} job={state['job'].get('space_nm')}.{state['job'].get('sql_id')} result={state.get('tuned_result') or ''}"
+                final_log = f"FINAL SUCCESS stage=SQL_TUNING status={TUNING_PASS} SQL_SEQ={state['job'].get('sql_seq')} SQL_ID={state['job'].get('sql_id')} SPACE_NM={state['job'].get('space_nm')} result={state.get('tuned_result') or ''}"
                 self._update_row(state["db_config"], state["job"], {"TUNED_TO_SQL": state.get("tuned_sql") or state.get("to_sql"), "TUNED_RESULT": state.get("tuned_result") or "NO TUNING", "STATUS_TUNING": TUNING_PASS, "LOG": final_log, "RETRY_COUNT": state["retry_count"]})
                 self._increment_rag_hits(state["db_config"], state.get("tuning_guides") or [])
                 state["result"] = self._result(
@@ -585,7 +585,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         failure_attempts = attempts or [{"attempt": 1, "stage": self._failure_stage(status), "status": status, "reason": message}]
         if db_config and self._has_sql_key(job):
             update_values = {key: value for key, value in (partial_values or {}).items() if value not in (None, "")}
-            update_values.update({"STATUS_TUNING": status, "TUNED_RESULT": str((partial_values or {}).get("TUNED_RESULT") or message)[:4000], "LOG": f"FINAL FAILURE stage=SQL_TUNING status={status} error={message}", "RETRY_COUNT": self._configured_retry_limit()})
+            update_values.update({"STATUS_TUNING": status, "TUNED_RESULT": str((partial_values or {}).get("TUNED_RESULT") or message)[:4000], "LOG": f"FINAL FAILURE stage=SQL_TUNING status={status} SQL_SEQ={job.get('sql_seq')} SQL_ID={job.get('sql_id')} SPACE_NM={job.get('space_nm')} error={message}", "RETRY_COUNT": self._configured_retry_limit()})
             self._update_row(db_config, job, update_values)
             logging.getLogger("smartmigrate.workflow").error(message, extra={"workflow_log": [self._map_id(job), "SQL_TUNING", "SQL_TUNING", "ERROR", self._failure_stage(status), status, max(0, len(failure_attempts) - 1), update_values.get("TUNED_TO_SQL") or ""]})
         return self._result(
@@ -628,6 +628,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             "component": "15C_sqlTuningOneJobPocExecutor",
             "job_route": payload.get("job_route") or "SQL_TUNING",
             "job_type": "SQL",
+            "sql_seq": job.get("sql_seq") or payload.get("sql_seq"),
             "space_nm": job.get("space_nm") or payload.get("space_nm"),
             "sql_id": job.get("sql_id") or payload.get("sql_id"),
             "ok": ok,
@@ -673,6 +674,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
     def _load_sql_job(self, db_config: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
         aliases = [
+            ("SQL_SEQ", "sql_seq", "NUMBER"),
             ("TAG_KIND", "tag_kind", "VARCHAR2(100)"),
             ("SPACE_NM", "space_nm", "VARCHAR2(4000)"),
             ("SQL_ID", "sql_id", "VARCHAR2(4000)"),
@@ -733,19 +735,25 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
 
     # retry 중인 tuning 단계 status와 메시지를 NEXT_SQL_INFO에 저장한다.
     def _mark_running_status(self, db_config: dict[str, Any], job: dict[str, Any], status: str, message: str, retry_count: int = 0) -> None:
-        self._update_row(db_config, job, {"STATUS_TUNING": status, "LOG": f"RUNNING stage=SQL_TUNING status={status} message={message}", "RETRY_COUNT": retry_count})
+        self._update_row(db_config, job, {"STATUS_TUNING": status, "LOG": f"RUNNING stage=SQL_TUNING status={status} SQL_SEQ={job.get('sql_seq')} SQL_ID={job.get('sql_id')} SPACE_NM={job.get('space_nm')} message={message}", "RETRY_COUNT": retry_count})
 
     # SPACE_NM/SQL_ID 기반 UPDATE/SELECT where 절과 bind 값을 만든다. 12C/17C와 같은 구조다.
     def _sql_key_where(self, job: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        sql_seq = job.get("sql_seq")
+        if sql_seq not in (None, ""):
+            try:
+                return "SQL_SEQ = :sql_seq", {"sql_seq": int(sql_seq)}
+            except (TypeError, ValueError) as exc:
+                raise ValueError("SQL tuning item sql_seq must be an integer") from exc
         space_nm = str(job.get("space_nm") or "").strip()
         sql_id = str(job.get("sql_id") or "").strip()
         if not space_nm or not sql_id:
-            raise ValueError("SQL tuning item requires space_nm+sql_id")
+            raise ValueError("SQL tuning item requires sql_seq or space_nm+sql_id")
         return "TO_CHAR(SPACE_NM) = :space_nm AND TO_CHAR(SQL_ID) = :sql_id", {"space_nm": space_nm, "sql_id": sql_id}
 
     # payload/job에 SQL row를 특정할 key가 있는지 확인한다.
     def _has_sql_key(self, job: dict[str, Any]) -> bool:
-        return bool(str(job.get("space_nm") or "").strip() and str(job.get("sql_id") or "").strip())
+        return bool(job.get("sql_seq") not in (None, "") or (str(job.get("space_nm") or "").strip() and str(job.get("sql_id") or "").strip()))
 
     # 프롬프트에 사용된 SEARCH RAG rule의 HIT_CNT를 증가시킨다. 12C와 같은 RAG 사용량 기록이다.
     def _increment_rag_hits(self, db_config: dict[str, Any], examples: list[dict[str, Any]]) -> None:

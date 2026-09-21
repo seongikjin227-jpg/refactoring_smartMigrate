@@ -98,7 +98,7 @@ class NewType17ASqlFormattingJobsToLoopTable(Component):
             cur = conn.cursor()
             cur.execute(
                 f"""
-                SELECT SQL_SEQ, PRIORITY
+                SELECT SQL_SEQ, TO_CHAR(SQL_ID) AS SQL_ID, TO_CHAR(SPACE_NM) AS SPACE_NM, PRIORITY
                   FROM {table}
                  WHERE UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING')
                    AND (FORMATTED_SQL IS NULL OR NVL(DBMS_LOB.GETLENGTH(FORMATTED_SQL), 0) = 0)
@@ -110,16 +110,18 @@ class NewType17ASqlFormattingJobsToLoopTable(Component):
                     "job_route": "SQL_FORMATTING",
                     "job_type": "SQL",
                     "sql_seq": self._json_value(row[0]),
-                    "priority": self._json_value(row[1]),
+                    "sql_id": self._json_value(row[1]),
+                    "space_nm": self._json_value(row[2]),
+                    "priority": self._json_value(row[3]),
                 }
                 for row in cur.fetchall()
             ]
 
     # 입력 payload나 job item이 실행 가능한 구조인지 검증한다.
     def _validate_sql_key(self, job: dict[str, Any], index: int) -> None:
-        if str(job.get("sql_seq") or "").strip():
+        if str(job.get("sql_seq") or "").strip() or (str(job.get("space_nm") or "").strip() and str(job.get("sql_id") or "").strip()):
             return
-        raise ValueError(f"17A SQL Formatting job row {index} requires sql_seq")
+        raise ValueError(f"17A SQL Formatting job row {index} requires sql_seq or space_nm+sql_id")
 
     # payload와 Langflow 입력에서 Oracle 접속 및 schema 설정을 모은다.
     def _db_config(self, payload: dict[str, Any]) -> dict[str, Any]:
