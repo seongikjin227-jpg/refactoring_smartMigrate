@@ -199,7 +199,7 @@ class NewType04RagCommandTool(Component):
             anns_field="dense_vector",
             limit=candidate_limit,
             filter="is_active == true",
-            output_fields=["sql_id", "space_nm", "tag_kind", "target_table"],
+            output_fields=["sql_seq", "sql_id", "space_nm", "tag_kind", "target_table"],
             search_params={"metric_type": "COSINE", "params": {}},
         )
 

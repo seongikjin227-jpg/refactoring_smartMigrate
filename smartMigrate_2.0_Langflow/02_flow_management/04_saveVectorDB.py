@@ -260,7 +260,7 @@ class NewType04SaveVectorDB(Component):
         # Milvus 환경이 analyzer/functions를 허용하지 않으면 dense-only collection으로 생성한다.
         
         if client.has_collection(collection_name):
-            if schema_kind == "conversion":
+            if schema_kind in {"conversion", "asis_sql"}:
                 self._ensure_sql_seq_field(client, collection_name)
             client.load_collection(collection_name=collection_name)
             return False
@@ -315,6 +315,7 @@ class NewType04SaveVectorDB(Component):
             # 의도적으로 보관하지 않고, 검색 뒤 Oracle 원본에서 최신 상태를 판별한다.
             schema.add_field("space_nm", DataType.VARCHAR, max_length=512)
             schema.add_field("sql_id", DataType.VARCHAR, max_length=512)
+            schema.add_field("sql_seq", DataType.INT64)
             schema.add_field("tag_kind", DataType.VARCHAR, max_length=100)
             schema.add_field("target_table", DataType.VARCHAR, max_length=2048)
             schema.add_field("fr_sql", DataType.VARCHAR, max_length=TEXT_MAX)
@@ -350,7 +351,7 @@ class NewType04SaveVectorDB(Component):
         client.create_collection(collection_name=collection_name, schema=schema, index_params=index_params, consistency_level="Bounded")
 
     def _ensure_sql_seq_field(self, client: Any, collection_name: str) -> None:
-        """Add SQL_SEQ metadata to a pre-existing Correct SQL collection.
+        """Add SQL_SEQ metadata to a pre-existing SQL collection.
 
         Milvus requires fields added after collection creation to be nullable.
         A subsequent normal sync upserts active documents with their SQL_SEQ.
@@ -680,6 +681,7 @@ class NewType04SaveVectorDB(Component):
         sql = f"""
             SELECT SPACE_NM,
                    SQL_ID,
+                   SQL_SEQ,
                    TAG_KIND,
                    TARGET_TABLE,
                    FR_SQL,
@@ -697,10 +699,11 @@ class NewType04SaveVectorDB(Component):
             for row in cur.fetchall():
                 space_nm = self._lob_to_str(row[0]).strip()
                 sql_id = self._lob_to_str(row[1]).strip()
-                fr_sql = self._lob_to_str(row[4]).strip()
-                edit_fr_sql = self._lob_to_str(row[5]).strip()
+                sql_seq = self._num(row[2])
+                fr_sql = self._lob_to_str(row[5]).strip()
+                edit_fr_sql = self._lob_to_str(row[6]).strip()
                 content_source = edit_fr_sql or fr_sql
-                if not space_nm or not sql_id or not content_source:
+                if not space_nm or not sql_id or sql_seq is None or not content_source:
                     continue
                 doc_key = f"{space_nm}:{sql_id}"
                 rows.append(
@@ -708,13 +711,14 @@ class NewType04SaveVectorDB(Component):
                         doc_id=f"ASIS_SQL:{self._hash_text(doc_key)[:24]}",
                         space_nm=space_nm,
                         sql_id=sql_id,
-                        tag_kind=self._lob_to_str(row[2]),
-                        target_table=self._lob_to_str(row[3]),
+                        sql_seq=sql_seq,
+                        tag_kind=self._lob_to_str(row[3]),
+                        target_table=self._lob_to_str(row[4]),
                         fr_sql=fr_sql,
                         edit_fr_sql=edit_fr_sql,
                         content=self._sql_content(content_source),
                         is_active=True,
-                        updated_at=self._lob_to_str(row[6]),
+                        updated_at=self._lob_to_str(row[7]),
                     )
                 )
             return rows
