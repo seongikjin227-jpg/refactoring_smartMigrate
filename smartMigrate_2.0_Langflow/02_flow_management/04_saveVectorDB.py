@@ -584,8 +584,10 @@ class NewType04SaveVectorDB(Component):
     # DB 또는 payload에서 이 단계에 필요한 입력 데이터를 로드한다.
     def _load_correct_migration_rows(self, db_config: dict[str, Any]) -> list[dict[str, Any]]:
         table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
+        detail_table = self._qualify("NEXT_MIG_INFO_DTL", db_config.get("system_schema"))
         sql = f"""
             SELECT MAP_ID,
+                   MAP_TYPE,
                    FR_TABLE,
                    TO_TABLE,
                    CONDITION,
@@ -602,20 +604,50 @@ class NewType04SaveVectorDB(Component):
         with self._connect(db_config) as conn:
             cur = conn.cursor()
             cur.execute(sql)
+            source_rows = cur.fetchall()
+            map_ids = [self._lob_to_str(row[0]).strip() for row in source_rows if self._lob_to_str(row[0]).strip()]
+            mappings_by_map_id: dict[str, list[str]] = {}
+            if map_ids:
+                # Oracle IN supports at most 1,000 expressions; sync may exceed that.
+                for map_id_batch in self._chunks(map_ids, 900):
+                    bind_names = [f"map_id_{index}" for index in range(len(map_id_batch))]
+                    cur.execute(
+                        f"""
+                        SELECT MAP_ID, FR_COL, TO_COL
+                          FROM {detail_table}
+                         WHERE MAP_ID IN ({', '.join(f':{name}' for name in bind_names)})
+                         ORDER BY MAP_ID, MAP_DTL
+                        """,
+                        dict(zip(bind_names, map_id_batch, strict=True)),
+                    )
+                    for mapping_row in cur.fetchall():
+                        mapping_map_id = self._lob_to_str(mapping_row[0]).strip()
+                        fr_col = self._lob_to_str(mapping_row[1]).strip()
+                        to_col = self._lob_to_str(mapping_row[2]).strip()
+                        if mapping_map_id and fr_col and to_col:
+                            mappings_by_map_id.setdefault(mapping_map_id, []).append(f"  - {fr_col} -> {to_col}")
             rows = []
-            for row in cur.fetchall():
+            for row in source_rows:
                 map_id = self._lob_to_str(row[0]).strip()
-                fr_table = self._lob_to_str(row[1]).strip()
-                to_table = self._lob_to_str(row[2]).strip()
-                condition = self._lob_to_str(row[3]).strip()
-                mig_sql = self._lob_to_str(row[4]).strip()
-                verify_sql = self._lob_to_str(row[5]).strip()
-                user_edited = self._lob_to_str(row[6]).strip().upper()
-                status = self._lob_to_str(row[7]).strip().upper()
-                # Migration SQL 검색은 생성 당시와 같은 업무 문맥이 필요하다:
-                # source/target table, filter condition, 확정된 MIG/VERIFY SQL을 함께 저장한다.
+                map_type = self._lob_to_str(row[1]).strip() or "TABLE"
+                fr_table = self._lob_to_str(row[2]).strip()
+                to_table = self._lob_to_str(row[3]).strip()
+                condition = self._lob_to_str(row[4]).strip()
+                mig_sql = self._lob_to_str(row[5]).strip()
+                verify_sql = self._lob_to_str(row[6]).strip()
+                user_edited = self._lob_to_str(row[7]).strip().upper()
+                status = self._lob_to_str(row[8]).strip().upper()
+                # Embedding is mapping-structure only.  MIG_SQL and VERIFY_SQL
+                # remain retrieval metadata, not search criteria.
+                mapping_text = "\n".join(mappings_by_map_id.get(map_id) or []) or "  (no column mappings found)"
                 search_content = "\n".join(
-                    part for part in (f"FR_TABLE: {fr_table}", f"TO_TABLE: {to_table}", f"CONDITION: {condition}", f"MIG_SQL: {mig_sql}") if part.strip()
+                    (
+                        f"MAP_TYPE: {map_type}",
+                        f"FR_TABLE: {fr_table}",
+                        f"TO_TABLE: {to_table}",
+                        f"CONDITION: {condition}",
+                        f"COLUMN_MAPPINGS:\n{mapping_text}",
+                    )
                 )
                 rows.append(
                     self._entity(
@@ -630,7 +662,7 @@ class NewType04SaveVectorDB(Component):
                         status=status,
                         content=search_content,
                         is_active=user_edited == "Y" and status == "PASS" and bool(mig_sql) and bool(verify_sql),
-                        updated_at=self._lob_to_str(row[8]),
+                        updated_at=self._lob_to_str(row[9]),
                     )
                 )
             return rows

@@ -788,10 +788,19 @@ class NewType10CMigOneJobPocExecutor(Component):
     def _migration_correct_sql_hints(self, metadata: dict[str, Any], map_id: int) -> str:
         """확정된 migration Correct SQL 예시를 Top K만 조회한다."""
         fr_table = str(metadata.get("fr_table") or "").strip()
-        to_table = str(metadata.get("to_table") or "").strip()
+        to_table = str(metadata.get("raw_to_table") or metadata.get("to_table") or "").strip()
         condition = str(metadata.get("condition") or "").strip()
-        mig_sql = str(metadata.get("saved_migration_sql") or "").strip()
-        query_text = "\n".join((f"FR_TABLE: {fr_table}", f"TO_TABLE: {to_table}", f"CONDITION: {condition}", f"MIG_SQL: {mig_sql}"))
+        map_type = str(metadata.get("map_type") or "TABLE").strip()
+        mapping_info = self._mapping_info(metadata.get("mapping_details") or [])
+        query_text = "\n".join(
+            (
+                f"MAP_TYPE: {map_type}",
+                f"FR_TABLE: {fr_table}",
+                f"TO_TABLE: {to_table}",
+                f"CONDITION: {condition}",
+                f"COLUMN_MAPPINGS:\n{mapping_info}",
+            )
+        )
         vector = self._embed_rag_text(query_text)
         rows = self._migration_milvus_client().search(
             collection_name=self._migration_rag_config()["collection"],

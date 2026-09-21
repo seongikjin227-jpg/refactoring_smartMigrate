@@ -213,9 +213,6 @@ class NewType04RagCommandTool(Component):
         The AS-IS collection deliberately has no status metadata.  This avoids a
         sync delay accidentally offering a now-PASS job for retry.
         """
-        # 기준 SQL을 직접 입력값에서 받거나 SQL_ID, SPACE_NM 기준으로 Oracle에서 조회한다.
-        query_sql, query_source, query_identity, query_target_table = self._similarity_query_sql(conn, command)
-
         # 상태 필터는 기본적으로 FAIL_ONLY이며, AS-IS 재시도 검색은 변환 상태만 허용한다.
         status_filter = self._status_filter(command.get("status_filter") or command.get("filter"))
         status_scope = self._conversion_only_scope(command.get("status_scope") or command.get("domain"))
@@ -233,8 +230,12 @@ class NewType04RagCommandTool(Component):
         # 기준 SQL을 임베딩 API에 보내기 전에 정규화하고, 검색용 dense vector로 변환한다.
         config = self._milvus_config()
         client = self._milvus_client(config)
-        vector, query_vector_source = self._stored_asis_query_vector(client, config, query_sql, query_identity)
-        if vector is None:
+        stored_query = self._stored_asis_query(client, config, command)
+        if stored_query is not None:
+            query_sql, query_source, query_identity, query_target_table, vector = stored_query
+            query_vector_source = "SM_ASIS_SQL"
+        else:
+            query_sql, query_source, query_identity, query_target_table = self._similarity_query_sql(command)
             vector = self._embed_texts([self._sql_content(query_sql)], self._embed_config())[0]
             query_vector_source = "EMBEDDING_API"
 
@@ -307,95 +308,71 @@ class NewType04RagCommandTool(Component):
             "data": {"similar_sqls": matches},
         }
 
-    def _stored_asis_query_vector(
+    def _stored_asis_query(
         self,
         client: Any,
         config: dict[str, str],
-        query_sql: str,
-        query_identity: tuple[str, str] | None,
-    ) -> tuple[list[float] | None, str]:
-        """Reuse the synced AS-IS vector only for the exact current SQL row."""
-        if not query_identity:
-            return None, "EMBEDDING_API"
-        sql_id, space_nm = query_identity
+        command: dict[str, Any],
+    ) -> tuple[str, str, tuple[str, str], str, list[float]] | None:
+        """Load an identified search source directly from SM_ASIS_SQL.
+
+        SQL_SEQ and SQL_ID+SPACE_NM identify a document whose source text and
+        dense vector are already synchronized.  They must not trigger an Oracle
+        source-SQL read or a new embedding request; only a raw query_sql needs a
+        fresh embedding.
+        """
+        if any(str(command.get(field) or "").strip() for field in ("query_sql", "sql", "fr_sql", "edit_fr_sql")):
+            return None
+        sql_seq = command.get("sql_seq")
+        sql_id = str(command.get("sql_id") or "").strip()
+        space_nm = str(command.get("space_nm") or "").strip()
+        if sql_seq in (None, "") and not (sql_id and space_nm):
+            return None
+        if sql_seq not in (None, ""):
+            try:
+                filter_expression = f"sql_seq == {int(sql_seq)} and is_active == true"
+            except (TypeError, ValueError) as exc:
+                raise ValueError("sql_seq must be an integer") from exc
+            query_source = "sql_seq"
+        elif sql_id and space_nm:
+            filter_expression = (
+                f"sql_id == {json.dumps(sql_id, ensure_ascii=False)} "
+                f"and space_nm == {json.dumps(space_nm, ensure_ascii=False)} and is_active == true"
+            )
+            query_source = "sql_id+space_nm"
+        else:
+            raise ValueError("Both sql_id and space_nm are required together")
         try:
             rows = client.query(
                 collection_name=config["asis_sql_collection"],
-                filter=(
-                    f"sql_id == {json.dumps(sql_id, ensure_ascii=False)} "
-                    f"and space_nm == {json.dumps(space_nm, ensure_ascii=False)} and is_active == true"
-                ),
-                output_fields=["dense_vector", "fr_sql", "edit_fr_sql"],
+                filter=filter_expression,
+                output_fields=["dense_vector", "sql_id", "space_nm", "target_table", "fr_sql", "edit_fr_sql"],
                 limit=1,
             )
             row = rows[0] if isinstance(rows, list) and rows else {}
             stored_sql = str(row.get("edit_fr_sql") or row.get("fr_sql") or "").strip() if isinstance(row, dict) else ""
             vector = row.get("dense_vector") if isinstance(row, dict) else None
-            if stored_sql == str(query_sql or "").strip() and isinstance(vector, list) and vector:
-                return [float(value) for value in vector], "SM_ASIS_SQL"
+            stored_sql_id = str(row.get("sql_id") or "").strip() if isinstance(row, dict) else ""
+            stored_space_nm = str(row.get("space_nm") or "").strip() if isinstance(row, dict) else ""
+            if stored_sql and stored_sql_id and stored_space_nm and isinstance(vector, list) and vector:
+                return (
+                    stored_sql,
+                    query_source,
+                    self._identity_key(stored_sql_id, stored_space_nm),
+                    str(row.get("target_table") or "").strip(),
+                    [float(value) for value in vector],
+                )
         except Exception as exc:
-            logging.getLogger("smartmigrate.workflow").warning("SM_ASIS_SQL vector reuse skipped: %s", exc)
-        return None, "EMBEDDING_API"
+            raise ValueError(f"SM_ASIS_SQL lookup failed: {exc}") from exc
+        raise ValueError("The selected AS-IS SQL is not available in SM_ASIS_SQL. Sync AS-IS SQL to VectorDB first.")
 
     # 유사도 검색에 사용할 기준 SQL과 식별 정보를 명령 또는 DB에서 가져온다.
-    def _similarity_query_sql(self, conn: Any, command: dict[str, Any]) -> tuple[str, str, tuple[str, str] | None, str]:
+    def _similarity_query_sql(self, command: dict[str, Any]) -> tuple[str, str, tuple[str, str] | None, str]:
         for field in ("query_sql", "sql", "fr_sql", "edit_fr_sql"):
             value = str(command.get(field) or "").strip()
             if value:
                 return value, field, None, str(command.get("target_table") or "").strip()
-        sql_seq = command.get("sql_seq")
-        if sql_seq not in (None, ""):
-            try:
-                sql_seq = int(sql_seq)
-            except (TypeError, ValueError) as exc:
-                raise ValueError("sql_seq must be an integer") from exc
-            cur = conn.cursor()
-            cur.execute(
-                f"""
-                SELECT SQL_ID, SPACE_NM, EDIT_FR_SQL, FR_SQL, TARGET_TABLE
-                  FROM {self._qualify('NEXT_SQL_INFO')}
-                 WHERE SQL_SEQ = :sql_seq
-                """,
-                {"sql_seq": sql_seq},
-            )
-            row = cur.fetchone()
-            if not row:
-                raise ValueError(f"NEXT_SQL_INFO row not found: SQL_SEQ={sql_seq}")
-            sql_text = self._json_value(row[2]) or self._json_value(row[3]) or ""
-            if not str(sql_text).strip():
-                raise ValueError("The selected NEXT_SQL_INFO row has neither EDIT_FR_SQL nor FR_SQL")
-            return (
-                str(sql_text).strip(),
-                "sql_seq",
-                self._identity_key(row[0], row[1]),
-                str(self._json_value(row[4]) or "").strip(),
-            )
-        sql_id = str(command.get("sql_id") or "").strip()
-        space_nm = str(command.get("space_nm") or "").strip()
-        if not sql_id or not space_nm:
-            raise ValueError("query_sql (or sql/fr_sql) or both sql_id and space_nm are required")
-        cur = conn.cursor()
-        cur.execute(
-            f"""
-            SELECT EDIT_FR_SQL, FR_SQL, TARGET_TABLE
-              FROM {self._qualify('NEXT_SQL_INFO')}
-             WHERE UPPER(TRIM(SQL_ID)) = UPPER(TRIM(:sql_id))
-               AND UPPER(TRIM(SPACE_NM)) = UPPER(TRIM(:space_nm))
-            """,
-            {"sql_id": sql_id, "space_nm": space_nm},
-        )
-        row = cur.fetchone()
-        if not row:
-            raise ValueError(f"NEXT_SQL_INFO row not found: SQL_ID={sql_id}, SPACE_NM={space_nm}")
-        sql_text = self._json_value(row[0]) or self._json_value(row[1]) or ""
-        if not str(sql_text).strip():
-            raise ValueError("The selected NEXT_SQL_INFO row has neither EDIT_FR_SQL nor FR_SQL")
-        return (
-            str(sql_text).strip(),
-            "sql_id+space_nm",
-            self._identity_key(sql_id, space_nm),
-            str(self._json_value(row[2]) or "").strip(),
-        )
+        raise ValueError("query_sql (or sql/fr_sql) is required when sql_seq or sql_id+space_nm is not supplied")
 
     # Milvus 후보 SQL들의 변환 상태를 Oracle에서 일괄 조회한다.
     def _load_sql_statuses(self, conn: Any, candidates: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, str]]:

@@ -319,15 +319,14 @@ class NewType04UpdateCommandTool(Component):
 
         ref_seq = self._positive_int_value(raw.get("ref_seq"), "ref_seq")
         params = {**target_params, "ref_seq": ref_seq}
-        table = self._qualify("NEXT_SQL_INFO")
         return {
             "action": action,
             "identity": identity,
             "summary": f"REF_SEQ={ref_seq}; existing Correct SQL reference selected",
             "sql": (
-                f"UPDATE {table} T SET REF_SEQ = :ref_seq "
+                f"UPDATE {self._qualify('NEXT_SQL_INFO')} SET REF_SEQ = :ref_seq "
                 f"WHERE {target_where} "
-                "AND T.SQL_SEQ <> :ref_seq"
+                "AND SQL_SEQ <> :ref_seq"
             ),
             "params": params,
         }
