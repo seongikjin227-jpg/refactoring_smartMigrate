@@ -220,6 +220,17 @@ class NewType04UpdateCommandTool(Component):
         if action == "save_correct_sql":
             return self._save_correct_sql_statement(raw, action)
 
+        if action in {"approve_correct_sql_conversion", "confirm_correct_sql_conversion"}:
+            sql_id, space_nm = self._sql_identity(raw)
+            return self._sql_statement(
+                action,
+                sql_id,
+                space_nm,
+                "STATUS_CONVERSION = 'PASS-CONVERSION'",
+                {"sql_id": sql_id, "space_nm": space_nm},
+                "STATUS_CONVERSION=PASS-CONVERSION; Correct SQL approved",
+            )
+
         if action in {"set_sql_ref_seq", "set_sql_reference_seq"}:
             return self._sql_ref_seq_statement(raw, action, clear=False)
 
@@ -314,7 +325,7 @@ class NewType04UpdateCommandTool(Component):
         }
 
     def _save_correct_sql_statement(self, raw: dict[str, Any], action: str) -> dict[str, Any]:
-        """Persist an explicitly user-approved Correct SQL and mark it edited.
+        """Persist user-supplied Correct SQL and mark it edited.
 
         VectorDB sync is intentionally not performed here.  The Management Agent
         calls the separate Sync Correct SQL tool after this Oracle transaction
@@ -339,7 +350,7 @@ class NewType04UpdateCommandTool(Component):
         return {
             "action": action,
             "identity": identity,
-            "summary": f"USER_EDITED=Y; saved {', '.join(saved)}. Call sync_correct_sql next.",
+            "summary": f"USER_EDITED=Y; saved {', '.join(saved)}. Await approval or re-execution choice before any sync.",
             "sql": f"UPDATE {self._qualify('NEXT_SQL_INFO')} SET {', '.join(assignments)} WHERE {target_where}",
             "params": params,
         }

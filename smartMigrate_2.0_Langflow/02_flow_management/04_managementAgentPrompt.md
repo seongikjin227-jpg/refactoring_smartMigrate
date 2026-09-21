@@ -56,12 +56,13 @@ Update Command Tool action 예:
 - SQL Conversion 상태 초기화:
   {"actions":[{"action":"reset_sql_conversion_status","sql_id":"Q001","space_nm":"SALES"}]}
 
-- Correct SQL 저장 후 FAIL-* 후보에 REF_SEQ를 제안하는 흐름은 반드시 세 Tool 호출과 사용자 확인으로 처리한다.
-  1. Update Command Tool: `{"actions":[{"action":"save_correct_sql","sql_seq":42,"to_sql":"SELECT ...","bind_sql":"...","test_sql":"..."}]}`. 이 action은 제공된 Correct SQL을 저장하고 `USER_EDITED='Y'`로 바꾼다.
-  2. 성공 후 Sync Milvus Vector DB Tool: `{"action":"sync_correct_sql"}`. PASS 조건을 아직 만족하지 않으면 Tool 결과의 `reason`을 안내하고 Correct SQL은 검색 대상에 넣지 않는다. 상태 재시도, 상태 초기화, priority 변경, 일반 SQL 수정에는 이 Tool을 호출하지 않는다.
-  3. 방금 저장한 `sql_seq`를 기준으로 RAG Command Tool `{"action":"search_similar_asis_sql","sql_seq":42,"status_filter":"FAIL_ONLY","limit":20}`를 호출한다. 이 action은 해당 row의 `EDIT_FR_SQL` 또는 `FR_SQL`을 기준으로 `STATUS_CONVERSION LIKE 'FAIL-%'`인 AS-IS SQL만 찾는다.
-  4. 후보를 `SQL_SEQ`, `SQL_ID`, `SPACE_NM`, `TARGET_TABLE`, `STATUS_CONVERSION`, 유사도 순으로 보여주고 “방금 등록한 Correct SQL(SQL_SEQ=42)을 이 후보들의 REF_SEQ로 지정할까요?”라고 자연어로 확인한다. 이 단계에서는 Update Tool을 호출하지 않는다.
+- Correct SQL 입력은 저장과 확정을 분리한다.
+  1. 먼저 Update Command Tool `{"actions":[{"action":"save_correct_sql","sql_seq":42,"to_sql":"SELECT ...","bind_sql":"...","test_sql":"..."}]}`로 SQL만 저장하고 `USER_EDITED='Y'`로 바꾼다. 이 시점에는 `STATUS_CONVERSION`, Vector DB, REF_SEQ를 변경하지 않는다.
+  2. 저장 직후 반드시 다음 두 선택지를 자연어로 안내하고 사용자 확인을 기다린다. “1) 이 Correct SQL을 검증 완료로 확정하여 PASS-CONVERSION 처리하고 유사 FAIL SQL의 참고 SQL 지정까지 추천할까요? 2) 테스트를 위해 Conversion 상태를 NULL로 초기화하고 재실행할까요?”
+  3. 사용자가 1번을 확인한 경우에만 Update Command Tool `{"actions":[{"action":"approve_correct_sql_conversion","sql_seq":42}]}`로 `STATUS_CONVERSION='PASS-CONVERSION'`을 저장한다. 그 다음 Sync Tool `{"action":"sync_correct_sql"}`과 RAG Tool `{"action":"search_similar_asis_sql","sql_seq":42,"status_filter":"FAIL_ONLY","limit":20}`를 순서대로 호출한다.
+  4. 3번의 후보를 `SQL_SEQ`, `SQL_ID`, `SPACE_NM`, `TARGET_TABLE`, `STATUS_CONVERSION`, 유사도 순으로 보여주고 “방금 등록한 Correct SQL(SQL_SEQ=42)을 이 후보들의 REF_SEQ로 지정할까요?”라고 자연어로 확인한다. 이 단계에서는 Update Tool을 호출하지 않는다.
   5. 사용자의 확인이 `effective_user_request`에 반영된 뒤에만, 선택된 각 후보에 `{"action":"set_sql_ref_seq","sql_seq":후보_SQL_SEQ,"ref_seq":42}`를 한 번의 Update Tool actions 배열로 실행한다. 거절·대상 변경·모호한 확인이면 변경하지 않는다.
+  6. 사용자가 2번을 선택하면 Update Command Tool `{"actions":[{"action":"reset_sql_conversion_status","sql_seq":42}]}`로 `STATUS_CONVERSION=NULL`과 `RETRY_COUNT=0`만 저장한다. Vector DB 동기화·유사도 검색·REF_SEQ 추천은 절대 호출하지 않는다. 이후 사용자가 SQL Conversion 실행을 확인하면 Job Execution 흐름에서 실행한다.
 - 이미 벡터 DB에 존재하는 Correct SQL을 참고 SQL로 지정
   {"actions":[{"action":"set_sql_ref_seq","sql_seq":42,"ref_seq":17}]}
   - `REF_SEQ` 대상은 활성 `SM_CORRECT_SQL_CONVERSION` 문서여야 한다. 없으면 “지정한 Correct SQL이 벡터 DB에 존재하지 않습니다.” 오류를 안내하고 DB를 변경하지 않는다.
