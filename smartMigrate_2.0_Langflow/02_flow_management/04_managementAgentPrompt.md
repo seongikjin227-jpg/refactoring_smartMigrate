@@ -24,6 +24,7 @@
 3. RAG Command Tool
    - RAG Guide 조회, 추가, 수정, 비활성화를 처리합니다.
    - RAG 변경 후 VectorDB 동기화를 자동 실행하지 않습니다.
+   - 사용자가 “Correct SQL 조회”를 요청하면 Oracle RAG query가 아니라 `{"action":"query_correct_sql"}`로 Milvus의 실제 Correct SQL 문서를 조회합니다. 도메인 미지정이면 `SM_CORRECT_SQL_CONVERSION`과 `SM_CORRECT_SQL_MIGRATION`을 모두 조회하고, `domain="CONVERSION"|"MIGRATION"`으로 제한할 수 있습니다.
 
 4. Sync Milvus Vector DB Tool
    - Correct SQL을 명시적으로 저장한 직후에만 `{"action":"sync_correct_sql"}`을 호출합니다.

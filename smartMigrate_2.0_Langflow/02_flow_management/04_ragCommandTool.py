@@ -39,7 +39,7 @@ class NewType04RagCommandTool(Component):
             display_name="Command JSON",
             required=False,
             tool_mode=True,
-            info='Example: {"action":"query","category":"SQL_CONVERSION","keyword":"CUSTOMER","limit":10}',
+            info='Examples: {"action":"query","category":"SQL_CONVERSION","limit":10}, {"action":"query_correct_sql","sql_seq":42}',
         ),
         DataInput(name="payload_json", display_name="Payload JSON", required=False),
         StrInput(name="db_host", display_name="DB Host", required=True),
@@ -55,6 +55,8 @@ class NewType04RagCommandTool(Component):
         SecretStrInput(name="milvus_password", display_name="Milvus Password", required=False),
         StrInput(name="milvus_db_name", display_name="Milvus DB Name", value="default", required=False),
         StrInput(name="asis_sql_collection_name", display_name="AS-IS SQL Collection Name", value="SM_ASIS_SQL", required=False),
+        StrInput(name="correct_sql_conversion_collection_name", display_name="Correct SQL Collection Name", value="SM_CORRECT_SQL_CONVERSION", required=False),
+        StrInput(name="correct_sql_migration_collection_name", display_name="Correct SQL Migration Collection Name", value="SM_CORRECT_SQL_MIGRATION", required=False),
         StrInput(name="rag_embed_base_url", display_name="RAG Embedding Base URL", required=False),
         SecretStrInput(name="rag_embed_api_key", display_name="RAG Embedding API Key", required=False),
         StrInput(name="rag_embed_model", display_name="RAG Embedding Model", value="BAAI/bge-m3", required=False),
@@ -75,20 +77,23 @@ class NewType04RagCommandTool(Component):
         try:
             command = self._parse_command()
             action = str(command.get("action") or "").strip().lower() or "query"
-            with self._connect() as conn:
-                if action in {"query", "list", "get"}:
-                    result = self._query(conn, command)
-                elif action in {"search_similar_asis_sql", "find_similar_asis_sql", "similar_asis_sql"}:
-                    result = self._search_similar_asis_sql(conn, command)
-                elif action in {"add", "insert", "create"}:
-                    result = self._insert(conn, command)
-                elif action in {"update", "modify"}:
-                    result = self._update(conn, command)
-                elif action in {"disable", "delete", "soft_delete"}:
-                    result = self._disable(conn, self._required_rag_id(command))
-                else:
-                    raise ValueError(f"Unsupported RAG action: {action}")
-                conn.commit()
+            if action in {"query_correct_sql", "list_correct_sql", "get_correct_sql"}:
+                result = self._query_correct_sql(command)
+            else:
+                with self._connect() as conn:
+                    if action in {"query", "list", "get"}:
+                        result = self._query(conn, command)
+                    elif action in {"search_similar_asis_sql", "find_similar_asis_sql", "similar_asis_sql"}:
+                        result = self._search_similar_asis_sql(conn, command)
+                    elif action in {"add", "insert", "create"}:
+                        result = self._insert(conn, command)
+                    elif action in {"update", "modify"}:
+                        result = self._update(conn, command)
+                    elif action in {"disable", "delete", "soft_delete"}:
+                        result = self._disable(conn, self._required_rag_id(command))
+                    else:
+                        raise ValueError(f"Unsupported RAG action: {action}")
+                    conn.commit()
             result = {**result, "component": "04_ragCommandTool", "answer_text": self._answer(result), "final": True}
             self.status = result
             return Data(data=result)
@@ -103,7 +108,6 @@ class NewType04RagCommandTool(Component):
         category = self._optional_category(command.get("category"))
         rule_type = self._optional_rule_type(command.get("rule_type"))
         use_yn = self._optional_use_yn(command.get("use_yn"))
-        keyword = str(command.get("keyword") or "").strip()
         limit = self._limit(command.get("limit"))
         full_text = self._as_bool(command.get("full_text"))
 
@@ -121,16 +125,6 @@ class NewType04RagCommandTool(Component):
         if use_yn:
             conditions.append("UPPER(TRIM(USE_YN)) = :use_yn")
             params["use_yn"] = use_yn
-        if keyword:
-            conditions.append(
-                "("
-                "UPPER(TO_CHAR(SOURCE_TABLES)) LIKE UPPER(:keyword) OR "
-                "UPPER(DBMS_LOB.SUBSTR(GUIDANCE_TEXT, 4000, 1)) LIKE UPPER(:keyword) OR "
-                "UPPER(DBMS_LOB.SUBSTR(SOURCE_SQL, 4000, 1)) LIKE UPPER(:keyword) OR "
-                "UPPER(DBMS_LOB.SUBSTR(TARGET_SQL, 4000, 1)) LIKE UPPER(:keyword)"
-                ")"
-            )
-            params["keyword"] = f"%{keyword}%"
 
         text_length = min(self._positive_int(getattr(self, "max_text_chars", None), 4000), 4000)
         guidance_expr = "GUIDANCE_TEXT" if full_text else f"DBMS_LOB.SUBSTR(GUIDANCE_TEXT, {text_length}, 1)"
@@ -159,6 +153,58 @@ class NewType04RagCommandTool(Component):
         names = [str(item[0]).lower() for item in cur.description]
         rows = [{names[index]: self._json_value(value) for index, value in enumerate(row)} for row in cur.fetchall()]
         return {"ok": True, "action": "query", "row_count": len(rows), "data": {"rules": rows}, "needs_vector_sync": False}
+
+    def _query_correct_sql(self, command: dict[str, Any]) -> dict[str, Any]:
+        """Read documents that are actually stored in Milvus Correct SQL collection."""
+        config = self._milvus_config()
+        client = self._milvus_client(config)
+        domain = str(command.get("domain") or command.get("correct_sql_domain") or "ALL").strip().upper()
+        if domain not in {"ALL", "CONVERSION", "MIGRATION"}:
+            raise ValueError("domain must be ALL, CONVERSION, or MIGRATION")
+        collections = []
+        if domain in {"ALL", "CONVERSION"}:
+            collections.append(("CONVERSION", config["correct_sql_conversion_collection"]))
+        if domain in {"ALL", "MIGRATION"}:
+            collections.append(("MIGRATION", config["correct_sql_migration_collection"]))
+        documents = []
+        limit = self._limit(command.get("limit"))
+        for kind, collection in collections:
+            if not client.has_collection(collection_name=collection):
+                continue
+            clauses = [] if self._as_bool(command.get("include_inactive")) else ["is_active == true"]
+            if kind == "CONVERSION":
+                if command.get("sql_seq") not in (None, ""):
+                    sql_seq = self._positive_int(command.get("sql_seq"), 0)
+                    if not sql_seq:
+                        raise ValueError("sql_seq must be a positive number")
+                    clauses.append(f"sql_seq == {sql_seq}")
+                for key, field in (("sql_id", "sql_id"), ("space_nm", "space_nm")):
+                    value = str(command.get(key) or "").strip()
+                    if value:
+                        clauses.append(f"{field} == {json.dumps(value, ensure_ascii=False)}")
+                fields = ["doc_id", "sql_seq", "space_nm", "sql_id", "status_conversion", "user_edited", "tag_kind", "target_table", "source_sql", "to_sql", "bind_sql", "test_sql", "is_active", "updated_at"]
+            else:
+                map_id = str(command.get("map_id") or "").strip()
+                if map_id:
+                    clauses.append(f"map_id == {json.dumps(map_id, ensure_ascii=False)}")
+                fields = ["doc_id", "map_id", "fr_table", "to_table", "condition", "mig_sql", "verify_sql", "user_edited", "status", "is_active", "updated_at"]
+            rows = client.query(
+                collection_name=collection,
+                filter=" and ".join(clauses) if clauses else 'doc_id != ""',
+                output_fields=fields,
+                limit=limit,
+            )
+            for row in rows if isinstance(rows, list) else []:
+                if isinstance(row, dict):
+                    documents.append({"correct_sql_domain": kind, **row})
+        return {
+            "ok": True,
+            "action": "query_correct_sql",
+            "row_count": len(documents),
+            "correct_sql_domain": domain,
+            "collections": [collection for _, collection in collections],
+            "data": {"correct_sqls": documents},
+        }
 
     # AS-IS SQL과 유사한 SQL을 벡터 검색으로 찾고 상태 조건으로 필터링한다.
     def _search_similar_asis_sql(self, conn: Any, command: dict[str, Any]) -> dict[str, Any]:
@@ -526,6 +572,8 @@ class NewType04RagCommandTool(Component):
         action = result.get("action")
         if action == "query":
             return f"RAG Guide query completed: {result.get('row_count', 0)} row(s)."
+        if action == "query_correct_sql":
+            return f"Correct SQL VectorDB query completed: {result.get('row_count', 0)} document(s)."
         if action == "search_similar_asis_sql":
             return (
                 f"AS-IS SQL similarity search completed: {result.get('row_count', 0)} row(s) "
@@ -709,12 +757,18 @@ class NewType04RagCommandTool(Component):
             "password": self._secret_to_str(getattr(self, "milvus_password", None)) or str(os.getenv("MILVUS_PASSWORD") or ""),
             "db_name": str(getattr(self, "milvus_db_name", "") or os.getenv("MILVUS_DB_NAME") or "default").strip(),
             "asis_sql_collection": str(getattr(self, "asis_sql_collection_name", "") or os.getenv("MILVUS_ASIS_SQL_COLLECTION") or "SM_ASIS_SQL").strip(),
+            "correct_sql_conversion_collection": str(getattr(self, "correct_sql_conversion_collection_name", "") or os.getenv("MILVUS_CORRECT_SQL_CONVERSION_COLLECTION") or "SM_CORRECT_SQL_CONVERSION").strip(),
+            "correct_sql_migration_collection": str(getattr(self, "correct_sql_migration_collection_name", "") or os.getenv("MILVUS_CORRECT_SQL_MIGRATION_COLLECTION") or "SM_CORRECT_SQL_MIGRATION").strip(),
         }
-        missing = [key for key in ("uri", "username", "password", "db_name", "asis_sql_collection") if not config[key]]
+        missing = [key for key in ("uri", "username", "password", "db_name", "asis_sql_collection", "correct_sql_conversion_collection", "correct_sql_migration_collection") if not config[key]]
         if missing:
             raise ValueError(f"missing Milvus config for AS-IS SQL search: {', '.join(missing)}")
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", config["asis_sql_collection"]):
             raise ValueError("Invalid AS-IS SQL collection name")
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", config["correct_sql_conversion_collection"]):
+            raise ValueError("Invalid Correct SQL collection name")
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", config["correct_sql_migration_collection"]):
+            raise ValueError("Invalid Correct SQL Migration collection name")
         return config
 
     # Milvus 검색에 사용할 클라이언트 객체를 생성한다.
