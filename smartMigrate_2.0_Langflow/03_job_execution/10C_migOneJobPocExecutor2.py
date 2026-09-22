@@ -699,6 +699,10 @@ class NewType10CMigOneJobPocExecutor2(Component):
             return {"type": "CLOB", "length": len(value), "truncated": True, "preview": value[:4000]}
         return self._json_safe_value(value)
 
+    def _json_dump(self, value: Any) -> str:
+        """Render record verification values as readable multi-line JSON."""
+        return json.dumps(value, ensure_ascii=False, default=str, indent=2)
+
     def _matching_parenthesis(self, text: str, open_index: int) -> int:
         depth = 0
         for index, char in enumerate(text[open_index:], start=open_index):
@@ -1243,12 +1247,42 @@ class NewType10CMigOneJobPocExecutor2(Component):
         return self._stage_sql_from_state(state, str(step.get("status") or ""))
 
     def _record_verify_log_body(self, state: dict[str, Any]) -> str:
-        """Keep record-verify logs free of INSERT/count-verify SQL text."""
+        """Render each sampled virtual AS-IS row beside its TOBE target row."""
         projection = str(state.get("record_projection_sql") or "").strip()
-        detail = str(state.get("record_verify_detail") or "").strip()
-        parts = ["[RECORD_PROJECTION_SQL]", projection or "(projection unavailable)"]
-        if detail:
-            parts.extend(["", "[RECORD_COMPARISON_RESULT]", detail])
+        result = dict(state.get("record_verify_result") or {})
+        parts = [
+            "[ASIS_TO_TOBE_COLUMN_MAPPING_SQL]",
+            projection or "(projection unavailable)",
+            "",
+            "[RECORD_VERIFY_SUMMARY]",
+            f"key_strategy={result.get('key_strategy') or ''}",
+            f"key_columns={result.get('key_columns') or []}",
+            f"selected_count={result.get('selected_count') or 0}",
+            f"mismatch_count={result.get('mismatch_count') or 0}",
+            f"result={result.get('summary') or ''}",
+        ]
+        for index, row in enumerate(result.get("rows") or [], start=1):
+            parts.extend(
+                [
+                    "",
+                    f"[CASE {index}] result={row.get('result') or ''}",
+                    "[RECORD_KEY]",
+                    self._json_dump(row.get("record_key") or {}),
+                    "[ASIS_DATASET_VIRTUAL]",
+                    # This is the SELECT dataset derived from MIG_SQL before
+                    # INSERT. Its columns use the TOBE target-column aliases
+                    # shown in the mapping SQL above.
+                    self._json_dump(row.get("expected") or {}),
+                    "[TOBE_DATASET_ACTUAL_ALL_COLUMNS]",
+                    self._json_dump(row.get("actual") or {}),
+                    "[COLUMN_DIFF]",
+                    self._json_dump(row.get("diffs") or []),
+                ]
+            )
+        if not result:
+            detail = str(state.get("record_verify_detail") or "").strip()
+            if detail:
+                parts.extend(["", "[RECORD_VERIFY_ERROR_DETAIL]", detail])
         return "\n".join(parts)
 
     # retry router가 왜 다음 경로를 선택했는지 status 메시지로 설명한다.

@@ -12,6 +12,7 @@
 | `00_architecture_chapter3_job_execution.md` | "전체 작업 진행해줘" 포함 실행 라우팅, 잔여 작업 산정, Loop 구성 | 백엔드/플로우 개발자 |
 | `00_full_workflow_loop_guide.md` | 전체 실행의 queue 생성, Loop `item`/`done`, executor 복귀 조건과 phase gate | 신규 플로우 개발자 |
 | `00_architecture_chapter4_domain_executors.md` | 10C/12C/15C/17C 단일 작업 실행 로직, 상태 전이, RAG/LLM 처리 | 실행 엔진 개발자 |
+| `00_db_migration_verification_guide.md` | 10C2 DB Migration count·record 검증 알고리즘, 로그, retry 규칙 | 개발자, 검수자, 운영자 |
 | `00_architecture_chapter5_logging_operations.md` | 로깅, `NEXT_MIG_LOG`, Select Command Tool, 장애 분석, 운영 Runbook | 운영자, 유지보수 담당 |
 | `00_architecture_chapter6_oracle_ddl.md` | Oracle 테이블 DDL, 컬럼 코멘트, 주요 인덱스 | DBA, 백엔드 개발자 |
 
