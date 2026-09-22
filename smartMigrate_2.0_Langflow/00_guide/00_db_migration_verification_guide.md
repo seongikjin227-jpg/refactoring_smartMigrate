@@ -82,7 +82,7 @@ SELECT S.EMP_ID AS EMP_NO,
  WHERE S.USE_YN = 'Y'
 ```
 
-이 SQL은 source expression과 target column의 매핑 근거로 로그에 남긴다. 또한 record 검증 sample query는 MIG_SQL의 SELECT expression에서 참조한 source column을 별도 `ASIS_nnn` alias로 함께 조회한다. 따라서 `S.LAST_NAME || S.FIRST_NAME AS EMP_NAME`이면 case 로그에 `S.LAST_NAME`, `S.FIRST_NAME`의 원본 값이 각각 보이고, mapping SQL을 통해 그것들이 `EMP_NAME`으로 조합됐음을 확인할 수 있다.
+이 SQL은 source expression과 target column의 매핑 근거로 로그에 남긴다. 또한 record 검증 sample query는 MIG_SQL의 SELECT expression에서 참조한 source column을 별도 `ASIS_nnn` alias로 함께 조회한다. 따라서 `S.LAST_NAME || S.FIRST_NAME AS EMP_NAME`이면 case 로그에 `S.LAST_NAME`, `S.FIRST_NAME`의 원본 값이 각각 보이고, mapping SQL을 통해 그것들이 `EMP_NAME`으로 조합됐음을 확인할 수 있다. `LPAD(S.EMP_NO, 5, '0') AS EMP_NO`도 alias-qualified column reference `S.EMP_NO`를 파싱해 원본 source dataset에 표시하고, LPAD 적용 결과는 expected target value `EMP_NO`에 표시한다.
 
 ### 3.3 표본 선정
 
@@ -110,6 +110,8 @@ SELECT P.*
 | 3 | 복합 fallback key | MIG_SQL INSERT 대상 중 non-LOB 컬럼 전체 |
 
 fallback은 PK가 없는 staging/legacy table을 위한 방법이다. CLOB/BLOB/LONG 계열은 WHERE equality key에서 제외한다. fallback key로 실제 TOBE row가 두 건 이상 발견되면 어떤 row가 대응되는지 증명할 수 없으므로 `FAIL-TEST2`다.
+
+선정된 key는 target SELECT의 bind parameter로 전달한다. 예를 들어 `EMP_NO='01001'`이면 실제 target 조회는 `WHERE EMP_NO = :pk_0`, bind 값은 `{"pk_0":"01001"}`로 로그에 기록한다. null key 값은 bind하지 않고 `EMP_NO IS NULL` 조건을 사용한다.
 
 ### 3.5 실제 TOBE row 조회와 컬럼 비교
 
@@ -145,6 +147,21 @@ SELECT S.EMP_ID AS EMP_NO,
   FROM ASIS_EMP S
  WHERE S.USE_YN = 'Y'
 
+[ASIS_DATASET_QUERY_SQL]
+SELECT P.* FROM (
+  SELECT S.EMP_ID AS EMP_NO,
+         S.LAST_NAME || S.FIRST_NAME AS EMP_NAME,
+         S.DEPT_CODE AS DEPT_CD,
+         S.EMP_ID AS ASIS_001,
+         S.LAST_NAME AS ASIS_002,
+         S.FIRST_NAME AS ASIS_003,
+         S.DEPT_CODE AS ASIS_004
+    FROM ASIS_EMP S
+   WHERE S.USE_YN = 'Y'
+) P WHERE ROWNUM <= :sample_size
+[ASIS_DATASET_QUERY_BIND_VALUES]
+{"sample_size": 3}
+
 [RECORD_VERIFY_SUMMARY]
 key_strategy=TARGET_PRIMARY_KEY
 key_columns=['EMP_NO']
@@ -156,6 +173,12 @@ mismatch_count=1
 {"S.EMP_ID": "1001", "S.LAST_NAME": "홍", "S.FIRST_NAME": "길동", "S.DEPT_CODE": "HR"}
 [RECORD_KEY]
 {"EMP_NO": "1001"}
+[TOBE_DATASET_QUERY_SQL]
+SELECT EMP_NO, EMP_NAME, DEPT_CD, LOAD_TS, BATCH_ID
+  FROM TOBE_EMP
+ WHERE EMP_NO = :pk_0
+[TOBE_DATASET_QUERY_BIND_VALUES]
+{"pk_0": "1001"}
 [EXPECTED_TARGET_VALUES_FROM_MIG_SQL]
 {"EMP_NO": "1001", "EMP_NAME": "홍길동", "DEPT_CD": "HR"}
 [TOBE_DATASET_ACTUAL_ALL_COLUMNS]

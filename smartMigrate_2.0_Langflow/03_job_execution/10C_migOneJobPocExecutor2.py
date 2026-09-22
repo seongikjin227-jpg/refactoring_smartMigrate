@@ -423,7 +423,8 @@ class NewType10CMigOneJobPocExecutor2(Component):
         map_id = self._to_int(context.get("map_id"))
         db_config = self._db_config(context["job"])
         metadata = self._load_mig_metadata(db_config, map_id)
-        metadata["correct_sql_hints"] = self._migration_correct_sql_hints(metadata, map_id)
+        correct_sql_kind = "VERIFY_SQL" if context.get("failure_status") == "FAIL-TEST" else "MIG_SQL"
+        metadata["correct_sql_hints"] = self._migration_correct_sql_hints(metadata, map_id, correct_sql_kind)
         return {
             "stage": "FETCH_DDL",
             "status": "PASS",
@@ -605,7 +606,13 @@ class NewType10CMigOneJobPocExecutor2(Component):
         return mapping_projection_sql, target_columns, f"SELECT {sample_select}\n{from_clause}", asis_columns
 
     def _source_column_references(self, expression: str) -> list[str]:
-        """Extract conventional alias.column references used by a MIG SELECT expression."""
+        """Extract conventional alias.column references used by a MIG SELECT expression.
+
+        For example, ``LPAD(S.EMP_NO, 5, '0') AS EMP_NO`` yields ``S.EMP_NO``.
+        The source value is added to the AS-IS sample query separately from the
+        target-shaped expression, so the log shows both raw source and mapped
+        expected value.
+        """
         text = re.sub(r"'(?:''|[^'])*'", "", str(expression or "").upper())
         return list(dict.fromkeys(re.findall(r"(?<![A-Z0-9_$#])([A-Z_][A-Z0-9_$#]*\.[A-Z_][A-Z0-9_$#]*)(?![A-Z0-9_$#])", text)))
 
@@ -634,7 +641,8 @@ class NewType10CMigOneJobPocExecutor2(Component):
                         key = f"pk_{index}"
                         where_parts.append(f"{column} = :{key}")
                         params[key] = value
-                cur.execute(f"SELECT {', '.join(all_columns)} FROM {target_table} WHERE {' AND '.join(where_parts)}", params)
+                target_lookup_sql = f"SELECT {', '.join(all_columns)} FROM {target_table} WHERE {' AND '.join(where_parts)}"
+                cur.execute(target_lookup_sql, params)
                 actual_rows = cur.fetchall()
                 actual = dict(zip(all_columns, actual_rows[0], strict=True)) if len(actual_rows) == 1 else None
                 diffs = [] if actual is not None else [{"column": "<ROW>", "expected": "present", "actual": "missing" if not actual_rows else f"duplicate({len(actual_rows)})"}]
@@ -642,13 +650,24 @@ class NewType10CMigOneJobPocExecutor2(Component):
                     for column in compare_columns:
                         if not self._record_values_equal(expected.get(column), actual.get(column)):
                             diffs.append({"column": column, "expected": self._record_log_value(expected.get(column)), "actual": self._record_log_value(actual.get(column))})
-                rows.append({"asis_dataset": {source_ref: self._record_log_value(expected.get(alias)) for alias, source_ref in asis_columns.items()}, "record_key": {column: self._record_log_value(expected.get(column)) for column in pk_columns}, "expected": {column: self._record_log_value(expected.get(column)) for column in compare_columns}, "actual": {column: self._record_log_value(actual.get(column)) if actual is not None else None for column in all_columns}, "diffs": diffs, "result": "MATCH" if not diffs else ("MISSING_TARGET_ROW" if not actual_rows else "VALUE_MISMATCH")})
+                rows.append({
+                    "asis_dataset": {source_ref: self._record_log_value(expected.get(alias)) for alias, source_ref in asis_columns.items()},
+                    "record_key": {column: self._record_log_value(expected.get(column)) for column in pk_columns},
+                    "tobe_dataset_query_sql": target_lookup_sql,
+                    "tobe_dataset_query_params": {key: self._record_log_value(value) for key, value in params.items()},
+                    "expected": {column: self._record_log_value(expected.get(column)) for column in compare_columns},
+                    "actual": {column: self._record_log_value(actual.get(column)) if actual is not None else None for column in all_columns},
+                    "diffs": diffs,
+                    "result": "MATCH" if not diffs else ("MISSING_TARGET_ROW" if not actual_rows else "VALUE_MISMATCH"),
+                })
         mismatch_count = sum(1 for row in rows if row["result"] != "MATCH")
         compared = list(dict.fromkeys(compare_columns))
         uncompared = [column for column in all_columns if column not in compared]
         return {
             "ok": mismatch_count == 0,
             "sample_size": sample_size,
+            "asis_dataset_query_sql": sample_sql,
+            "asis_dataset_query_params": {"sample_size": sample_size},
             "selected_count": len(rows),
             "mismatch_count": mismatch_count,
             "compared_columns": compared,
@@ -1030,8 +1049,8 @@ class NewType10CMigOneJobPocExecutor2(Component):
         return self._qualify_source_tables_in_sql(stripped, dict(context.get("db_config") or {}))
 
     # Milvus에서 이전에 확정된 migration Correct SQL 예시를 찾아 현재 프롬프트 힌트로 만든다.
-    def _migration_correct_sql_hints(self, metadata: dict[str, Any], map_id: int) -> str:
-        """확정된 migration Correct SQL 예시를 Top K만 조회한다."""
+    def _migration_correct_sql_hints(self, metadata: dict[str, Any], map_id: int, correct_sql_kind: str) -> str:
+        """현재 생성 단계와 같은 kind의 migration Correct SQL 예시만 조회한다."""
         fr_table = str(metadata.get("fr_table") or "").strip()
         to_table = str(metadata.get("raw_to_table") or metadata.get("to_table") or "").strip()
         condition = str(metadata.get("condition") or "").strip()
@@ -1051,9 +1070,9 @@ class NewType10CMigOneJobPocExecutor2(Component):
             collection_name=self._migration_rag_config()["collection"],
             data=[vector],
             anns_field="dense_vector",
-            filter='is_active == true and mig_sql != "" and verify_sql != ""',
+            filter=f'is_active == true and correct_sql_kind == "{correct_sql_kind}" and {"mig_sql" if correct_sql_kind == "MIG_SQL" else "verify_sql"} != ""',
             limit=self._positive_int(getattr(self, "correct_sql_top_k", None), 1),
-            output_fields=["map_id", "fr_table", "to_table", "condition", "mig_sql", "verify_sql", "user_edited", "status"],
+            output_fields=["map_id", "correct_sql_kind", "fr_table", "to_table", "condition", "mig_sql", "verify_sql", "user_edited", "status"],
             search_params={"metric_type": "COSINE"},
         )
         lines: list[str] = []
@@ -1064,14 +1083,13 @@ class NewType10CMigOneJobPocExecutor2(Component):
             lines.extend((
                 f"- REFERENCE_MAP_ID={reference_map_id} | SCORE={round(score, 6)} | FR_TABLE={entity.get('fr_table') or ''} | TO_TABLE={entity.get('to_table') or ''}",
                 f"  CONDITION: {entity.get('condition') or ''}",
-                f"  MIG_SQL: {entity.get('mig_sql') or ''}",
-                f"  VERIFY_SQL: {entity.get('verify_sql') or ''}",
+                f"  {correct_sql_kind}: {entity.get('mig_sql') if correct_sql_kind == 'MIG_SQL' else entity.get('verify_sql') or ''}",
             ))
             logging.getLogger("smartmigrate.workflow").info(
                 "Migration Correct SQL hint loaded",
                 extra={"workflow_log": [map_id, "DB_MIGRATION", "CORRECT_SQL_HINT", "INFO", "LOAD_MIGRATION_HINT", "PASS", 0, f"collection={self._migration_rag_config()['collection']}, reference_map_id={reference_map_id}, score={round(score, 6)}"]},
             )
-        return "\n".join(lines) if lines else "- (no matching user-edited migration SQL)"
+        return "\n".join(lines) if lines else f"- (no matching user-edited {correct_sql_kind})"
 
     # migration Correct SQL 검색에 필요한 embedding/Milvus 설정을 모은다. 12C의 RAG 설정 헬퍼와 구조가 같다.
     def _migration_rag_config(self) -> dict[str, str | int]:
@@ -1277,6 +1295,11 @@ class NewType10CMigOneJobPocExecutor2(Component):
             "[ASIS_TO_TOBE_COLUMN_MAPPING_SQL]",
             projection or "(projection unavailable)",
             "",
+            "[ASIS_DATASET_QUERY_SQL]",
+            str(result.get("asis_dataset_query_sql") or "(query unavailable)"),
+            "[ASIS_DATASET_QUERY_BIND_VALUES]",
+            self._json_dump(result.get("asis_dataset_query_params") or {}),
+            "",
             "[RECORD_VERIFY_SUMMARY]",
             f"key_strategy={result.get('key_strategy') or ''}",
             f"key_columns={result.get('key_columns') or []}",
@@ -1293,6 +1316,10 @@ class NewType10CMigOneJobPocExecutor2(Component):
                     self._json_dump(row.get("asis_dataset") or {}),
                     "[RECORD_KEY]",
                     self._json_dump(row.get("record_key") or {}),
+                    "[TOBE_DATASET_QUERY_SQL]",
+                    str(row.get("tobe_dataset_query_sql") or "(query unavailable)"),
+                    "[TOBE_DATASET_QUERY_BIND_VALUES]",
+                    self._json_dump(row.get("tobe_dataset_query_params") or {}),
                     "[EXPECTED_TARGET_VALUES_FROM_MIG_SQL]",
                     self._json_dump(row.get("expected") or {}),
                     "[TOBE_DATASET_ACTUAL_ALL_COLUMNS]",

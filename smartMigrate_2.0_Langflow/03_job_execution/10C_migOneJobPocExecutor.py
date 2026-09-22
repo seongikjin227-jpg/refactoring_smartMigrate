@@ -414,7 +414,8 @@ class NewType10CMigOneJobPocExecutor(Component):
         map_id = self._to_int(context.get("map_id"))
         db_config = self._db_config(context["job"])
         metadata = self._load_mig_metadata(db_config, map_id)
-        metadata["correct_sql_hints"] = self._migration_correct_sql_hints(metadata, map_id)
+        correct_sql_kind = "VERIFY_SQL" if context.get("failure_status") == "FAIL-TEST" else "MIG_SQL"
+        metadata["correct_sql_hints"] = self._migration_correct_sql_hints(metadata, map_id, correct_sql_kind)
         return {
             "stage": "FETCH_DDL",
             "status": "PASS",
@@ -769,8 +770,8 @@ class NewType10CMigOneJobPocExecutor(Component):
         return self._qualify_source_tables_in_sql(stripped, dict(context.get("db_config") or {}))
 
     # Milvus에서 이전에 확정된 migration Correct SQL 예시를 찾아 현재 프롬프트 힌트로 만든다.
-    def _migration_correct_sql_hints(self, metadata: dict[str, Any], map_id: int) -> str:
-        """확정된 migration Correct SQL 예시를 Top K만 조회한다."""
+    def _migration_correct_sql_hints(self, metadata: dict[str, Any], map_id: int, correct_sql_kind: str) -> str:
+        """현재 생성 단계와 같은 kind의 migration Correct SQL 예시만 조회한다."""
         fr_table = str(metadata.get("fr_table") or "").strip()
         to_table = str(metadata.get("raw_to_table") or metadata.get("to_table") or "").strip()
         condition = str(metadata.get("condition") or "").strip()
@@ -790,9 +791,9 @@ class NewType10CMigOneJobPocExecutor(Component):
             collection_name=self._migration_rag_config()["collection"],
             data=[vector],
             anns_field="dense_vector",
-            filter='is_active == true and mig_sql != "" and verify_sql != ""',
+            filter=f'is_active == true and correct_sql_kind == "{correct_sql_kind}" and {"mig_sql" if correct_sql_kind == "MIG_SQL" else "verify_sql"} != ""',
             limit=self._positive_int(getattr(self, "correct_sql_top_k", None), 1),
-            output_fields=["map_id", "fr_table", "to_table", "condition", "mig_sql", "verify_sql", "user_edited", "status"],
+            output_fields=["map_id", "correct_sql_kind", "fr_table", "to_table", "condition", "mig_sql", "verify_sql", "user_edited", "status"],
             search_params={"metric_type": "COSINE"},
         )
         lines: list[str] = []
@@ -803,14 +804,13 @@ class NewType10CMigOneJobPocExecutor(Component):
             lines.extend((
                 f"- REFERENCE_MAP_ID={reference_map_id} | SCORE={round(score, 6)} | FR_TABLE={entity.get('fr_table') or ''} | TO_TABLE={entity.get('to_table') or ''}",
                 f"  CONDITION: {entity.get('condition') or ''}",
-                f"  MIG_SQL: {entity.get('mig_sql') or ''}",
-                f"  VERIFY_SQL: {entity.get('verify_sql') or ''}",
+                f"  {correct_sql_kind}: {entity.get('mig_sql') if correct_sql_kind == 'MIG_SQL' else entity.get('verify_sql') or ''}",
             ))
             logging.getLogger("smartmigrate.workflow").info(
                 "Migration Correct SQL hint loaded",
                 extra={"workflow_log": [map_id, "DB_MIGRATION", "CORRECT_SQL_HINT", "INFO", "LOAD_MIGRATION_HINT", "PASS", 0, f"collection={self._migration_rag_config()['collection']}, reference_map_id={reference_map_id}, score={round(score, 6)}"]},
             )
-        return "\n".join(lines) if lines else "- (no matching user-edited migration SQL)"
+        return "\n".join(lines) if lines else f"- (no matching user-edited {correct_sql_kind})"
 
     # migration Correct SQL 검색에 필요한 embedding/Milvus 설정을 모은다. 12C의 RAG 설정 헬퍼와 구조가 같다.
     def _migration_rag_config(self) -> dict[str, str | int]:

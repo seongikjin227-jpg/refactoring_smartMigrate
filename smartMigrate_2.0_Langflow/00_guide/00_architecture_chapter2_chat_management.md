@@ -247,10 +247,11 @@ VectorDB 동기화는 별도 `VECTOR_DB_SYNC` route가 아니다. `04_saveVector
 |---|---|---|
 | "VectorDB 업로드해줘" | `MANAGEMENT_AGENT` | Sync Tool `{"action":"sync_all"}` |
 | "방금 저장한 Bind Correct SQL을 반영해줘" | `MANAGEMENT_AGENT` | Sync Tool `{"action":"sync_correct_sql","sql_seq":42,"correct_sql_kind":"BIND_SQL"}` |
+| "방금 저장한 Migration Correct SQL을 반영해줘" | `MANAGEMENT_AGENT` | Sync Tool `{"action":"sync_correct_sql","map_id":101,"correct_sql_kind":"MIG_SQL"}` 또는 `VERIFY_SQL` |
 
-현재 `04_saveVectorDB.py`는 특정 `RAG_ID`만 부분 업로드하지 않는다. `sync_all`은 Oracle 원천 테이블을 읽어 변경된 활성 row만 `content_hash` 기준으로 upsert하고, 기존 Milvus 문서를 자동 비활성화하거나 삭제하지 않는다. `sync_correct_sql`은 Correct SQL Conversion 컬렉션만 같은 방식으로 동기화한다.
+현재 `04_saveVectorDB.py`는 특정 `RAG_ID`만 부분 업로드하지 않는다. `sync_all`은 RAG/AS-IS Oracle 원천을 읽어 변경된 활성 row만 `content_hash` 기준으로 upsert하고, Correct SQL을 대량 색인하지 않는다. `sync_correct_sql`은 Conversion(`sql_seq` + 단계 kind) 또는 Migration(`map_id` + `MIG_SQL`/`VERIFY_SQL`)의 채팅 저장 한 건만 같은 방식으로 동기화한다.
 
-Correct SQL은 채팅으로 받은 한 단계 SQL만 `save_correct_sql`로 저장한다. Correct TO_SQL은 `FAIL-BIND`, Correct BIND_SQL과 필수 JSON `BIND_SET`은 `FAIL-TEST`, Correct TEST_SQL은 `PASS-CONVERSION`으로 상태를 전이한다. 이어 `sync_correct_sql(sql_seq, correct_sql_kind)`이 그 한 단계 문서만 저장한다. BIND_SQL Correct SQL은 `search_similar_asis_sql(..., FAIL_ONLY, min_similarity=0.8)` 결과 중 80% 초과의 `FAIL-BIND` 후보에만 `apply_correct_sql_to_failed_job(correct_sql_kind='BIND_SQL')`을 적용한다. 이 UPDATE는 `REF_SEQ`와 `RETRY_COUNT=0`만 변경하고 FAIL-BIND 상태를 보존한다. 기존 Milvus 문서는 자동 삭제하지 않으며, 컬렉션이 없다면 단건 동기화가 현재 schema로 생성한다.
+Correct SQL은 채팅으로 받은 한 단계 SQL만 저장한다. Migration Correct `MIG_SQL`은 `save_migration_mig_sql` 직후 `sync_correct_sql(map_id, correct_sql_kind='MIG_SQL')`으로, Correct `VERIFY_SQL`은 `save_migration_verify_sql` 직후 `sync_correct_sql(map_id, correct_sql_kind='VERIFY_SQL')`으로 저장한다. 각 Milvus 문서는 해당 kind SQL만 가지며 다른 SQL kind는 빈 값으로 보관한다. `FAIL-TEST`에서 VERIFY_SQL을 생성할 때는 `VERIFY_SQL` Correct SQL 문서만 힌트로 검색한다. Correct TO_SQL은 `FAIL-BIND`, Correct BIND_SQL과 필수 JSON `BIND_SET`은 `FAIL-TEST`, Correct TEST_SQL은 `PASS-CONVERSION`으로 상태를 전이한다. 이어 `sync_correct_sql(sql_seq, correct_sql_kind)`이 그 한 단계 문서만 저장한다. BIND_SQL Correct SQL은 `search_similar_asis_sql(..., FAIL_ONLY, min_similarity=0.8)` 결과 중 80% 초과의 `FAIL-BIND` 후보에만 `apply_correct_sql_to_failed_job(correct_sql_kind='BIND_SQL')`을 적용한다. 이 UPDATE는 `REF_SEQ`와 `RETRY_COUNT=0`만 변경하고 FAIL-BIND 상태를 보존한다. 기존 Milvus 문서는 자동 삭제하지 않으며, 컬렉션이 없다면 단건 동기화가 현재 schema로 생성한다. 기존 Migration 컬렉션은 schema를 자동 변경할 수 없으므로 `correct_sql_kind` 필드가 없으면 삭제 후 재생성해야 한다.
 
 캔버스에서는 Management Router의 `Vector DB Sync` 출력 및 `04_saveVectorDB`로 향하던 직접 선을 제거한다. `04_saveVectorDB`의 `Tool Result`만 Management Agent의 Tool 입력에 연결한다.
 

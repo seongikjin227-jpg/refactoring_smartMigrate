@@ -61,7 +61,12 @@ class NewType04SaveVectorDB(Component):
             display_name="Tool Command JSON",
             required=False,
             tool_mode=True,
-            info='Use {"action":"sync_correct_sql"} after save_correct_sql, or {"action":"sync_all"} for a full sync.',
+            info=(
+                'After a chat save use {"action":"sync_correct_sql","sql_seq":42,'
+                '"correct_sql_kind":"BIND_SQL"} for Conversion or '
+                '{"action":"sync_correct_sql","map_id":101,"correct_sql_kind":"MIG_SQL"} '
+                'for Migration. Use {"action":"sync_all"} for RAG/AS-IS sync and collection creation.'
+            ),
         ),
         DataInput(name="payload_json", display_name="Payload JSON", required=False),
         StrInput(name="db_host", display_name="DB Host", required=True),
@@ -95,7 +100,12 @@ class NewType04SaveVectorDB(Component):
             command = self._parse_payload(getattr(self, "command_json", ""))
             action = str(command.get("action") or "sync_correct_sql").strip().lower()
             if action in {"sync_correct_sql", "sync_correct", "correct_sql_sync"}:
-                result = self._sync_correct_sql_only(command)
+                correct_sql_kind = str(command.get("correct_sql_kind") or "").strip().upper()
+                domain = str(command.get("domain") or command.get("correct_sql_domain") or "").strip().upper()
+                if correct_sql_kind == "MIG_SQL" or domain == "MIGRATION" or command.get("map_id") not in (None, ""):
+                    result = self._sync_correct_migration_sql_only(command)
+                else:
+                    result = self._sync_correct_sql_only(command)
             elif action in {"sync_all", "sync_vector_db", "sync"}:
                 message = self.run()
                 result = {**dict(getattr(self, "status", {}) or {}), "message": str(getattr(message, "text", ""))}
@@ -157,6 +167,59 @@ class NewType04SaveVectorDB(Component):
             "final": True,
         }
 
+    def _sync_correct_migration_sql_only(self, command: dict[str, Any]) -> dict[str, Any]:
+        """Sync one chat-saved Correct Migration SQL document after its DB save."""
+        started = time.perf_counter()
+        db_config = self._db_config()
+        milvus_config = self._milvus_config()
+        embed_config = self._embed_config()
+        self._require_db_config(db_config)
+        self._require_milvus_config(milvus_config)
+        self._require_embed_config(embed_config)
+
+        map_id = str(command.get("map_id") or "").strip()
+        correct_sql_kind = str(command.get("correct_sql_kind") or "MIG_SQL").strip().upper()
+        if not map_id or correct_sql_kind not in {"MIG_SQL", "VERIFY_SQL"}:
+            raise ValueError("Migration Correct SQL sync requires map_id and correct_sql_kind=MIG_SQL or VERIFY_SQL")
+
+        rows = self._load_correct_migration_rows(db_config, map_id=map_id, correct_sql_kind=correct_sql_kind)
+        active_rows = [row for row in rows if row.get("is_active")]
+        collection = milvus_config["correct_sql_migration_collection"]
+        if not active_rows:
+            result = {
+                "upserted": 0,
+                "skipped": 0,
+                "failures": [],
+                "reason": f"The requested chat-saved Correct {correct_sql_kind} is missing or USER_EDITED is not Y",
+            }
+            return {
+                "ok": True,
+                "component": "04_syncMilvusVectorDB",
+                "action": "sync_correct_sql",
+                "correct_sql_kind": correct_sql_kind,
+                "collection": collection,
+                "collection_created": False,
+                "correct_sql_migration": result,
+                "elapsed_seconds": round(time.perf_counter() - started, 3),
+                "final": True,
+            }
+
+        client = self._milvus_client(milvus_config)
+        vector_dim = self._detect_vector_dim(active_rows, embed_config)
+        created = self._ensure_collection(client, collection, vector_dim, "migration")
+        sync = self._sync_collection(client, collection, rows, embed_config)
+        return {
+            "ok": not sync["failures"],
+            "component": "04_syncMilvusVectorDB",
+            "action": "sync_correct_sql",
+            "correct_sql_kind": correct_sql_kind,
+            "collection": collection,
+            "collection_created": created,
+            "correct_sql_migration": sync,
+            "elapsed_seconds": round(time.perf_counter() - started, 3),
+            "final": True,
+        }
+
     # Langflow output 진입점에서 입력을 검증하고 이 컴포넌트의 주요 실행 흐름을 시작한다.
     def run(self) -> Message:
         # ---------------------------------------------------------------------
@@ -178,9 +241,10 @@ class NewType04SaveVectorDB(Component):
 
         rag_rows = self._load_rag_rows(db_config)
         # Correct SQL is event-driven: only sync_correct_sql after a chat save
-        # may write this collection.  sync_all must not re-index USER_EDITED rows.
+        # may write either Correct SQL collection. sync_all must not re-index
+        # USER_EDITED rows, including migration rows.
         conversion_rows: list[dict[str, Any]] = []
-        migration_rows = self._load_correct_migration_rows(db_config)
+        migration_rows: list[dict[str, Any]] = []
         asis_sql_rows = self._load_asis_sql_rows(db_config)
         active_rows = rag_rows + conversion_rows + migration_rows + asis_sql_rows
         vector_dim = self._detect_vector_dim(active_rows, embed_config)
@@ -343,6 +407,7 @@ class NewType04SaveVectorDB(Component):
             schema.add_field("edit_fr_sql", DataType.VARCHAR, max_length=TEXT_MAX)
         elif schema_kind == "migration":
             schema.add_field("map_id", DataType.VARCHAR, max_length=128)
+            schema.add_field("correct_sql_kind", DataType.VARCHAR, max_length=16)
             schema.add_field("fr_table", DataType.VARCHAR, max_length=2048)
             schema.add_field("to_table", DataType.VARCHAR, max_length=2048)
             schema.add_field("condition", DataType.VARCHAR, max_length=8192)
@@ -593,7 +658,9 @@ class NewType04SaveVectorDB(Component):
             return rows
 
     # DB 또는 payload에서 이 단계에 필요한 입력 데이터를 로드한다.
-    def _load_correct_migration_rows(self, db_config: dict[str, Any]) -> list[dict[str, Any]]:
+    def _load_correct_migration_rows(
+        self, db_config: dict[str, Any], *, map_id: str, correct_sql_kind: str
+    ) -> list[dict[str, Any]]:
         table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
         detail_table = self._qualify("NEXT_MIG_INFO_DTL", db_config.get("system_schema"))
         sql = f"""
@@ -608,13 +675,13 @@ class NewType04SaveVectorDB(Component):
                    STATUS,
                    TO_CHAR(UPD_TS, 'YYYY-MM-DD HH24:MI:SS')
               FROM {table}
-             WHERE MIG_SQL IS NOT NULL
-               AND VERIFY_SQL IS NOT NULL
+             WHERE MAP_ID = :map_id
+               AND {"MIG_SQL" if correct_sql_kind == "MIG_SQL" else "VERIFY_SQL"} IS NOT NULL
              ORDER BY UPD_TS DESC NULLS LAST
         """
         with self._connect(db_config) as conn:
             cur = conn.cursor()
-            cur.execute(sql)
+            cur.execute(sql, {"map_id": map_id})
             source_rows = cur.fetchall()
             map_ids = [self._lob_to_str(row[0]).strip() for row in source_rows if self._lob_to_str(row[0]).strip()]
             mappings_by_map_id: dict[str, list[str]] = {}
@@ -644,12 +711,15 @@ class NewType04SaveVectorDB(Component):
                 fr_table = self._lob_to_str(row[2]).strip()
                 to_table = self._lob_to_str(row[3]).strip()
                 condition = self._lob_to_str(row[4]).strip()
-                mig_sql = self._lob_to_str(row[5]).strip()
-                verify_sql = self._lob_to_str(row[6]).strip()
+                stored_mig_sql = self._lob_to_str(row[5]).strip()
+                stored_verify_sql = self._lob_to_str(row[6]).strip()
+                mig_sql = stored_mig_sql if correct_sql_kind == "MIG_SQL" else ""
+                verify_sql = stored_verify_sql if correct_sql_kind == "VERIFY_SQL" else ""
                 user_edited = self._lob_to_str(row[7]).strip().upper()
                 status = self._lob_to_str(row[8]).strip().upper()
-                # Embedding is mapping-structure only.  MIG_SQL and VERIFY_SQL
-                # remain retrieval metadata, not search criteria.
+                # Each Correct Migration document has exactly one SQL kind. The
+                # other SQL field is deliberately blank, just like stage-specific
+                # Conversion Correct SQL documents.
                 mapping_text = "\n".join(mappings_by_map_id.get(map_id) or []) or "  (no column mappings found)"
                 search_content = "\n".join(
                     (
@@ -662,8 +732,9 @@ class NewType04SaveVectorDB(Component):
                 )
                 rows.append(
                     self._entity(
-                        doc_id=f"MIG:{self._hash_text(map_id)[:24]}",
+                        doc_id=f"MIG:{self._hash_text(f'{map_id}:{correct_sql_kind}')[:24]}",
                         map_id=map_id,
+                        correct_sql_kind=correct_sql_kind,
                         fr_table=fr_table,
                         to_table=to_table,
                         condition=condition,
@@ -672,7 +743,7 @@ class NewType04SaveVectorDB(Component):
                         user_edited=user_edited,
                         status=status,
                         content=search_content,
-                        is_active=user_edited == "Y" and status == "PASS" and bool(mig_sql) and bool(verify_sql),
+                        is_active=user_edited == "Y" and bool(mig_sql or verify_sql),
                         updated_at=self._lob_to_str(row[9]),
                     )
                 )

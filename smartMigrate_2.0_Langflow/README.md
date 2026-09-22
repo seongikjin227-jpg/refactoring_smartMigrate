@@ -212,7 +212,7 @@ map_id, mig_kind, log_type, log_level, step_name, status, retry_count, generate_
 | Milvus `SM_CORRECT_SQL_CONVERSION` | 보정된 SQL Conversion 예시 검색 |
 | Milvus `SM_CORRECT_SQL_MIGRATION` | 보정된 Migration SQL 예시 검색 |
 
-`02_flow_management/04_saveVectorDB.py`는 RAG Guide/AS-IS SQL 동기화와 채팅으로 저장된 Correct SQL의 단건 동기화를 담당합니다. Correct SQL은 `USER_EDITED='Y'`인 요청 행의 지정 단계(`TO_SQL`/`BIND_SQL`/`TEST_SQL`)만 `sync_correct_sql(sql_seq, correct_sql_kind)`으로 upsert하며 Conversion PASS를 요구하지 않습니다. 컬렉션이 없으면 현재 스키마로 생성하지만, 기존 컬렉션의 schema를 자동 변경·삭제하지는 않습니다.
+`02_flow_management/04_saveVectorDB.py`는 RAG Guide/AS-IS SQL 동기화와 채팅으로 저장된 Correct SQL의 단건 동기화를 담당합니다. Conversion은 `USER_EDITED='Y'`인 요청 행의 지정 단계(`TO_SQL`/`BIND_SQL`/`TEST_SQL`)만 `sync_correct_sql(sql_seq, correct_sql_kind)`으로 upsert하며, Migration은 Correct `MIG_SQL` 또는 `VERIFY_SQL`만 `sync_correct_sql(map_id, correct_sql_kind)`으로 kind별 upsert합니다. 두 흐름 모두 PASS를 요구하지 않으며 `sync_all`은 Correct SQL을 대량 색인하지 않습니다. 컬렉션이 없으면 현재 스키마로 생성하지만, 기존 컬렉션의 schema를 자동 변경·삭제하지는 않습니다. 기존 `SM_CORRECT_SQL_MIGRATION`에 `correct_sql_kind` 또는 신규 schema 필드가 없으면 운영자가 해당 컬렉션을 삭제한 뒤 다음 단건 sync로 재생성해야 합니다.
 
 ## 최소 검증
 

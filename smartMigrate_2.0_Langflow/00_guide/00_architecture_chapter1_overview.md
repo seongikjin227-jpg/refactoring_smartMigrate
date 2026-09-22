@@ -77,7 +77,7 @@ flowchart LR
 |---|---|---|---|
 | `SM_RAG_RULES` | `NEXT_MIG_RAG_INFO` | `12C`, `15C` | SQL Conversion/Tuning rule 검색 |
 | `SM_CORRECT_SQL_CONVERSION` | 채팅 저장 후 `sync_correct_sql(sql_seq, correct_sql_kind)`으로 올린 `USER_EDITED='Y'`의 단계별 문서 | `12C` | 단계별 Correct SQL 예시 검색 및 `REF_SEQ` 대상 |
-| `SM_CORRECT_SQL_MIGRATION` | `NEXT_MIG_INFO`의 user-edited/pass migration row | `10C` | migration SQL/verify SQL 예시 검색 |
+| `SM_CORRECT_SQL_MIGRATION` | 채팅에서 `save_migration_mig_sql`/`save_migration_verify_sql` 후 kind별 `sync_correct_sql(map_id, MIG_SQL/VERIFY_SQL)`으로 올린 Correct SQL 한 건 | `10C` | 단계별 Correct Migration SQL 예시 검색 |
 | `SM_ASIS_SQL` | `NEXT_SQL_INFO`의 `EDIT_FR_SQL` 우선, 없으면 `FR_SQL` | `04_ragCommandTool` | 유사 AS-IS SQL 검색 |
 
 ```mermaid

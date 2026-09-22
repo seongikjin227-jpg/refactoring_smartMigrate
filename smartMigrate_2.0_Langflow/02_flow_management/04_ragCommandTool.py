@@ -171,7 +171,10 @@ class NewType04RagCommandTool(Component):
         has_sql_seq = command.get("sql_seq") not in (None, "")
         has_sql_id = bool(str(command.get("sql_id") or "").strip())
         has_space_nm = bool(str(command.get("space_nm") or "").strip())
-        if not has_sql_seq and has_sql_id != has_space_nm:
+        # Conversion identity is SQL_SEQ or the SQL_ID/SPACE_NM pair. Migration
+        # Correct SQL is identified by MAP_ID, and an unqualified query is valid
+        # for listing the chat-saved documents in either collection.
+        if domain == "CONVERSION" and not has_sql_seq and has_sql_id != has_space_nm:
             raise ValueError("Correct SQL lookup requires sql_seq or both sql_id and space_nm")
         for kind, collection in collections:
             if not client.has_collection(collection_name=collection):
@@ -187,12 +190,12 @@ class NewType04RagCommandTool(Component):
                     for key, field in (("sql_id", "sql_id"), ("space_nm", "space_nm")):
                         value = str(command.get(key) or "").strip()
                         clauses.append(f"{field} == {json.dumps(value, ensure_ascii=False)}")
-                fields = ["doc_id", "sql_seq", "space_nm", "sql_id", "status_conversion", "user_edited", "tag_kind", "target_table", "source_sql", "to_sql", "bind_sql", "test_sql", "is_active", "updated_at"]
+                fields = ["doc_id", "sql_seq", "space_nm", "sql_id", "status_conversion", "correct_sql_kind", "user_edited", "tag_kind", "target_table", "source_sql", "to_sql", "bind_sql", "test_sql", "is_active", "updated_at"]
             else:
                 map_id = str(command.get("map_id") or "").strip()
                 if map_id:
                     clauses.append(f"map_id == {json.dumps(map_id, ensure_ascii=False)}")
-                fields = ["doc_id", "map_id", "fr_table", "to_table", "condition", "mig_sql", "verify_sql", "user_edited", "status", "is_active", "updated_at"]
+                fields = ["doc_id", "map_id", "correct_sql_kind", "fr_table", "to_table", "condition", "mig_sql", "verify_sql", "user_edited", "status", "is_active", "updated_at"]
             rows = client.query(
                 collection_name=collection,
                 filter=" and ".join(clauses) if clauses else 'doc_id != ""',

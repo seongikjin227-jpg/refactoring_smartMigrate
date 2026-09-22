@@ -107,7 +107,7 @@ RAG Guide는 `NEXT_MIG_RAG_INFO`에 저장된다. 추가, 수정, 비활성화�
 | 비활성화 | `RAG_ID` | 없음 | `RAG_ID={RAG_ID} RAG Guide 비활성화해줘.` | 물리 삭제 대신 `USE_YN='N'`으로 변경한다. |
 | VectorDB 동기화 | 없음 | 없음 | `RAG Guide, Correct SQL, AS-IS SQL을 VectorDB에 동기화해줘.` | Oracle 원천 snapshot을 기준으로 `SM_RAG_RULES`, Correct SQL collection, `SM_ASIS_SQL`을 갱신한다. |
 
-Correct SQL은 반드시 채팅으로 받은 하나의 단계 SQL만 저장한다. Correct TOBE 저장은 `STATUS_CONVERSION=FAIL-BIND`, `RETRY_COUNT=0`으로 바꿔 Bind 생성부터 재개한다. Correct BIND 저장은 실행 가능한 `BIND_SQL`과 비어 있지 않은 JSON 배열 `BIND_SET`을 함께 요구하고 `STATUS_CONVERSION=FAIL-TEST`, `RETRY_COUNT=0`으로 바꿔 Test 생성·실행부터 재개한다. Correct TEST 저장은 사람이 검증까지 완료했다는 뜻이므로 `STATUS_CONVERSION=PASS-CONVERSION`으로 종료한다. 각 저장 직후 `sync_correct_sql(sql_seq, correct_sql_kind)`으로 동일 단계 문서만 벡터 DB에 저장한다. executor는 `USER_EDITED`를 사용하지 않고 status stage만 사용한다.
+Correct SQL은 반드시 채팅으로 받은 하나의 단계 SQL만 저장한다. Migration Correct MIG_SQL은 `STATUS=FAIL-TEST`, `RETRY_COUNT=0`으로 바꿔 Verify부터 재개하며, 저장 직후 `sync_correct_sql(map_id, correct_sql_kind='MIG_SQL')`으로 그 MIG_SQL 한 건만 벡터 DB에 저장한다. Correct VERIFY_SQL은 `STATUS=PASS`로 종료하며, 저장 직후 `sync_correct_sql(map_id, correct_sql_kind='VERIFY_SQL')`으로 그 VERIFY_SQL 한 건만 벡터 DB에 저장한다. Correct TOBE 저장은 `STATUS_CONVERSION=FAIL-BIND`, `RETRY_COUNT=0`으로 바꿔 Bind 생성부터 재개한다. Correct BIND 저장은 실행 가능한 `BIND_SQL`과 비어 있지 않은 JSON 배열 `BIND_SET`을 함께 요구하고 `STATUS_CONVERSION=FAIL-TEST`, `RETRY_COUNT=0`으로 바꿔 Test 생성·실행부터 재개한다. Correct TEST 저장은 사람이 검증까지 완료했다는 뜻이므로 `STATUS_CONVERSION=PASS-CONVERSION`으로 종료한다. 각 Conversion 저장 직후 `sync_correct_sql(sql_seq, correct_sql_kind)`으로 동일 단계 문서만 벡터 DB에 저장한다. executor는 `USER_EDITED`를 사용하지 않고 status stage만 사용한다.
 
 ### RAG Guide 입력 규칙
 

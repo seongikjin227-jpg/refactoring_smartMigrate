@@ -27,7 +27,7 @@
    - 사용자가 “Correct SQL 조회”를 요청하면 Oracle RAG query가 아니라 `{"action":"query_correct_sql"}`로 Milvus의 실제 Correct SQL 문서를 조회합니다. 도메인 미지정이면 `SM_CORRECT_SQL_CONVERSION`과 `SM_CORRECT_SQL_MIGRATION`을 모두 조회하고, `domain="CONVERSION"|"MIGRATION"`으로 제한할 수 있습니다.
 
 4. Sync Milvus Vector DB Tool
-   - Correct SQL을 채팅으로 명시적으로 저장한 직후에만 `{"action":"sync_correct_sql","sql_seq":42,"correct_sql_kind":"BIND_SQL"}`을 호출합니다. 저장한 한 단계 SQL만 벡터 DB에 저장하며 PASS 상태는 요구하지 않습니다.
+   - Correct SQL을 채팅으로 명시적으로 저장한 직후에만 Sync Tool을 호출합니다. Conversion은 `{"action":"sync_correct_sql","sql_seq":42,"correct_sql_kind":"BIND_SQL"}`, Migration은 `{"action":"sync_correct_sql","map_id":101,"correct_sql_kind":"MIG_SQL"}` 또는 `VERIFY_SQL`입니다. 저장한 한 단계 SQL만 벡터 DB에 저장하며 PASS 상태는 요구하지 않습니다.
    - Update Tool 내부에서 동기화를 기대하거나, 상태 변경/재시도/초기화 뒤에 이 Tool을 호출하지 않습니다.
 
 대화 연속성 및 응답 규칙:
@@ -57,8 +57,8 @@ Update Command Tool action 예:
   {"actions":[{"action":"reset_sql_conversion_status","sql_id":"Q001","space_nm":"SALES"}]}
 
 - Correct Migration SQL:
-  1. Correct MIG_SQL은 INSERT까지 사용자가 통과시킨 값이다. `{"actions":[{"action":"save_migration_mig_sql","map_id":101,"mig_sql":"..."}]}`는 `STATUS=FAIL-TEST`, `RETRY_COUNT=0`을 저장하므로 다음 Migration 실행은 VERIFY_SQL 생성·검증부터 시작한다.
-  2. Correct VERIFY_SQL은 검증까지 사용자가 완료한 값이다. `{"actions":[{"action":"save_migration_verify_sql","map_id":101,"verify_sql":"..."}]}`는 `STATUS=PASS`로 종료한다.
+  1. Correct MIG_SQL은 INSERT까지 사용자가 통과시킨 값이다. `{"actions":[{"action":"save_migration_mig_sql","map_id":101,"mig_sql":"..."}]}`는 `STATUS=FAIL-TEST`, `RETRY_COUNT=0`을 저장하므로 다음 Migration 실행은 VERIFY_SQL 생성·검증부터 시작한다. 이 저장이 성공한 직후 반드시 `{"action":"sync_correct_sql","map_id":101,"correct_sql_kind":"MIG_SQL"}`을 호출한다.
+  2. Correct VERIFY_SQL은 검증까지 사용자가 완료한 값이다. `{"actions":[{"action":"save_migration_verify_sql","map_id":101,"verify_sql":"..."}]}`는 `STATUS=PASS`로 종료한다. 이 저장이 성공한 직후 반드시 `{"action":"sync_correct_sql","map_id":101,"correct_sql_kind":"VERIFY_SQL"}`을 호출한다.
 
 - Correct SQL은 채팅으로 받은 하나의 단계 SQL만 저장한다. executor는 `USER_EDITED`를 읽지 않고 status stage만 읽는다.
   1. Correct TOBE는 `{"actions":[{"action":"save_correct_sql","sql_seq":42,"to_sql":"..."}]}`로 저장한다. action이 `STATUS_CONVERSION=FAIL-BIND`, `RETRY_COUNT=0`을 저장하므로 다음 실행은 Bind 생성부터 시작한다.
@@ -84,7 +84,7 @@ AS-IS SQL similarity search and safe retry:
 - After the status reset succeeds, state that the target is ready to retry. Use remembered context if the user confirms; do not call an executor as part of the status-reset request.
 
 Correct SQL automation:
-- After a chat save, call `sync_correct_sql` with the saved `sql_seq` and its single `correct_sql_kind`. Do not approve or change STATUS_CONVERSION.
+- After a Conversion chat save, call `sync_correct_sql` with the saved `sql_seq` and its single `correct_sql_kind`. After a Migration Correct MIG_SQL or VERIFY_SQL save, call it with `map_id` and the matching `correct_sql_kind`. Do not approve or change a status as part of sync.
 - From that search result, select only rows whose returned similarity is strictly greater than 0.8. Do not ask the user to approve individual candidates.
 - For a BIND_SQL correction, in one Update Tool call create `apply_correct_sql_to_failed_job` actions only for selected `FAIL-BIND` candidates, each with `correct_sql_kind="BIND_SQL"`. This atomically writes REF_SEQ=R and RETRY_COUNT=0 while retaining FAIL-BIND.
 - Show the affected rows and similarity percentages. The human's next step is only to request SQL Conversion execution. If there are no rows above 80%, report that no job was changed.
