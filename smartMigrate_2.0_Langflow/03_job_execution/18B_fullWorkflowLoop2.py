@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from contextlib import contextmanager
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from lfx.base.flow_controls.loop_utils import (
@@ -55,6 +56,9 @@ class NewType18BFullWorkflowLoop2(Component):
         for index, item in enumerate(data_list, start=1):
             self._validate_job(self._data_dict(item), index)
         self.update_ctx({f"{self._id}_data": data_list, f"{self._id}_index": 0, f"{self._id}_initialized": True})
+        # Keep the exact 18A input visible separately from later dynamic rows.
+        # This is the baseline needed to diagnose identity/key mismatches.
+        self._log_initial_queue_snapshot(data_list)
 
     # Langflow Message 입력을 Loop가 처리할 Data 객체로 변환한다.
     def _convert_message_to_data(self, message: Message) -> Data:
@@ -137,9 +141,8 @@ class NewType18BFullWorkflowLoop2(Component):
             cursor = int(self.ctx.get(f"{self._id}_index", 0) or 0)
             dynamic_added_count = int(self.ctx.get(f"{self._id}_dynamic_added_count", 0) or 0)
             while cursor < len(data_list):
-                # item을 loop body로 넘기기 전에 DB 자동 실행 대상 목록을 먼저 refresh한다.
-                # 이렇게 해야 "바로 다음에 실행할 job"도 data_list[cursor:]에 포함된 상태로 중복 비교된다.
-                # 예: 다음 job이 104이고 DB 자동 실행 대상 조회에도 104가 있으면, 새 job으로 added 처리하지 않는다.
+                # 18A 최초 snapshot의 첫 item은 poll 없이 실행한다. 이후 전체 실행만 DB를 refresh하며,
+                # cursor 이후의 미실행 queue에서 같은 route의 MAP_ID/SQL_SEQ identity를 다시 넣지 않는다.
                 next_payload = self._data_dict(data_list[cursor])
                 if self._dynamic_refresh_allowed(data_list, cursor):
                     dynamic_added_count += self._refresh_dynamic_queue(data_list, cursor, self._route(next_payload))
@@ -437,23 +440,25 @@ class NewType18BFullWorkflowLoop2(Component):
         # 이미 메모리 큐의 남은 구간에 있는 job은 아래 remaining_keys 비교로 제외한다.
         pending_jobs = self._load_pending_jobs_from_db(db_config, first_payload)
 
-        # cursor 위치의 "지금 실행할 job"과 그 뒤의 남은 job만 중복 기준으로 본다.
-        # cursor 앞쪽에서 이미 실행된 job은 사용자가 FAIL stage를 유지한 채 RETRY_COUNT를 0으로 바꾸면 새 요청으로 재추가될 수 있다.
-        # 따라서 전체 data_list가 아니라 data_list[cursor:]만 비교한다.
-        # 이 정책의 의미:
-        # - data_list[cursor:]에 있으면 이미 이번 run에서 실행 예정이므로 추가하지 않는다.
-        # - data_list[:cursor]에만 있으면 이미 지나간 작업이므로, DB가 다시 자동 실행 대상으로 선정되면 새 요청으로 본다.
-        remaining_keys = {
-            self._job_key(self._data_dict(item))
-            for item in data_list[cursor:]
-            if self._job_key(self._data_dict(item)) is not None
-        }
+        # 아직 실행하지 않은 queue에 있는 동일 route 작업만 중복 추가하지 않는다.
+        # 완료된 item은 DB 상태상 자동 대상에서 빠지므로 여기서 추적하지 않는다.
+        # SQL Conversion/Tuning/Formatting은 같은 SQL_SEQ라도 서로 다른 단계이므로 route를 포함해 구분한다.
+        known_key_positions: dict[tuple[Any, ...], list[int]] = {}
+        for position, item in enumerate(data_list[cursor:], start=cursor):
+            key = self._job_key(self._data_dict(item))
+            if key is not None:
+                known_key_positions.setdefault(key, []).append(position)
+        # Freeze the queue side before insertion.  The diagnostic must compare
+        # this exact pre-poll list, not the already-mutated queue after ADD.
+        remaining_queue_before = [self._data_dict(item) for item in data_list[cursor:]]
+        known_keys = set(known_key_positions)
         added = 0
         invalid_key_count = 0
         already_queued_count = 0
         duplicate_poll_count = 0
         added_jobs: list[dict[str, Any]] = []
         seen_new_keys: set[tuple[Any, ...]] = set()
+        comparison_rows: list[dict[str, Any]] = []
         for job in pending_jobs:
             key = self._job_key(job)
 
@@ -462,37 +467,44 @@ class NewType18BFullWorkflowLoop2(Component):
             # key가 seen_new_keys에 있으면 같은 refresh 안에서 DB query 결과가 중복된 것이므로 한 번만 추가한다.
             if key is None:
                 invalid_key_count += 1
-                continue
-            if key in remaining_keys:
-                already_queued_count += 1
+                comparison_rows.append({"decision": "SKIP_INVALID_KEY", "job": job, "key": key})
                 continue
             if key in seen_new_keys:
                 duplicate_poll_count += 1
+                comparison_rows.append({"decision": "SKIP_DUPLICATE_IN_POLL", "job": job, "key": key})
+                continue
+            if key in known_keys:
+                already_queued_count += 1
+                comparison_rows.append({"decision": "SKIP_ALREADY_QUEUED", "job": job, "key": key, "matching_positions": known_key_positions.get(key, [])})
                 continue
 
             # 새 자동 실행 대상 job은 route phase와 priority를 기준으로 cursor 이후 적절한 위치에 삽입한다.
             # 삽입 후에는 remaining_keys에도 즉시 등록해 같은 refresh 안에서 다시 추가되지 않게 한다.
             insert_at = self._insert_dynamic_job(data_list, cursor, next_route, Data(data=job))
-            remaining_keys.add(key)
+            known_keys.add(key)
+            known_key_positions[key] = [insert_at]
             seen_new_keys.add(key)
             added += 1
             added_jobs.append({"job": job, "key": key, "insert_at": insert_at})
+            comparison_rows.append({"decision": "ADD", "job": job, "key": key, "insert_at": insert_at})
 
         if added:
             # 삽입 때문에 job_index, total_jobs, route_total_jobs가 바뀌므로 전체 큐 metadata를 다시 계산한다.
             # output payload 형식은 기존 18B와 맞춰야 하므로, 동적 큐 내부 상태는 로그로만 남긴다.
             self._reindex_jobs(data_list)
             self.update_ctx({f"{self._id}_data": data_list})
-            self._log_dynamic_jobs_added(
-                added_jobs,
-                cursor,
-                next_route,
-                len(data_list),
-                polled_count=len(pending_jobs),
-                already_queued_count=already_queued_count,
-                invalid_key_count=invalid_key_count,
-                duplicate_poll_count=duplicate_poll_count,
-            )
+        self._log_dynamic_refresh_comparison(
+            data_list=data_list,
+            cursor=cursor,
+            next_route=next_route,
+            remaining_queue_before=remaining_queue_before,
+            pending_jobs=pending_jobs,
+            comparison_rows=comparison_rows,
+            added_jobs=added_jobs,
+            already_queued_count=already_queued_count,
+            invalid_key_count=invalid_key_count,
+            duplicate_poll_count=duplicate_poll_count,
+        )
         return added
 
     def _dynamic_refresh_allowed(self, data_list: list[Data], cursor: int) -> bool:
@@ -508,6 +520,19 @@ class NewType18BFullWorkflowLoop2(Component):
         logging.getLogger("smartmigrate.workflow").info(
             message,
             extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP2", "INFO", "DYNAMIC_QUEUE_REFRESH", "SKIP_INITIAL", 0, message]},
+        )
+
+    def _log_initial_queue_snapshot(self, data_list: list[Data]) -> None:
+        """Log the exact 18A queue before 18B has ever polled the DB."""
+        lines = [
+            "[18A_INITIAL_SNAPSHOT]",
+            f"received_count={len(data_list)} route_counts={self._plan_counts(data_list)}",
+            *[self._queue_log_line(self._data_dict(item), position=index) for index, item in enumerate(data_list)],
+        ]
+        message = "\n".join(lines)
+        logging.getLogger("smartmigrate.workflow").info(
+            "18A initial queue snapshot captured; see SQL body for item-by-item identity comparison.",
+            extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP2", "INFO", "DYNAMIC_QUEUE_SNAPSHOT", "18A_RECEIVED", len(data_list), message]},
         )
 
     # Oracle 원본 테이블에서 현재 자동 실행 대상 job을 다시 읽는다. USER_EDITED는 대상 선정에 사용하지 않는다.
@@ -624,37 +649,58 @@ class NewType18BFullWorkflowLoop2(Component):
         data_list.insert(insert_at, item)
         return insert_at
 
-    # refresh 한 번에 추가된 동적 job 목록을 한 줄의 workflow log로 남긴다.
-    def _log_dynamic_jobs_added(
+    def _log_dynamic_refresh_comparison(
         self,
-        added_jobs: list[dict[str, Any]],
+        *,
+        data_list: list[Data],
         cursor: int,
         next_route: str,
-        queue_size: int,
-        *,
-        polled_count: int,
+        remaining_queue_before: list[dict[str, Any]],
+        pending_jobs: list[dict[str, Any]],
+        comparison_rows: list[dict[str, Any]],
+        added_jobs: list[dict[str, Any]],
         already_queued_count: int,
         invalid_key_count: int,
         duplicate_poll_count: int,
     ) -> None:
-        summaries = []
-        for item in added_jobs:
-            job = dict(item.get("job") or {})
-            key = item.get("key")
-            insert_at = item.get("insert_at")
-            summaries.append(
-                f"{self._route(job)} key={key} priority={self._payload_value(job, 'priority')} insert_at={insert_at}"
-            )
+        """Persist the two actual lists and every identity comparison decision.
 
-        # 동적 추가 로그는 job마다 여러 줄로 찍지 않고 refresh 1회당 한 줄로 남긴다.
-        # count/cursor/next_route/queue_size/jobs를 같이 남겨 테스트 중 큐 삽입 결과를 한눈에 확인한다.
-        message = (
-            f"dynamic automatic execution candidate jobs added count={len(added_jobs)}, polled={polled_count}, "
-            f"already_queued={already_queued_count}, invalid_key={invalid_key_count}, duplicate_poll={duplicate_poll_count}, "
-            f"cursor={cursor}, next_route={next_route}, queue_size={queue_size}, jobs=[{'; '.join(summaries)}]"
-        )
+        This intentionally uses a multi-line CLOB body: count-only logs cannot
+        explain whether 18A supplied ``123.0`` and DB polling supplied ``123``,
+        or whether route/key extraction itself was missing.
+        """
+        lines = [
+            "[DYNAMIC_QUEUE_REFRESH]",
+            (
+                f"cursor={cursor} next_route={next_route} queue_total_after={len(data_list)} "
+                f"remaining_before_compare={len(remaining_queue_before)} db_polled={len(pending_jobs)} "
+                f"added={len(added_jobs)} already_queued={already_queued_count} "
+                f"invalid_key={invalid_key_count} duplicate_in_poll={duplicate_poll_count}"
+            ),
+            "",
+            "[REMAINING_QUEUE_BEFORE_POLL]",
+            *[self._queue_log_line(item, position=position) for position, item in enumerate(remaining_queue_before, start=cursor)],
+            "",
+            "[DB_DYNAMIC_POLL]",
+            *[self._queue_log_line(job, position=index) for index, job in enumerate(pending_jobs)],
+            "",
+            "[COMPARISON_DECISIONS]",
+        ]
+        for index, row in enumerate(comparison_rows):
+            job = dict(row.get("job") or {})
+            decision = str(row.get("decision") or "UNKNOWN")
+            suffix = ""
+            if row.get("matching_positions") is not None:
+                suffix += f" matching_queue_positions={row['matching_positions']}"
+            if row.get("insert_at") is not None:
+                suffix += f" insert_at={row['insert_at']}"
+            lines.append(f"poll[{index}] decision={decision}{suffix} {self._queue_log_line(job)}")
+        if not comparison_rows:
+            lines.append("(no DB candidates)")
+
+        message = "\n".join(lines)
         logging.getLogger("smartmigrate.workflow").info(
-            message,
+            f"dynamic queue refresh compared remaining={len(remaining_queue_before)} against polled={len(pending_jobs)}; added={len(added_jobs)}",
             extra={
                 "workflow_log": [
                     0,
@@ -662,11 +708,24 @@ class NewType18BFullWorkflowLoop2(Component):
                     "18B_FULL_LOOP2",
                     "INFO",
                     "DYNAMIC_QUEUE_REFRESH",
-                    "ADD",
+                    "COMPARE",
                     len(added_jobs),
                     message,
                 ]
             },
+        )
+
+    def _queue_log_line(self, payload: dict[str, Any], *, position: int | None = None) -> str:
+        """Show raw identity fields beside the exact normalized comparison key."""
+        prefix = f"queue[{position}]" if position is not None else "job"
+        route = self._route(payload)
+        raw_map_id = self._payload_value(payload, "map_id")
+        raw_sql_seq = self._payload_value(payload, "sql_seq")
+        key = self._job_key(payload)
+        return (
+            f"{prefix} route={route} map_id_raw={raw_map_id!r} sql_seq_raw={raw_sql_seq!r} "
+            f"sql_id={self._payload_value(payload, 'sql_id')!r} space_nm={self._payload_value(payload, 'space_nm')!r} "
+            f"priority={self._payload_value(payload, 'priority')!r} normalized_key={key!r}"
         )
 
     # route별 workflow log 첫 번째 식별자에 넣을 값을 고른다.
@@ -682,19 +741,31 @@ class NewType18BFullWorkflowLoop2(Component):
     def _job_key(self, payload: dict[str, Any]) -> tuple[Any, ...] | None:
         route = self._route(payload)
         if route == "MIG":
-            # DB Migration은 MAP_ID 하나로 row가 식별된다.
-            map_id = str(self._payload_value(payload, "map_id") or "").strip()
+            # DB Migration은 MAP_ID 하나로 row가 식별된다. DataFrame의 101.0과
+            # DB cursor의 101을 같은 identity로 정규화한다.
+            map_id = self._normalized_job_identity(self._payload_value(payload, "map_id"))
             return (route, map_id) if map_id else None
         if route in {"SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"}:
-            # SQL 계열은 SQL_SEQ 또는 SPACE_NM + SQL_ID로 row를 식별한다.
-            # 같은 SQL_ID라도 conversion/tuning/formatting은 서로 다른 phase job이므로 route도 key에 포함한다.
-            sql_seq = str(self._payload_value(payload, "sql_seq") or "").strip()
+            # SQL 계열의 유일한 row identity는 SQL_SEQ다. SQL_ID/SPACE_NM fallback은
+            # 사용하지 않아 18A DataFrame과 DB poll의 identity 체계가 섞이지 않게 한다.
+            # 같은 SQL_SEQ의 conversion/tuning/formatting은 서로 다른 phase job이므로 route만 추가한다.
+            sql_seq = self._normalized_job_identity(self._payload_value(payload, "sql_seq"))
             if sql_seq:
                 return (route, "SQL_SEQ", sql_seq)
-            space_nm = str(self._payload_value(payload, "space_nm") or "").strip().upper()
-            sql_id = str(self._payload_value(payload, "sql_id") or "").strip().upper()
-            return (route, "SQL_KEY", space_nm, sql_id) if space_nm and sql_id else None
         return None
+
+    def _normalized_job_identity(self, value: Any) -> str:
+        """Normalize numeric identifiers so DataFrame 123.0 equals DB value 123."""
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        try:
+            number = Decimal(text)
+            if number.is_finite() and number == number.to_integral_value():
+                return str(int(number))
+        except (InvalidOperation, ValueError):
+            pass
+        return text
 
     # route를 phase 비교용 숫자로 변환한다.
     def _phase_index(self, route: str) -> int:

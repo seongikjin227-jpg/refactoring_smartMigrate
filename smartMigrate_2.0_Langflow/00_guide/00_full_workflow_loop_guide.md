@@ -42,14 +42,14 @@ sequenceDiagram
 
 - `item_output()`은 Loop body의 시작 output이다. 외부 graph에 결과를 한 번 더 흘려 중복 실행하지 않도록 `stop("item")`을 사용하고, 실제 body 실행은 `_iterate()`가 담당한다.
 - 18A의 최초 DataFrame은 workflow의 기준 snapshot이다. 첫 item(`cursor=0`) 직전에는 DB refresh를 하지 않아 최초 계획이 중복 삽입되지 않는다. `initial_plan_source=database_snapshot`인 전체 실행만 첫 item 완료 후 `_refresh_dynamic_queue()`를 호출한다. `selected_jobs` 또는 payload의 명시 범위 실행은 dynamic poll을 하지 않는다.
-- refresh 시 DB에서 다시 읽은 실행 후보 job 중 cursor 이후 queue에 이미 있는 식별자(MIG=`MAP_ID`, SQL=`route+SQL_SEQ`)는 제외하고, 새 job만 phase와 priority 순서에 맞춰 삽입한다.
+- refresh 시 DB에서 다시 읽은 실행 후보 job 중 cursor 이후의 미실행 queue에 이미 있는 동일 route 식별자(MIG=`MAP_ID`, SQL=`SQL_SEQ`)는 제외하고, 새 job만 phase와 priority 순서에 맞춰 삽입한다. 완료 item은 DB 상태상 자동 실행 대상에서 빠지므로 중복 기준에 보관하지 않는다. DataFrame의 `123.0`과 DB cursor의 `123`은 같은 identifier로 정규화한다. SQL Conversion/Tuning/Formatting은 동일 `SQL_SEQ`라도 서로 다른 단계이므로 route로만 구분한다.
 - refresh 뒤 cursor 위치를 다시 읽어 `execute_loop_body([item])`에 한 row만 전달하고 result를 `aggregated_results`에 누적한다. executor와 iteration dashboard가 끝난 뒤에만 cursor를 증가시켜 다음 row를 호출한다.
 - `done_output()`은 `_iterate()`가 완료된 뒤 단 한 번 실행된다. `loop_done=True`, route별 `workflow_summary`, `aggregated_results`, 중단 사유를 만들어 `18D_fullWorkflowDashboard`로 보낸다.
 - 일반 도메인 Loop(`10B`, `12B`, `15B`, `17B`)도 같은 `item`/`done` output contract를 쓰지만, 해당 도메인의 DataFrame 전체를 Loop body에 넘긴다. `18B`만 phase gate를 위해 한 item씩 순차 호출한다.
 
 ## 3. 10C 이후 다음 item으로 진행되는 조건
 
-`MIG` item은 `10C_migOneJobPocExecutor.py`에서 한 건의 generate → execute → verify → retry → final status 저장을 끝낸 뒤 result를 돌려준다. 18B는 result의 성공/실패와 관계없이 다음 MIG item으로 진행한다. 즉, 한 job의 최종 실패는 Loop 자체의 예외가 아니다.
+`MIG` item은 `10C_migOneJobPocExecutor.py`에서 한 건의 generate → execute → verify → retry → final status 저장을 끝낸 뒤 result를 돌려준다. 레코드 검증을 활성화한 흐름은 `10C_migOneJobPocExecutor2.py`를 연결하며, execute → count verify → PK 기반 record verify 순서로 처리한다. record verify는 count PASS 이후에만 실행하며 불일치는 `FAIL-TEST2`로 저장한다. Full Workflow의 모든 item은 결과와 무관하게 `18B → 10C → 12C → 15C → 17C → 18D → 18B` 체인을 한 번 돈다. 선행 단계가 `FAIL-*`이면 후속 executor는 DB/LLM 작업을 실행하지 않고 pass-through/skip payload만 보강한다. 18B는 result의 성공/실패와 관계없이 다음 item으로 진행한다. 즉, 한 job의 최종 실패는 Loop 자체의 예외가 아니다.
 
 다만 첫 SQL phase item을 실행하기 직전에 `18B._db_migration_phase_gate()`가 `NEXT_MIG_INFO`를 재확인한다.
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import time
 import urllib.error
@@ -85,21 +86,19 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             payload = self._parse_payload(getattr(self, "job_item", ""))
             self._log_run_job(payload, job, status="START", message="before run_job")
             prior_failure = self._prior_failure_status(payload)
+            if prior_failure:
+                result = self._component_pass_through(payload, started, f"SQL formatting skipped because a prior stage failed: {prior_failure}")
+                result["status"] = prior_failure
+                result["formatting_skipped"] = True
+                self.status = result
+                self._log_run_job(payload, job, status="END", message="after run_job")
+                return Data(data=result)
             generated_sql_list = self._formatting_candidates(payload)
             payload["generated_sql_list"] = generated_sql_list
             if generated_sql_list:
                 db_config = self._db_config(payload)
                 self._require_db_config(db_config)
                 result = self._run_batch_formatting(payload, db_config, started)
-                if prior_failure:
-                    result = self._preserve_prior_failure_after_formatting(result, payload, prior_failure)
-                self.status = result
-                self._log_run_job(payload, job, status="END", message="after run_job")
-                return Data(data=result)
-            if prior_failure:
-                result = self._component_pass_through(payload, started, f"SQL formatting skipped because prior stage failed and no generated SQL exists: {prior_failure}")
-                result["status"] = prior_failure
-                result["formatting_skipped"] = True
                 self.status = result
                 self._log_run_job(payload, job, status="END", message="after run_job")
                 return Data(data=result)
@@ -194,7 +193,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             prompt = self._build_formatter_batch_prompt(format_inputs)
             self._log_formatting_event(payload, step_name="FORMAT_PROMPT", status="PASS", message="Formatting prompt assembled", generate_sql=prompt)
             try:
-                raw_response = self._call_formatter_prompt(prompt, self._llm_config(payload))
+                raw_response = self._call_formatter_prompt(prompt, self._llm_config(payload), expected_item_ids={item["item_id"] for item in format_inputs})
                 self._log_formatting_event(payload, step_name="LLM_RESPONSE", status="PASS", message="LLM formatting response returned", generate_sql=raw_response)
                 formatted_by_id = self._format_sql_batch_response(format_inputs, raw_response)
             except Exception as exc:
@@ -276,7 +275,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         format_inputs = [{"item_id": "1", "sql": source_sql}]
         prompt = self._build_formatter_batch_prompt(format_inputs)
         self._log_formatting_event(log_payload, step_name="FORMAT_PROMPT", status="PASS", message="Formatting prompt assembled", generate_sql=prompt)
-        raw_response = self._call_formatter_prompt(prompt, self._llm_config(payload))
+        raw_response = self._call_formatter_prompt(prompt, self._llm_config(payload), expected_item_ids={"1"})
         self._log_formatting_event(log_payload, step_name="LLM_RESPONSE", status="PASS", message="LLM formatting response returned", generate_sql=raw_response)
         formatted_by_id = self._format_sql_batch_response(format_inputs, raw_response)
         formatted_sql = (formatted_by_id.get("1") or ("", ""))[0]
@@ -510,6 +509,16 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         text = str(raw or "").strip()
         if not text:
             raise ValueError("formatter batch response is empty")
+        # Models occasionally wrap an otherwise valid array in ```json fences
+        # or a one-line explanation.  Keep the strict array schema, but recover
+        # that array before declaring the model response invalid.
+        fenced = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", text, flags=re.I | re.S)
+        if fenced:
+            text = fenced.group(1).strip()
+        elif not text.startswith("[") or not text.endswith("]"):
+            start, end = text.find("["), text.rfind("]")
+            if start >= 0 and end > start:
+                text = text[start:end + 1].strip()
         if not text.startswith("[") or not text.endswith("]"):
             raise ValueError(f"formatter batch response must be a JSON array only; preview={text[:300]}")
         parsed: Any = json.loads(text)
@@ -525,60 +534,85 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                 result[item_id] = sql
         return result
 
-    # 설정된 LLM/fallback model 순서로 formatting prompt를 호출한다. 12C/15C와 같은 호출 방식이다.
-    def _call_formatter_prompt(self, prompt: str, config: dict[str, Any]) -> str:
-        api_key = str(config.get("llm_api_key") or "").strip()
-        model = str(config.get("llm_model") or "").strip()
-        base_url = str(config.get("llm_base_url") or "").strip().rstrip("/")
-        provider = str(config.get("llm_provider") or "").strip().lower()
-        if not api_key or not model or not base_url:
-            raise ValueError("llm_base_url, llm_api_key, and llm_model are required")
+    # Formatting JSON schema까지 검증한 뒤 fallback model을 선택한다.
+    def _call_formatter_prompt(self, prompt: str, config: dict[str, Any], *, expected_item_ids: set[str]) -> str:
+        """Treat malformed formatter output as a model failure and use fallback."""
+        api_key = str(config.get("llm_api_key") or os.getenv("LLM_API_KEY") or os.getenv("OPEN_API_KEY") or "").strip()
+        base_url = str(config.get("llm_base_url") or os.getenv("LLM_BASE_URL") or "").strip().rstrip("/")
+        model = str(config.get("llm_model") or os.getenv("LLM_MODEL") or "GLM-5.1").strip()
+        provider = str(config.get("llm_provider") or os.getenv("LLM_PROVIDER") or "").strip().lower()
+        if not api_key:
+            raise ValueError("LLM API key is required for SQL formatting")
         if not provider:
             provider = "anthropic" if "anthropic" in base_url.lower() or model.lower().startswith("claude") else "openai"
-        candidates = [model, *[item.strip() for item in str(config.get("llm_fallback_models") or "").split(",") if item.strip()]]
+        if provider not in {"openai", "anthropic"}:
+            raise ValueError("LLM provider must be openai or anthropic")
+        candidates = [model, *[item.strip() for item in str(config.get("llm_fallback_models") or os.getenv("LLM_FALLBACK_MODELS") or "").split(",") if item.strip()]]
         candidate_models = list(dict.fromkeys(candidates))
         for index, candidate in enumerate(candidate_models):
             try:
                 if provider == "anthropic":
                     from anthropic import Anthropic
 
-                    response = Anthropic(api_key=api_key, base_url=base_url, timeout=self._positive_int(config.get("llm_timeout_seconds"), 900)).messages.create(
+                    response = Anthropic(api_key=api_key, base_url=(base_url or "https://api.anthropic.com").rstrip("/"), timeout=self._positive_int(config.get("llm_timeout_seconds"), 900)).messages.create(
                         model=candidate,
                         max_tokens=self._positive_int(config.get("llm_max_tokens"), 4096),
                         temperature=0,
-                        system="Oracle/MyBatis SQL을 의미 변경 없이 포맷하십시오.",
+                        system="Return only the required JSON array. Format Oracle/MyBatis SQL without changing its meaning.",
                         messages=[{"role": "user", "content": prompt}],
                     )
-                    return "".join(str(getattr(item, "text", "")) for item in response.content).strip()
-                url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
-                request = urllib.request.Request(
-                    url,
-                    data=json.dumps(
-                        {
-                            "model": candidate,
-                            "messages": [
-                                {"role": "system", "content": "Oracle/MyBatis SQL을 의미 변경 없이 포맷하십시오."},
-                                {"role": "user", "content": prompt},
-                            ],
-                            "temperature": 0,
-                            "max_tokens": self._positive_int(config.get("llm_max_tokens"), 4096),
-                        },
-                        ensure_ascii=False,
-                    ).encode("utf-8"),
-                    headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-                    method="POST",
-                )
-                with urllib.request.urlopen(request, timeout=self._positive_int(config.get("llm_timeout_seconds"), 900)) as response:
-                    body = json.loads(response.read().decode("utf-8", errors="ignore"))
-                return str((((body.get("choices") or [{}])[0].get("message") or {}).get("content") or "")).strip()
+                    content = "".join(str(item.text or "") for item in response.content).strip()
+                elif not base_url:
+                    from openai import OpenAI
+
+                    response = OpenAI(api_key=api_key, timeout=self._positive_int(config.get("llm_timeout_seconds"), 900)).chat.completions.create(
+                        model=candidate,
+                        temperature=0,
+                        max_tokens=self._positive_int(config.get("llm_max_tokens"), 4096),
+                        messages=[
+                            {"role": "system", "content": "Return only the required JSON array. Format Oracle/MyBatis SQL without changing its meaning."},
+                            {"role": "user", "content": prompt},
+                        ],
+                    )
+                    content = str(response.choices[0].message.content or "").strip()
+                else:
+                    url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
+                    request = urllib.request.Request(
+                        url,
+                        data=json.dumps(
+                            {
+                                "model": candidate,
+                                "messages": [
+                                    {"role": "system", "content": "Return only the required JSON array. Format Oracle/MyBatis SQL without changing its meaning."},
+                                    {"role": "user", "content": prompt},
+                                ],
+                                "temperature": 0,
+                                "max_tokens": self._positive_int(config.get("llm_max_tokens"), 4096),
+                            },
+                            ensure_ascii=False,
+                        ).encode("utf-8"),
+                        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+                        method="POST",
+                    )
+                    with urllib.request.urlopen(request, timeout=self._positive_int(config.get("llm_timeout_seconds"), 900)) as response:
+                        body = json.loads(response.read().decode("utf-8", errors="ignore"))
+                    content = str((((body.get("choices") or [{}])[0].get("message") or {}).get("content") or "")).strip()
+                if not content:
+                    raise ValueError("LLM returned empty message content")
+                parsed = self._parse_formatter_batch_response(content)
+                if set(parsed) != expected_item_ids:
+                    raise ValueError(f"formatter item_id mismatch: expected={sorted(expected_item_ids)}, actual={sorted(parsed)}")
+                return content
             except urllib.error.HTTPError as exc:
+                logging.getLogger("smartmigrate.workflow").warning(f"17C formatter model={candidate} HTTP {exc.code}; fallback will be tried if available")
                 if index == len(candidate_models) - 1:
                     detail = exc.read().decode("utf-8", errors="ignore")
                     raise ValueError(f"LLM HTTP {exc.code}: {detail[:500]}") from exc
-            except Exception:
+            except Exception as exc:
+                logging.getLogger("smartmigrate.workflow").warning(f"17C formatter model={candidate} rejected response: {type(exc).__name__}: {exc}")
                 if index == len(candidate_models) - 1:
                     raise
-        raise ValueError("LLM formatter returned no content")
+        raise ValueError("LLM formatter returned no valid JSON response")
 
     # LLM 응답에서 markdown/wrapper를 제거하고 formatting된 SQL 본문만 남긴다.
     def _clean_formatted_sql(self, value: str) -> str:

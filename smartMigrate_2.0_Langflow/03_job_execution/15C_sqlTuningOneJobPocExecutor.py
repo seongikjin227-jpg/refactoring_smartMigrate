@@ -394,7 +394,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                         "tuning_guides": state.get("tuning_guides") or [],
                         "matched_rule_ids": sorted(set(state.get("matched_rule_ids") or [])),
                         "tag_kind": state.get("tag_kind"),
-                        "next_node": "17C_sqlFormattingOneJobPocExecutor",
+                        "next_node": self._after_tuning_node(state["payload"]),
                     },
                 )
                 return state
@@ -596,19 +596,20 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             elapsed=time.perf_counter() - started,
             attempts=failure_attempts,
             message=message,
-            extra={"status_tuning": status, "tuning_status": status, "tuned_to_sql": (partial_values or {}).get("tuned_to_sql") or (partial_values or {}).get("TUNED_TO_SQL"), "tuned_result": (partial_values or {}).get("TUNED_RESULT") or message, "tuning_guides": list(tuning_guides or []), "next_node": self._dashboard_node(payload)},
+            extra={"status_tuning": status, "tuning_status": status, "tuned_to_sql": (partial_values or {}).get("tuned_to_sql") or (partial_values or {}).get("TUNED_TO_SQL"), "tuned_result": (partial_values or {}).get("TUNED_RESULT") or message, "tuning_guides": list(tuning_guides or []), "next_node": self._after_tuning_node(payload)},
         )
 
-    # 튜닝을 실행하지 않는 정상 경로에서 현재 payload를 다음 dashboard 노드로 넘긴다.
+    # Full Workflow에서는 skip/실패도 17C를 거쳐 18D로 돌아간다.
+    # 17C는 선행 FAIL-*를 보고 실제 포맷팅을 하지 않고 skip 결과만 보강한다.
     def _pass_through(self, *, payload: dict[str, Any], job: dict[str, Any], started: float, status: str, message: str) -> dict[str, Any]:
-        return self._result(payload=payload, job=job, ok=False, status=status, elapsed=time.perf_counter() - started, attempts=[], message=message, extra={"tuning_skipped": True, "next_node": self._dashboard_node(payload)})
+        return self._result(payload=payload, job=job, ok=False, status=status, elapsed=time.perf_counter() - started, attempts=[], message=message, extra={"tuning_skipped": True, "next_node": self._after_tuning_node(payload)})
 
     # 현재 item이 15C 담당이 아닐 때 원본 payload를 유지한 채 넘긴다. 10C/12C의 pass-through와 같은 패턴이다.
     def _component_pass_through(self, payload: dict[str, Any], started: float, message: str) -> dict[str, Any]:
         elapsed = time.perf_counter() - started
         total = int(payload.get("total_jobs") or 1)
         index = int(payload.get("job_index") or 1)
-        result = {**payload, "component": "15C_sqlTuningOneJobPocExecutor", "ok": bool(payload.get("ok", True)), "status": payload.get("status") or "PASS-THROUGH", "elapsed_seconds": round(elapsed, 3), "attempt_count": int(payload.get("attempt_count") or 0), "attempts": list(payload.get("attempts") or []), "job_index": index, "total_jobs": total, "completed_count": index, "remaining_count": max(total - index, 0), "stages": dict(payload.get("stages") or {}), "component_pass_through": True, "pass_through_component": "15C", "message": payload.get("message") or message, "next_node": "17C_sqlFormattingOneJobPocExecutor"}
+        result = {**payload, "component": "15C_sqlTuningOneJobPocExecutor", "ok": bool(payload.get("ok", True)), "status": payload.get("status") or "PASS-THROUGH", "elapsed_seconds": round(elapsed, 3), "attempt_count": int(payload.get("attempt_count") or 0), "attempts": list(payload.get("attempts") or []), "job_index": index, "total_jobs": total, "completed_count": index, "remaining_count": max(total - index, 0), "stages": dict(payload.get("stages") or {}), "component_pass_through": True, "pass_through_component": "15C", "message": payload.get("message") or message, "next_node": self._after_tuning_node(payload)}
         history = list(result.get("history") or [])
         history.append({"step": "15C_pass_through", "message": message})
         result["history"] = history
@@ -1008,11 +1009,15 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
     # 현재 payload route에 맞는 dashboard 노드명을 결정한다.
     def _dashboard_node(self, payload: dict[str, Any]) -> str:
         if payload.get("full_workflow"):
-            return "17C_sqlFormattingOneJobPocExecutor"
+            return "18D_fullWorkflowDashboard"
         route = str(payload.get("job_route") or "").upper()
         if route == "SQL_CONVERSION":
             return "12D_sqlConversionIterationDashboard"
         return "15D_sqlTuningIterationDashboard"
+
+    def _after_tuning_node(self, payload: dict[str, Any]) -> str:
+        """Keep the complete 10C→12C→15C→17C chain for full-workflow items."""
+        return "17C_sqlFormattingOneJobPocExecutor" if payload.get("full_workflow") else self._dashboard_node(payload)
 
     # 최종 status가 의미하는 tuning 실패 단계를 반환한다.
     def _failure_stage(self, status: str) -> str:

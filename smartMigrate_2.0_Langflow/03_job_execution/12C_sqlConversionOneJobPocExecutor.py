@@ -329,7 +329,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                         message,
                         extra={
                             "workflow_log": [
-                                f"{job.get('sql_id') or ''} / {job.get('space_nm') or ''}"[:100],
+                                self._workflow_log_job_id(job),
                                 "SQL_CONVERSION",
                                 "SQL_CONVERSION",
                                 "INFO",
@@ -451,7 +451,10 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "full_workflow_abort_phase": "DB_MIGRATION",
             "full_workflow_abort_reason": message,
             "db_status_updated": False,
-            "next_node": "12D_sqlConversionIterationDashboard",
+            # Full Workflow must preserve the one-item component chain even
+            # when the migration phase gate rejects this SQL item.  15C/17C
+            # will only pass it through; they must not execute DB/LLM work.
+            "next_node": "15C_sqlTuningOneJobPocExecutor" if payload.get("full_workflow") else "12D_sqlConversionIterationDashboard",
         }
 
     # 현재 loop item의 route를 12C 내부 job_name으로 해석한다.
@@ -526,7 +529,9 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 "TARGET_TABLE is empty. Cannot retrieve mapping rules for SQL conversion.",
             )
 
-        map_id = f"{job.get('sql_id') or ''} / {job.get('space_nm') or ''}"[:100]
+        # The graph's legacy state key is named map_id, but SQL conversion logs
+        # must be identified by the SQL row's SQL_SEQ, not SQL_ID/SPACE_NM.
+        map_id = self._workflow_log_job_id(job)
         tag_kind = str(job.get("tag_kind") or "").strip().upper()
         attempts: list[dict[str, Any]] = []
         llm_config = self._llm_config(payload)
@@ -856,7 +861,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         examples: list[dict[str, Any]] | None = None,
         correct_sql_hint_text: str | None = None,
     ) -> str:
-        map_id = f"{job.get('sql_id')} / {job.get('space_nm')}"[:100]
+        map_id = self._workflow_log_job_id(job)
         # TO_SQL 프롬프트 맥락은 다음 순서로 조립한다.
         # migration 테이블/컬럼 매핑 규칙, SQL_CONVERSION GENERAL guide,
         # SQL block별 vector 유사도 순서로 뽑은 SQL_CONVERSION SEARCH 예시를 차례로 넣는다.
@@ -901,7 +906,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         retry_count: int,
         correct_sql_hint_text: str | None = None,
     ) -> tuple[str, str | None]:
-        map_id = f"{job.get('sql_id')} / {job.get('space_nm')}"[:100]
+        map_id = self._workflow_log_job_id(job)
         # Correct BIND_SQL already advances to FAIL-TEST with a supplied
         # BIND_SET.  A FAIL-BIND execution must always generate a fresh bind SQL.
         bind_sql = ""
@@ -956,7 +961,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         correct_sql_hint_text: str | None = None,
         mapping_rules: list[dict[str, str]] | None = None,
     ) -> str:
-        map_id = f"{job.get('sql_id')} / {job.get('space_nm')}"[:100]
+        map_id = self._workflow_log_job_id(job)
         # TEST_SQL은 BIND_SET의 bind case를 사용해 원본 AS-IS SQL과 TO_SQL 결과 건수를 비교한다.
         prompt = self._build_prompt(
             "TEST_SQL",
@@ -1026,7 +1031,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 message,
                 extra={
                     "workflow_log": [
-                        f"{job.get('sql_id') or ''} / {job.get('space_nm') or ''}"[:100],
+                        self._workflow_log_job_id(job),
                         "SQL_CONVERSION",
                         "SQL_CONVERSION",
                         "ERROR",
@@ -1082,7 +1087,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 message,
                 extra={
                     "workflow_log": [
-                        f"{job.get('sql_id') or ''} / {job.get('space_nm') or ''}"[:100],
+                        self._workflow_log_job_id(job),
                         "SQL_CONVERSION",
                         "SQL_CONVERSION",
                         "INFO",
@@ -1370,6 +1375,17 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         if not space_nm or not sql_id:
             raise ValueError("SQL job item requires sql_seq or space_nm+sql_id")
         return "TO_CHAR(SPACE_NM) = :space_nm AND TO_CHAR(SQL_ID) = :sql_id", {"space_nm": space_nm, "sql_id": sql_id}
+
+    def _workflow_log_job_id(self, job: dict[str, Any]) -> str:
+        """Use SQL_SEQ as the SQL Conversion workflow-log identifier.
+
+        SQL_ID and SPACE_NM remain a legacy fallback only for malformed rows
+        that do not carry SQL_SEQ, so diagnostic logs remain attributable.
+        """
+        sql_seq = str(job.get("sql_seq") or "").strip()
+        if sql_seq:
+            return sql_seq
+        return f"{job.get('sql_id') or ''} / {job.get('space_nm') or ''}"[:100]
 
     # payload/job에 SQL row를 특정할 key가 있는지 확인한다.
     def _has_sql_key(self, job: dict[str, Any]) -> bool:

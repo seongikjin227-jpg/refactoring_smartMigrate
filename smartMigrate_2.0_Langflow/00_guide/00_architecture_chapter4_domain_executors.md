@@ -44,7 +44,11 @@ flowchart LR
 
 ## 4.2 DB Migration Executor: 10C
 
-`10C_migOneJobPocExecutor.py`는 `NEXT_MIG_INFO.MAP_ID` 한 건을 처리한다.
+기본 `10C_migOneJobPocExecutor.py`는 `NEXT_MIG_INFO.MAP_ID` 한 건을 처리한다. 레코드 검증을 포함하는 신규 흐름은 `10C_migOneJobPocExecutor2.py`를 사용한다.
+
+`Executor2`는 `MIG_SQL` 실행 뒤 먼저 count 검증을 수행한다. count가 PASS인 경우에만 `INSERT INTO ... (target columns) SELECT ...`의 SELECT 부분을 가상 TOBE 데이터셋으로 만들어, target PK 기준의 결정적 표본(기본 3건)을 실제 TOBE row와 비교한다. 비교 로그에는 예상값(INSERT 대상 컬럼), 실제값(TOBE 전체 컬럼), 컬럼별 diff를 함께 남긴다. CLOB은 앞 4,000자, BLOB은 앞 4,000 byte까지만 비교·로그한다.
+
+count 불일치는 `FAIL-TEST`, 레코드 불일치 또는 레코드 검증 불가(대상 PK 없음, MIG_SQL 구조 미지원 등)는 `FAIL-TEST2`다. `FAIL-TEST2` 재실행은 INSERT를 반복하지 않고 저장된 MIG/VERIFY SQL로 count 검증 후 레코드 검증부터 다시 수행한다.
 
 ### 입력
 
@@ -323,7 +327,7 @@ SQL Formatting은 `STATUS_CONVERSION`, `STATUS_TUNING`을 변경하지 않는다
 
 | 도메인 | 기본 retry | retry 기준 |
 |---|---|---|
-| DB Migration | `max_retry=2` | `FAIL-TRUNCATE`, `FAIL-INSERT`, `FAIL-TEST`에 따라 generate/execute/verify 단계 재시도 |
+| DB Migration | `max_retry=2` | `FAIL-TRUNCATE`, `FAIL-INSERT`, `FAIL-TEST`(count), `FAIL-TEST2`(record context)에 따라 generate/execute/verify 단계 재시도 |
 | SQL Conversion | `max_retry=2` | `FAIL-TOBE`, `FAIL-BIND`, `FAIL-TEST` 단계별 재생성 |
 | SQL Tuning | `max_retry=2` | `FAIL-TUNED`, `FAIL-TEST` 단계별 재시도 |
 | SQL Formatting | `max_retry=2` | formatting 결과 empty/error 시 재시도 |

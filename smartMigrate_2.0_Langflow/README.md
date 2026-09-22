@@ -73,6 +73,7 @@ smartMigrate_2.0_Langflow/
     10A_migJobsToLoopTable.py
     10B_migLoop.py
     10C_migOneJobPocExecutor.py
+    10C_migOneJobPocExecutor2.py  # count + record context verification variant
     10D_migIterationDashboard.py
     11_finalDashboard.py
     11B_failureCauseAnalyzer.py
@@ -227,6 +228,7 @@ python -m compileall smartMigrate_2.0_Langflow\01_agent_start smartMigrate_2.0_L
 ```powershell
 python -m py_compile `
   smartMigrate_2.0_Langflow\03_job_execution\10C_migOneJobPocExecutor.py `
+  smartMigrate_2.0_Langflow\03_job_execution\10C_migOneJobPocExecutor2.py `
   smartMigrate_2.0_Langflow\03_job_execution\12C_sqlConversionOneJobPocExecutor.py `
   smartMigrate_2.0_Langflow\03_job_execution\15C_sqlTuningOneJobPocExecutor.py `
   smartMigrate_2.0_Langflow\03_job_execution\17C_sqlFormattingOneJobPocExecutor.py `
