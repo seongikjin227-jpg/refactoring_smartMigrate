@@ -33,7 +33,7 @@ sequenceDiagram
     participant C as 10C/12C/15C/17C
     participant D as 18D Dashboard
     A->>B: route 순서의 job rows
-    B->>B: DB 자동 실행 대상 refresh 및 미계획 job 중복 제거
+    B->>B: 첫 18A snapshot 실행 후 DB refresh 및 새 후속 job 추가
     B->>C: item 1개를 Loop body에 전달
     C-->>B: executor result
     B->>C: 다음 item (같은 route 또는 다음 phase)
@@ -41,7 +41,8 @@ sequenceDiagram
 ```
 
 - `item_output()`은 Loop body의 시작 output이다. 외부 graph에 결과를 한 번 더 흘려 중복 실행하지 않도록 `stop("item")`을 사용하고, 실제 body 실행은 `_iterate()`가 담당한다.
-- `_iterate()`는 cursor가 가리키는 현재 row를 실행하기 전에 `_refresh_dynamic_queue()`를 호출한다. DB에서 다시 읽은 실행 후보 job 중 cursor 이후 queue에 이미 있는 식별자(MIG=`MAP_ID`, SQL=`route+SPACE_NM+SQL_ID`)는 제외하고, 새 job만 phase와 priority 순서에 맞춰 삽입한다.
+- 18A의 최초 DataFrame은 workflow의 기준 snapshot이다. 첫 item(`cursor=0`) 직전에는 DB refresh를 하지 않아 최초 계획이 중복 삽입되지 않는다. `initial_plan_source=database_snapshot`인 전체 실행만 첫 item 완료 후 `_refresh_dynamic_queue()`를 호출한다. `selected_jobs` 또는 payload의 명시 범위 실행은 dynamic poll을 하지 않는다.
+- refresh 시 DB에서 다시 읽은 실행 후보 job 중 cursor 이후 queue에 이미 있는 식별자(MIG=`MAP_ID`, SQL=`route+SQL_SEQ`)는 제외하고, 새 job만 phase와 priority 순서에 맞춰 삽입한다.
 - refresh 뒤 cursor 위치를 다시 읽어 `execute_loop_body([item])`에 한 row만 전달하고 result를 `aggregated_results`에 누적한다. executor와 iteration dashboard가 끝난 뒤에만 cursor를 증가시켜 다음 row를 호출한다.
 - `done_output()`은 `_iterate()`가 완료된 뒤 단 한 번 실행된다. `loop_done=True`, route별 `workflow_summary`, `aggregated_results`, 중단 사유를 만들어 `18D_fullWorkflowDashboard`로 보낸다.
 - 일반 도메인 Loop(`10B`, `12B`, `15B`, `17B`)도 같은 `item`/`done` output contract를 쓰지만, 해당 도메인의 DataFrame 전체를 Loop body에 넘긴다. `18B`만 phase gate를 위해 한 item씩 순차 호출한다.
@@ -76,4 +77,4 @@ SQL Conversion은 최초와 중간 재시도에서 원본 `EDIT_FR_SQL`(없으�
 - `item` output에서 executor를 별도로 다시 연결하거나 호출하지 않는다. Loop body 외부 연결은 동일 job의 이중 실행 원인이 된다.
 - job 추가/병합 시 18A 및 Loop2의 식별자 중복 제거를 우회하지 않는다. Loop2의 dynamic refresh는 cursor 앞에서 이미 실행된 job이 명시적 reset으로 다시 자동 실행 대상이 된 경우에만 새 job으로 재추가한다.
 - `done`은 모든 실행 결과가 누적된 최종 summary 전용이다. item-level dashboard는 10D/12D/15D/17D 또는 18D의 iteration 흐름을 사용한다.
-- 전체 실행의 자동 실행 대상 선정과 명시적 재실행은 분리한다. 실패 job을 다시 실행하려면 상태를 NULL로 reset한 뒤 새 요청으로 queue를 만들도록 한다.
+- 전체 실행의 자동 실행 대상 선정과 명시적 재실행은 분리한다. 실패 job을 다시 실행하려면 실패 stage는 유지한 채 `RETRY_COUNT=0`으로 reset한 뒤 새 요청으로 queue를 만든다.

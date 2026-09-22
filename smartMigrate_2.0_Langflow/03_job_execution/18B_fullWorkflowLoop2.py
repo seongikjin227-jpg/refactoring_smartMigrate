@@ -141,7 +141,10 @@ class NewType18BFullWorkflowLoop2(Component):
                 # 이렇게 해야 "바로 다음에 실행할 job"도 data_list[cursor:]에 포함된 상태로 중복 비교된다.
                 # 예: 다음 job이 104이고 DB 자동 실행 대상 조회에도 104가 있으면, 새 job으로 added 처리하지 않는다.
                 next_payload = self._data_dict(data_list[cursor])
-                dynamic_added_count += self._refresh_dynamic_queue(data_list, cursor, self._route(next_payload))
+                if self._dynamic_refresh_allowed(data_list, cursor):
+                    dynamic_added_count += self._refresh_dynamic_queue(data_list, cursor, self._route(next_payload))
+                elif cursor == 0:
+                    self._log_initial_dynamic_refresh_skipped(data_list, next_payload)
 
                 # refresh 과정에서 cursor 위치에 더 앞 phase job이 삽입될 수 있다.
                 # 따라서 refresh 후에 다시 data_list[cursor]를 읽어 실제 실행할 item을 확정한다.
@@ -446,6 +449,9 @@ class NewType18BFullWorkflowLoop2(Component):
             if self._job_key(self._data_dict(item)) is not None
         }
         added = 0
+        invalid_key_count = 0
+        already_queued_count = 0
+        duplicate_poll_count = 0
         added_jobs: list[dict[str, Any]] = []
         seen_new_keys: set[tuple[Any, ...]] = set()
         for job in pending_jobs:
@@ -454,7 +460,14 @@ class NewType18BFullWorkflowLoop2(Component):
             # key가 없으면 안전하게 무시한다.
             # key가 remaining_keys에 있으면 "지금 실행할 job 또는 앞으로 실행할 job"이므로 중복 추가하지 않는다.
             # key가 seen_new_keys에 있으면 같은 refresh 안에서 DB query 결과가 중복된 것이므로 한 번만 추가한다.
-            if key is None or key in remaining_keys or key in seen_new_keys:
+            if key is None:
+                invalid_key_count += 1
+                continue
+            if key in remaining_keys:
+                already_queued_count += 1
+                continue
+            if key in seen_new_keys:
+                duplicate_poll_count += 1
                 continue
 
             # 새 자동 실행 대상 job은 route phase와 priority를 기준으로 cursor 이후 적절한 위치에 삽입한다.
@@ -470,8 +483,32 @@ class NewType18BFullWorkflowLoop2(Component):
             # output payload 형식은 기존 18B와 맞춰야 하므로, 동적 큐 내부 상태는 로그로만 남긴다.
             self._reindex_jobs(data_list)
             self.update_ctx({f"{self._id}_data": data_list})
-            self._log_dynamic_jobs_added(added_jobs, cursor, next_route, len(data_list))
+            self._log_dynamic_jobs_added(
+                added_jobs,
+                cursor,
+                next_route,
+                len(data_list),
+                polled_count=len(pending_jobs),
+                already_queued_count=already_queued_count,
+                invalid_key_count=invalid_key_count,
+                duplicate_poll_count=duplicate_poll_count,
+            )
         return added
+
+    def _dynamic_refresh_allowed(self, data_list: list[Data], cursor: int) -> bool:
+        """Poll only after the 18A all-pending snapshot has started executing."""
+        if cursor <= 0 or not data_list:
+            return False
+        initial_plan_source = str(self._data_dict(data_list[0]).get("initial_plan_source") or "").strip().lower()
+        return initial_plan_source == "database_snapshot"
+
+    def _log_initial_dynamic_refresh_skipped(self, data_list: list[Data], first_payload: dict[str, Any]) -> None:
+        source = str(first_payload.get("initial_plan_source") or "unknown")
+        message = f"initial dynamic DB refresh skipped; 18A snapshot is authoritative. source={source}, queue_size={len(data_list)}"
+        logging.getLogger("smartmigrate.workflow").info(
+            message,
+            extra={"workflow_log": [0, "WORKFLOW", "18B_FULL_LOOP2", "INFO", "DYNAMIC_QUEUE_REFRESH", "SKIP_INITIAL", 0, message]},
+        )
 
     # Oracle 원본 테이블에서 현재 자동 실행 대상 job을 다시 읽는다. USER_EDITED는 대상 선정에 사용하지 않는다.
     def _load_pending_jobs_from_db(self, db_config: dict[str, Any], template_payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -594,6 +631,11 @@ class NewType18BFullWorkflowLoop2(Component):
         cursor: int,
         next_route: str,
         queue_size: int,
+        *,
+        polled_count: int,
+        already_queued_count: int,
+        invalid_key_count: int,
+        duplicate_poll_count: int,
     ) -> None:
         summaries = []
         for item in added_jobs:
@@ -607,8 +649,9 @@ class NewType18BFullWorkflowLoop2(Component):
         # 동적 추가 로그는 job마다 여러 줄로 찍지 않고 refresh 1회당 한 줄로 남긴다.
         # count/cursor/next_route/queue_size/jobs를 같이 남겨 테스트 중 큐 삽입 결과를 한눈에 확인한다.
         message = (
-            f"dynamic automatic execution candidate jobs added count={len(added_jobs)}, cursor={cursor}, "
-            f"next_route={next_route}, queue_size={queue_size}, jobs=[{'; '.join(summaries)}]"
+            f"dynamic automatic execution candidate jobs added count={len(added_jobs)}, polled={polled_count}, "
+            f"already_queued={already_queued_count}, invalid_key={invalid_key_count}, duplicate_poll={duplicate_poll_count}, "
+            f"cursor={cursor}, next_route={next_route}, queue_size={queue_size}, jobs=[{'; '.join(summaries)}]"
         )
         logging.getLogger("smartmigrate.workflow").info(
             message,

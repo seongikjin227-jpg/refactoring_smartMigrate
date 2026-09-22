@@ -53,6 +53,7 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
             payload = self._parse_payload(getattr(self, "payload_json", ""))
             db_config = self._db_config(payload)
             max_retry = max(0, int(getattr(self, "max_retry", None) or 2))
+            initial_plan_source = self._initial_plan_source(payload)
             grouped = self._dedupe_grouped_jobs(self._group_jobs(payload, db_config))
             grouped["MIG"] = self._sort_migration_jobs(grouped["MIG"])
 
@@ -76,6 +77,7 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
                             "job_type": "MIG" if route == "MIG" else "SQL",
                             "route_label": ROUTE_LABELS[route],
                             "run_mode": payload.get("run_mode") or "all_pending",
+                            "initial_plan_source": initial_plan_source,
                             "full_workflow": True,
                             "phase_index": phase_index,
                             "phase_count": len(ROUTE_ORDER),
@@ -97,13 +99,20 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
                 "job_route": "FULL_WORKFLOW",
                 "full_workflow": True,
                 "loop_job_count": total,
+                "initial_plan_source": initial_plan_source,
                 "workflow_plan_counts": route_totals,
                 "planned_jobs": rows,
                 "next_node": "18B_fullWorkflowLoop2",
             }
             self.status = status
             __log_result = DataFrame(rows)
-            logging.getLogger("smartmigrate.workflow").info("after build_jobs_table", extra={"workflow_log": [0, "WORKFLOW", "18A_FULL_JOBS", "INFO", "BUILD_JOBS_TABLE", "END", 0]})
+            logging.getLogger("smartmigrate.workflow").info(
+                "18A initial workflow plan built: source=%s total=%s routes=%s",
+                initial_plan_source,
+                total,
+                route_totals,
+                extra={"workflow_log": [0, "WORKFLOW", "18A_FULL_JOBS", "INFO", "BUILD_JOBS_TABLE", "END", total, f"source={initial_plan_source}, routes={route_totals}"]},
+            )
             return __log_result
         except Exception as exc:
             logging.getLogger("smartmigrate.workflow").error(f"error build_jobs_table: {exc}", extra={"workflow_log": [0, "WORKFLOW", "18A_FULL_JOBS", "ERROR", "BUILD_JOBS_TABLE", "ERROR", 0]})
@@ -135,6 +144,18 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
         if not any(grouped.values()) and str(payload.get("run_mode") or "").lower() == "all_pending":
             return self._load_all_pending_jobs(db_config)
         return grouped
+
+    def _initial_plan_source(self, payload: dict[str, Any]) -> str:
+        """Identify whether 18A built an all-pending snapshot or an explicit scope."""
+        if isinstance(payload.get("selected_jobs"), list) and payload.get("selected_jobs"):
+            return "selected_jobs"
+        requested = payload.get("requested_jobs") if isinstance(payload.get("requested_jobs"), dict) else {}
+        jobs = payload.get("remaining_jobs") or payload.get("pending_jobs") or requested or {}
+        if isinstance(jobs, dict):
+            keys = ("migration_jobs", "sql_conversion_jobs", "sql_jobs", "sql_tuning_jobs", "sql_formatting_jobs")
+            if any(isinstance(jobs.get(key), list) and jobs.get(key) for key in keys):
+                return "payload_jobs"
+        return "database_snapshot" if str(payload.get("run_mode") or "").lower() == "all_pending" else "payload_jobs"
 
     # Full Workflow의 payload는 여러 job-source를 합칠 수 있으므로 route별 식별자를
     # 기준으로 중복 제거한다. DB 조회 자체는 중복을 만들지 않지만 payload 중복을 막는다.

@@ -100,7 +100,7 @@ flowchart TD
 
 ### Full Workflow 내부 SQL Conversion gate
 
-`18A -> 18B` Full Workflow는 DB Migration을 먼저 모두 실행한 뒤 SQL Conversion phase로 넘어간다. 실제 운영 Loop는 `18B_fullWorkflowLoop2.py`이며, 매 item 직전 DB 자동 실행 대상 목록을 refresh해 아직 queue에 없는 job만 phase/priority 순서로 삽입한다. 동적으로 추가하는 SQL Conversion/Tuning/Formatting job은 `SQL_ID + SPACE_NM` 대신 `SQL_SEQ` 하나로 식별하며, route까지 포함해 중복을 제거한다. SQL phase 진입 직전에 Loop2가 전체 `NEXT_MIG_INFO` 상태를 확인하고, `USE_YN='Y'`인 DB Migration row 중 `STATUS IS NULL` 또는 `FAIL`/`FAIL-*`가 하나라도 있으면 SQL Conversion/Tuning/Formatting을 시작하지 않고 Done payload로 종료한다. 이는 실행 대상 조회와 별개인 phase 완료 gate이며, `18B_FULL_LOOP2 / DB_MIGRATION_GATE / ABORT` workflow log를 남긴다.
+`18A -> 18B` Full Workflow는 DB Migration을 먼저 모두 실행한 뒤 SQL Conversion phase로 넘어간다. 18A는 최초 DB snapshot과 Migration 의존성 순서를 갖춘 기준 queue를 만들고, 실제 운영 Loop인 `18B_fullWorkflowLoop2.py`는 첫 item 직전에는 poll하지 않는다. 전체 실행(`initial_plan_source=database_snapshot`)에서만 첫 item 완료 후 DB 자동 실행 대상을 refresh하여 아직 queue에 없는 새 후속 job을 phase/priority 순서로 삽입한다. 명시 선택 실행은 poll하지 않으므로 전체 pending job으로 확장되지 않는다. 동적으로 추가하는 SQL Conversion/Tuning/Formatting job은 `SQL_SEQ`와 route로 식별해 중복을 제거한다. SQL phase 진입 직전에 Loop2가 전체 `NEXT_MIG_INFO` 상태를 확인하고, `USE_YN='Y'`인 DB Migration row 중 `STATUS IS NULL` 또는 `FAIL`/`FAIL-*`가 하나라도 있으면 SQL Conversion/Tuning/Formatting을 시작하지 않고 Done payload로 종료한다. 이는 실행 대상 조회와 별개인 phase 완료 gate이며, `18B_FULL_LOOP2 / DB_MIGRATION_GATE / ABORT` workflow log를 남긴다.
 
 `18B`는 Done output을 반환하기 직전에 항상 종료 사유를 workflow log로 남긴다. 종료 사유는 `NO_PLANNED_JOB`, `COMPLETED`, `ABORTED` 중 하나로 구분되며 Done payload의 `done_reason`에도 포함된다.
 
@@ -164,7 +164,7 @@ sequenceDiagram
 | 4 | `06_getRemainingJobs.py` | payload + DB config | 네 도메인의 runnable count 조회 | `job_availability`, `remaining_summary` |
 | 5 | `08_jobExecutionRouter.py` | enriched payload + LLM config | route를 `FULL_WORKFLOW`, run mode를 `all_pending`으로 확정 | `next_node=18A_fullWorkflowJobsToLoopTable` |
 | 6 | `18A_fullWorkflowJobsToLoopTable.py` | payload + DB config | DB에서 전체 자동 실행 대상 row 조회, route order로 DataFrame 생성 | Full Workflow jobs DataFrame |
-| 7 | `18B_fullWorkflowLoop2.py` | DataFrame | 매 item 전 DB 자동 실행 대상 refresh, 중복 제외 후 한 row씩 item output | `job_item` |
+| 7 | `18B_fullWorkflowLoop2.py` | DataFrame | 최초 snapshot의 첫 item을 실행하고, 이후 전체 실행에서만 DB refresh·중복 제외 후 한 row씩 item output | `job_item` |
 | 8 | `10C/12C/15C/17C` | `job_item` | 각 도메인 단일 작업 실행, DB update, log insert | `job_result` |
 | 9 | `18D_fullWorkflowDashboard.py` | `job_result` | iteration progress 메시지와 loop feedback 생성 | `loop_result` |
 | 10 | `18B_fullWorkflowLoop2.py` | loop feedback | 다음 row 전 refresh/삽입 후 진행, 끝나면 `loop_done=True` | done payload |
