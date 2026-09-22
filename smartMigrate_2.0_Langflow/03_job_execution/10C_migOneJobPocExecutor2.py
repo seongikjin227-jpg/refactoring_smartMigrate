@@ -176,6 +176,7 @@ class NewType10CMigOneJobPocExecutor2(Component):
         DataInput(name="job_item", display_name="Job Item", required=True),
         IntInput(name="max_retry", display_name="Max Retry", value=2, required=False),
         IntInput(name="record_sample_size", display_name="Record Verify Sample Size", value=3, required=False),
+        StrInput(name="record_verify_key_columns", display_name="Record Verify Key Columns (optional)", value="", required=False),
         StrInput(name="source_schema", display_name="Source Schema", required=False),
         StrInput(name="target_schema", display_name="Target Schema", required=False),
         StrInput(name="llm_base_url", display_name="LLM Base URL", required=False),
@@ -442,13 +443,8 @@ class NewType10CMigOneJobPocExecutor2(Component):
         """설정된 LLM으로 migration SQL과 verification SQL을 생성한다."""
         job = context["job"]
         try:
-            verify_only = context.get("failure_status") in {"FAIL-TEST", FAIL_TEST2}
-            if context.get("failure_status") == FAIL_TEST2:
-                migration_sql = str(context.get("current_migration_sql") or context.get("migration_sql") or context.get("saved_migration_sql") or "")
-                verification_sql = str(context.get("current_v_sql") or context.get("verification_sql") or context.get("saved_verification_sql") or "")
-                used_model = "stored-verification"
-            else:
-                migration_sql, verification_sql, used_model = self._generate_migration_sqls(context, verify_only=verify_only)
+            verify_only = context.get("failure_status") == "FAIL-TEST"
+            migration_sql, verification_sql, used_model = self._generate_migration_sqls(context, verify_only=verify_only)
             if verify_only:
                 migration_sql = str(context.get("current_migration_sql") or context.get("migration_sql") or context.get("saved_migration_sql") or "").strip()
             migration_sql = self._clean_sql_statement(migration_sql)
@@ -538,29 +534,24 @@ class NewType10CMigOneJobPocExecutor2(Component):
         """Compare deterministic projected source records to their target PK rows."""
         try:
             projection_sql, target_columns = self._record_projection_sql(str(context.get("current_migration_sql") or ""))
-            target_pk_columns = [str(value).upper() for value in context.get("target_pk_columns") or []]
-            if not target_pk_columns:
-                raise ValueError("RECORD_VERIFY requires a target table primary key")
-            missing_pk = [column for column in target_pk_columns if column not in target_columns]
-            if missing_pk:
-                raise ValueError(f"RECORD_VERIFY target PK must be present in MIG_SQL target columns: {missing_pk}")
-            target_all_columns = [str(item.get("column_name") or "").upper() for item in context.get("target_ddl") or []]
+            target_ddl = list(context.get("target_ddl") or [])
+            target_all_columns = [str(item.get("column_name") or "").upper() for item in target_ddl]
             if not target_all_columns:
                 raise ValueError("RECORD_VERIFY target DDL columns are unavailable")
+            target_pk_columns = [str(value).upper() for value in context.get("target_pk_columns") or []]
+            key_columns, key_strategy = self._record_verify_key_columns(target_pk_columns, target_columns, target_ddl)
             result = self._execute_record_verification(
                 dict(context.get("db_config") or {}),
                 projection_sql,
                 str(context.get("to_table") or ""),
                 target_columns,
                 target_all_columns,
-                target_pk_columns,
+                key_columns,
                 self._record_sample_size(),
             )
+            result["key_columns"] = key_columns
+            result["key_strategy"] = key_strategy
             detail_json = json.dumps(result, ensure_ascii=False, default=str)
-            logging.getLogger("smartmigrate.workflow").info(
-                f"record verification {result['summary']}",
-                extra={"workflow_log": [context.get("map_id") or 0, "DB_MIGRATION", "VERIFY_RECORDS", "INFO" if result["ok"] else "ERROR", "VERIFY_RECORDS", "PASS" if result["ok"] else FAIL_TEST2, max(0, int(context.get("db_attempts") or 1) - 1), detail_json]},
-            )
             return {
                 "stage": "VERIFY_RECORDS",
                 "status": "PASS" if result["ok"] else FAIL_TEST2,
@@ -628,7 +619,7 @@ class NewType10CMigOneJobPocExecutor2(Component):
                     for column in compare_columns:
                         if not self._record_values_equal(expected.get(column), actual.get(column)):
                             diffs.append({"column": column, "expected": self._record_log_value(expected.get(column)), "actual": self._record_log_value(actual.get(column))})
-                rows.append({"target_pk": {column: self._record_log_value(expected.get(column)) for column in pk_columns}, "expected": {column: self._record_log_value(expected.get(column)) for column in compare_columns}, "actual": {column: self._record_log_value(actual.get(column)) if actual is not None else None for column in all_columns}, "diffs": diffs, "result": "MATCH" if not diffs else ("MISSING_TARGET_ROW" if not actual_rows else "VALUE_MISMATCH")})
+                rows.append({"record_key": {column: self._record_log_value(expected.get(column)) for column in pk_columns}, "expected": {column: self._record_log_value(expected.get(column)) for column in compare_columns}, "actual": {column: self._record_log_value(actual.get(column)) if actual is not None else None for column in all_columns}, "diffs": diffs, "result": "MATCH" if not diffs else ("MISSING_TARGET_ROW" if not actual_rows else "VALUE_MISMATCH")})
         mismatch_count = sum(1 for row in rows if row["result"] != "MATCH")
         compared = list(dict.fromkeys(compare_columns))
         uncompared = [column for column in all_columns if column not in compared]
@@ -651,6 +642,32 @@ class NewType10CMigOneJobPocExecutor2(Component):
             return max(1, min(int(getattr(self, "record_sample_size", None) or 3), 100))
         except (TypeError, ValueError):
             return 3
+
+    def _record_verify_key_columns(self, target_pk_columns: list[str], target_columns: list[str], target_ddl: list[dict[str, Any]]) -> tuple[list[str], str]:
+        """Choose an explicit PK first, then a safe deterministic fallback.
+
+        Some migration targets are staging tables without an Oracle PK
+        constraint.  In that case every non-LOB INSERT target column is used
+        as a composite lookup key, so a duplicate target row is still reported
+        as a verification failure instead of being silently accepted.
+        """
+        configured = [self._clean_identifier(value.strip()) for value in str(getattr(self, "record_verify_key_columns", "") or "").split(",") if value.strip()]
+        if configured:
+            missing = [column for column in configured if column not in target_columns]
+            if missing:
+                raise ValueError(f"RECORD_VERIFY configured key columns must be present in MIG_SQL target columns: {missing}")
+            return configured, "CONFIGURED_KEY_COLUMNS"
+        if target_pk_columns:
+            missing = [column for column in target_pk_columns if column not in target_columns]
+            if missing:
+                raise ValueError(f"RECORD_VERIFY target PK must be present in MIG_SQL target columns: {missing}")
+            return target_pk_columns, "TARGET_PRIMARY_KEY"
+        lob_types = {"BLOB", "CLOB", "NCLOB", "LONG", "LONG RAW", "BFILE"}
+        types = {str(item.get("column_name") or "").upper(): str(item.get("data_type") or "").upper() for item in target_ddl}
+        fallback = [column for column in target_columns if types.get(column) not in lob_types]
+        if not fallback:
+            raise ValueError("RECORD_VERIFY target has no PK and no non-LOB INSERT columns for a fallback composite key")
+        return fallback, "INSERT_COLUMNS_FALLBACK_NO_PK"
 
     def _record_values_equal(self, expected: Any, actual: Any) -> bool:
         # CLOB/BLOB values are intentionally bounded for this sampled context
@@ -769,11 +786,10 @@ class NewType10CMigOneJobPocExecutor2(Component):
                         attempt["failed_stage"],
                         attempt["status"],
                         retry_count,
-                        attempt.get("migration_sql", ""),
+                        self._stage_sql_from_state(state, attempt["status"]),
                     ]
                 },
             )
-            next_status = "EXECUTED" if attempt["status"] in {"FAIL-TEST", FAIL_TEST2} else ""
             return {
                 **state,
                 "attempts": [*(state.get("attempts") or []), attempt],
@@ -781,7 +797,7 @@ class NewType10CMigOneJobPocExecutor2(Component):
                 "db_attempts": retry_count + 1,
                 "attempt": retry_count + 1,
                 "error_type": "",
-                "status": next_status,
+                "status": "",
                 "failure_status": attempt["status"],
             }
 
@@ -813,8 +829,10 @@ class NewType10CMigOneJobPocExecutor2(Component):
                 return "generate"
             return "execute"
 
-        # retry 준비 후 다음 attempt에서 SQL 생성 단계로 돌아갈지 결정한다.
+        # retry 준비 후 실패 단계에 정확히 맞는 node로 돌아간다.
         def after_retry_prepare(state: dict[str, Any]) -> str:
+            if state.get("failure_status") == FAIL_TEST2:
+                return "verify_records"
             return "execute" if state.get("failure_status") == "FAIL-TRUNCATE" else "generate"
 
         workflow = StateGraph(dict)
@@ -824,12 +842,17 @@ class NewType10CMigOneJobPocExecutor2(Component):
         workflow.add_node("verify_records", verify_records_node)
         workflow.add_node("retry_prepare", retry_prepare_node)
         workflow.add_node("finalize", finalize_node)
-        workflow.set_entry_point("generate")
+        # FAIL-TEST2 means INSERT and count verification already passed.  It
+        # must resume only the last record-comparison stage.
+        workflow.set_conditional_entry_point(
+            lambda state: "verify_records" if state.get("failure_status") == FAIL_TEST2 else "generate",
+            {"generate": "generate", "verify_records": "verify_records"},
+        )
         workflow.add_conditional_edges("generate", should_continue, {"execute": "execute", "verify": "verify", "verify_records": "verify_records", "retry_prepare": "retry_prepare", "finalize": "finalize", "generate": "generate"})
         workflow.add_conditional_edges("execute", should_continue, {"verify": "verify", "verify_records": "verify_records", "retry_prepare": "retry_prepare", "finalize": "finalize", "generate": "generate", "execute": "execute"})
         workflow.add_conditional_edges("verify", should_continue, {"verify_records": "verify_records", "finalize": "finalize", "retry_prepare": "retry_prepare", "generate": "generate"})
         workflow.add_conditional_edges("verify_records", should_continue, {"finalize": "finalize", "retry_prepare": "retry_prepare", "generate": "generate"})
-        workflow.add_conditional_edges("retry_prepare", after_retry_prepare, {"generate": "generate", "execute": "execute"})
+        workflow.add_conditional_edges("retry_prepare", after_retry_prepare, {"generate": "generate", "execute": "execute", "verify_records": "verify_records"})
         workflow.add_edge("finalize", END)
         graph = workflow.compile()
         initial_state = {
@@ -883,7 +906,7 @@ class NewType10CMigOneJobPocExecutor2(Component):
                 next_state["status"] = "COUNT_VERIFIED"
             elif step.get("stage") == "VERIFY_RECORDS":
                 next_state["status"] = "PASS"
-            elif step.get("stage") == "GENERATE_SQL" and state.get("failure_status") in {"FAIL-TEST", FAIL_TEST2}:
+            elif step.get("stage") == "GENERATE_SQL" and state.get("failure_status") == "FAIL-TEST":
                 next_state["status"] = "EXECUTED"
             self._log_step(next_state, step)
             return next_state
@@ -1191,12 +1214,12 @@ class NewType10CMigOneJobPocExecutor2(Component):
         stage_sql = self._log_sql_for_step(state, step)
         route_note = self._route_note(state, step)
         message = f"attempt={state.get('db_attempts')} stage={stage} status={status}; {step.get('message') or ''}{route_note}"
-        if status.startswith("FAIL-"):
-            log_type = "ROW_ERROR"
+        if stage == "VERIFY_RECORDS":
+            log_type = "VERIFY_RECORDS"
         elif stage == "VERIFY_COUNT":
             log_type = "VERIFY_SQL"
-        elif stage == "VERIFY_RECORDS":
-            log_type = "VERIFY_RECORDS"
+        elif status.startswith("FAIL-"):
+            log_type = "ROW_ERROR"
         elif stage in {"FETCH_DDL", "EXECUTE_SQL", "TRUNCATE", "PROMPT_BUILD"}:
             log_type = stage
         else:
@@ -1214,10 +1237,19 @@ class NewType10CMigOneJobPocExecutor2(Component):
         if stage == "VERIFY_COUNT":
             return str(state.get("current_v_sql") or "")
         if stage == "VERIFY_RECORDS":
-            return str(state.get("record_projection_sql") or "")
+            return self._record_verify_log_body(state)
         if stage == "GENERATE_SQL" and state.get("status") == "EXECUTED":
             return str(state.get("current_v_sql") or "")
         return self._stage_sql_from_state(state, str(step.get("status") or ""))
+
+    def _record_verify_log_body(self, state: dict[str, Any]) -> str:
+        """Keep record-verify logs free of INSERT/count-verify SQL text."""
+        projection = str(state.get("record_projection_sql") or "").strip()
+        detail = str(state.get("record_verify_detail") or "").strip()
+        parts = ["[RECORD_PROJECTION_SQL]", projection or "(projection unavailable)"]
+        if detail:
+            parts.extend(["", "[RECORD_COMPARISON_RESULT]", detail])
+        return "\n".join(parts)
 
     # retry router가 왜 다음 경로를 선택했는지 status 메시지로 설명한다.
     def _route_note(self, state: dict[str, Any], step: dict[str, Any]) -> str:
@@ -1230,6 +1262,8 @@ class NewType10CMigOneJobPocExecutor2(Component):
             return "; route=normal,next=VERIFY"
         if step.get("status") == "FAIL-TEST":
             return "; route=retry,next=GENERATE_SQL_VERIFY_ONLY"
+        if step.get("status") == FAIL_TEST2:
+            return "; route=retry,next=VERIFY_RECORDS_ONLY"
         if step.get("status") == "FAIL-TRUNCATE":
             return "; route=retry,next=EXECUTE_SQL"
         if str(step.get("status") or "").startswith("FAIL-"):

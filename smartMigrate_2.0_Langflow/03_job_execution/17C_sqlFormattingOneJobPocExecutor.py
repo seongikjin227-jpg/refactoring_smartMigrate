@@ -86,19 +86,17 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             payload = self._parse_payload(getattr(self, "job_item", ""))
             self._log_run_job(payload, job, status="START", message="before run_job")
             prior_failure = self._prior_failure_status(payload)
-            if prior_failure:
-                result = self._component_pass_through(payload, started, f"SQL formatting skipped because a prior stage failed: {prior_failure}")
-                result["status"] = prior_failure
-                result["formatting_skipped"] = True
-                self.status = result
-                self._log_run_job(payload, job, status="END", message="after run_job")
-                return Data(data=result)
             generated_sql_list = self._formatting_candidates(payload)
             payload["generated_sql_list"] = generated_sql_list
             if generated_sql_list:
                 db_config = self._db_config(payload)
                 self._require_db_config(db_config)
                 result = self._run_batch_formatting(payload, db_config, started)
+                # The generated_sql_list contract wins: if upstream supplied
+                # generated SQL, 17C formats it even when an earlier stage
+                # status is FAIL-*.  Preserve that prior status afterwards.
+                if prior_failure:
+                    result = self._preserve_prior_failure_after_formatting(result, payload, prior_failure)
                 self.status = result
                 self._log_run_job(payload, job, status="END", message="after run_job")
                 return Data(data=result)
