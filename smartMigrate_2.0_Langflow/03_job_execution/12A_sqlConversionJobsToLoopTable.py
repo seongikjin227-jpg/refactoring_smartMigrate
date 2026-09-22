@@ -122,7 +122,8 @@ class NewType12ASqlConversionJobsToLoopTable(Component):
                 f"""
                 SELECT SQL_SEQ, TO_CHAR(SQL_ID) AS SQL_ID, TO_CHAR(SPACE_NM) AS SPACE_NM, PRIORITY
                   FROM {table}
-                 WHERE STATUS_CONVERSION IS NULL
+                 WHERE (STATUS_CONVERSION IS NULL OR UPPER(TRIM(NVL(STATUS_CONVERSION, ''))) = 'FAIL' OR UPPER(TRIM(NVL(STATUS_CONVERSION, ''))) LIKE 'FAIL-%')
+                   AND NVL(RETRY_COUNT, 0) < 2
                  ORDER BY PRIORITY ASC NULLS LAST, UPD_TS ASC NULLS FIRST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                 """
             )

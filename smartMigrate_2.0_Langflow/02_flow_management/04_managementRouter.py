@@ -36,7 +36,7 @@ MANAGEMENT_ROUTER_PROMPT = """당신은 SmartMigrate 04 관리 요청 라우터�
 - USER_EDITED, USE_YN, priority, 상태 초기화, SQL 저장, SQL 비우기 요청은 MANAGEMENT_AGENT입니다.
 - RAG Guide 조회/추가/수정/비활성화 요청은 MANAGEMENT_AGENT입니다.
 - "비슷한 AS-IS SQL", "유사 SQL", "유사한 실패 SQL", "Fail-* 재시도 후보"처럼 AS-IS SQL 벡터 검색 또는 그 결과의 재시도 요청은 MANAGEMENT_AGENT입니다.
-- 유사 SQL 검색 결과로 FAIL-* 상태를 NULL로 바꾸는 요청도 MANAGEMENT_AGENT입니다. 검색만 요청한 경우에는 상태를 변경하지 않습니다.
+- 유사 SQL 검색 결과의 FAIL-* 행을 유지한 채 RETRY_COUNT를 0으로 바꾸는 요청도 MANAGEMENT_AGENT입니다. 검색만 요청한 경우에는 상태를 변경하지 않습니다.
 - VectorDB, Milvus, 벡터DB, vector upload, vector sync 요청도 MANAGEMENT_AGENT입니다. Agent가 연결된 Sync Milvus Vector DB Tool을 직접 호출합니다.
 - RAG Guide를 추가/수정/비활성화한 직후라도 VectorDB 동기화를 자동으로 이어서 실행하지 않습니다. 사용자가 별도로 요청한 경우에만 Agent가 sync_all Tool command를 호출합니다.
 

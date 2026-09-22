@@ -47,9 +47,9 @@ SQL 관련 단건 작업은 `SQL_ID`와 `SPACE_NM`을 모두 입력해야 한다
 
 | 기능 | 대상 | 필수 입력 | 선택 입력 | 요청 템플릿 | 처리 결과 |
 |---|---|---|---|---|---|
-| DB Migration 상태 초기화 | `NEXT_MIG_INFO` | `MAP_ID` | `PRIORITY=1` 또는 `PRIORITY=5` | `MAP_ID={MAP_ID} 다시 실행할 수 있게 상태 초기화하고 PRIORITY=1로 설정해줘.` | `STATUS`를 DB `NULL`로 바꾸고 retry count를 초기화한다. SQL 본문은 유지한다. |
-| SQL Conversion 상태 초기화 | `NEXT_SQL_INFO` | `SQL_ID`, `SPACE_NM` | `PRIORITY=1` 또는 `PRIORITY=5` | `SQL_ID={SQL_ID}, SPACE_NM={SPACE_NM} SQL Conversion 상태 초기화해줘.` | `STATUS_CONVERSION`을 DB `NULL`로 바꾼다. |
-| SQL Tuning 상태 초기화 | `NEXT_SQL_INFO` | `SQL_ID`, `SPACE_NM` | `PRIORITY=1` 또는 `PRIORITY=5` | `SQL_ID={SQL_ID}, SPACE_NM={SPACE_NM} SQL Tuning 상태 초기화해줘.` | `STATUS_TUNING`을 DB `NULL`로 바꾼다. `STATUS_CONVERSION`은 유지한다. |
+| DB Migration 재시도 준비 | `NEXT_MIG_INFO` | `MAP_ID` | `PRIORITY=1` 또는 `PRIORITY=5` | `MAP_ID={MAP_ID} RETRY_COUNT를 0으로 바꾸고 PRIORITY=1로 설정해줘.` | `STATUS`와 SQL 본문을 유지하고 retry count만 초기화한다. |
+| SQL Conversion 재시도 준비 | `NEXT_SQL_INFO` | `SQL_ID`, `SPACE_NM` | `PRIORITY=1` 또는 `PRIORITY=5` | `SQL_ID={SQL_ID}, SPACE_NM={SPACE_NM} SQL Conversion 재시도 준비해줘.` | `STATUS_CONVERSION`을 유지하고 `RETRY_COUNT=0`으로 바꾼다. |
+| SQL Tuning 재시도 준비 | `NEXT_SQL_INFO` | `SQL_ID`, `SPACE_NM` | `PRIORITY=1` 또는 `PRIORITY=5` | `SQL_ID={SQL_ID}, SPACE_NM={SPACE_NM} SQL Tuning 재시도 준비해줘.` | `STATUS_TUNING`을 유지하고 `RETRY_COUNT=0`으로 바꾼다. |
 | DB Migration 보정 SQL 저장 | `NEXT_MIG_INFO` | `MAP_ID`, SQL 컬럼명, SQL 본문 | 없음 | `MAP_ID={MAP_ID}의 MIG_SQL을 아래 SQL로 저장해줘. SQL=...` | 사용자가 제공한 SQL을 지정 컬럼에 저장하고 `USER_EDITED='Y'`로 표시한다. |
 | SQL job 보정 SQL 저장 | `NEXT_SQL_INFO` | `SQL_ID`, `SPACE_NM`, SQL 컬럼명, SQL 본문 | 없음 | `SQL_ID={SQL_ID}, SPACE_NM={SPACE_NM}의 TO_SQL을 아래 SQL로 저장해줘. SQL=...` | 사용자가 제공한 SQL을 지정 컬럼에 저장하고 `USER_EDITED='Y'`로 표시한다. |
 | DB Migration USER_EDITED 변경 | `NEXT_MIG_INFO` | `MAP_ID`, `USER_EDITED=Y` 또는 `USER_EDITED=N` | 없음 | `MAP_ID={MAP_ID}의 USER_EDITED를 N으로 바꿔줘.` | SQL 본문은 유지하고 `USER_EDITED` 값만 변경한다. |
@@ -64,10 +64,10 @@ SQL 관련 단건 작업은 `SQL_ID`와 `SPACE_NM`을 모두 입력해야 한다
 
 | 단계 | 사용자 요청 예시 | 처리 |
 |---|---|---|
-| 유사 SQL 검색 | `아래 SQL과 비슷한 실패 SQL 최대 20개 찾아줘. SQL=...` | 사용자 반환 결과는 최대 20건이다. 실패 판정은 항상 `STATUS_CONVERSION LIKE 'FAIL-%'`만 사용하며 SQL Tuning 실패 상태는 검색하지 않는다. 기본 최소 유사도는 Tool 입력의 70%다. 사용자가 유사도 조건을 말하지 않으면 command JSON의 `min_similarity`는 생략하며, `유사도 80% 이상` 요청 시에만 값을 전달한다. AS-IS SQL 유사도가 검색 기준이고, `TARGET_TABLE`이 겹치는 후보를 먼저 정렬한다. 결과 표에는 `SQL_ID`, `SPACE_NM`, `TARGET_TABLE`, `TARGET_TABLE 겹침`, `STATUS_CONVERSION`, 유사도가 포함된다. |
+| 유사 SQL 검색 | `아래 SQL과 비슷한 실패 SQL 최대 20개 찾아줘. SQL=...` | 사용자 반환 결과는 최대 20건이다. 실패 판정은 항상 `STATUS_CONVERSION='FAIL' OR LIKE 'FAIL-%'`만 사용하며 SQL Tuning 실패 상태는 검색하지 않는다. 기본 최소 유사도는 Tool 입력의 70%다. 사용자가 유사도 조건을 말하지 않으면 command JSON의 `min_similarity`는 생략하며, `유사도 80% 이상` 요청 시에만 값을 전달한다. AS-IS SQL 유사도가 검색 기준이고, `TARGET_TABLE`이 겹치는 후보를 먼저 정렬한다. 결과 표에는 `SQL_ID`, `SPACE_NM`, `TARGET_TABLE`, `TARGET_TABLE 겹침`, `STATUS_CONVERSION`, 유사도가 포함된다. |
 | 기준 job으로 검색 | `SQL_ID=S001, SPACE_NM=PAYMENT와 비슷한 실패 SQL 찾아줘.` | 기준 row의 `EDIT_FR_SQL` 우선, 없으면 `FR_SQL`을 임베딩한다. 기준 row 자신은 기본적으로 결과에서 제외한다. |
 | 다음 요청 안내 | 없음 | 채팅 기록을 사용하지 않으므로 Agent는 각 후보마다 완전한 요청 문장을 제공한다. 예: `SQL_ID=Q001, SPACE_NM=SALES 재시도 상태로 변경해줘.` `위 목록`, `그것들`처럼 이전 결과를 가리키는 요청은 사용하지 않는다. |
-| 재시도 상태 변경 | `SQL_ID=Q001, SPACE_NM=SALES 재시도 상태로 바꿔줘.` | 확인된 후보만 `FAIL-*` 상태에서 DB `NULL`로 변경하고 `RETRY_COUNT`를 0으로 초기화한다. 이 단계는 작업을 실행하지 않는다. |
+| 재시도 상태 변경 | `SQL_ID=Q001, SPACE_NM=SALES 재시도 준비해줘.` | 확인된 `FAIL`/`FAIL-*` 행의 상태는 보존하고 `RETRY_COUNT`만 0으로 초기화한다. 이 단계는 작업을 실행하지 않는다. |
 | 실제 작업 실행 | `SQL_ID=Q001, SPACE_NM=SALES SQL Conversion 실행해줘.` | `STATUS_CONVERSION` 재시도 상태 변경이 완료된 뒤 별도 요청으로 Conversion executor를 실행한다. |
 
 상태는 Milvus metadata가 아니라 검색 직후와 UPDATE 시점에 모두 Oracle `NEXT_SQL_INFO`에서 재확인한다. 따라서 동기화 이후 상태가 `PASS-*`로 바뀐 row는 검색 결과에 포함되거나 재시도 처리되지 않는다.
@@ -107,7 +107,7 @@ RAG Guide는 `NEXT_MIG_RAG_INFO`에 저장된다. 추가, 수정, 비활성화�
 | 비활성화 | `RAG_ID` | 없음 | `RAG_ID={RAG_ID} RAG Guide 비활성화해줘.` | 물리 삭제 대신 `USE_YN='N'`으로 변경한다. |
 | VectorDB 동기화 | 없음 | 없음 | `RAG Guide, Correct SQL, AS-IS SQL을 VectorDB에 동기화해줘.` | Oracle 원천 snapshot을 기준으로 `SM_RAG_RULES`, Correct SQL collection, `SM_ASIS_SQL`을 갱신한다. |
 
-Correct SQL을 입력하면 Agent는 우선 SQL과 `USER_EDITED='Y'`만 저장한다. 이어 사용자는 다음 중 하나를 선택한다: (1) `PASS-CONVERSION`으로 확정하고 Vector DB 동기화 및 유사 `FAIL-*` 작업 반영을 진행하거나, (2) `STATUS_CONVERSION`을 `NULL`로 초기화하여 Conversion 재실행을 준비한다. 2번에서는 Vector DB 동기화·유사도 검색·`REF_SEQ` 반영을 수행하지 않는다. 1번에서는 유사도 80% 초과 `FAIL-*` 후보를 자동으로 찾아 저장 Correct SQL의 `SQL_SEQ`를 `REF_SEQ`로 기록하고, 해당 후보의 `STATUS_CONVERSION`을 `NULL`, `RETRY_COUNT`를 0으로 바꾼다. 사용자는 결과를 검토한 뒤 SQL Conversion 실행만 요청하면 된다.
+Correct SQL은 반드시 채팅으로 받은 하나의 단계 SQL만 저장한다. Correct TOBE 저장은 `STATUS_CONVERSION=FAIL-BIND`, `RETRY_COUNT=0`으로 바꿔 Bind 생성부터 재개한다. Correct BIND 저장은 실행 가능한 `BIND_SQL`과 비어 있지 않은 JSON 배열 `BIND_SET`을 함께 요구하고 `STATUS_CONVERSION=FAIL-TEST`, `RETRY_COUNT=0`으로 바꿔 Test 생성·실행부터 재개한다. Correct TEST 저장은 사람이 검증까지 완료했다는 뜻이므로 `STATUS_CONVERSION=PASS-CONVERSION`으로 종료한다. 각 저장 직후 `sync_correct_sql(sql_seq, correct_sql_kind)`으로 동일 단계 문서만 벡터 DB에 저장한다. executor는 `USER_EDITED`를 사용하지 않고 status stage만 사용한다.
 
 ### RAG Guide 입력 규칙
 
@@ -142,7 +142,7 @@ Correct SQL을 입력하면 Agent는 우선 SQL과 `USER_EDITED='Y'`만 저장�
 | 조회성 요청은 read-only로 처리한다. | 상태, 로그, SQL 원문, 실패 원인 분석은 조회 전용 경로를 사용한다. |
 | 실행성 요청은 DB를 변경할 수 있다. | `실행`, `진행`, `남은 작업 처리` 요청은 executor로 연결되어 상태, 로그, 결과 SQL 또는 target table이 변경될 수 있다. |
 | Update Command의 SQL 저장은 사용자가 제공한 SQL만 반영한다. | LLM이 보정 SQL을 새로 작성해 저장하지 않는다. |
-| 상태 초기화는 DB `NULL`이다. | 재실행 대상 조건은 상태 컬럼 `IS NULL` 기준이다. SQL 본문은 별도 요청이 없으면 유지한다. |
+| 재시도 준비는 `RETRY_COUNT=0`이다. | 실행 대상은 `NULL`/`FAIL`/`FAIL-*`와 `RETRY_COUNT < 2`이며, 실패 단계는 상태를 보존한다. |
 | 유사 SQL 기반 재시도는 명시적 확인이 필요하다. | 검색은 read-only다. 재시도 action은 UPDATE 시점에도 해당 상태가 `FAIL-*`인지 검사하므로 PASS row는 변경하지 않고 skip한다. |
 | `USER_EDITED` 변경은 SQL 본문을 삭제하지 않는다. | `USER_EDITED='N'`으로 바꾸면 이후 실행에서 저장된 보정 SQL을 강제 재사용하지 않는다. |
 | DB Migration `USE_YN` 변경은 SQL 본문과 상태를 삭제하지 않는다. | `USE_YN='N'`이면 DB Migration 실행 대상에서 제외된다. `NEXT_SQL_INFO`에는 `USE_YN` 컬럼이 없다. |

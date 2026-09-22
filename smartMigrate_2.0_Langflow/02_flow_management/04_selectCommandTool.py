@@ -483,9 +483,9 @@ class NewType04SelectCommandTool(Component):
             "action": "list_remaining_jobs",
             "target": {"domain": domain, "keyword": keyword, "limit_per_domain": limit},
             "definition": {
-                "DB_MIGRATION": "(UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y' AND STATUS IS NULL)",
-                "SQL_CONVERSION": "(STATUS_CONVERSION IS NULL)",
-                "SQL_TUNING": "(UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION') AND STATUS_TUNING IS NULL)",
+                "DB_MIGRATION": "(USE_YN='Y' AND STATUS is NULL/FAIL/FAIL-* AND RETRY_COUNT < 2)",
+                "SQL_CONVERSION": "(STATUS_CONVERSION is NULL/FAIL/FAIL-* AND RETRY_COUNT < 2)",
+                "SQL_TUNING": "(conversion PASS AND STATUS_TUNING is NULL/FAIL/FAIL-* AND RETRY_COUNT < 2)",
                 "SQL_FORMATTING": "(UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING') AND (FORMATTED_SQL IS NULL OR NVL(DBMS_LOB.GETLENGTH(FORMATTED_SQL), 0) = 0))",
             },
             "data": data,
@@ -741,23 +741,22 @@ class NewType04SelectCommandTool(Component):
     # 전체 실행 queue의 자동 실행 대상 선정 조건 자체를 변경하는 함수는 아니다.
     def _remaining_where(self, domain: str) -> str:
         domain = self._normalize_domain(domain)
-        user_edited = "UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y'"
         if domain in {"DB_MIGRATION", "DB_MIG"}:
             return (
                 "UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y' "
-                "AND (STATUS IS NULL OR "
-                f"({user_edited} AND UPPER(TRIM(NVL(STATUS, 'NULL'))) LIKE 'FAIL-%'))"
+                "AND (STATUS IS NULL OR UPPER(TRIM(NVL(STATUS, ''))) = 'FAIL' OR UPPER(TRIM(NVL(STATUS, ''))) LIKE 'FAIL-%') "
+                "AND NVL(RETRY_COUNT, 0) < 2"
             )
         if domain == "SQL_CONVERSION":
             return (
-                "(STATUS_CONVERSION IS NULL OR "
-                f"({user_edited} AND UPPER(TRIM(NVL(STATUS_CONVERSION, 'NULL'))) LIKE 'FAIL-%'))"
+                "(STATUS_CONVERSION IS NULL OR UPPER(TRIM(NVL(STATUS_CONVERSION, ''))) = 'FAIL' OR UPPER(TRIM(NVL(STATUS_CONVERSION, ''))) LIKE 'FAIL-%') "
+                "AND NVL(RETRY_COUNT, 0) < 2"
             )
         if domain == "SQL_TUNING":
             return (
                 "UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION') "
-                "AND (STATUS_TUNING IS NULL OR "
-                f"({user_edited} AND UPPER(TRIM(NVL(STATUS_TUNING, 'NULL'))) LIKE 'FAIL-%'))"
+                "AND (STATUS_TUNING IS NULL OR UPPER(TRIM(NVL(STATUS_TUNING, ''))) = 'FAIL' OR UPPER(TRIM(NVL(STATUS_TUNING, ''))) LIKE 'FAIL-%') "
+                "AND NVL(RETRY_COUNT, 0) < 2"
             )
         if domain == "SQL_FORMATTING":
             return (

@@ -142,8 +142,9 @@ flowchart TD
 SELECT COUNT(*)
   FROM NEXT_MIG_INFO
  WHERE UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
-   AND (STATUS IS NULL OR (UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y'
-   AND UPPER(TRIM(NVL(STATUS, 'NULL'))) LIKE 'FAIL-%'));
+   AND (UPPER(TRIM(NVL(STATUS, ''))) = 'FAIL'
+        OR UPPER(TRIM(NVL(STATUS, ''))) LIKE 'FAIL-%')
+   AND NVL(RETRY_COUNT, 0) < 2;
 ```
 
 ### 5.7.2 SQL Conversion이 prerequisite으로 막힐 때
@@ -181,7 +182,7 @@ SELECT COUNT(*)
 |---|---|
 | `USER_EDITED='Y'` | SQL 보정 저장이 필요하면 `04_updateCommandTool.py`로 명시적으로 설정한다. |
 | status가 `FAIL-*`인지 | user-edited rerun 조건은 fail 상태와 결합된다. |
-| status reset 여부 | 필요하면 `04_updateCommandTool.py`로 status NULL, retry 0 처리한다. |
+| retry re-enable 여부 | 필요하면 `04_updateCommandTool.py`로 FAIL status는 유지하고 retry 0 처리한다. |
 | SQL 저장 action 여부 | DB Migration과 SQL 계열 모두 정의된 save/clear action만 사용 가능 |
 
 ### 5.7.6 로그가 안 쌓일 때
@@ -230,14 +231,14 @@ flowchart LR
     V --> O[NEXT_SQL_INFO 최신 상태 재조회]
     O --> F[FAIL-* 후보만 반환]
     F --> C{명시적 확인}
-    C -->|yes| U[FAIL-* predicate UPDATE: status NULL]
+    C -->|yes| U[FAIL-* predicate UPDATE: RETRY_COUNT=0]
     C -->|no| X[상태 변경 없음]
 ```
 
 - 검색 기본값은 `status_filter=FAIL_ONLY`이며 사용자 반환 결과는 최대 20건이다. 실패 판정과 상태 변경 대상은 항상 `STATUS_CONVERSION`이다. 내부 후보 pool은 FAIL 필터 후 결과를 보완하기 위해 더 크게 조회할 수 있다. `PASS_ONLY`, `ALL`은 명시적으로 선택할 수 있지만 `STATUS_TUNING` / Tuning 실패는 이 기능의 검색 대상이 아니다.
 - 기본 최소 유사도는 Tool 입력의 70% (`Minimum Similarity=0.7`)다. 사용자가 조건을 말하지 않으면 Agent는 command JSON의 `min_similarity`를 생략한다. 사용자가 요청한 경우에만 command JSON으로 값을 전달하며 `0.8` 또는 `80` 모두 80%로 해석한다.
 - 검색은 read-only다. AS-IS SQL dense similarity가 검색 기준이며, 기준/후보의 `TARGET_TABLE` 겹침은 추가 정렬 신호다. 겹치는 후보를 먼저 두고 각 그룹 안에서는 유사도 내림차순으로 정렬하며, 겹치지 않아도 유사도가 기준을 넘으면 결과에 남긴다. 결과 표에는 `SQL_ID`, `SPACE_NM`, `TARGET_TABLE`, `TARGET_TABLE 겹침`, `STATUS_CONVERSION`, 유사도를 표시한다. 채팅 기록을 사용하지 않으므로 "아래 목록을 변경할까요?"라고 묻지 않고, 각 후보의 완전한 다음 요청 문장 `SQL_ID={값}, SPACE_NM={값} 재시도 상태로 변경해줘.`를 제공한다.
-- `retry_failed_sql_conversion`은 `UPDATE`의 `WHERE STATUS_CONVERSION LIKE 'FAIL-%'` 조건을 사용한다. 검색과 update 사이에 PASS로 바뀐 row는 0건 update로 skip되며 PASS를 NULL로 바꾸지 않는다. 이 action은 재실행 가능한 상태로 바꿀 뿐 executor를 실행하지 않는다.
+- `retry_failed_sql_conversion`은 `UPDATE`의 `WHERE STATUS_CONVERSION LIKE 'FAIL-%'` 조건을 사용한다. 검색과 update 사이에 PASS로 바뀐 row는 0건 update로 skip되며, 매칭된 FAIL stage는 유지한 채 `RETRY_COUNT=0`으로 만든다. 이 action은 재실행 준비만 하며 executor를 실행하지 않는다.
 - 상태 변경 성공 후 실제 실행은 `SQL_ID={값}, SPACE_NM={값} SQL Conversion 실행해줘.`로 별도 수행한다.
 - vector DB에는 상태를 저장하지 않는다. 동기화 시점과 무관하게 Oracle 상태가 최종 판단 기준이다.
 

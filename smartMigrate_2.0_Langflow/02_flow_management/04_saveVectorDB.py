@@ -117,7 +117,11 @@ class NewType04SaveVectorDB(Component):
         self._require_db_config(db_config)
         self._require_milvus_config(milvus_config)
         self._require_embed_config(embed_config)
-        rows = self._load_correct_sql_rows(db_config)
+        sql_seq = command.get("sql_seq")
+        correct_sql_kind = str(command.get("correct_sql_kind") or "").strip().upper()
+        if sql_seq in (None, "") or correct_sql_kind not in {"TO_SQL", "BIND_SQL", "TEST_SQL"}:
+            raise ValueError("sync_correct_sql requires sql_seq and correct_sql_kind (TO_SQL, BIND_SQL, or TEST_SQL)")
+        rows = self._load_correct_sql_rows(db_config, sql_seq=int(sql_seq), correct_sql_kind=correct_sql_kind)
         active_rows = [row for row in rows if row.get("is_active")]
         collection = milvus_config["correct_sql_conversion_collection"]
         if not active_rows:
@@ -125,7 +129,7 @@ class NewType04SaveVectorDB(Component):
                 "upserted": 0,
                 "skipped": 0,
                 "failures": [],
-                "reason": "No Correct SQL meets USER_EDITED='Y' and PASS conversion",
+                "reason": "The requested chat-saved Correct SQL is missing or USER_EDITED is not Y",
             }
             self.status = result
             return {
@@ -173,7 +177,9 @@ class NewType04SaveVectorDB(Component):
         self._require_embed_config(embed_config)
 
         rag_rows = self._load_rag_rows(db_config)
-        conversion_rows = self._load_correct_sql_rows(db_config)
+        # Correct SQL is event-driven: only sync_correct_sql after a chat save
+        # may write this collection.  sync_all must not re-index USER_EDITED rows.
+        conversion_rows: list[dict[str, Any]] = []
         migration_rows = self._load_correct_migration_rows(db_config)
         asis_sql_rows = self._load_asis_sql_rows(db_config)
         active_rows = rag_rows + conversion_rows + migration_rows + asis_sql_rows
@@ -317,6 +323,7 @@ class NewType04SaveVectorDB(Component):
             schema.add_field("sql_id", DataType.VARCHAR, max_length=512)
             schema.add_field("sql_seq", DataType.INT64)
             schema.add_field("status_conversion", DataType.VARCHAR, max_length=100)
+            schema.add_field("correct_sql_kind", DataType.VARCHAR, max_length=16)
             schema.add_field("user_edited", DataType.VARCHAR, max_length=8)
             schema.add_field("tag_kind", DataType.VARCHAR, max_length=100)
             schema.add_field("target_table", DataType.VARCHAR, max_length=2048)
@@ -499,7 +506,9 @@ class NewType04SaveVectorDB(Component):
             return rows
 
     # DB 또는 payload에서 이 단계에 필요한 입력 데이터를 로드한다.
-    def _load_correct_sql_rows(self, db_config: dict[str, Any]) -> list[dict[str, Any]]:
+    def _load_correct_sql_rows(
+        self, db_config: dict[str, Any], *, sql_seq: int | None = None, correct_sql_kind: str | None = None
+    ) -> list[dict[str, Any]]:
         # ---------------------------------------------------------------------
         # Oracle NEXT_SQL_INFO -> SM_CORRECT_SQL_CONVERSION row 변환
         # ---------------------------------------------------------------------
@@ -528,13 +537,13 @@ class NewType04SaveVectorDB(Component):
                    TEST_SQL,
                    TO_CHAR(UPD_TS, 'YYYY-MM-DD HH24:MI:SS')
               FROM {table}
-             WHERE FR_SQL IS NOT NULL
-                OR EDIT_FR_SQL IS NOT NULL
+             WHERE (FR_SQL IS NOT NULL OR EDIT_FR_SQL IS NOT NULL)
+               AND (:sql_seq IS NULL OR SQL_SEQ = :sql_seq)
              ORDER BY UPD_TS DESC NULLS LAST
         """
         with self._connect(db_config) as conn:
             cur = conn.cursor()
-            cur.execute(sql)
+            cur.execute(sql, {"sql_seq": sql_seq})
             rows = []
             for row in cur.fetchall():
                 space_nm = self._lob_to_str(row[0]).strip()
@@ -546,19 +555,20 @@ class NewType04SaveVectorDB(Component):
                 to_sql = self._lob_to_str(row[9]).strip()
                 bind_sql = self._lob_to_str(row[10]).strip()
                 test_sql = self._lob_to_str(row[11]).strip()
+                if correct_sql_kind:
+                    selected_sql = {"TO_SQL": to_sql, "BIND_SQL": bind_sql, "TEST_SQL": test_sql}[correct_sql_kind]
+                    to_sql = selected_sql if correct_sql_kind == "TO_SQL" else ""
+                    bind_sql = selected_sql if correct_sql_kind == "BIND_SQL" else ""
+                    test_sql = selected_sql if correct_sql_kind == "TEST_SQL" else ""
                 status = self._lob_to_str(row[5]).strip().upper()
                 user_edited = self._lob_to_str(row[6]).strip().upper()
                 # 사람이 보정했고 성공한 conversion row만 correct SQL 힌트로 사용한다.
                 # 실패 row나 손대지 않은 row는 모델에 나쁜 예시를 주지 않도록 제외한다.
                 
-                is_active = (
-                    bool(source_sql)
-                    and user_edited == "Y"
-                    and status in {"PASS", "PASS-CONVERSION"}
-                )
+                is_active = bool(source_sql) and user_edited == "Y" and bool(to_sql or bind_sql or test_sql)
                 if not space_nm or not sql_id or sql_seq is None:
                     continue
-                doc_key = f"{space_nm}:{sql_id}"
+                doc_key = f"{space_nm}:{sql_id}:{correct_sql_kind or 'LEGACY'}"
                 rows.append(
                     self._entity(
                         doc_id=f"SQL:{self._hash_text(doc_key)[:24]}",
@@ -566,6 +576,7 @@ class NewType04SaveVectorDB(Component):
                         sql_id=sql_id,
                         sql_seq=sql_seq,
                         status_conversion=status,
+                        correct_sql_kind=correct_sql_kind or "LEGACY",
                         user_edited=user_edited,
                         tag_kind=self._lob_to_str(row[7]),
                         target_table=self._lob_to_str(row[8]),

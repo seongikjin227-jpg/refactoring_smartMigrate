@@ -111,7 +111,7 @@ class NewType04UpdateCommandTool(Component):
                             "action": statement["action"],
                             "identity": statement["identity"],
                             "updated_rows": cur.rowcount,
-                            "summary": "Skipped: status is no longer FAIL-*" if skipped else statement["summary"],
+                            "summary": "Skipped: status is no longer FAIL or FAIL-*" if skipped else statement["summary"],
                             "skipped": skipped,
                         }
                     )
@@ -148,12 +148,12 @@ class NewType04UpdateCommandTool(Component):
         if action == "reset_migration_status":
             map_id = self._map_id(raw)
             retry_count = self._int_value(raw.get("retry_count", 0), "retry_count")
-            set_sql = "STATUS = NULL, RETRY_COUNT = :retry_count"
+            set_sql = "RETRY_COUNT = :retry_count"
             params: dict[str, Any] = {"map_id": map_id, "retry_count": retry_count}
             if "priority" in raw and raw.get("priority") not in (None, ""):
                 set_sql += ", PRIORITY = :priority"
                 params["priority"] = self._int_value(raw.get("priority"), "priority")
-            return self._migration_statement(action, map_id, set_sql, params, "STATUS=NULL, RETRY_COUNT reset")
+            return self._migration_statement(action, map_id, set_sql, params, "STATUS retained; RETRY_COUNT reset")
 
         if action == "set_migration_user_edited":
             map_id = self._map_id(raw)
@@ -181,12 +181,22 @@ class NewType04UpdateCommandTool(Component):
         if action == "save_migration_mig_sql":
             map_id = self._map_id(raw)
             sql_text = self._text_value(raw, "sql_text", "mig_sql")
-            return self._migration_statement(action, map_id, "MIG_SQL = :sql_text", {"map_id": map_id, "sql_text": sql_text}, "MIG_SQL saved")
+            return self._migration_statement(
+                action, map_id,
+                "MIG_SQL = :sql_text, USER_EDITED = 'Y', STATUS = 'FAIL-TEST', RETRY_COUNT = 0",
+                {"map_id": map_id, "sql_text": sql_text},
+                "Correct MIG_SQL saved; INSERT is user-confirmed, next stage is VERIFY",
+            )
 
         if action == "save_migration_verify_sql":
             map_id = self._map_id(raw)
             sql_text = self._text_value(raw, "sql_text", "verify_sql")
-            return self._migration_statement(action, map_id, "VERIFY_SQL = :sql_text", {"map_id": map_id, "sql_text": sql_text}, "VERIFY_SQL saved")
+            return self._migration_statement(
+                action, map_id,
+                "VERIFY_SQL = :sql_text, USER_EDITED = 'Y', STATUS = 'PASS', RETRY_COUNT = 0",
+                {"map_id": map_id, "sql_text": sql_text},
+                "Correct VERIFY_SQL saved; user-confirmed PASS",
+            )
 
         if action == "reset_sql_conversion_status":
             return self._sql_reset_statement(raw, action, "STATUS_CONVERSION")
@@ -226,14 +236,9 @@ class NewType04UpdateCommandTool(Component):
             return self._save_correct_sql_statement(raw, action)
 
         if action in {"approve_correct_sql_conversion", "confirm_correct_sql_conversion"}:
-            sql_id, space_nm = self._sql_identity(raw)
-            return self._sql_statement(
-                action,
-                sql_id,
-                space_nm,
-                "STATUS_CONVERSION = 'PASS-CONVERSION'",
-                {"sql_id": sql_id, "space_nm": space_nm},
-                "STATUS_CONVERSION=PASS-CONVERSION; Correct SQL approved",
+            raise ValueError(
+                "Conversion PASS approval is retired. Use save_correct_sql with correct_sql_kind='TEST_SQL'; "
+                "only Correct TEST SQL may set PASS-CONVERSION."
             )
 
         if action in {"apply_correct_sql_to_failed_job", "apply_correct_sql_and_retry"}:
@@ -267,19 +272,20 @@ class NewType04UpdateCommandTool(Component):
 
         raise ValueError(f"Unsupported update action: {action}")
 
-    # 명시적 reset은 상태를 NULL로 돌려 해당 단계의 자동 실행 대상 조건에 다시 맞게 만든다.
+    # 명시적 reset은 FAIL stage를 보존하고 RETRY_COUNT만 0으로 되돌려 재실행 대상 조건에 맞춘다.
     def _sql_reset_statement(self, raw: dict[str, Any], action: str, status_column: str) -> dict[str, Any]:
         sql_id, space_nm = self._sql_identity(raw)
         retry_count = self._int_value(raw.get("retry_count", 0), "retry_count")
-        set_sql = f"{status_column} = NULL, RETRY_COUNT = :retry_count"
+        # FAIL or FAIL-* is the resume cursor. Re-enabling a job must not erase it.
+        set_sql = "RETRY_COUNT = :retry_count"
         params: dict[str, Any] = {"sql_id": sql_id, "space_nm": space_nm, "retry_count": retry_count}
         if "priority" in raw and raw.get("priority") not in (None, ""):
             set_sql += ", PRIORITY = :priority"
             params["priority"] = self._int_value(raw.get("priority"), "priority")
-        return self._sql_statement(action, sql_id, space_nm, set_sql, params, f"{status_column}=NULL, RETRY_COUNT reset")
+        return self._sql_statement(action, sql_id, space_nm, set_sql, params, f"{status_column} retained; RETRY_COUNT reset")
 
     def _sql_retry_failed_statement(self, raw: dict[str, Any], action: str, status_column: str) -> dict[str, Any]:
-        """Reset a SQL status only when its current value is FAIL-*.
+        """Reset a SQL status only when its current value is FAIL or FAIL-*.
 
         The predicate is evaluated at write time, rather than trusting a preceding
         vector search result, so a concurrently completed PASS row is protected.
@@ -289,13 +295,14 @@ class NewType04UpdateCommandTool(Component):
         return {
             "action": action,
             "identity": f"SQL_ID={sql_id}, SPACE_NM={space_nm}",
-            "summary": f"{status_column}=NULL, RETRY_COUNT reset (only if current status is FAIL-*)",
+            "summary": f"{status_column} retained; RETRY_COUNT reset (only if current status is FAIL or FAIL-*)",
             "sql": (
                 f"UPDATE {self._qualify('NEXT_SQL_INFO')} "
-                f"SET {status_column} = NULL, RETRY_COUNT = :retry_count "
+                "SET RETRY_COUNT = :retry_count "
                 "WHERE UPPER(TRIM(SQL_ID)) = UPPER(TRIM(:sql_id)) "
                 "AND UPPER(TRIM(SPACE_NM)) = UPPER(TRIM(:space_nm)) "
-                f"AND UPPER(TRIM(NVL({status_column}, 'NULL'))) LIKE 'FAIL-%'"
+                f"AND (UPPER(TRIM(NVL({status_column}, ''))) = 'FAIL' "
+                f"OR UPPER(TRIM(NVL({status_column}, ''))) LIKE 'FAIL-%')"
             ),
             "params": {"sql_id": sql_id, "space_nm": space_nm, "retry_count": retry_count},
             "skip_when_not_matched": True,
@@ -341,21 +348,24 @@ class NewType04UpdateCommandTool(Component):
         """
         target_where, target_params, identity = self._sql_target_locator(raw)
         ref_seq = self._positive_int_value(raw.get("ref_seq"), "ref_seq")
+        correct_sql_kind = str(raw.get("correct_sql_kind") or "").strip().upper()
+        if correct_sql_kind not in {"TO_SQL", "BIND_SQL", "TEST_SQL"}:
+            raise ValueError("apply_correct_sql_to_failed_job requires correct_sql_kind (TO_SQL, BIND_SQL, or TEST_SQL)")
+        required_status = {"TO_SQL": "FAIL-TOBE", "BIND_SQL": "FAIL-BIND", "TEST_SQL": "FAIL-TEST"}[correct_sql_kind]
         retry_count = self._int_value(raw.get("retry_count", 0), "retry_count")
-        params = {**target_params, "ref_seq": ref_seq, "retry_count": retry_count}
+        params = {**target_params, "ref_seq": ref_seq, "retry_count": retry_count, "required_status": required_status}
         return {
             "action": action,
             "identity": identity,
             "summary": (
-                f"REF_SEQ={ref_seq}; STATUS_CONVERSION=NULL, RETRY_COUNT reset "
-                "(only if current status is FAIL-*)"
+                f"REF_SEQ={ref_seq}; STATUS_CONVERSION retained, RETRY_COUNT reset "
+                f"(only if current status is {required_status})"
             ),
             "sql": (
                 f"UPDATE {self._qualify('NEXT_SQL_INFO')} "
-                "SET REF_SEQ = :ref_seq, STATUS_CONVERSION = NULL, "
-                "RETRY_COUNT = :retry_count "
+                "SET REF_SEQ = :ref_seq, RETRY_COUNT = :retry_count "
                 f"WHERE {target_where} "
-                "AND UPPER(TRIM(NVL(STATUS_CONVERSION, 'NULL'))) LIKE 'FAIL-%' "
+                "AND UPPER(TRIM(NVL(STATUS_CONVERSION, 'NULL'))) = :required_status "
                 "AND SQL_SEQ <> :ref_seq"
             ),
             "params": params,
@@ -375,23 +385,45 @@ class NewType04UpdateCommandTool(Component):
             "bind_sql": "BIND_SQL",
             "test_sql": "TEST_SQL",
         }
-        assignments = ["USER_EDITED = 'Y'"]
+        assignments = ["USER_EDITED = 'Y'", "RETRY_COUNT = 0"]
         params = dict(target_params)
-        saved = []
+        saved: list[str] = []
         for key, column in column_inputs.items():
             if key in raw and raw.get(key) is not None:
                 assignments.append(f"{column} = :{key}")
                 params[key] = str(raw.get(key))
                 saved.append(column)
-        if not saved:
-            raise ValueError("save_correct_sql requires at least one of to_sql, bind_sql, test_sql")
+        if len(saved) != 1:
+            raise ValueError("save_correct_sql requires exactly one of to_sql, bind_sql, test_sql")
+        kind = saved[0]
+        if kind == "BIND_SQL":
+            bind_set = self._text_value(raw, "bind_set")
+            self._validate_bind_set(bind_set)
+            assignments.append("BIND_SET = :bind_set")
+            params["bind_set"] = bind_set
+            next_status = "FAIL-TEST"
+        elif kind == "TO_SQL":
+            next_status = "FAIL-BIND"
+        else:
+            next_status = "PASS-CONVERSION"
+        assignments.append("STATUS_CONVERSION = :next_status")
+        params["next_status"] = next_status
         return {
             "action": action,
             "identity": identity,
-            "summary": f"USER_EDITED=Y; saved {', '.join(saved)}. Await approval or re-execution choice before any sync.",
+            "summary": f"Correct {kind} saved; STATUS_CONVERSION={next_status}, RETRY_COUNT=0",
             "sql": f"UPDATE {self._qualify('NEXT_SQL_INFO')} SET {', '.join(assignments)} WHERE {target_where}",
             "params": params,
         }
+
+    def _validate_bind_set(self, bind_set: str) -> None:
+        """Correct BIND_SQL is accepted only with the executable bind-case payload."""
+        try:
+            parsed = json.loads(bind_set)
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError("bind_set must be a JSON array such as [{\"PARAM\": \"value\"}]") from exc
+        if not isinstance(parsed, list) or not parsed or not all(isinstance(item, dict) for item in parsed):
+            raise ValueError("bind_set must be a non-empty JSON array of objects")
 
     def _validate_ref_seq_in_correct_sql(self, raw: dict[str, Any]) -> None:
         """Require REF_SEQ to identify an active, already-indexed Correct SQL doc.

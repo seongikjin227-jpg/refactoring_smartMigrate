@@ -176,12 +176,12 @@ sequenceDiagram
 
 | action 예 | 대상 | 설명 |
 |---|---|---|
-| `reset_migration_status` | `NEXT_MIG_INFO` | `STATUS=NULL`, `RETRY_COUNT=0`, 선택적으로 `PRIORITY` 변경 |
+| `reset_migration_status` | `NEXT_MIG_INFO` | `STATUS` 유지, `RETRY_COUNT=0`, 선택적으로 `PRIORITY` 변경 |
 | `set_migration_user_edited` | `NEXT_MIG_INFO` | `USER_EDITED`를 Y/N으로 변경 |
 | `clear_migration_mig_sql` | `NEXT_MIG_INFO` | `MIG_SQL=NULL` |
 | `save_migration_mig_sql` | `NEXT_MIG_INFO` | 사용자가 제공한 SQL을 `MIG_SQL`에 저장 |
-| `reset_sql_conversion_status` | `NEXT_SQL_INFO` | `STATUS_CONVERSION=NULL`, `RETRY_COUNT=0` |
-| `reset_sql_tuning_status` | `NEXT_SQL_INFO` | `STATUS_TUNING=NULL`, `RETRY_COUNT=0` |
+| `reset_sql_conversion_status` | `NEXT_SQL_INFO` | `STATUS_CONVERSION` 유지, `RETRY_COUNT=0` |
+| `reset_sql_tuning_status` | `NEXT_SQL_INFO` | `STATUS_TUNING` 유지, `RETRY_COUNT=0` |
 | `reset_sql_formatting_result` | `NEXT_SQL_INFO` | `FORMATTED_SQL=NULL`, `RETRY_COUNT=0` |
 | `clear_sql_to_sql` / `save_sql_to_sql` | `NEXT_SQL_INFO` | `TO_SQL` 비우기 또는 저장 |
 
@@ -246,11 +246,11 @@ VectorDB 동기화는 별도 `VECTOR_DB_SYNC` route가 아니다. `04_saveVector
 | 요청 예 | route | 실행 컴포넌트 |
 |---|---|---|
 | "VectorDB 업로드해줘" | `MANAGEMENT_AGENT` | Sync Tool `{"action":"sync_all"}` |
-| "방금 저장한 Correct SQL을 반영해줘" | `MANAGEMENT_AGENT` | Sync Tool `{"action":"sync_correct_sql"}` |
+| "방금 저장한 Bind Correct SQL을 반영해줘" | `MANAGEMENT_AGENT` | Sync Tool `{"action":"sync_correct_sql","sql_seq":42,"correct_sql_kind":"BIND_SQL"}` |
 
 현재 `04_saveVectorDB.py`는 특정 `RAG_ID`만 부분 업로드하지 않는다. `sync_all`은 Oracle 원천 테이블을 읽어 변경된 활성 row만 `content_hash` 기준으로 upsert하고, 기존 Milvus 문서를 자동 비활성화하거나 삭제하지 않는다. `sync_correct_sql`은 Correct SQL Conversion 컬렉션만 같은 방식으로 동기화한다.
 
-Correct SQL 입력은 저장과 확정을 분리한다. Agent는 `save_correct_sql`로 SQL과 `USER_EDITED='Y'`만 저장한 뒤, (1) `PASS-CONVERSION`으로 확정해 Vector DB 동기화 및 유사 FAIL SQL 반영을 진행할지, 또는 (2) `STATUS_CONVERSION=NULL`로 초기화해 Conversion 재실행을 준비할지 사용자에게 묻는다. 1번을 선택한 경우에만 `approve_correct_sql_conversion` → `sync_correct_sql` → `search_similar_asis_sql(sql_seq, FAIL_ONLY, min_similarity=0.8)` 순서로 실행한다. 검색 결과 중 80%를 초과한 FAIL row에는 `apply_correct_sql_to_failed_job`으로 저장 Correct SQL의 `SQL_SEQ`를 `REF_SEQ`에 기록하고 `STATUS_CONVERSION=NULL`, `RETRY_COUNT=0`을 하나의 UPDATE로 적용한다. 사용자는 반영 결과를 보고 SQL Conversion 실행만 요청한다. 2번을 선택한 경우에는 상태 초기화만 수행하며 Vector DB 동기화·유사도 검색·REF_SEQ 반영을 하지 않는다. 기존 Milvus 문서를 자동 비활성화하거나 삭제하지 않으며, Update Tool에서 파일 경로로 `04_saveVectorDB.py`를 import해서는 안 된다.
+Correct SQL은 채팅으로 받은 한 단계 SQL만 `save_correct_sql`로 저장한다. Correct TO_SQL은 `FAIL-BIND`, Correct BIND_SQL과 필수 JSON `BIND_SET`은 `FAIL-TEST`, Correct TEST_SQL은 `PASS-CONVERSION`으로 상태를 전이한다. 이어 `sync_correct_sql(sql_seq, correct_sql_kind)`이 그 한 단계 문서만 저장한다. BIND_SQL Correct SQL은 `search_similar_asis_sql(..., FAIL_ONLY, min_similarity=0.8)` 결과 중 80% 초과의 `FAIL-BIND` 후보에만 `apply_correct_sql_to_failed_job(correct_sql_kind='BIND_SQL')`을 적용한다. 이 UPDATE는 `REF_SEQ`와 `RETRY_COUNT=0`만 변경하고 FAIL-BIND 상태를 보존한다. 기존 Milvus 문서는 자동 삭제하지 않으며, 컬렉션이 없다면 단건 동기화가 현재 schema로 생성한다.
 
 캔버스에서는 Management Router의 `Vector DB Sync` 출력 및 `04_saveVectorDB`로 향하던 직접 선을 제거한다. `04_saveVectorDB`의 `Tool Result`만 Management Agent의 Tool 입력에 연결한다.
 

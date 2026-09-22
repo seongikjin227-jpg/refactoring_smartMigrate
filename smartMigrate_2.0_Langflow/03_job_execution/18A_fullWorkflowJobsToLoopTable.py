@@ -179,7 +179,8 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
                     SELECT MAP_ID, PRIORITY, PRIOR_MAP_ID
                       FROM {mig_table}
                      WHERE UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
-                       AND STATUS IS NULL
+                       AND (STATUS IS NULL OR UPPER(TRIM(NVL(STATUS, ''))) = 'FAIL' OR UPPER(TRIM(NVL(STATUS, ''))) LIKE 'FAIL-%')
+                       AND NVL(RETRY_COUNT, 0) < 2
                      ORDER BY PRIORITY ASC NULLS LAST, MAP_ID ASC
                     """,
                     "MIG",
@@ -190,7 +191,8 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
                     f"""
                     SELECT SQL_SEQ, TO_CHAR(SQL_ID) AS SQL_ID, TO_CHAR(SPACE_NM) AS SPACE_NM, PRIORITY
                       FROM {sql_table}
-                     WHERE STATUS_CONVERSION IS NULL
+                     WHERE (STATUS_CONVERSION IS NULL OR UPPER(TRIM(NVL(STATUS_CONVERSION, ''))) = 'FAIL' OR UPPER(TRIM(NVL(STATUS_CONVERSION, ''))) LIKE 'FAIL-%')
+                       AND NVL(RETRY_COUNT, 0) < 2
                      ORDER BY PRIORITY ASC NULLS LAST, UPD_TS ASC NULLS FIRST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                     """,
                     "SQL_CONVERSION",
@@ -202,7 +204,8 @@ class NewType18AFullWorkflowJobsToLoopTable(Component):
                     SELECT SQL_SEQ, TO_CHAR(SQL_ID) AS SQL_ID, TO_CHAR(SPACE_NM) AS SPACE_NM, PRIORITY
                       FROM {sql_table}
                      WHERE UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')
-                       AND STATUS_TUNING IS NULL
+                       AND (STATUS_TUNING IS NULL OR UPPER(TRIM(NVL(STATUS_TUNING, ''))) = 'FAIL' OR UPPER(TRIM(NVL(STATUS_TUNING, ''))) LIKE 'FAIL-%')
+                       AND NVL(RETRY_COUNT, 0) < 2
                      ORDER BY PRIORITY ASC NULLS LAST, UPD_TS ASC NULLS FIRST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                     """,
                     "SQL_TUNING",

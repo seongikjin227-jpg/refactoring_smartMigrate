@@ -318,7 +318,7 @@ Milvus는 Oracle 원천 데이터를 검색용으로 복제한 벡터 저장소�
 | 컬렉션 | Oracle 원천 | 전용 metadata | 사용처 |
 |---|---|---|---|
 | `SM_RAG_RULES` | `NEXT_MIG_RAG_INFO` | `rag_id`, `category`, `rule_type`, `use_yn`, `source_tables`, `guidance_text`, `source_sql`, `target_sql` | 12C Conversion, 15C Tuning RAG 검색 |
-| `SM_CORRECT_SQL_CONVERSION` | `save_correct_sql`로 저장되고 `USER_EDITED='Y'`, Conversion PASS를 만족한 SQL row | `sql_seq`, `space_nm`, `sql_id`, `status_conversion`, `user_edited`, `tag_kind`, `target_table`, `source_sql`, `to_sql`, `bind_sql`, `test_sql` | 12C correct SQL hint 및 REF_SEQ 지정 대상 |
+| `SM_CORRECT_SQL_CONVERSION` | `save_correct_sql` 후 `sync_correct_sql(sql_seq, correct_sql_kind)`으로 저장된 `USER_EDITED='Y'` 단계 SQL | `sql_seq`, `space_nm`, `sql_id`, `status_conversion`, `correct_sql_kind`, `user_edited`, `tag_kind`, `target_table`, `source_sql`, `to_sql`, `bind_sql`, `test_sql` | 12C 단계별 Correct SQL hint 및 REF_SEQ 지정 대상 |
 | `SM_CORRECT_SQL_MIGRATION` | `NEXT_MIG_INFO`의 user-edited/PASS migration row | `map_id`, `fr_table`, `to_table`, `condition`, `mig_sql`, `verify_sql`, `user_edited`, `status` | 10C migration SQL hint |
 | `SM_ASIS_SQL` | `NEXT_SQL_INFO`의 `EDIT_FR_SQL` 또는 `FR_SQL` | `sql_seq`, `space_nm`, `sql_id`, `tag_kind`, `target_table`, `fr_sql`, `edit_fr_sql` | 04 유사 AS-IS SQL 검색 및 12C Correct SQL hint 검색의 query vector 재사용 |
 

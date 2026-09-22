@@ -128,7 +128,8 @@ class NewType10AMigJobsToLoopTable(Component):
                 SELECT MAP_ID, PRIORITY, PRIOR_MAP_ID
                   FROM {table}
                  WHERE UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
-                   AND STATUS IS NULL
+                   AND (STATUS IS NULL OR UPPER(TRIM(NVL(STATUS, ''))) = 'FAIL' OR UPPER(TRIM(NVL(STATUS, ''))) LIKE 'FAIL-%')
+                   AND NVL(RETRY_COUNT, 0) < 2
                  ORDER BY PRIORITY ASC NULLS LAST, MAP_ID ASC
                 """
             )

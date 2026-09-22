@@ -124,7 +124,8 @@ class NewType04CurrentProgress(Component):
             SELECT COUNT(*)
               FROM {mig_table}
              WHERE UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
-               AND (STATUS IS NULL OR ({self._user_edited_expr()} AND UPPER(TRIM(NVL(STATUS, 'NULL'))) LIKE 'FAIL-%'))
+               AND (STATUS IS NULL OR UPPER(TRIM(NVL(STATUS, ''))) = 'FAIL' OR UPPER(TRIM(NVL(STATUS, ''))) LIKE 'FAIL-%')
+               AND NVL(RETRY_COUNT, 0) < 2
             """,
         )
         counts["SQL_CONVERSION"] = self._count(
@@ -132,8 +133,8 @@ class NewType04CurrentProgress(Component):
             f"""
             SELECT COUNT(*)
               FROM {sql_table}
-             WHERE STATUS_CONVERSION IS NULL
-                OR ({self._user_edited_expr()} AND UPPER(TRIM(NVL(STATUS_CONVERSION, 'NULL'))) LIKE 'FAIL-%')
+             WHERE (STATUS_CONVERSION IS NULL OR UPPER(TRIM(NVL(STATUS_CONVERSION, ''))) = 'FAIL' OR UPPER(TRIM(NVL(STATUS_CONVERSION, ''))) LIKE 'FAIL-%')
+               AND NVL(RETRY_COUNT, 0) < 2
             """,
         )
         counts["SQL_TUNING"] = self._count(
@@ -142,7 +143,8 @@ class NewType04CurrentProgress(Component):
             SELECT COUNT(*)
               FROM {sql_table}
              WHERE UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')
-               AND (STATUS_TUNING IS NULL OR ({self._user_edited_expr()} AND UPPER(TRIM(NVL(STATUS_TUNING, 'NULL'))) LIKE 'FAIL-%'))
+               AND (STATUS_TUNING IS NULL OR UPPER(TRIM(NVL(STATUS_TUNING, ''))) = 'FAIL' OR UPPER(TRIM(NVL(STATUS_TUNING, ''))) LIKE 'FAIL-%')
+               AND NVL(RETRY_COUNT, 0) < 2
             """,
         )
         counts["SQL_FORMATTING"] = self._count(

@@ -15,9 +15,9 @@ MIG → SQL_CONVERSION → SQL_TUNING → SQL_FORMATTING
 
 | Route | queue 원천 | 식별자 | 자동 실행 대상 선정 조건 |
 | --- | --- | --- | --- |
-| `MIG` | `NEXT_MIG_INFO` | `MAP_ID` | `USE_YN='Y' AND STATUS IS NULL` |
-| `SQL_CONVERSION` | `NEXT_SQL_INFO` | `SPACE_NM`, `SQL_ID` | `STATUS_CONVERSION IS NULL` |
-| `SQL_TUNING` | `NEXT_SQL_INFO` | `SPACE_NM`, `SQL_ID` | conversion이 PASS이고 `STATUS_TUNING IS NULL` |
+| `MIG` | `NEXT_MIG_INFO` | `MAP_ID` | `USE_YN='Y' AND STATUS is NULL/FAIL/FAIL-* AND RETRY_COUNT < 2` |
+| `SQL_CONVERSION` | `NEXT_SQL_INFO` | `SPACE_NM`, `SQL_ID` | `STATUS_CONVERSION is NULL/FAIL/FAIL-* AND RETRY_COUNT < 2` |
+| `SQL_TUNING` | `NEXT_SQL_INFO` | `SPACE_NM`, `SQL_ID` | conversion이 PASS이고 `STATUS_TUNING is NULL/FAIL/FAIL-* AND RETRY_COUNT < 2` |
 | `SQL_FORMATTING` | `NEXT_SQL_INFO` | `SPACE_NM`, `SQL_ID` | tuning이 PASS이고 `FORMATTED_SQL`이 비어 있음 |
 
 `18A`는 `MIG`를 `PRIORITY`, `PRIOR_MAP_ID` 의존성 순으로 정렬한다. 또 payload에 같은 job이 중복되어도 MIG는 `MAP_ID`, SQL 계열은 `(SPACE_NM, SQL_ID)` 기준으로 하나만 queue에 넣는다. 따라서 하나의 Full Workflow plan 안에서 동일 Migration job이 두 번 실행되지 않는다.
@@ -55,7 +55,7 @@ sequenceDiagram
 | 재확인 결과 | 18B 동작 |
 | --- | --- |
 | 모든 `USE_YN='Y'` MIG가 `PASS` | 첫 `12C` item 실행, 이후 15C/17C로 계속 진행 |
-| `STATUS IS NULL` 또는 `FAIL-%`가 하나 이상 | SQL Conversion/Tuning/Formatting을 시작하지 않고 `done`으로 종료 |
+| `STATUS IS NULL` 또는 `FAIL`/`FAIL-*`가 하나 이상 | SQL Conversion/Tuning/Formatting을 시작하지 않고 `done`으로 종료 |
 | 10C result가 migration 실패 신호 | 남은 SQL phase를 skip하고 `done`으로 종료 |
 
 이 gate는 `18A`가 queue를 처음 만들 때의 snapshot과 실제 실행 중 DB 상태가 달라질 수 있기 때문에 필요하다. SQL executor 자체도 관련 mapping의 MIG 상태를 다시 확인하지만, 그 검사는 해당 SQL 한 건만 실패/skip 처리하는 보조 방어선이다.

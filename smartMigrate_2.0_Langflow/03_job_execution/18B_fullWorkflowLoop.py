@@ -313,7 +313,7 @@ class NewType18BFullWorkflowLoop(Component):
                     SUM(
                         CASE
                             WHEN NVL(UPPER(USE_YN), 'N') = 'Y'
-                             AND UPPER(STATUS) LIKE 'FAIL-%'
+                             AND (UPPER(STATUS) = 'FAIL' OR UPPER(STATUS) LIKE 'FAIL-%')
                             THEN 1 ELSE 0
                         END
                     ) AS FAIL_COUNT
@@ -330,7 +330,7 @@ class NewType18BFullWorkflowLoop(Component):
             "pending_null_count": pending_null_count,
             "fail_count": fail_count,
             "reason": (
-                f"DB Migration is not 100% PASS; auto_candidates={pending_null_count}, fail={fail_count}. SQL Conversion and downstream phases were not started."
+                f"DB Migration is not 100% PASS; pending_null={pending_null_count}, fail={fail_count}. SQL Conversion and downstream phases were not started."
                 if block_sql
                 else ""
             ),
@@ -390,7 +390,7 @@ class NewType18BFullWorkflowLoop(Component):
                     "DB_MIGRATION_GATE",
                     "ABORT",
                     0,
-                    f"auto_candidates={gate.get('pending_null_count', 0)}, fail={gate.get('fail_count', 0)}; {reason}",
+                    f"pending_null={gate.get('pending_null_count', 0)}, fail={gate.get('fail_count', 0)}; {reason}",
                 ]
             },
         )

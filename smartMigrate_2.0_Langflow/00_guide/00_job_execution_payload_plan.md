@@ -139,11 +139,11 @@
 
 ## 잔여 조건
 
-- MIG 잔여: `NEXT_MIG_INFO.USE_YN='Y'` 이고 `STATUS IS NULL`
-- SQL Conversion 잔여: `STATUS_CONVERSION IS NULL`
-- SQL Tuning 잔여: `STATUS_CONVERSION IN ('PASS', 'PASS-CONVERSION')` 이고 `STATUS_TUNING IS NULL`
+- MIG 실행 대상: `NEXT_MIG_INFO.USE_YN='Y'`, `STATUS IS NULL` 또는 `STATUS='FAIL'` 또는 `FAIL-*`, `RETRY_COUNT < 2`
+- SQL Conversion 실행 대상: `STATUS_CONVERSION IS NULL` 또는 `STATUS_CONVERSION='FAIL'` 또는 `FAIL-*`, `RETRY_COUNT < 2`
+- SQL Tuning 실행 대상: Conversion PASS이고 `STATUS_TUNING IS NULL` 또는 `STATUS_TUNING='FAIL'` 또는 `FAIL-*`, `RETRY_COUNT < 2`
 
-`USER_EDITED='Y' AND FAIL-%`는 전체 실행/대시보드 잔여 대상에 자동 포함하지 않는다. 재실행하려면 Update Command Tool로 해당 status를 `NULL`로 초기화한 뒤 새 실행 요청을 만든다.
+`SKIP`, `NA`, `RUNNING`은 실행 대상이 아니다. `NULL`은 신규 실행 대상이며, 실패 행은 Update Command Tool로 상태를 유지한 채 `RETRY_COUNT`를 0으로 변경한 뒤 새 실행 요청을 만든다.
 - SQL Formatting 잔여: `STATUS_TUNING IN ('PASS', 'PASS-TUNING')` 이고 `FORMATTED_SQL`이 비어 있음
 
 ## 10C DB Migration PoC Executor 결정 사항

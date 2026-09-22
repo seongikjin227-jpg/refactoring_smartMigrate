@@ -338,7 +338,7 @@ class NewType18BFullWorkflowLoop2(Component):
                     SUM(
                         CASE
                             WHEN NVL(UPPER(USE_YN), 'N') = 'Y'
-                             AND UPPER(STATUS) LIKE 'FAIL-%'
+                             AND (UPPER(STATUS) = 'FAIL' OR UPPER(STATUS) LIKE 'FAIL-%')
                             THEN 1 ELSE 0
                         END
                     ) AS FAIL_COUNT
@@ -355,7 +355,7 @@ class NewType18BFullWorkflowLoop2(Component):
             "pending_null_count": pending_null_count,
             "fail_count": fail_count,
             "reason": (
-                f"DB Migration is not 100% PASS; auto_candidates={pending_null_count}, fail={fail_count}. SQL Conversion and downstream phases were not started."
+                f"DB Migration is not 100% PASS; pending_null={pending_null_count}, fail={fail_count}. SQL Conversion and downstream phases were not started."
                 if block_sql
                 else ""
             ),
@@ -415,7 +415,7 @@ class NewType18BFullWorkflowLoop2(Component):
                     "DB_MIGRATION_GATE",
                     "ABORT",
                     0,
-                    f"auto_candidates={gate.get('pending_null_count', 0)}, fail={gate.get('fail_count', 0)}; {reason}",
+                    f"pending_null={gate.get('pending_null_count', 0)}, fail={gate.get('fail_count', 0)}; {reason}",
                 ]
             },
         )
@@ -435,7 +435,7 @@ class NewType18BFullWorkflowLoop2(Component):
         pending_jobs = self._load_pending_jobs_from_db(db_config, first_payload)
 
         # cursor 위치의 "지금 실행할 job"과 그 뒤의 남은 job만 중복 기준으로 본다.
-        # cursor 앞쪽에서 이미 실행된 job은 사용자가 다시 STATUS=NULL로 바꾸면 새 요청으로 재추가될 수 있다.
+        # cursor 앞쪽에서 이미 실행된 job은 사용자가 FAIL stage를 유지한 채 RETRY_COUNT를 0으로 바꾸면 새 요청으로 재추가될 수 있다.
         # 따라서 전체 data_list가 아니라 data_list[cursor:]만 비교한다.
         # 이 정책의 의미:
         # - data_list[cursor:]에 있으면 이미 이번 run에서 실행 예정이므로 추가하지 않는다.
@@ -473,7 +473,7 @@ class NewType18BFullWorkflowLoop2(Component):
             self._log_dynamic_jobs_added(added_jobs, cursor, next_route, len(data_list))
         return added
 
-    # Oracle 원본 테이블에서 현재 자동 실행 대상 job을 다시 읽는다. USER_EDITED=Y FAIL-*는 자동 실행 대상으로 보지 않는다.
+    # Oracle 원본 테이블에서 현재 자동 실행 대상 job을 다시 읽는다. USER_EDITED는 대상 선정에 사용하지 않는다.
     def _load_pending_jobs_from_db(self, db_config: dict[str, Any], template_payload: dict[str, Any]) -> list[dict[str, Any]]:
         mig_table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
         sql_table = self._qualify("NEXT_SQL_INFO", db_config.get("system_schema"))
@@ -481,8 +481,7 @@ class NewType18BFullWorkflowLoop2(Component):
             cur = conn.cursor()
             jobs: list[dict[str, Any]] = []
 
-            # MIG 자동 실행 대상 선정 조건: USE_YN='Y'이고 STATUS가 NULL인 row만 다시 실행 대상으로 본다.
-            # USER_EDITED='Y'이더라도 STATUS가 FAIL-*이면 이 동적 큐에서는 가져오지 않는다.
+            # MIG 자동 실행 대상: USE_YN='Y', STATUS=NULL/FAIL/FAIL-*, RETRY_COUNT<2.
             jobs.extend(
                 self._query_pending_jobs(
                     cur,
@@ -490,7 +489,8 @@ class NewType18BFullWorkflowLoop2(Component):
                     SELECT MAP_ID, PRIORITY, PRIOR_MAP_ID
                       FROM {mig_table}
                      WHERE UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
-                       AND STATUS IS NULL
+                       AND (STATUS IS NULL OR UPPER(TRIM(NVL(STATUS, ''))) = 'FAIL' OR UPPER(TRIM(NVL(STATUS, ''))) LIKE 'FAIL-%')
+                       AND NVL(RETRY_COUNT, 0) < 2
                      ORDER BY PRIORITY ASC NULLS LAST, MAP_ID ASC
                     """,
                     "MIG",
@@ -500,15 +500,16 @@ class NewType18BFullWorkflowLoop2(Component):
                 )
             )
 
-            # SQL Conversion 자동 실행 대상 선정 조건: STATUS_CONVERSION이 NULL인 row만 대상이다.
-            # 사용자가 보정 SQL을 저장했더라도 재실행하려면 상태를 명시적으로 NULL로 초기화해야 한다.
+            # SQL Conversion 자동 실행 대상: STATUS_CONVERSION=NULL/FAIL/FAIL-*, RETRY_COUNT<2.
+            # Correct SQL 저장 action은 다음 FAIL stage와 RETRY_COUNT=0을 직접 저장한다.
             jobs.extend(
                 self._query_pending_jobs(
                     cur,
                     f"""
                     SELECT SQL_SEQ, TO_CHAR(SQL_ID) AS SQL_ID, TO_CHAR(SPACE_NM) AS SPACE_NM, PRIORITY
                       FROM {sql_table}
-                     WHERE STATUS_CONVERSION IS NULL
+                     WHERE (STATUS_CONVERSION IS NULL OR UPPER(TRIM(NVL(STATUS_CONVERSION, ''))) = 'FAIL' OR UPPER(TRIM(NVL(STATUS_CONVERSION, ''))) LIKE 'FAIL-%')
+                       AND NVL(RETRY_COUNT, 0) < 2
                      ORDER BY PRIORITY ASC NULLS LAST, UPD_TS ASC NULLS FIRST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                     """,
                     "SQL_CONVERSION",
@@ -518,8 +519,7 @@ class NewType18BFullWorkflowLoop2(Component):
                 )
             )
 
-            # SQL Tuning 자동 실행 대상 선정 조건: Conversion이 PASS 계열이고 STATUS_TUNING이 NULL인 row만 대상이다.
-            # USER_EDITED='Y' AND STATUS_TUNING LIKE 'FAIL-%' 조건은 의도적으로 제외한다.
+            # SQL Tuning 자동 실행 대상: Conversion PASS, STATUS_TUNING=NULL/FAIL/FAIL-*, RETRY_COUNT<2.
             jobs.extend(
                 self._query_pending_jobs(
                     cur,
@@ -527,7 +527,8 @@ class NewType18BFullWorkflowLoop2(Component):
                     SELECT SQL_SEQ, TO_CHAR(SQL_ID) AS SQL_ID, TO_CHAR(SPACE_NM) AS SPACE_NM, PRIORITY
                       FROM {sql_table}
                      WHERE UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')
-                       AND STATUS_TUNING IS NULL
+                       AND (STATUS_TUNING IS NULL OR UPPER(TRIM(NVL(STATUS_TUNING, ''))) = 'FAIL' OR UPPER(TRIM(NVL(STATUS_TUNING, ''))) LIKE 'FAIL-%')
+                       AND NVL(RETRY_COUNT, 0) < 2
                      ORDER BY PRIORITY ASC NULLS LAST, UPD_TS ASC NULLS FIRST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                     """,
                     "SQL_TUNING",

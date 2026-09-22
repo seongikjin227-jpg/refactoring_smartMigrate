@@ -354,12 +354,14 @@ stateDiagram-v2
 
 | 도메인 | 자동 실행 대상 선정 조건 | Running | Pass | Fail |
 |---|---|---|---|---|
-| MIG | `STATUS IS NULL` | `RUNNING`, `RUNNING-FAIL-*` | `PASS` | `FAIL-TRUNCATE`, `FAIL-INSERT`, `FAIL-TEST`, `SKIP-PRIOR-FAIL` |
-| Conversion | `STATUS_CONVERSION IS NULL` | `RUNNING` | `PASS-CONVERSION` | `FAIL-TOBE`, `FAIL-BIND`, `FAIL-TEST` |
-| Tuning | conversion pass and tuning null | `RUNNING` | `PASS-TUNING` | `FAIL-TUNED`, `FAIL-TEST` |
+| MIG | `STATUS` is NULL/`FAIL`/`FAIL-*`, `RETRY_COUNT < 2` | `RUNNING`, `RUNNING-FAIL-*` | `PASS` | `FAIL-TRUNCATE`, `FAIL-INSERT`, `FAIL-TEST`, `SKIP-PRIOR-FAIL` |
+| Conversion | `STATUS_CONVERSION` is NULL/`FAIL`/`FAIL-*`, `RETRY_COUNT < 2` | `RUNNING` | `PASS-CONVERSION` | `FAIL-TOBE`, `FAIL-BIND`, `FAIL-TEST` |
+| Tuning | conversion pass; tuning is NULL/`FAIL`/`FAIL-*`; `RETRY_COUNT < 2` | `RUNNING` | `PASS-TUNING` | `FAIL-TUNED`, `FAIL-TEST` |
 | Formatting | tuning pass and `FORMATTED_SQL` empty | internal running result | `FORMATTED_SQL` saved | `FAIL-FORMATTING` |
 
-`USER_EDITED='Y'`는 executor 내부에서 저장 SQL 우선 사용을 뜻하며, `FAIL-*` row를 전체 실행에 자동 포함한다는 뜻은 아니다. 운영자가 재실행을 승인하면 status를 `NULL`로 초기화한다.
+`USER_EDITED='Y'`는 사용자가 채팅으로 Correct SQL을 저장했다는 표식이며 executor의 SQL 재사용 조건이 아니다. 재실행 승인 시 FAIL 상태는 보존하고 `RETRY_COUNT`를 0으로 변경한다. Conversion은 저장된 실패 stage에서 재개한다 (`FAIL-TOBE`/`FAIL-BIND`/`FAIL-TEST`).
+
+Correct SQL은 `USER_EDITED` 재사용으로 처리하지 않는다. Management 저장 action이 완료된 단계를 status로 전진시킨다. Correct MIG_SQL은 INSERT 통과를 뜻하므로 `FAIL-TEST`에서 Verify만 재개하며, Correct VERIFY_SQL은 `PASS`로 종료한다. Correct TO_SQL은 `FAIL-BIND`, Correct BIND_SQL+BIND_SET은 `FAIL-TEST`, Correct TEST_SQL은 `PASS-CONVERSION`으로 각각 저장한다.
 
 ## 4.10 개발자가 수정할 때 우선 확인할 곳
 

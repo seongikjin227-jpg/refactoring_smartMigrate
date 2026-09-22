@@ -99,7 +99,7 @@ flowchart TD
 | "현재 진행 상황 어때?" | `MANAGEMENT` | 04 `CURRENT_PROGRESS` | running job + 최근 로그 |
 | "map id 101 왜 실패했어?" | `MANAGEMENT` | 04 `MANAGEMENT_AGENT` | Select Tool 조회 후 LLM 분석 답변 |
 | "전체 Fail 분석해줘" | `MANAGEMENT` | 04 `MANAGEMENT_AGENT` | 최근 fail 로그 중심 분석 |
-| "map id 101 상태 초기화해줘" | `MANAGEMENT` | 04 `MANAGEMENT_AGENT` | Update Tool action으로 status NULL, retry 0 |
+| "map id 101 재시도 준비해줘" | `MANAGEMENT` | 04 `MANAGEMENT_AGENT` | Update Tool action으로 FAIL status 유지, retry 0 |
 | "sql id A / space B의 TO_SQL을 이걸로 저장해줘 ..." | `MANAGEMENT` | 04 `MANAGEMENT_AGENT` | Update Tool action으로 SQL CLOB 저장 |
 | "전체 작업 진행해줘" | `JOB_EXECUTION` | 08 `FULL_WORKFLOW` | MIG -> Conversion -> Tuning -> Formatting 실행 |
 | "SQL Tuning 남은 작업 진행해줘" | `JOB_EXECUTION` | 08 `SQL_TUNING` | 선행 조건 확인 후 tuning loop |
