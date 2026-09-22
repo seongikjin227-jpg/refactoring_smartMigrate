@@ -82,18 +82,21 @@ SELECT S.EMP_ID AS EMP_NO,
  WHERE S.USE_YN = 'Y'
 ```
 
-이 결과를 로그에서는 `ASIS_DATASET_VIRTUAL`이라고 부른다. 엄밀히는 source table과 migration SELECT expression으로 만든 “이관 전 예상 target row”다. 따라서 `S.LAST_NAME || S.FIRST_NAME AS EMP_NAME`처럼 source expression과 target column의 매핑이 위 SQL에 명시된다.
+이 SQL은 source expression과 target column의 매핑 근거로 로그에 남긴다. 또한 record 검증 sample query는 MIG_SQL의 SELECT expression에서 참조한 source column을 별도 `ASIS_nnn` alias로 함께 조회한다. 따라서 `S.LAST_NAME || S.FIRST_NAME AS EMP_NAME`이면 case 로그에 `S.LAST_NAME`, `S.FIRST_NAME`의 원본 값이 각각 보이고, mapping SQL을 통해 그것들이 `EMP_NAME`으로 조합됐음을 확인할 수 있다.
 
 ### 3.3 표본 선정
 
-가상 데이터셋에서 기본 3건(`Record Verify Sample Size`)을 결정적으로 선택한다.
+가상 데이터셋에서 반환되는 **위에서부터 기본 3건**(`Record Verify Sample Size`)을 선택한다.
 
 ```sql
-ROW_NUMBER() OVER (ORDER BY ORA_HASH(key_columns...))
+SELECT P.*
+  FROM (가상 AS-IS 데이터셋 SELECT) P
+ WHERE ROWNUM <= :sample_size
 ```
 
-- 같은 데이터 상태에서는 같은 key row가 선택되어 재현 가능하다.
-- random 함수로 매번 다른 row를 뽑지 않으므로 장애 재현과 로그 비교가 가능하다.
+- random/hash 표본을 사용하지 않으므로 운영자가 SQL 결과의 첫 3건을 그대로 로그와 대조할 수 있다.
+- MIG_SQL SELECT에 `ORDER BY`가 있으면 그 순서의 첫 3건이다.
+- SQL에 `ORDER BY`가 없으면 Oracle 관계형 결과의 행 순서는 원칙적으로 보장되지 않는다. 매번 같은 “업무상 첫 3건”을 원하면 MIG_SQL SELECT에 안정적인 `ORDER BY`를 명시해야 한다.
 - sample size는 1~100으로 제한한다.
 
 ### 3.4 Row key 결정 알고리즘
@@ -149,9 +152,11 @@ selected_count=3
 mismatch_count=1
 
 [CASE 1] result=MATCH
+[ASIS_DATASET_SOURCE_COLUMNS]
+{"S.EMP_ID": "1001", "S.LAST_NAME": "홍", "S.FIRST_NAME": "길동", "S.DEPT_CODE": "HR"}
 [RECORD_KEY]
 {"EMP_NO": "1001"}
-[ASIS_DATASET_VIRTUAL]
+[EXPECTED_TARGET_VALUES_FROM_MIG_SQL]
 {"EMP_NO": "1001", "EMP_NAME": "홍길동", "DEPT_CD": "HR"}
 [TOBE_DATASET_ACTUAL_ALL_COLUMNS]
 {"EMP_NO": "1001", "EMP_NAME": "홍길동", "DEPT_CD": "HR", "LOAD_TS": "...", "BATCH_ID": "..."}
@@ -159,9 +164,11 @@ mismatch_count=1
 []
 
 [CASE 2] result=VALUE_MISMATCH
+[ASIS_DATASET_SOURCE_COLUMNS]
+{"S.EMP_ID": "1002", "S.LAST_NAME": "김", "S.FIRST_NAME": "철수", "S.DEPT_CODE": "FIN"}
 [RECORD_KEY]
 {"EMP_NO": "1002"}
-[ASIS_DATASET_VIRTUAL]
+[EXPECTED_TARGET_VALUES_FROM_MIG_SQL]
 {"EMP_NO": "1002", "EMP_NAME": "김철수", "DEPT_CD": "FIN"}
 [TOBE_DATASET_ACTUAL_ALL_COLUMNS]
 {"EMP_NO": "1002", "EMP_NAME": "김철수", "DEPT_CD": "ACCOUNTING", "LOAD_TS": "..."}
@@ -169,7 +176,7 @@ mismatch_count=1
 [{"column": "DEPT_CD", "expected": "FIN", "actual": "ACCOUNTING"}]
 ```
 
-따라서 운영자는 mapping SQL로 AS-IS expression → TOBE column 관계를 확인하고, 각 CASE에서 예상 데이터셋과 실제 TOBE 전체 row를 나란히 확인할 수 있다.
+따라서 운영자는 mapping SQL로 AS-IS expression → TOBE column 관계를 확인하고, 각 CASE에서 **AS-IS 원본 source column 값 → record key → MIG_SQL이 계산한 예상 target 값 → 실제 TOBE 전체 row**를 순서대로 확인할 수 있다.
 
 ## 5. Retry / 상태 전이
 

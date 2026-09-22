@@ -533,7 +533,7 @@ class NewType10CMigOneJobPocExecutor2(Component):
     def _node_verify_records(self, context: dict[str, Any]) -> dict[str, Any]:
         """Compare deterministic projected source records to their target PK rows."""
         try:
-            projection_sql, target_columns = self._record_projection_sql(str(context.get("current_migration_sql") or ""))
+            projection_sql, target_columns, sample_projection_sql, asis_columns = self._record_projection_sql(str(context.get("current_migration_sql") or ""))
             target_ddl = list(context.get("target_ddl") or [])
             target_all_columns = [str(item.get("column_name") or "").upper() for item in target_ddl]
             if not target_all_columns:
@@ -543,6 +543,8 @@ class NewType10CMigOneJobPocExecutor2(Component):
             result = self._execute_record_verification(
                 dict(context.get("db_config") or {}),
                 projection_sql,
+                sample_projection_sql,
+                asis_columns,
                 str(context.get("to_table") or ""),
                 target_columns,
                 target_all_columns,
@@ -566,8 +568,8 @@ class NewType10CMigOneJobPocExecutor2(Component):
                 "outputs": {"record_projection_sql": str(context.get("record_projection_sql") or "")},
             }
 
-    def _record_projection_sql(self, migration_sql: str) -> tuple[str, list[str]]:
-        """Turn INSERT target columns + SELECT expressions into a virtual TOBE dataset."""
+    def _record_projection_sql(self, migration_sql: str) -> tuple[str, list[str], str, dict[str, str]]:
+        """Build target-shaped mapping SQL plus a raw AS-IS-column sample query."""
         sql = self._clean_sql_statement(migration_sql)
         match = re.match(r"^INSERT\s+INTO\s+[^\s(]+\s*\(", sql, flags=re.IGNORECASE | re.DOTALL)
         if not match:
@@ -584,16 +586,37 @@ class NewType10CMigOneJobPocExecutor2(Component):
         expressions = self._split_sql_list(select_sql[6:from_index])
         if len(expressions) != len(target_columns):
             raise ValueError(f"RECORD_VERIFY target column/expression count mismatch: {len(target_columns)} != {len(expressions)}")
-        projection = ",\n       ".join(f"{self._strip_select_alias(expression)} AS {column}" for expression, column in zip(expressions, target_columns, strict=True))
-        return f"SELECT {projection}\n{select_sql[from_index:]}", target_columns
+        source_expressions = [self._strip_select_alias(expression) for expression in expressions]
+        projection = ",\n       ".join(f"{expression} AS {column}" for expression, column in zip(source_expressions, target_columns, strict=True))
+        from_clause = select_sql[from_index:]
+        mapping_projection_sql = f"SELECT {projection}\n{from_clause}"
+
+        # The expected target shape alone hides how source columns were merged.
+        # Add each referenced source column with neutral ASIS_n aliases to the
+        # sample query, then expose the original S.COLUMN label in the log.
+        source_refs: list[str] = []
+        for expression in source_expressions:
+            for source_ref in self._source_column_references(expression):
+                if source_ref not in source_refs:
+                    source_refs.append(source_ref)
+        asis_columns = {f"ASIS_{index:03d}": source_ref for index, source_ref in enumerate(source_refs, start=1)}
+        asis_projection = ",\n       ".join(f"{source_ref} AS {alias}" for alias, source_ref in asis_columns.items())
+        sample_select = projection if not asis_projection else f"{projection},\n       {asis_projection}"
+        return mapping_projection_sql, target_columns, f"SELECT {sample_select}\n{from_clause}", asis_columns
+
+    def _source_column_references(self, expression: str) -> list[str]:
+        """Extract conventional alias.column references used by a MIG SELECT expression."""
+        text = re.sub(r"'(?:''|[^'])*'", "", str(expression or "").upper())
+        return list(dict.fromkeys(re.findall(r"(?<![A-Z0-9_$#])([A-Z_][A-Z0-9_$#]*\.[A-Z_][A-Z0-9_$#]*)(?![A-Z0-9_$#])", text)))
 
     def _strip_select_alias(self, expression: str) -> str:
         """Remove an optional explicit SELECT alias before applying the target-column alias."""
         return re.sub(r"\s+AS\s+(?:\"[^\"]+\"|[A-Z_][A-Z0-9_$#]*)\s*$", "", expression.strip(), flags=re.IGNORECASE)
 
-    def _execute_record_verification(self, db_config: dict[str, Any], projection_sql: str, target_table: str, compare_columns: list[str], all_columns: list[str], pk_columns: list[str], sample_size: int) -> dict[str, Any]:
-        order_expr = " || CHR(31) || ".join(f"NVL(TO_CHAR(P.{column}), CHR(0))" for column in pk_columns)
-        sample_sql = f"SELECT * FROM (SELECT P.*, ROW_NUMBER() OVER (ORDER BY ORA_HASH({order_expr})) AS SM_RN FROM ({projection_sql}) P) WHERE SM_RN <= :sample_size"
+    def _execute_record_verification(self, db_config: dict[str, Any], projection_sql: str, sample_projection_sql: str, asis_columns: dict[str, str], target_table: str, compare_columns: list[str], all_columns: list[str], pk_columns: list[str], sample_size: int) -> dict[str, Any]:
+        # Keep the sample easy to audit: use the first N rows returned by the
+        # virtual AS-IS dataset instead of a hash-selected pseudo-random sample.
+        sample_sql = f"SELECT P.* FROM ({sample_projection_sql}) P WHERE ROWNUM <= :sample_size"
         rows: list[dict[str, Any]] = []
         with self._connect(db_config) as conn:
             cur = conn.cursor()
@@ -619,7 +642,7 @@ class NewType10CMigOneJobPocExecutor2(Component):
                     for column in compare_columns:
                         if not self._record_values_equal(expected.get(column), actual.get(column)):
                             diffs.append({"column": column, "expected": self._record_log_value(expected.get(column)), "actual": self._record_log_value(actual.get(column))})
-                rows.append({"record_key": {column: self._record_log_value(expected.get(column)) for column in pk_columns}, "expected": {column: self._record_log_value(expected.get(column)) for column in compare_columns}, "actual": {column: self._record_log_value(actual.get(column)) if actual is not None else None for column in all_columns}, "diffs": diffs, "result": "MATCH" if not diffs else ("MISSING_TARGET_ROW" if not actual_rows else "VALUE_MISMATCH")})
+                rows.append({"asis_dataset": {source_ref: self._record_log_value(expected.get(alias)) for alias, source_ref in asis_columns.items()}, "record_key": {column: self._record_log_value(expected.get(column)) for column in pk_columns}, "expected": {column: self._record_log_value(expected.get(column)) for column in compare_columns}, "actual": {column: self._record_log_value(actual.get(column)) if actual is not None else None for column in all_columns}, "diffs": diffs, "result": "MATCH" if not diffs else ("MISSING_TARGET_ROW" if not actual_rows else "VALUE_MISMATCH")})
         mismatch_count = sum(1 for row in rows if row["result"] != "MATCH")
         compared = list(dict.fromkeys(compare_columns))
         uncompared = [column for column in all_columns if column not in compared]
@@ -1266,12 +1289,11 @@ class NewType10CMigOneJobPocExecutor2(Component):
                 [
                     "",
                     f"[CASE {index}] result={row.get('result') or ''}",
+                    "[ASIS_DATASET_SOURCE_COLUMNS]",
+                    self._json_dump(row.get("asis_dataset") or {}),
                     "[RECORD_KEY]",
                     self._json_dump(row.get("record_key") or {}),
-                    "[ASIS_DATASET_VIRTUAL]",
-                    # This is the SELECT dataset derived from MIG_SQL before
-                    # INSERT. Its columns use the TOBE target-column aliases
-                    # shown in the mapping SQL above.
+                    "[EXPECTED_TARGET_VALUES_FROM_MIG_SQL]",
                     self._json_dump(row.get("expected") or {}),
                     "[TOBE_DATASET_ACTUAL_ALL_COLUMNS]",
                     self._json_dump(row.get("actual") or {}),
