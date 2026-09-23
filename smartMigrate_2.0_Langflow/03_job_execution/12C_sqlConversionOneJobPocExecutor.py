@@ -565,6 +565,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "bind_set": str(job.get("bind_set") or "") or None,
             "test_sql": str(job.get("test_sql") or "").strip(),
             "tuned_fr_sql": str(job.get("tuned_fr_sql") or "").strip() or None,
+            "generated_sql_columns": [],
             "sql_length": self._sql_length_kind(source_sql),
             "resume_stage": self._initial_resume_stage(job, tag_kind, str(job.get("to_sql") or "").strip(), str(job.get("bind_sql") or "").strip()),
             "status": "RUNNING",
@@ -601,6 +602,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 next_state = {**state, "source_for_conversion": source_for_conversion, "tuned_fr_sql": tuned_fr_sql, "sql_length": sql_length, "node_failed": False}
                 if allow_pre_tuning and tuned_fr_sql and not before_tuned and state.get("resume_stage") == "GENERATE_TOBE_SQL":
                     next_state["resume_stage"] = "GENERATE_TOBE_SQL"
+                    next_state["generated_sql_columns"] = [*(state.get("generated_sql_columns") or []), "TUNED_FR_SQL"]
                 return next_state
             except Exception as exc:
                 state["last_status"], state["last_message"], state["resume_stage"] = FAIL_TOBE, str(exc), "TUNE_FR_SQL"
@@ -626,6 +628,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                     str((state.get("correct_sql_hints") or {}).get("TO_SQL") or "- (empty)"),
                 )
                 state["to_sql"] = to_sql
+                state["generated_sql_columns"] = list(dict.fromkeys([*(state.get("generated_sql_columns") or []), "TO_SQL"]))
                 state["node_failed"] = False
                 state["last_status"] = ""
                 state["last_message"] = ""
@@ -667,6 +670,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                     str((state.get("correct_sql_hints") or {}).get("BIND_SQL") or "- (empty)"),
                 )
                 state.update({"bind_sql": bind_sql, "bind_set": bind_set, "resume_stage": "GENERATE_TEST_SQL", "last_status": "", "last_message": "", "node_failed": False})
+                state["generated_sql_columns"] = list(dict.fromkeys([*(state.get("generated_sql_columns") or []), "BIND_SQL"]))
                 attempt_entry = {"attempt": state["attempt_no"], "stage": bind_reuse_stage, "status": CONVERSION_PASS}
                 state["attempts"].append(attempt_entry)
                 logger.info("BIND_SQL completed", extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "BIND_SQL", "INFO", bind_reuse_stage, "SUCCESS", state["retry_count"], bind_sql]})
@@ -693,6 +697,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                     state["mapping_rules"],
                 )
                 state["test_sql"] = test_sql
+                state["generated_sql_columns"] = list(dict.fromkeys([*(state.get("generated_sql_columns") or []), "TEST_SQL"]))
                 self._update_row(state["db_config"], state["job"], {"TEST_SQL": test_sql})
                 test_rows = self._execute_test_query(state["db_config"], test_sql)
                 self._evaluate_test_rows(test_rows)
@@ -745,14 +750,14 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                     payload=state["payload"], job=state["job"], ok=True, status=CONVERSION_PASS,
                     elapsed=time.perf_counter() - state["started"], attempts=state["attempts"],
                     message="SQL conversion completed. Continuing to tuning.",
-                    extra={"status_conversion": CONVERSION_PASS, "conversion_status": CONVERSION_PASS, "to_sql": state.get("to_sql"), "bind_sql": state.get("bind_sql"), "bind_set": state.get("bind_set"), "test_sql": state.get("test_sql"), "tuned_fr_sql": state.get("tuned_fr_sql"), "sql_length": state.get("sql_length"), "tag_kind": state["tag_kind"], "next_node": "15C_sqlTuningOneJobPocExecutor"},
+                    extra={"status_conversion": CONVERSION_PASS, "conversion_status": CONVERSION_PASS, "to_sql": state.get("to_sql"), "bind_sql": state.get("bind_sql"), "bind_set": state.get("bind_set"), "test_sql": state.get("test_sql"), "tuned_fr_sql": state.get("tuned_fr_sql"), "generated_sql_columns": state.get("generated_sql_columns") or [], "sql_length": state.get("sql_length"), "tag_kind": state["tag_kind"], "next_node": "15C_sqlTuningOneJobPocExecutor"},
                 )
                 return state
             state["result"] = self._finish_failure(
                 state["payload"], state["job"], state["db_config"], state["started"],
                 state.get("last_status") or FAIL_TOBE, state.get("last_message") or "SQL conversion failed.",
                 state.get("attempts") or [],
-                partial_values={"TO_SQL": state.get("to_sql"), "BIND_SQL": state.get("bind_sql"), "BIND_SET": state.get("bind_set"), "TEST_SQL": state.get("test_sql"), "TUNED_FR_SQL": state.get("tuned_fr_sql")},
+                partial_values={"TO_SQL": state.get("to_sql"), "BIND_SQL": state.get("bind_sql"), "BIND_SET": state.get("bind_set"), "TEST_SQL": state.get("test_sql"), "TUNED_FR_SQL": state.get("tuned_fr_sql"), "generated_sql_columns": state.get("generated_sql_columns") or []},
             )
             return state
 
@@ -1012,7 +1017,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             update_values = {
                 key: value
                 for key, value in (partial_values or {}).items()
-                if value not in (None, "")
+                if key != "generated_sql_columns" and value not in (None, "")
             }
             update_values.update(
                 {
@@ -1057,6 +1062,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 "bind_sql": (partial_values or {}).get("bind_sql") or (partial_values or {}).get("BIND_SQL"),
                 "bind_set": (partial_values or {}).get("bind_set") or (partial_values or {}).get("BIND_SET"),
                 "test_sql": (partial_values or {}).get("test_sql") or (partial_values or {}).get("TEST_SQL"),
+                "generated_sql_columns": (partial_values or {}).get("generated_sql_columns") or [],
                 "next_node": "15C_sqlTuningOneJobPocExecutor" if payload.get("full_workflow") else "12D_sqlConversionIterationDashboard",
             },
         )
@@ -1163,6 +1169,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         result = [dict(item) for item in payload.get("generated_sql_list") or [] if isinstance(item, dict)]
         sql_id = job.get("sql_id") or payload.get("sql_id")
         space_nm = job.get("space_nm") or payload.get("space_nm")
+        generated_columns = {str(value).upper() for value in extra.get("generated_sql_columns") or []}
         for key, column in (
             ("tuned_fr_sql", "TUNED_FR_SQL"),
             ("to_sql", "TO_SQL"),
@@ -1172,7 +1179,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             # state의 소문자 key와 DB에서 읽은 대문자 key를 모두 확인해 생성 SQL을 놓치지 않는다.
             # 검증 실패 후에도 생성된 SQL은 formatting 단계에서 확인할 수 있어야 한다.
             sql_value = extra.get(key) or extra.get(key.upper())
-            if str(sql_value or "").strip():
+            if column in generated_columns and str(sql_value or "").strip():
                 result.append(
                     {
                         "table": "NEXT_SQL_INFO",

@@ -216,6 +216,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             "to_sql": to_sql,
             "tuned_sql": "",
             "tuned_result": "",
+            "generated_sql_columns": [],
             "tag_kind": str(payload.get("tag_kind") or job.get("tag_kind") or "").strip().upper(),
             "target_table": str(payload.get("target_table") or job.get("target_table") or "").strip(),
             "bind_set": payload.get("bind_set") or job.get("bind_set"),
@@ -239,7 +240,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             final_state.get("last_status") or FAIL_TUNED,
             final_state.get("last_message") or "SQL tuning failed",
             final_state.get("attempts") or [],
-            partial_values={"TUNED_TO_SQL": final_state.get("tuned_sql"), "TUNED_RESULT": final_state.get("tuned_result")},
+            partial_values={"TUNED_TO_SQL": final_state.get("tuned_sql"), "TUNED_RESULT": final_state.get("tuned_result"), "generated_sql_columns": final_state.get("generated_sql_columns") or []},
             tuning_guides=final_state.get("tuning_guides") or [],
         )
 
@@ -296,6 +297,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                     candidate_sql = self._clean_generated_sql(candidate_sql)
                     if not candidate_sql:
                         raise ValueError("TUNED_TO_SQL generation returned empty SQL")
+                    state["generated_sql_columns"] = list(dict.fromkeys([*(state.get("generated_sql_columns") or []), "TUNED_TO_SQL"]))
                     tuned_result = candidate_result or "TUNING APPLIED"
                     matched_ids = sorted({match["rule_id"] for block in tuning_examples for match in block.get("top_rule_matches", []) if match.get("rule_id")})
                     state["matched_rule_ids"] = sorted(set(state.get("matched_rule_ids") or []) | set(matched_ids))
@@ -391,6 +393,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                         "tuning_status": TUNING_PASS,
                         "tuned_to_sql": state.get("tuned_sql") or state.get("to_sql"),
                         "tuned_result": state.get("tuned_result") or "NO TUNING",
+                        "generated_sql_columns": state.get("generated_sql_columns") or [],
                         "tuning_guides": state.get("tuning_guides") or [],
                         "matched_rule_ids": sorted(set(state.get("matched_rule_ids") or [])),
                         "tag_kind": state.get("tag_kind"),
@@ -406,7 +409,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
                 state.get("last_status") or FAIL_TUNED,
                 state.get("last_message") or "SQL tuning failed.",
                 state.get("attempts") or [],
-                partial_values={"TUNED_TO_SQL": state.get("tuned_sql"), "TUNED_RESULT": state.get("tuned_result")},
+                partial_values={"TUNED_TO_SQL": state.get("tuned_sql"), "TUNED_RESULT": state.get("tuned_result"), "generated_sql_columns": state.get("generated_sql_columns") or []},
                 tuning_guides=state.get("tuning_guides") or [],
             )
             return state
@@ -584,7 +587,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
     def _finish_failure(self, payload: dict[str, Any], job: dict[str, Any], db_config: dict[str, Any], started: float, status: str, message: str, attempts: list[dict[str, Any]] | None = None, partial_values: dict[str, Any] | None = None, tuning_guides: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         failure_attempts = attempts or [{"attempt": 1, "stage": self._failure_stage(status), "status": status, "reason": message}]
         if db_config and self._has_sql_key(job):
-            update_values = {key: value for key, value in (partial_values or {}).items() if value not in (None, "")}
+            update_values = {key: value for key, value in (partial_values or {}).items() if key != "generated_sql_columns" and value not in (None, "")}
             update_values.update({"STATUS_TUNING": status, "TUNED_RESULT": str((partial_values or {}).get("TUNED_RESULT") or message)[:4000], "LOG": f"FINAL FAILURE stage=SQL_TUNING status={status} SQL_SEQ={job.get('sql_seq')} SQL_ID={job.get('sql_id')} SPACE_NM={job.get('space_nm')} error={message}", "RETRY_COUNT": self._configured_retry_limit()})
             self._update_row(db_config, job, update_values)
             logging.getLogger("smartmigrate.workflow").error(message, extra={"workflow_log": [self._map_id(job), "SQL_TUNING", "SQL_TUNING", "ERROR", self._failure_stage(status), status, max(0, len(failure_attempts) - 1), update_values.get("TUNED_TO_SQL") or ""]})
@@ -596,7 +599,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             elapsed=time.perf_counter() - started,
             attempts=failure_attempts,
             message=message,
-            extra={"status_tuning": status, "tuning_status": status, "tuned_to_sql": (partial_values or {}).get("tuned_to_sql") or (partial_values or {}).get("TUNED_TO_SQL"), "tuned_result": (partial_values or {}).get("TUNED_RESULT") or message, "tuning_guides": list(tuning_guides or []), "next_node": self._after_tuning_node(payload)},
+            extra={"status_tuning": status, "tuning_status": status, "tuned_to_sql": (partial_values or {}).get("tuned_to_sql") or (partial_values or {}).get("TUNED_TO_SQL"), "tuned_result": (partial_values or {}).get("TUNED_RESULT") or message, "generated_sql_columns": (partial_values or {}).get("generated_sql_columns") or [], "tuning_guides": list(tuning_guides or []), "next_node": self._after_tuning_node(payload)},
         )
 
     # Full Workflow에서는 skip/실패도 17C를 거쳐 18D로 돌아간다.
@@ -655,7 +658,8 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         # state의 소문자 key와 DB에서 읽은 대문자 key를 모두 확인해 생성 SQL을 놓치지 않는다.
         # 검증 실패 후에도 생성된 SQL은 formatting 단계에서 확인할 수 있어야 한다.
         tuned_to_sql = extra.get("tuned_to_sql") or extra.get("TUNED_TO_SQL")
-        if str(tuned_to_sql or "").strip():
+        generated_columns = {str(value).upper() for value in extra.get("generated_sql_columns") or []}
+        if "TUNED_TO_SQL" in generated_columns and str(tuned_to_sql or "").strip():
             result.append({"table": "NEXT_SQL_INFO", "sql_id": sql_id, "space_nm": space_nm, "column": "TUNED_TO_SQL", "source_component": "15C_sqlTuningOneJobPocExecutor"})
         return self._dedupe_generated_sql_list(result)
 

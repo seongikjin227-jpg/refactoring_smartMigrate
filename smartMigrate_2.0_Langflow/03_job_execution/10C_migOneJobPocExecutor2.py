@@ -341,6 +341,7 @@ class NewType10CMigOneJobPocExecutor2(Component):
                             map_id,
                             graph_result.get("current_migration_sql", ""),
                             graph_result.get("current_v_sql", ""),
+                            graph_result.get("generated_sql_columns") or [],
                         ),
                         "llm_model": graph_result.get("llm_model", ""),
                         "generated_sql_saved": bool(graph_result.get("generated_sql_saved")),
@@ -470,6 +471,7 @@ class NewType10CMigOneJobPocExecutor2(Component):
                 "outputs": {
                     "migration_sql": migration_sql,
                     "verification_sql": verification_sql,
+                    "generated_sql_columns": ["VERIFY_SQL"] if verify_only else ["MIG_SQL", "VERIFY_SQL"],
                     "llm_model": used_model,
                     "generated_sql_saved": False,
                 },
@@ -986,6 +988,9 @@ SELECT A.ROW_NO,
                 }
             )
             if step.get("stage") == "GENERATE_SQL":
+                next_state["generated_sql_columns"] = list(
+                    dict.fromkeys([*(state.get("generated_sql_columns") or []), *(outputs.get("generated_sql_columns") or [])])
+                )
                 self._save_generated_sql(
                     self._db_config(state.get("job") or {}),
                     int(state["map_id"]),
@@ -2102,10 +2107,10 @@ SELECT A.ROW_NO,
         }
 
     # migration 결과에 포함할 generated_sqls 목록을 표준 구조로 만든다.
-    def _generated_sql_list(self, existing: Any, map_id: Any, migration_sql: Any, verification_sql: Any) -> list[dict[str, Any]]:
+    def _generated_sql_list(self, existing: Any, map_id: Any, migration_sql: Any, verification_sql: Any, generated_columns: list[str]) -> list[dict[str, Any]]:
         result = [dict(item) for item in existing or [] if isinstance(item, dict)]
         for column, value in (("MIG_SQL", migration_sql), ("VERIFY_SQL", verification_sql)):
-            if str(value or "").strip():
+            if column in {str(item).upper() for item in generated_columns} and str(value or "").strip():
                 result.append(
                     {
                         "table": "NEXT_MIG_INFO",
