@@ -550,6 +550,7 @@ class NewType10CMigOneJobPocExecutor2(Component):
             or context.get("migration_sql")
             or ""
         )
+        comparison_sql = ""
         try:
             comparison_sql, compare_columns = self._build_full_row_compare_sql(
                 migration_sql,
@@ -573,10 +574,10 @@ class NewType10CMigOneJobPocExecutor2(Component):
                 "stage": "VERIFY_RECORDS",
                 "status": FAIL_TEST2,
                 "message": f"full-row verification failed: {exc}",
-                # Keep the exact MIG_SQL input in the failure log.  This
-                # distinguishes parser-shape issues from an empty/stale graph
-                # state on a FAIL-TEST2 resume.
-                "outputs": {"record_projection_sql": f"[RECORD_VERIFY_INPUT_MIG_SQL]\n{migration_sql}"},
+                # If Oracle rejects the generated WITH SQL, retain that exact
+                # statement in the workflow log.  The input MIG_SQL itself is
+                # not a verification artifact and is intentionally omitted.
+                "outputs": {"record_projection_sql": comparison_sql},
             }
 
     def _build_full_row_compare_sql(self, migration_sql: str, verification_sql: str, target_ddl: list[dict[str, Any]]) -> tuple[str, list[str]]:
@@ -587,7 +588,7 @@ class NewType10CMigOneJobPocExecutor2(Component):
         columns are in scope.  MIG_SQL supplies the matching AS-IS expression
         for each target column, including transforms such as SUBSTR/LPAD.
         """
-        source_count_sql, target_count_sql = self._extract_count_verify_datasets(verification_sql)
+        _, target_count_sql = self._extract_count_verify_datasets(verification_sql)
         compare_columns = self._count_verify_target_columns(target_count_sql)
         if not compare_columns:
             raise ValueError("RECORD_VERIFY could not find target COUNT(column) expressions in VERIFY_SQL")
@@ -610,7 +611,11 @@ class NewType10CMigOneJobPocExecutor2(Component):
         tobe_payload = self._row_concat_sql(
             [(column, f"T2.{column}", type_by_column[column]) for column in compare_columns]
         )
-        source_from_clause = self._select_from_clause(source_count_sql)
+        # The source expression came from MIG_SQL and may refer to its own
+        # aliases/CTEs (for example S.UPD_TM).  Use the same SELECT scope as
+        # that expression rather than assuming the Verify SQL's S scope uses
+        # identical aliases or schema qualification.
+        source_from_clause = self._migration_source_from_clause(migration_sql)
         target_from_clause = self._select_from_clause(target_count_sql)
         sql = f"""WITH
 ASIS_ROWS AS (
@@ -693,6 +698,19 @@ SELECT A.ROW_NO,
 
     def _migration_target_expressions(self, migration_sql: str) -> dict[str, str]:
         """Map each INSERT target column to its same-position SELECT expression."""
+        target_columns, expressions, _ = self._migration_select_parts(migration_sql)
+        return {
+            column: self._strip_select_alias(expression)
+            for column, expression in zip(target_columns, expressions, strict=True)
+        }
+
+    def _migration_source_from_clause(self, migration_sql: str) -> str:
+        """Return the exact source FROM/WHERE scope that made MIG_SQL valid."""
+        _, _, from_clause = self._migration_select_parts(migration_sql)
+        return from_clause
+
+    def _migration_select_parts(self, migration_sql: str) -> tuple[list[str], list[str], str]:
+        """Parse INSERT targets, same-position SELECT expressions, and its FROM scope."""
         sql = self._clean_sql_statement(migration_sql)
         # Some valid generated statements begin with a WITH clause before the
         # INSERT.  Locate the single INSERT instead of requiring byte zero.
@@ -717,10 +735,7 @@ SELECT A.ROW_NO,
         expressions = self._split_sql_list(select_sql[select_index + len("SELECT"):from_index])
         if len(expressions) != len(target_columns):
             raise ValueError(f"RECORD_VERIFY target column/expression count mismatch: {len(target_columns)} != {len(expressions)}")
-        return {
-            column: self._strip_select_alias(expression)
-            for column, expression in zip(target_columns, expressions, strict=True)
-        }
+        return target_columns, expressions, select_sql[from_index:].strip()
 
     def _strip_select_alias(self, expression: str) -> str:
         """Remove an optional explicit SELECT alias before applying the target-column alias."""
