@@ -544,9 +544,15 @@ class NewType10CMigOneJobPocExecutor2(Component):
 
     def _node_verify_records(self, context: dict[str, Any]) -> dict[str, Any]:
         """Compare every count-verified AS-IS/TO-BE row in a stable concat order."""
+        migration_sql = str(
+            context.get("saved_migration_sql")
+            or context.get("current_migration_sql")
+            or context.get("migration_sql")
+            or ""
+        )
         try:
             comparison_sql, compare_columns = self._build_full_row_compare_sql(
-                str(context.get("current_migration_sql") or ""),
+                migration_sql,
                 str(context.get("current_v_sql") or context.get("verification_sql") or ""),
                 list(context.get("target_ddl") or []),
             )
@@ -567,7 +573,10 @@ class NewType10CMigOneJobPocExecutor2(Component):
                 "stage": "VERIFY_RECORDS",
                 "status": FAIL_TEST2,
                 "message": f"full-row verification failed: {exc}",
-                "outputs": {"record_projection_sql": str(context.get("record_projection_sql") or "")},
+                # Keep the exact MIG_SQL input in the failure log.  This
+                # distinguishes parser-shape issues from an empty/stale graph
+                # state on a FAIL-TEST2 resume.
+                "outputs": {"record_projection_sql": f"[RECORD_VERIFY_INPUT_MIG_SQL]\n{migration_sql}"},
             }
 
     def _build_full_row_compare_sql(self, migration_sql: str, verification_sql: str, target_ddl: list[dict[str, Any]]) -> tuple[str, list[str]]:
@@ -685,19 +694,27 @@ SELECT A.ROW_NO,
     def _migration_target_expressions(self, migration_sql: str) -> dict[str, str]:
         """Map each INSERT target column to its same-position SELECT expression."""
         sql = self._clean_sql_statement(migration_sql)
-        match = re.match(r"^INSERT\s+INTO\s+[^\s(]+\s*\(", sql, flags=re.IGNORECASE | re.DOTALL)
+        # Some valid generated statements begin with a WITH clause before the
+        # INSERT.  Locate the single INSERT instead of requiring byte zero.
+        match = re.search(r"\bINSERT\s+INTO\s+[^\s(]+\s*\(", sql, flags=re.IGNORECASE | re.DOTALL)
         if not match:
-            raise ValueError("RECORD_VERIFY supports INSERT INTO target(columns) SELECT ... migrations only")
+            preview = re.sub(r"\s+", " ", sql[:240]).strip()
+            raise ValueError(
+                "RECORD_VERIFY supports INSERT INTO target(columns) SELECT ... migrations only; "
+                f"MIG_SQL starts with: {preview or '(empty)'}"
+            )
         open_index = match.end() - 1
         close_index = self._matching_parenthesis(sql, open_index)
         target_columns = [self._clean_identifier(item.strip().strip('"')) for item in self._split_sql_list(sql[open_index + 1:close_index])]
         select_sql = sql[close_index + 1:].strip()
-        if not select_sql.upper().startswith("SELECT "):
-            raise ValueError("RECORD_VERIFY requires INSERT ... SELECT syntax")
+        select_index = 0 if select_sql.upper().startswith("SELECT ") else self._top_level_keyword(select_sql, "SELECT")
+        if select_index < 0:
+            preview = re.sub(r"\s+", " ", sql[:240]).strip()
+            raise ValueError(f"RECORD_VERIFY requires INSERT INTO target(columns) SELECT ... syntax; MIG_SQL starts with: {preview}")
         from_index = self._top_level_keyword(select_sql, "FROM")
-        if from_index < 0:
+        if from_index < 0 or from_index < select_index:
             raise ValueError("RECORD_VERIFY could not find FROM in migration SELECT")
-        expressions = self._split_sql_list(select_sql[6:from_index])
+        expressions = self._split_sql_list(select_sql[select_index + len("SELECT"):from_index])
         if len(expressions) != len(target_columns):
             raise ValueError(f"RECORD_VERIFY target column/expression count mismatch: {len(target_columns)} != {len(expressions)}")
         return {
@@ -997,6 +1014,11 @@ SELECT A.ROW_NO,
                     next_state.get("current_migration_sql", ""),
                     next_state.get("current_v_sql", ""),
                 )
+                # The DB save succeeded.  Record verification always uses this
+                # persisted value, including when this same run proceeds
+                # immediately from generation to verification.
+                next_state["saved_migration_sql"] = next_state.get("current_migration_sql", "")
+                next_state["saved_verification_sql"] = next_state.get("current_v_sql", "")
                 next_state["generated_sql_saved"] = True
             if step.get("stage") == "VERIFY_COUNT":
                 next_state["status"] = "COUNT_VERIFIED"
