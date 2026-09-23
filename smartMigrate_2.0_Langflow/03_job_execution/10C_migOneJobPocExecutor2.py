@@ -163,20 +163,28 @@ MIGRATION_PROMPT_TEMPLATE: dict[str, str] = {
 
 
 FAIL_TEST2 = "FAIL-TEST2"
+# The migration selectors use ``RETRY_COUNT < 2``.  A failure before the
+# LangGraph retry loop (for example a Milvus/RAG connection exception while
+# loading metadata) must therefore be persisted with this value, otherwise it
+# is selected forever without consuming a retry.
+AUTO_SELECTION_RETRY_LIMIT = 2
 
 
 class NewType10CMigOneJobPocExecutor2(Component):
 
     display_name = "10C MIG One Job Executor 2 (Count + Record Verify)"
-    description = "Runs one DB Migration job with real DB status/log updates and internal retry."
+    description = "Runs one DB Migration job with count verification followed by full-row concat comparison."
     name = "NewType10CMigOneJobPocExecutor2"
     icon = "DatabaseZap"
 
     inputs = [
         DataInput(name="job_item", display_name="Job Item", required=True),
         IntInput(name="max_retry", display_name="Max Retry", value=2, required=False),
-        IntInput(name="record_sample_size", display_name="Record Verify Sample Size", value=3, required=False),
-        StrInput(name="record_verify_key_columns", display_name="Record Verify Key Columns (optional)", value="", required=False),
+        # Retained only so deployed Langflow flows that still send these inputs
+        # remain compatible.  Verification is now always full-row and does not
+        # sample rows or use a record key.
+        IntInput(name="record_sample_size", display_name="Legacy Record Sample Size (unused)", value=3, required=False),
+        StrInput(name="record_verify_key_columns", display_name="Legacy Record Verify Key Columns (unused)", value="", required=False),
         StrInput(name="source_schema", display_name="Source Schema", required=False),
         StrInput(name="target_schema", display_name="Target Schema", required=False),
         StrInput(name="llm_base_url", display_name="LLM Base URL", required=False),
@@ -347,20 +355,21 @@ class NewType10CMigOneJobPocExecutor2(Component):
                 elapsed = int(time.perf_counter() - started)
                 error_message = message or str(exc)
                 stage_sql = graph_result.get("stage_sql", "") if isinstance(graph_result, dict) else ""
+                terminal_retry_count = AUTO_SELECTION_RETRY_LIMIT
                 try:
-                    self._update_job(db_config, map_id, "FAIL-INSERT", elapsed, max(0, len(attempts) - 1))
+                    self._update_job(db_config, map_id, "FAIL-INSERT", elapsed, terminal_retry_count)
                     logger.error(
                         error_message,
-                        extra={"workflow_log": [map_id, "DB_MIGRATION", "JOB_FAIL", "ERROR", "FINAL", final_status, retry_count, stage_sql]},
+                        extra={"workflow_log": [map_id, "DB_MIGRATION", "JOB_FAIL", "ERROR", "FINAL", final_status, terminal_retry_count, stage_sql]},
                     )
                 except Exception:
                     logger.warning(
                         "DB status update failed while recording migration executor failure; original error is preserved.",
-                        extra={"workflow_log": [map_id, "DB_MIGRATION", "JOB_FAIL", "WARN", "FINAL", final_status, retry_count, str(exc)]},
+                        extra={"workflow_log": [map_id, "DB_MIGRATION", "JOB_FAIL", "WARN", "FINAL", final_status, terminal_retry_count, str(exc)]},
                         exc_info=True,
                     )
                 result = self._result(job, ok=False, status="FAIL-INSERT", elapsed=elapsed, attempts=attempts)
-                result.update({"error_type": "SYSTEM_ERROR", "error": str(exc), "message": f"migration executor error: {exc}"})
+                result.update({"retry_count": terminal_retry_count, "error_type": "SYSTEM_ERROR", "error": str(exc), "message": f"migration executor error: {exc}"})
                 self.status = result
                 __log_result = Data(data=result)
                 logger.error("error run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "ERROR", "RUN_JOB", "ERROR", 0]})
@@ -532,45 +541,147 @@ class NewType10CMigOneJobPocExecutor2(Component):
             }
 
     def _node_verify_records(self, context: dict[str, Any]) -> dict[str, Any]:
-        """Compare deterministic projected source records to their target PK rows."""
+        """Compare every count-verified AS-IS/TO-BE row in a stable concat order."""
         try:
-            projection_sql, target_columns, sample_projection_sql, asis_columns = self._record_projection_sql(str(context.get("current_migration_sql") or ""))
-            target_ddl = list(context.get("target_ddl") or [])
-            target_all_columns = [str(item.get("column_name") or "").upper() for item in target_ddl]
-            if not target_all_columns:
-                raise ValueError("RECORD_VERIFY target DDL columns are unavailable")
-            target_pk_columns = [str(value).upper() for value in context.get("target_pk_columns") or []]
-            key_columns, key_strategy = self._record_verify_key_columns(target_pk_columns, target_columns, target_ddl)
-            result = self._execute_record_verification(
-                dict(context.get("db_config") or {}),
-                projection_sql,
-                sample_projection_sql,
-                asis_columns,
-                str(context.get("to_table") or ""),
-                target_columns,
-                target_all_columns,
-                key_columns,
-                self._record_sample_size(),
+            comparison_sql, compare_columns = self._build_full_row_compare_sql(
+                str(context.get("current_migration_sql") or ""),
+                str(context.get("current_v_sql") or context.get("verification_sql") or ""),
+                list(context.get("target_ddl") or []),
             )
-            result["key_columns"] = key_columns
-            result["key_strategy"] = key_strategy
+            result = self._execute_full_row_comparison(
+                dict(context.get("db_config") or {}),
+                comparison_sql,
+                compare_columns,
+            )
             detail_json = json.dumps(result, ensure_ascii=False, default=str)
             return {
                 "stage": "VERIFY_RECORDS",
                 "status": "PASS" if result["ok"] else FAIL_TEST2,
                 "message": result["summary"],
-                "outputs": {"record_projection_sql": projection_sql, "record_verify_result": result, "record_verify_detail": detail_json},
+                "outputs": {"record_projection_sql": comparison_sql, "record_verify_result": result, "record_verify_detail": detail_json},
             }
         except Exception as exc:
             return {
                 "stage": "VERIFY_RECORDS",
                 "status": FAIL_TEST2,
-                "message": f"record verification failed: {exc}",
+                "message": f"full-row verification failed: {exc}",
                 "outputs": {"record_projection_sql": str(context.get("record_projection_sql") or "")},
             }
 
-    def _record_projection_sql(self, migration_sql: str) -> tuple[str, list[str], str, dict[str, str]]:
-        """Build target-shaped mapping SQL plus a raw AS-IS-column sample query."""
+    def _build_full_row_compare_sql(self, migration_sql: str, verification_sql: str, target_ddl: list[dict[str, Any]]) -> tuple[str, list[str]]:
+        """Reuse count-VERIFY S/T scopes and compare mapped values for every row.
+
+        The Count Verify SQL defines the source and target population.  Its
+        target ``COUNT(column)`` expressions define which non-LOB target
+        columns are in scope.  MIG_SQL supplies the matching AS-IS expression
+        for each target column, including transforms such as SUBSTR/LPAD.
+        """
+        source_count_sql, target_count_sql = self._extract_count_verify_datasets(verification_sql)
+        compare_columns = self._count_verify_target_columns(target_count_sql)
+        if not compare_columns:
+            raise ValueError("RECORD_VERIFY could not find target COUNT(column) expressions in VERIFY_SQL")
+        migration_expressions = self._migration_target_expressions(migration_sql)
+        missing = [column for column in compare_columns if column not in migration_expressions]
+        if missing:
+            raise ValueError(f"RECORD_VERIFY target columns are absent from MIG_SQL INSERT list: {missing}")
+        type_by_column = {
+            self._clean_identifier(str(item.get("column_name") or "")): str(item.get("data_type") or "").upper()
+            for item in target_ddl
+            if str(item.get("column_name") or "").strip()
+        }
+        ddl_missing = [column for column in compare_columns if column not in type_by_column]
+        if ddl_missing:
+            raise ValueError(f"RECORD_VERIFY target DDL types are unavailable: {ddl_missing}")
+
+        asis_payload = self._row_concat_sql(
+            [(column, migration_expressions[column], type_by_column[column]) for column in compare_columns]
+        )
+        tobe_payload = self._row_concat_sql(
+            [(column, f"T2.{column}", type_by_column[column]) for column in compare_columns]
+        )
+        source_from_clause = self._select_from_clause(source_count_sql)
+        target_from_clause = self._select_from_clause(target_count_sql)
+        sql = f"""WITH
+ASIS_ROWS AS (
+    SELECT {asis_payload} AS ROW_CONCAT
+    {source_from_clause}
+),
+TOBE_ROWS AS (
+    SELECT {tobe_payload} AS ROW_CONCAT
+    {target_from_clause}
+),
+ASIS_ORDERED AS (
+    SELECT ROW_NUMBER() OVER (ORDER BY ROW_CONCAT) AS ROW_NO,
+           ROW_CONCAT
+      FROM ASIS_ROWS
+),
+TOBE_ORDERED AS (
+    SELECT ROW_NUMBER() OVER (ORDER BY ROW_CONCAT) AS ROW_NO,
+           ROW_CONCAT
+      FROM TOBE_ROWS
+)
+SELECT A.ROW_NO,
+       CASE WHEN A.ROW_CONCAT = T.ROW_CONCAT THEN 'MATCH' ELSE 'MISMATCH' END AS COMPARE_RESULT,
+       A.ROW_CONCAT AS ASIS_CONCAT,
+       T.ROW_CONCAT AS TOBE_CONCAT
+  FROM ASIS_ORDERED A
+  JOIN TOBE_ORDERED T
+    ON T.ROW_NO = A.ROW_NO
+ ORDER BY A.ROW_NO"""
+        return sql, compare_columns
+
+    def _extract_count_verify_datasets(self, verification_sql: str) -> tuple[str, str]:
+        """Extract the two inline SELECTs from ``FROM (SELECT ...) S, (SELECT ...) T``."""
+        sql = self._clean_sql_statement(verification_sql)
+        from_index = self._top_level_keyword(sql, "FROM")
+        if from_index < 0:
+            raise ValueError("RECORD_VERIFY VERIFY_SQL has no outer FROM clause")
+        position = from_index + len("FROM")
+
+        def read_inline_select(start: int) -> tuple[str, int]:
+            while start < len(sql) and sql[start].isspace():
+                start += 1
+            if start >= len(sql) or sql[start] != "(":
+                raise ValueError("RECORD_VERIFY requires VERIFY_SQL shape FROM (SELECT ...) S, (SELECT ...) T")
+            end = self._matching_parenthesis(sql, start)
+            dataset = sql[start + 1:end].strip()
+            if not dataset.upper().startswith("SELECT"):
+                raise ValueError("RECORD_VERIFY inline VERIFY_SQL dataset must be a SELECT")
+            return dataset, end + 1
+
+        source_sql, position = read_inline_select(position)
+        while position < len(sql) and (sql[position].isspace() or sql[position].isalnum() or sql[position] in "_$#\""):
+            position += 1
+        while position < len(sql) and sql[position].isspace():
+            position += 1
+        if position >= len(sql) or sql[position] != ",":
+            raise ValueError("RECORD_VERIFY requires comma-separated S and T datasets in VERIFY_SQL")
+        target_sql, _ = read_inline_select(position + 1)
+        return source_sql, target_sql
+
+    def _count_verify_target_columns(self, target_count_sql: str) -> list[str]:
+        """Return target columns from the T-side COUNT(column) list, excluding COUNT(*)."""
+        from_index = self._top_level_keyword(target_count_sql, "FROM")
+        if from_index < 0:
+            raise ValueError("RECORD_VERIFY target VERIFY dataset has no FROM clause")
+        columns: list[str] = []
+        for expression in self._split_sql_list(target_count_sql[len("SELECT"):from_index]):
+            match = re.match(r"^\s*COUNT\s*\(\s*(.*?)\s*\)", expression, flags=re.IGNORECASE | re.DOTALL)
+            if not match:
+                continue
+            count_expression = match.group(1).strip()
+            if count_expression == "*":
+                continue
+            simple_column = re.fullmatch(r"(?:(?:[A-Za-z_][A-Za-z0-9_$#]*|\"[^\"]+\")\.)?(?:[A-Za-z_][A-Za-z0-9_$#]*|\"[^\"]+\")", count_expression)
+            if not simple_column:
+                raise ValueError(f"RECORD_VERIFY target COUNT expression must be a target column: {count_expression}")
+            column = self._clean_identifier(count_expression.rsplit(".", 1)[-1].strip().strip('"'))
+            if column not in columns:
+                columns.append(column)
+        return columns
+
+    def _migration_target_expressions(self, migration_sql: str) -> dict[str, str]:
+        """Map each INSERT target column to its same-position SELECT expression."""
         sql = self._clean_sql_statement(migration_sql)
         match = re.match(r"^INSERT\s+INTO\s+[^\s(]+\s*\(", sql, flags=re.IGNORECASE | re.DOTALL)
         if not match:
@@ -587,145 +698,79 @@ class NewType10CMigOneJobPocExecutor2(Component):
         expressions = self._split_sql_list(select_sql[6:from_index])
         if len(expressions) != len(target_columns):
             raise ValueError(f"RECORD_VERIFY target column/expression count mismatch: {len(target_columns)} != {len(expressions)}")
-        source_expressions = [self._strip_select_alias(expression) for expression in expressions]
-        projection = ",\n       ".join(f"{expression} AS {column}" for expression, column in zip(source_expressions, target_columns, strict=True))
-        from_clause = select_sql[from_index:]
-        mapping_projection_sql = f"SELECT {projection}\n{from_clause}"
-
-        # The expected target shape alone hides how source columns were merged.
-        # Add each referenced source column with neutral ASIS_n aliases to the
-        # sample query, then expose the original S.COLUMN label in the log.
-        source_refs: list[str] = []
-        for expression in source_expressions:
-            for source_ref in self._source_column_references(expression):
-                if source_ref not in source_refs:
-                    source_refs.append(source_ref)
-        asis_columns = {f"ASIS_{index:03d}": source_ref for index, source_ref in enumerate(source_refs, start=1)}
-        asis_projection = ",\n       ".join(f"{source_ref} AS {alias}" for alias, source_ref in asis_columns.items())
-        sample_select = projection if not asis_projection else f"{projection},\n       {asis_projection}"
-        return mapping_projection_sql, target_columns, f"SELECT {sample_select}\n{from_clause}", asis_columns
-
-    def _source_column_references(self, expression: str) -> list[str]:
-        """Extract conventional alias.column references used by a MIG SELECT expression.
-
-        For example, ``LPAD(S.EMP_NO, 5, '0') AS EMP_NO`` yields ``S.EMP_NO``.
-        The source value is added to the AS-IS sample query separately from the
-        target-shaped expression, so the log shows both raw source and mapped
-        expected value.
-        """
-        text = re.sub(r"'(?:''|[^'])*'", "", str(expression or "").upper())
-        return list(dict.fromkeys(re.findall(r"(?<![A-Z0-9_$#])([A-Z_][A-Z0-9_$#]*\.[A-Z_][A-Z0-9_$#]*)(?![A-Z0-9_$#])", text)))
+        return {
+            column: self._strip_select_alias(expression)
+            for column, expression in zip(target_columns, expressions, strict=True)
+        }
 
     def _strip_select_alias(self, expression: str) -> str:
         """Remove an optional explicit SELECT alias before applying the target-column alias."""
         return re.sub(r"\s+AS\s+(?:\"[^\"]+\"|[A-Z_][A-Z0-9_$#]*)\s*$", "", expression.strip(), flags=re.IGNORECASE)
 
-    def _execute_record_verification(self, db_config: dict[str, Any], projection_sql: str, sample_projection_sql: str, asis_columns: dict[str, str], target_table: str, compare_columns: list[str], all_columns: list[str], pk_columns: list[str], sample_size: int) -> dict[str, Any]:
-        # Keep the sample easy to audit: use the first N rows returned by the
-        # virtual AS-IS dataset instead of a hash-selected pseudo-random sample.
-        sample_sql = f"SELECT P.* FROM ({sample_projection_sql}) P WHERE ROWNUM <= :sample_size"
-        rows: list[dict[str, Any]] = []
+    def _select_from_clause(self, select_sql: str) -> str:
+        from_index = self._top_level_keyword(select_sql, "FROM")
+        if from_index < 0:
+            raise ValueError("RECORD_VERIFY dataset SELECT has no FROM clause")
+        return select_sql[from_index:].strip()
+
+    def _row_concat_sql(self, columns: list[tuple[str, str, str]]) -> str:
+        parts = [self._row_concat_column_sql(column, expression, data_type) for column, expression, data_type in columns]
+        return " || '|' || ".join(parts)
+
+    def _row_concat_column_sql(self, column: str, expression: str, data_type: str) -> str:
+        value_sql, tag = self._normalized_compare_value_sql(expression, data_type)
+        return (
+            f"'{column}=' || CASE WHEN ({value_sql}) IS NULL THEN '<NULL>' "
+            f"ELSE '<{tag}:' || LENGTH({value_sql}) || ':' || ({value_sql}) || '>' END"
+        )
+
+    def _normalized_compare_value_sql(self, expression: str, data_type: str) -> tuple[str, str]:
+        """Render AS-IS and TO-BE values with the target DDL's canonical format."""
+        expr = f"({expression})"
+        normalized_type = re.sub(r"\s+", " ", str(data_type or "").upper()).strip()
+        if normalized_type.startswith("NUMBER") or normalized_type in {"FLOAT", "BINARY_FLOAT", "BINARY_DOUBLE"}:
+            return f"TO_CHAR(CAST({expr} AS NUMBER), 'TM9', 'NLS_NUMERIC_CHARACTERS=''.,''')", "N"
+        if normalized_type == "DATE":
+            return f"TO_CHAR(CAST({expr} AS DATE), 'YYYY-MM-DD HH24:MI:SS')", "D"
+        if normalized_type.startswith("TIMESTAMP"):
+            return f"TO_CHAR(CAST({expr} AS TIMESTAMP), 'YYYY-MM-DD HH24:MI:SS.FF9')", "TS"
+        if normalized_type == "RAW":
+            return f"RAWTOHEX(CAST({expr} AS RAW(2000)))", "RAW"
+        return f"TO_CHAR({expr})", "V"
+
+    def _execute_full_row_comparison(self, db_config: dict[str, Any], comparison_sql: str, compare_columns: list[str]) -> dict[str, Any]:
+        """Run the full row-pair query; retain at most five audit rows in logs."""
+        mismatch_samples: list[dict[str, Any]] = []
+        match_samples: list[dict[str, Any]] = []
+        mismatch_count = 0
+        compared_rows = 0
         with self._connect(db_config) as conn:
             cur = conn.cursor()
-            cur.execute(sample_sql, {"sample_size": sample_size})
-            names = [str(item[0]).upper() for item in cur.description or []]
-            expected_rows = [dict(zip(names, row, strict=True)) for row in cur.fetchall()]
-            for expected in expected_rows:
-                where_parts: list[str] = []
-                params: dict[str, Any] = {}
-                for index, column in enumerate(pk_columns):
-                    value = expected.get(column)
-                    if value is None:
-                        where_parts.append(f"{column} IS NULL")
-                    else:
-                        key = f"pk_{index}"
-                        where_parts.append(f"{column} = :{key}")
-                        params[key] = value
-                target_lookup_sql = f"SELECT {', '.join(all_columns)} FROM {target_table} WHERE {' AND '.join(where_parts)}"
-                cur.execute(target_lookup_sql, params)
-                actual_rows = cur.fetchall()
-                actual = dict(zip(all_columns, actual_rows[0], strict=True)) if len(actual_rows) == 1 else None
-                diffs = [] if actual is not None else [{"column": "<ROW>", "expected": "present", "actual": "missing" if not actual_rows else f"duplicate({len(actual_rows)})"}]
-                if actual is not None:
-                    for column in compare_columns:
-                        if not self._record_values_equal(expected.get(column), actual.get(column)):
-                            diffs.append({"column": column, "expected": self._record_log_value(expected.get(column)), "actual": self._record_log_value(actual.get(column))})
-                rows.append({
-                    "asis_dataset": {source_ref: self._record_log_value(expected.get(alias)) for alias, source_ref in asis_columns.items()},
-                    "record_key": {column: self._record_log_value(expected.get(column)) for column in pk_columns},
-                    "tobe_dataset_query_sql": target_lookup_sql,
-                    "tobe_dataset_query_params": {key: self._record_log_value(value) for key, value in params.items()},
-                    "expected": {column: self._record_log_value(expected.get(column)) for column in compare_columns},
-                    "actual": {column: self._record_log_value(actual.get(column)) if actual is not None else None for column in all_columns},
-                    "diffs": diffs,
-                    "result": "MATCH" if not diffs else ("MISSING_TARGET_ROW" if not actual_rows else "VALUE_MISMATCH"),
-                })
-        mismatch_count = sum(1 for row in rows if row["result"] != "MATCH")
-        compared = list(dict.fromkeys(compare_columns))
-        uncompared = [column for column in all_columns if column not in compared]
+            cur.execute(comparison_sql)
+            for row_no, compare_result, asis_concat, tobe_concat in cur:
+                compared_rows += 1
+                row = {
+                    "row_no": self._json_safe_value(row_no),
+                    "compare_result": str(compare_result or ""),
+                    "asis_concat": self._record_log_value(asis_concat),
+                    "tobe_concat": self._record_log_value(tobe_concat),
+                }
+                if row["compare_result"] == "MISMATCH":
+                    mismatch_count += 1
+                    if len(mismatch_samples) < 5:
+                        mismatch_samples.append(row)
+                elif len(match_samples) < 5:
+                    match_samples.append(row)
+        samples = mismatch_samples if mismatch_samples else match_samples
         return {
             "ok": mismatch_count == 0,
-            "sample_size": sample_size,
-            "asis_dataset_query_sql": sample_sql,
-            "asis_dataset_query_params": {"sample_size": sample_size},
-            "selected_count": len(rows),
+            "comparison_sql": comparison_sql,
+            "compared_columns": compare_columns,
+            "compared_rows": compared_rows,
             "mismatch_count": mismatch_count,
-            "compared_columns": compared,
-            # The target snapshot always exposes every target column.  Columns
-            # not present in INSERT are deliberately not judged because the
-            # virtual SELECT has no expected value for defaults/identities.
-            "uncompared_target_columns": uncompared,
-            "summary": f"record sample verification selected={len(rows)}, matched={len(rows) - mismatch_count}, mismatched={mismatch_count}",
-            "rows": rows,
+            "summary": f"full-row concat verification compared={compared_rows}, mismatched={mismatch_count}",
+            "rows": samples,
         }
-
-    def _record_sample_size(self) -> int:
-        try:
-            return max(1, min(int(getattr(self, "record_sample_size", None) or 3), 100))
-        except (TypeError, ValueError):
-            return 3
-
-    def _record_verify_key_columns(self, target_pk_columns: list[str], target_columns: list[str], target_ddl: list[dict[str, Any]]) -> tuple[list[str], str]:
-        """Choose an explicit PK first, then a safe deterministic fallback.
-
-        Some migration targets are staging tables without an Oracle PK
-        constraint.  In that case every non-LOB INSERT target column is used
-        as a composite lookup key, so a duplicate target row is still reported
-        as a verification failure instead of being silently accepted.
-        """
-        configured = [self._clean_identifier(value.strip()) for value in str(getattr(self, "record_verify_key_columns", "") or "").split(",") if value.strip()]
-        if configured:
-            missing = [column for column in configured if column not in target_columns]
-            if missing:
-                raise ValueError(f"RECORD_VERIFY configured key columns must be present in MIG_SQL target columns: {missing}")
-            return configured, "CONFIGURED_KEY_COLUMNS"
-        if target_pk_columns:
-            missing = [column for column in target_pk_columns if column not in target_columns]
-            if missing:
-                raise ValueError(f"RECORD_VERIFY target PK must be present in MIG_SQL target columns: {missing}")
-            return target_pk_columns, "TARGET_PRIMARY_KEY"
-        lob_types = {"BLOB", "CLOB", "NCLOB", "LONG", "LONG RAW", "BFILE"}
-        types = {str(item.get("column_name") or "").upper(): str(item.get("data_type") or "").upper() for item in target_ddl}
-        fallback = [column for column in target_columns if types.get(column) not in lob_types]
-        if not fallback:
-            raise ValueError("RECORD_VERIFY target has no PK and no non-LOB INSERT columns for a fallback composite key")
-        return fallback, "INSERT_COLUMNS_FALLBACK_NO_PK"
-
-    def _record_values_equal(self, expected: Any, actual: Any) -> bool:
-        # CLOB/BLOB values are intentionally bounded for this sampled context
-        # check.  The count check already ran first; record verification should
-        # remain inspectable and must not pull arbitrarily large LOBs per row.
-        expected = self._record_compare_value(expected)
-        actual = self._record_compare_value(actual)
-        return expected == actual
-
-    def _record_compare_value(self, value: Any) -> Any:
-        value = value.read() if hasattr(value, "read") else value
-        if isinstance(value, str):
-            return value[:4000]
-        if isinstance(value, bytes):
-            return value[:4000]
-        return value
 
     def _record_log_value(self, value: Any) -> Any:
         value = value.read() if hasattr(value, "read") else value
@@ -1288,22 +1333,16 @@ class NewType10CMigOneJobPocExecutor2(Component):
         return self._stage_sql_from_state(state, str(step.get("status") or ""))
 
     def _record_verify_log_body(self, state: dict[str, Any]) -> str:
-        """Render each sampled virtual AS-IS row beside its TOBE target row."""
-        projection = str(state.get("record_projection_sql") or "").strip()
+        """Render the full-row comparison SQL and up to five ordered results."""
+        comparison_sql = str(state.get("record_projection_sql") or "").strip()
         result = dict(state.get("record_verify_result") or {})
         parts = [
-            "[ASIS_TO_TOBE_COLUMN_MAPPING_SQL]",
-            projection or "(projection unavailable)",
+            "[FULL_ROW_CONCAT_COMPARE_SQL]",
+            comparison_sql or "(comparison SQL unavailable)",
             "",
-            "[ASIS_DATASET_QUERY_SQL]",
-            str(result.get("asis_dataset_query_sql") or "(query unavailable)"),
-            "[ASIS_DATASET_QUERY_BIND_VALUES]",
-            self._json_dump(result.get("asis_dataset_query_params") or {}),
-            "",
-            "[RECORD_VERIFY_SUMMARY]",
-            f"key_strategy={result.get('key_strategy') or ''}",
-            f"key_columns={result.get('key_columns') or []}",
-            f"selected_count={result.get('selected_count') or 0}",
+            "[FULL_ROW_CONCAT_COMPARE_SUMMARY]",
+            f"compared_columns={result.get('compared_columns') or []}",
+            f"compared_rows={result.get('compared_rows') or 0}",
             f"mismatch_count={result.get('mismatch_count') or 0}",
             f"result={result.get('summary') or ''}",
         ]
@@ -1311,21 +1350,11 @@ class NewType10CMigOneJobPocExecutor2(Component):
             parts.extend(
                 [
                     "",
-                    f"[CASE {index}] result={row.get('result') or ''}",
-                    "[ASIS_DATASET_SOURCE_COLUMNS]",
-                    self._json_dump(row.get("asis_dataset") or {}),
-                    "[RECORD_KEY]",
-                    self._json_dump(row.get("record_key") or {}),
-                    "[TOBE_DATASET_QUERY_SQL]",
-                    str(row.get("tobe_dataset_query_sql") or "(query unavailable)"),
-                    "[TOBE_DATASET_QUERY_BIND_VALUES]",
-                    self._json_dump(row.get("tobe_dataset_query_params") or {}),
-                    "[EXPECTED_TARGET_VALUES_FROM_MIG_SQL]",
-                    self._json_dump(row.get("expected") or {}),
-                    "[TOBE_DATASET_ACTUAL_ALL_COLUMNS]",
-                    self._json_dump(row.get("actual") or {}),
-                    "[COLUMN_DIFF]",
-                    self._json_dump(row.get("diffs") or []),
+                    f"[CASE {index}] ROW_NO={row.get('row_no') or ''} RESULT={row.get('compare_result') or ''}",
+                    "[ASIS_CONCAT]",
+                    str(row.get("asis_concat") or ""),
+                    "[TOBE_CONCAT]",
+                    str(row.get("tobe_concat") or ""),
                 ]
             )
         if not result:
