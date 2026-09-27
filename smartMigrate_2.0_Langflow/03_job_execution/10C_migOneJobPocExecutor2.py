@@ -588,7 +588,7 @@ class NewType10CMigOneJobPocExecutor2(Component):
         columns are in scope.  MIG_SQL supplies the matching AS-IS expression
         for each target column, including transforms such as SUBSTR/LPAD.
         """
-        source_count_sql, target_count_sql = self._extract_count_verify_datasets(verification_sql)
+        _, target_count_sql = self._extract_count_verify_datasets(verification_sql)
         compare_columns = self._count_verify_target_columns(target_count_sql)
         if not compare_columns:
             raise ValueError("RECORD_VERIFY could not find target COUNT(column) expressions in VERIFY_SQL")
@@ -611,10 +611,10 @@ class NewType10CMigOneJobPocExecutor2(Component):
         tobe_payload = self._row_concat_sql(
             [(column, f"T2.{column}", type_by_column[column]) for column in compare_columns]
         )
-        # Full-row verification is a projection of the Count Verify S/T
-        # datasets.  Replace S-side COUNT(...) with the corresponding
-        # MIG_SQL mapping expression, while retaining the exact S scope.
-        source_from_clause = self._select_from_clause(source_count_sql)
+        # Source expressions came from MIG_SQL and can use aliases/CTEs that
+        # the count Verify S dataset does not expose.  Keep the complete
+        # MIG_SQL source scope for ASIS_ROWS; T-side scope remains Verify SQL.
+        source_from_clause = self._migration_source_from_clause(migration_sql)
         target_from_clause = self._select_from_clause(target_count_sql)
         sql = f"""WITH
 ASIS_ROWS AS (
@@ -702,6 +702,11 @@ SELECT A.ROW_NO,
             column: self._strip_select_alias(expression)
             for column, expression in zip(target_columns, expressions, strict=True)
         }
+
+    def _migration_source_from_clause(self, migration_sql: str) -> str:
+        """Return the MIG_SQL source FROM/WHERE scope used by ASIS_ROWS."""
+        _, _, from_clause = self._migration_select_parts(migration_sql)
+        return from_clause
 
     def _migration_select_parts(self, migration_sql: str) -> tuple[list[str], list[str], str]:
         """Parse INSERT targets, same-position SELECT expressions, and its FROM scope."""

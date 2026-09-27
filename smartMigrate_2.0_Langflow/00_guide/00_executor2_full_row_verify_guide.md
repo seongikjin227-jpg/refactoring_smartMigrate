@@ -113,13 +113,13 @@ LOB/LONG 컬럼은 기존 Count Verify의 `COUNT(target_column)` 목록에서 �
 flowchart LR
     M[MIG_SQL] --> M1[INSERT 대상 컬럼 목록 파싱]
     M --> M2[SELECT 표현식 목록 파싱]
-    V[VERIFY_SQL] --> V0[S측 inline SELECT 추출]
+    M --> M3[MIG SELECT의 FROM / WHERE scope 추출]
     V --> V1[T측 inline SELECT 추출]
     V1 --> V2[COUNT 대상 TO 컬럼 추출, TOT 제외]
     V1 --> V3[T측 FROM / WHERE EXISTS scope 추출]
     M1 --> X[대상 컬럼과 같은 위치의 표현식 연결]
     M2 --> X
-    V0 --> A[ASIS_ROWS 생성]
+    M3 --> A[ASIS_ROWS 생성]
     V2 --> A
     V2 --> T[TOBE_ROWS 생성]
     V3 --> T
@@ -146,7 +146,7 @@ Executor2의 2차 검증 진입점은 `_node_verify_records()`다. 이 함수는
 
 ```text
 VERIFY_SQL 파싱
-  ├─ S inline SELECT 추출: ASIS_ROWS의 FROM / WHERE 범위
+  ├─ S inline SELECT 추출: 1차 Count Verify 구조 확인용
   ├─ T inline SELECT 추출: TOBE_ROWS의 FROM / WHERE EXISTS 범위
   └─ T SELECT의 COUNT(target_column) 목록 추출: 비교 대상 TO 컬럼 순서
 
@@ -175,6 +175,8 @@ MIG_SQL 파싱
 source_count_sql = SELECT COUNT(*) TOT, ... FROM <AS-IS 범위> WHERE ...
 target_count_sql = SELECT COUNT(*) TOT, ... FROM <TO-BE 범위> WHERE EXISTS (...)
 ```
+
+`source_count_sql`은 1차 Count Verify가 기대한 S dataset을 확인하기 위해 함께 분리한다. 2차 ASIS_ROWS의 실제 source scope는 alias/CTE 오류를 막기 위해 MIG_SQL SELECT에서 가져온다.
 
 #### 단계 B. T측 COUNT 컬럼 읽기: `_count_verify_target_columns()`
 
@@ -258,12 +260,12 @@ COUNT(T2.EMP_NAME)
 
 ### 4.4 ASIS_ROWS와 TOBE_ROWS가 사용하는 scope
 
-원래 요구대로 `ASIS_ROWS`는 Verify SQL S측의 `FROM/WHERE`를 그대로 사용한다. 단, SELECT projection의 `COUNT(...)`만 MIG_SQL에서 찾은 source expression CONCAT으로 교체한다.
+`ASIS_ROWS`는 MIG_SQL SELECT의 `FROM/JOIN/WHERE`를 그대로 사용한다. SELECT projection에는 MIG_SQL에서 찾은 source expression을 CONCAT으로 넣는다.
 
 ```text
 ASIS_ROWS
   SELECT CONCAT(MIG_SQL의 위치 기반 source expression들)
-  FROM   Verify SQL S측 FROM/WHERE
+  FROM   MIG_SQL SELECT의 FROM/JOIN/WHERE
 ```
 
 `TOBE_ROWS`는 Verify SQL T측의 `FROM/WHERE EXISTS`를 그대로 사용하고, T측 Count 대상 컬럼 자체를 CONCAT한다.
@@ -274,7 +276,7 @@ TOBE_ROWS
   FROM   Verify SQL T측 FROM/WHERE EXISTS
 ```
 
-따라서 Verify SQL S측은 MIG_SQL의 매핑 표현식에서 참조하는 alias와 컬럼을 모두 제공해야 한다. 예를 들어 MIG_SQL 매핑식이 `S.UPD_TM`이면 Verify SQL S측 `FROM`에서도 `S` alias와 `UPD_TM` 컬럼을 제공해야 한다. 그렇지 않으면 생성된 WITH SQL이 `ORA-00904`로 실패한다.
+이 선택은 MIG_SQL 매핑식의 alias와 CTE를 그대로 보장한다. 예를 들어 MIG_SQL 매핑식이 `S.UPD_TM`이면 ASIS_ROWS도 MIG_SQL의 `S` alias가 정의된 scope에서 실행되므로 Verify SQL S측 alias 차이로 `ORA-00904`가 발생하지 않는다.
 
 ### 4.5 컬럼 매핑 알고리즘 요약
 

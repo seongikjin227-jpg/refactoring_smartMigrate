@@ -134,14 +134,12 @@ When Mode is VERIFY_ONLY, return the existing migration_sql unchanged:
 [Required count verification SQL]
 Return one Oracle SELECT with FROM (SELECT COUNT(*) TOT, COUNT(source non-LOB columns)... ) S,
 (SELECT COUNT(*) TOT, COUNT(target non-LOB columns)... ) T.
-The S-side FROM/JOIN/WHERE scope and aliases must expose every source expression used by MIG_SQL.
-For example, if MIG_SQL maps LPAD(S.EMP_NO, 5, '0') or S.UPD_TM, the S-side inline SELECT must define alias S and those columns.
-Apply the identical source filter to MIG_SQL and the S-side dataset.  The T-side dataset must identify only this migration job's target rows.
+Apply the identical source filter to MIG_SQL and the S-side dataset. The T-side dataset must identify only this migration job's target rows.
 
 [Required full-row verification SQL]
 Return one executable Oracle WITH query. It must:
 1. Include ASIS_ROWS and TOBE_ROWS CTEs.
-2. Use the exact S-side FROM/JOIN/WHERE scope from verification_sql inside ASIS_ROWS. Do not use MIG_SQL's FROM/WHERE scope for ASIS_ROWS.
+2. Use the exact MIG_SQL SELECT FROM/JOIN/WHERE scope inside ASIS_ROWS, so every MIG_SQL mapping alias and CTE remains valid. Do not use verification_sql S-side scope for ASIS_ROWS.
 3. Use the exact T-side FROM/WHERE EXISTS scope from verification_sql inside TOBE_ROWS.
 4. Read only T-side COUNT(target_column) expressions. Exclude COUNT(*) TOT and LOB/LONG columns.
 5. For each target column from step 4, find the same target column in MIG_SQL INSERT INTO (...), then use the SELECT expression at the identical ordinal position as the AS-IS value.
@@ -178,7 +176,7 @@ Use this existing Count Verify SQL as the complete population contract:
 {verification_sql}
 
 Required construction order:
-1. Extract the S-side inline SELECT. ASIS_ROWS must use its exact FROM/JOIN/WHERE scope.
+1. Extract the MIG_SQL SELECT FROM/JOIN/WHERE scope. ASIS_ROWS must use this exact scope.
 2. Extract the T-side inline SELECT. TOBE_ROWS must use its exact FROM/WHERE EXISTS scope.
 3. Read T-side COUNT(target_column) only. Exclude COUNT(*) TOT.
 4. For each target column, locate it in MIG_SQL INSERT INTO (...) and use the same-position MIG_SQL SELECT expression for ASIS_ROWS.
