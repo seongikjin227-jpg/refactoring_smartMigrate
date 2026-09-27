@@ -588,7 +588,7 @@ class NewType10CMigOneJobPocExecutor2(Component):
         columns are in scope.  MIG_SQL supplies the matching AS-IS expression
         for each target column, including transforms such as SUBSTR/LPAD.
         """
-        _, target_count_sql = self._extract_count_verify_datasets(verification_sql)
+        source_count_sql, target_count_sql = self._extract_count_verify_datasets(verification_sql)
         compare_columns = self._count_verify_target_columns(target_count_sql)
         if not compare_columns:
             raise ValueError("RECORD_VERIFY could not find target COUNT(column) expressions in VERIFY_SQL")
@@ -611,11 +611,10 @@ class NewType10CMigOneJobPocExecutor2(Component):
         tobe_payload = self._row_concat_sql(
             [(column, f"T2.{column}", type_by_column[column]) for column in compare_columns]
         )
-        # The source expression came from MIG_SQL and may refer to its own
-        # aliases/CTEs (for example S.UPD_TM).  Use the same SELECT scope as
-        # that expression rather than assuming the Verify SQL's S scope uses
-        # identical aliases or schema qualification.
-        source_from_clause = self._migration_source_from_clause(migration_sql)
+        # Full-row verification is a projection of the Count Verify S/T
+        # datasets.  Replace S-side COUNT(...) with the corresponding
+        # MIG_SQL mapping expression, while retaining the exact S scope.
+        source_from_clause = self._select_from_clause(source_count_sql)
         target_from_clause = self._select_from_clause(target_count_sql)
         sql = f"""WITH
 ASIS_ROWS AS (
@@ -704,11 +703,6 @@ SELECT A.ROW_NO,
             for column, expression in zip(target_columns, expressions, strict=True)
         }
 
-    def _migration_source_from_clause(self, migration_sql: str) -> str:
-        """Return the exact source FROM/WHERE scope that made MIG_SQL valid."""
-        _, _, from_clause = self._migration_select_parts(migration_sql)
-        return from_clause
-
     def _migration_select_parts(self, migration_sql: str) -> tuple[list[str], list[str], str]:
         """Parse INSERT targets, same-position SELECT expressions, and its FROM scope."""
         sql = self._clean_sql_statement(migration_sql)
@@ -752,25 +746,22 @@ SELECT A.ROW_NO,
         return " || '|' || ".join(parts)
 
     def _row_concat_column_sql(self, column: str, expression: str, data_type: str) -> str:
-        value_sql, tag = self._normalized_compare_value_sql(expression, data_type)
-        return (
-            f"'{column}=' || CASE WHEN ({value_sql}) IS NULL THEN '<NULL>' "
-            f"ELSE '<{tag}:' || LENGTH({value_sql}) || ':' || ({value_sql}) || '>' END"
-        )
+        value_sql = self._normalized_compare_value_sql(expression, data_type)
+        return f"'{column}=' || CASE WHEN ({value_sql}) IS NULL THEN '<NULL>' ELSE ({value_sql}) END"
 
-    def _normalized_compare_value_sql(self, expression: str, data_type: str) -> tuple[str, str]:
-        """Render AS-IS and TO-BE values with the target DDL's canonical format."""
+    def _normalized_compare_value_sql(self, expression: str, data_type: str) -> str:
+        """Render AS-IS and TO-BE values with a readable, target-type-safe format."""
         expr = f"({expression})"
         normalized_type = re.sub(r"\s+", " ", str(data_type or "").upper()).strip()
         if normalized_type.startswith("NUMBER") or normalized_type in {"FLOAT", "BINARY_FLOAT", "BINARY_DOUBLE"}:
-            return f"TO_CHAR(CAST({expr} AS NUMBER), 'TM9', 'NLS_NUMERIC_CHARACTERS=''.,''')", "N"
+            return f"TO_CHAR(CAST({expr} AS NUMBER), 'TM9', 'NLS_NUMERIC_CHARACTERS=''.,''')"
         if normalized_type == "DATE":
-            return f"TO_CHAR(CAST({expr} AS DATE), 'YYYY-MM-DD HH24:MI:SS')", "D"
+            return f"TO_CHAR(CAST({expr} AS DATE), 'YYYY-MM-DD HH24:MI:SS')"
         if normalized_type.startswith("TIMESTAMP"):
-            return f"TO_CHAR(CAST({expr} AS TIMESTAMP), 'YYYY-MM-DD HH24:MI:SS.FF9')", "TS"
+            return f"TO_CHAR(CAST({expr} AS TIMESTAMP), 'YYYY-MM-DD HH24:MI:SS.FF9')"
         if normalized_type == "RAW":
-            return f"RAWTOHEX(CAST({expr} AS RAW(2000)))", "RAW"
-        return f"TO_CHAR({expr})", "V"
+            return f"RAWTOHEX(CAST({expr} AS RAW(2000)))"
+        return f"TO_CHAR({expr})"
 
     def _execute_full_row_comparison(self, db_config: dict[str, Any], comparison_sql: str, compare_columns: list[str]) -> dict[str, Any]:
         """Run the full row-pair query; retain at most five audit rows in logs."""

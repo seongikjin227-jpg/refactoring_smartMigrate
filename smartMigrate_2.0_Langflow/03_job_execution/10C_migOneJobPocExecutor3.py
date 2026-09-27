@@ -133,19 +133,24 @@ When Mode is VERIFY_ONLY, return the existing migration_sql unchanged:
 
 [Required count verification SQL]
 Return one Oracle SELECT with FROM (SELECT COUNT(*) TOT, COUNT(source non-LOB columns)... ) S,
-(SELECT COUNT(*) TOT, COUNT(target non-LOB columns)... ) T.  Use the same source scope as migration.
+(SELECT COUNT(*) TOT, COUNT(target non-LOB columns)... ) T.
+The S-side FROM/JOIN/WHERE scope and aliases must expose every source expression used by MIG_SQL.
+For example, if MIG_SQL maps LPAD(S.EMP_NO, 5, '0') or S.UPD_TM, the S-side inline SELECT must define alias S and those columns.
+Apply the identical source filter to MIG_SQL and the S-side dataset.  The T-side dataset must identify only this migration job's target rows.
 
 [Required full-row verification SQL]
 Return one executable Oracle WITH query. It must:
 1. Include ASIS_ROWS and TOBE_ROWS CTEs.
-2. Apply each MIG_SQL source expression to the matching target column by INSERT/SELECT position.
-3. Serialize only target columns listed in the T-side COUNT(target_column) expressions; omit TOT and LOB/LONG columns.
-4. Use schema-qualified source/target table names and aliases valid in their own CTE scope.
-5. Produce exactly these final columns in this order:
+2. Use the exact S-side FROM/JOIN/WHERE scope from verification_sql inside ASIS_ROWS. Do not use MIG_SQL's FROM/WHERE scope for ASIS_ROWS.
+3. Use the exact T-side FROM/WHERE EXISTS scope from verification_sql inside TOBE_ROWS.
+4. Read only T-side COUNT(target_column) expressions. Exclude COUNT(*) TOT and LOB/LONG columns.
+5. For each target column from step 4, find the same target column in MIG_SQL INSERT INTO (...), then use the SELECT expression at the identical ordinal position as the AS-IS value.
+6. Serialize the AS-IS mapping expression and the corresponding TO-BE target column in identical target-column order. Use readable COLUMN_NAME=value text, an explicit <NULL> marker, and type-safe date/number formatting. Do not add type tags or value lengths.
+7. Do not execute MIG_SQL and do not compare counts again; create only the read-only comparison SELECT.
+8. Produce exactly these final columns in this order:
    ROW_NO, COMPARE_RESULT, ASIS_CONCAT, TOBE_CONCAT.
-6. Order both datasets by the complete ROW_CONCAT and pair them with ROW_NUMBER().
-7. Set COMPARE_RESULT to MATCH when the concat values match, otherwise MISMATCH.
-8. Do not execute or embed MIG_SQL as PL/SQL; only create the comparison SELECT.
+9. Order both datasets by the complete ROW_CONCAT and pair them with ROW_NUMBER().
+10. Set COMPARE_RESULT to MATCH when the concat values match, otherwise MISMATCH.
 """
         raw, used_model = self._call_llm_json(
             system_anthropic="Return only the requested Oracle SQL JSON object.",
@@ -169,11 +174,19 @@ Create an executable Oracle 19c WITH query for full-row comparison.
 Use this existing MIG_SQL for target-column to source-expression mapping:
 {migration_sql}
 
-Use this existing Count Verify SQL to identify the T-side target COUNT(column) list and target scope:
+Use this existing Count Verify SQL as the complete population contract:
 {verification_sql}
 
+Required construction order:
+1. Extract the S-side inline SELECT. ASIS_ROWS must use its exact FROM/JOIN/WHERE scope.
+2. Extract the T-side inline SELECT. TOBE_ROWS must use its exact FROM/WHERE EXISTS scope.
+3. Read T-side COUNT(target_column) only. Exclude COUNT(*) TOT.
+4. For each target column, locate it in MIG_SQL INSERT INTO (...) and use the same-position MIG_SQL SELECT expression for ASIS_ROWS.
+5. Concatenate those mapped AS-IS values and the corresponding TO-BE target values in the same order.
+6. Do not execute MIG_SQL or compare counts again.
+
 The final SELECT columns must be ROW_NO, COMPARE_RESULT, ASIS_CONCAT, TOBE_CONCAT in that order.
-Use ROW_NUMBER() over ORDER BY complete ROW_CONCAT, and do not include markdown."""
+Use ROW_NUMBER() over ORDER BY complete ROW_CONCAT. Return JSON only; do not include markdown."""
         raw, used_model = self._call_llm_json(
             system_anthropic="Return only the requested Oracle SQL JSON object.",
             system_openai="Return only the requested Oracle SQL JSON object.",

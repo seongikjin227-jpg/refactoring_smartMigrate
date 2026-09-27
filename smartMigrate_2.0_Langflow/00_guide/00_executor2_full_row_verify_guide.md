@@ -1,44 +1,43 @@
-# 10C Executor2 Full-Row Verification Guide
+# 10C Executor2 전체 행 검증 가이드
 
-## 1. Purpose and scope
+## 1. 목적과 적용 범위
 
-This guide describes the actual implementation in `10C_migOneJobPocExecutor2.py`.
-Executor2 performs the following sequence for one `NEXT_MIG_INFO.MAP_ID`.
+이 문서는 `10C_migOneJobPocExecutor2.py`의 실제 동작을 기준으로 작성한다. Executor2는 `NEXT_MIG_INFO.MAP_ID` 한 건에 대해 MIG_SQL 실행, 1차 Count Verify, 2차 전체 행 검증을 순서대로 수행한다.
 
 ```mermaid
 flowchart TD
-    A[Load NEXT_MIG_INFO<br/>MIG_SQL / VERIFY_SQL] --> B[Generate or reuse MIG_SQL and VERIFY_SQL]
-    B --> C[Persist generated MIG_SQL / VERIFY_SQL]
-    C --> D[Execute MIG_SQL]
-    D --> E[Execute count VERIFY_SQL]
-    E -->|all DIFF values = 0| F[Build full-row WITH comparison SQL]
-    E -->|count mismatch / error| G[FAIL-TEST]
-    F --> H[Execute full-row comparison SQL]
-    H -->|all rows MATCH| I[PASS]
-    H -->|one or more MISMATCH / SQL error| J[FAIL-TEST2]
+    A[NEXT_MIG_INFO 조회<br/>MIG_SQL / VERIFY_SQL] --> B[MIG_SQL / VERIFY_SQL 생성 또는 재사용]
+    B --> C[생성 SQL 즉시 저장]
+    C --> D[MIG_SQL 실행]
+    D --> E[1차 Count VERIFY_SQL 실행]
+    E -->|모든 DIFF 값이 0| F[2차 전체 행 WITH SQL 조합]
+    E -->|불일치 또는 실행 오류| G[FAIL-TEST]
+    F --> H[전체 행 비교 SQL 실행]
+    H -->|모든 행 MATCH| I[PASS]
+    H -->|MISMATCH 또는 실행 오류| J[FAIL-TEST2]
 ```
 
-The first verification proves that row counts and non-null counts match. The second verification proves that the mapped values of every row match after the migration transformation has been applied.
+- 1차 검증은 전체 행 수와 non-LOB 컬럼의 non-null 건수가 맞는지 확인한다.
+- 2차 검증은 MIG_SQL의 변환식이 적용된 AS-IS 값과 실제 TO-BE 값을 모든 행 단위로 비교한다.
+- `FAIL-TEST2` 재실행은 MIG INSERT와 1차 Count Verify를 다시 실행하지 않고 2차 전체 행 검증만 재실행한다.
 
-`FAIL-TEST2` retries only the full-row verification step. It does not execute the migration INSERT or count verification again.
+## 2. 사용 SQL과 상태값의 역할
 
-## 2. The three SQL inputs and their roles
-
-| SQL / state | Source | Used for | Is it executed during full-row verification? |
+| 값 | 출처 | 용도 | 2차 검증 중 실행 여부 |
 |---|---|---|---|
-| `saved_migration_sql` | `NEXT_MIG_INFO.MIG_SQL` | Authoritative migration mapping, AS-IS expressions, AS-IS `FROM/WHERE` scope | No. It is parsed only. |
-| `current_migration_sql` | Current graph state | Executes the migration in the current attempt | No, unless the saved value is unavailable as a compatibility fallback. |
-| `VERIFY_SQL` | `NEXT_MIG_INFO.VERIFY_SQL` or current graph state | Executes count verification; supplies target scope and target comparison-column list | The original count SQL is executed in step 1; its T-side scope is embedded in step 2. |
+| `saved_migration_sql` | `NEXT_MIG_INFO.MIG_SQL` 저장값 | 대상 컬럼·AS-IS 변환식·AS-IS `FROM/WHERE` scope의 기준 | 실행하지 않고 파싱만 함 |
+| `current_migration_sql` | 현재 graph 상태 | 이번 attempt의 MIG_SQL 실행 상태 | 저장값이 없는 호환 상황에서만 fallback |
+| `VERIFY_SQL` | 저장값 또는 현재 graph 상태 | 1차 Count Verify 실행, TO-BE scope와 비교 컬럼 목록 추출 | 1차에서는 원문 실행, 2차에서는 T측 scope를 재사용 |
 
-The full-row step chooses `saved_migration_sql` first. When Executor2 generates a new MIG_SQL, it persists the value immediately and updates `saved_migration_sql` in the graph state before verification begins. Therefore, a normal run and a direct `FAIL-TEST2` resume use the same persisted migration definition.
+2차 검증은 `saved_migration_sql`을 우선 사용한다. 이번 실행에서 LLM이 새 MIG_SQL을 생성하면 DB 저장이 성공한 직후 graph의 `saved_migration_sql`도 같은 값으로 갱신한다. 따라서 최초 실행과 `FAIL-TEST2` 직접 재개가 같은 저장 SQL을 기준으로 동작한다.
 
-Important: full-row verification never re-executes `MIG_SQL`. It generates and executes one read-only `WITH ... SELECT` statement.
+중요: 2차 검증은 MIG_SQL을 다시 실행하지 않는다. MIG_SQL과 VERIFY_SQL을 읽어 하나의 읽기 전용 `WITH ... SELECT`를 조합하고, 그 SELECT만 실행한다.
 
-## 3. Required input shapes
+## 3. 필요한 SQL 구조
 
-### 3.1 MIG_SQL shape
+### 3.1 MIG_SQL: 위치 기반 매핑의 원본
 
-Executor2 needs a positional mapping. The supported shape is:
+Executor2가 지원하는 기본 MIG_SQL 형태는 다음과 같다.
 
 ```sql
 INSERT INTO TARGET_SCHEMA.TO_EMP (
@@ -54,19 +53,19 @@ FROM SOURCE_SCHEMA.ASIS_EMP S
 WHERE S.ACTIVE_YN = 'Y'
 ```
 
-The target-column list and SELECT-expression list must have the same number of entries.
+`INSERT`의 대상 컬럼 수와 `SELECT` 표현식 수는 같아야 한다.
 
-| INSERT position | Target column | Same-position source expression |
+| 위치 | INSERT 대상 컬럼 | 같은 위치의 SELECT 표현식 |
 |---:|---|---|
 | 1 | `EMP_NO` | `LPAD(S.EMP_NO, 5, '0')` |
 | 2 | `EMP_NAME` | `S.LAST_NAME || ' ' || S.FIRST_NAME` |
 | 3 | `HIRE_DT` | `S.HIRE_DATE` |
 
-The entire expression is preserved. Executor2 does not reduce `LPAD(S.EMP_NO, 5, '0')` to `S.EMP_NO`, and it does not split the name expression into separate comparisons.
+표현식 전체를 유지한다. 예를 들어 `LPAD(S.EMP_NO, 5, '0')`를 단순히 `S.EMP_NO`로 바꾸지 않으며, 이름 결합식도 두 컬럼으로 분해하지 않는다.
 
-### 3.2 Count VERIFY_SQL shape
+### 3.2 VERIFY_SQL: 비교 대상 TO 컬럼과 TO-BE 범위의 원본
 
-The Count Verify SQL has one outer SELECT and two inline datasets: S (AS-IS count dataset) and T (TO-BE count dataset).
+1차 Count Verify SQL은 외부 SELECT와 S/ T 두 inline dataset으로 구성된다.
 
 ```sql
 SELECT ABS(S.TOT - T.TOT) AS DIFF_TOT,
@@ -96,96 +95,231 @@ FROM (
 ) T
 ```
 
-For full-row verification, Executor2 reads the following from the T-side inline SELECT.
+2차 검증은 T측 inline SELECT에서 아래 정보를 사용한다.
 
-| T-side expression | Meaning in full-row verification |
+| T측 요소 | 2차 검증에서의 사용 방식 |
 |---|---|
-| `COUNT(*) AS TOT` | Excluded. Count comparison was already completed in step 1. |
-| `COUNT(T2.EMP_NO)` | Include target column `EMP_NO`. |
-| `COUNT(T2.EMP_NAME)` | Include target column `EMP_NAME`. |
-| `COUNT(T2.HIRE_DT)` | Include target column `HIRE_DT`. |
-| T-side `FROM ... WHERE EXISTS ...` | Reused as the TO-BE row population. |
+| `COUNT(*) AS TOT` | 제외한다. 전체 건수는 1차에서 이미 검증했다. |
+| `COUNT(T2.EMP_NO)` | `EMP_NO`를 비교 대상 컬럼으로 추가한다. |
+| `COUNT(T2.EMP_NAME)` | `EMP_NAME`을 비교 대상 컬럼으로 추가한다. |
+| `COUNT(T2.HIRE_DT)` | `HIRE_DT`를 비교 대상 컬럼으로 추가한다. |
+| T측 `FROM ... WHERE EXISTS ...` | TO-BE 데이터 범위로 그대로 사용한다. |
 
-LOB/LONG columns should already be absent from Count Verify's `COUNT(target_column)` list. They therefore do not enter the full-row concatenation automatically.
+LOB/LONG 컬럼은 기존 Count Verify의 `COUNT(target_column)` 목록에서 제외해야 하며, 그러면 2차 CONCAT 비교 대상에서도 자동 제외된다.
 
-## 4. How Executor2 builds the WITH SQL
-
-### 4.1 Parsing flow
+## 4. WITH SQL 조합 절차
 
 ```mermaid
 flowchart LR
-    M[MIG_SQL] --> M1[Parse INSERT target column list]
-    M --> M2[Parse SELECT expressions by position]
-    M --> M3[Extract MIG SELECT FROM / WHERE scope]
-    V[VERIFY_SQL] --> V1[Extract outer T inline SELECT]
-    V1 --> V2[Read COUNT target columns; omit TOT]
-    V1 --> V3[Extract T FROM / WHERE EXISTS scope]
-    M1 --> X[Match target column to same-position expression]
+    M[MIG_SQL] --> M1[INSERT 대상 컬럼 목록 파싱]
+    M --> M2[SELECT 표현식 목록 파싱]
+    V[VERIFY_SQL] --> V0[S측 inline SELECT 추출]
+    V --> V1[T측 inline SELECT 추출]
+    V1 --> V2[COUNT 대상 TO 컬럼 추출, TOT 제외]
+    V1 --> V3[T측 FROM / WHERE EXISTS scope 추출]
+    M1 --> X[대상 컬럼과 같은 위치의 표현식 연결]
     M2 --> X
-    M3 --> A[ASIS_ROWS]
+    V0 --> A[ASIS_ROWS 생성]
     V2 --> A
-    V2 --> T[TOBE_ROWS]
+    V2 --> T[TOBE_ROWS 생성]
     V3 --> T
     X --> A
-    A --> O[ROW_CONCAT sort + ROW_NUMBER]
+    A --> O[ROW_CONCAT 정렬 후 ROW_NUMBER 부여]
     T --> O
     O --> R[ROW_NO / COMPARE_RESULT / ASIS_CONCAT / TOBE_CONCAT]
 ```
 
-The AS-IS scope deliberately comes from MIG_SQL, not the Verify SQL S-side scope. This is important because a mapping expression can use a MIG-specific alias or CTE. For example, `S.UPD_TM` is valid only if the AS-IS CTE has the same `S` definition used by MIG_SQL.
+### 4.1 코드 리뷰: 전체 호출 순서
 
-The Count Verify S-side scope remains the source of truth for count verification in step 1. The T-side scope remains the source of truth for which TO-BE rows belong to this migration job in step 2.
-
-### 4.2 Column mapping algorithm
-
-For every target column discovered from the T-side `COUNT(target_column)` list:
-
-1. Normalize the target column name, for example `T2.EMP_NAME` becomes `EMP_NAME`.
-2. Find `EMP_NAME` in the MIG_SQL INSERT target-column list.
-3. Read the SELECT expression at the same ordinal position.
-4. Add that entire expression to the AS-IS row payload under the target-column label.
-5. Add the real target column to the TO-BE row payload under the same label.
-
-For the preceding example:
+Executor2의 2차 검증 진입점은 `_node_verify_records()`다. 이 함수는 다음 순서로 동작한다.
 
 ```text
-T COUNT(T2.EMP_NAME)
-        -> target column EMP_NAME
-        -> MIG INSERT position 2
-        -> MIG SELECT position 2
-        -> AS-IS expression: (S.LAST_NAME || ' ' || S.FIRST_NAME)
-        -> TO-BE expression: T2.EMP_NAME
+1. saved_migration_sql을 우선 선택
+2. current_v_sql(VERIFY_SQL)을 선택
+3. _build_full_row_compare_sql(MIG_SQL, VERIFY_SQL, target_ddl) 호출
+4. 만들어진 WITH SQL을 _execute_full_row_comparison()으로 실행
+5. 결과가 모두 MATCH면 PASS, 하나라도 MISMATCH면 FAIL-TEST2
+6. 생성 성공 후 Oracle 실행 오류가 나도 WITH SQL 전문을 record_projection_sql로 보존
 ```
 
-### 4.3 Canonical value serialization
-
-Each value is serialized with a column label, a type tag, a length, and an explicit null marker. This keeps a null, an empty-looking value, and delimiter-containing values distinguishable in the audit log.
-
-| Target DDL type | Canonical SQL form | Tag |
-|---|---|---|
-| `VARCHAR2`, `CHAR`, etc. | `TO_CHAR(expression)` | `V` |
-| `NUMBER`, `FLOAT`, binary float/double | `TO_CHAR(CAST(expression AS NUMBER), 'TM9', 'NLS_NUMERIC_CHARACTERS=''.,''')` | `N` |
-| `DATE` | `TO_CHAR(CAST(expression AS DATE), 'YYYY-MM-DD HH24:MI:SS')` | `D` |
-| `TIMESTAMP...` | `TO_CHAR(CAST(expression AS TIMESTAMP), 'YYYY-MM-DD HH24:MI:SS.FF9')` | `TS` |
-| `RAW` | `RAWTOHEX(CAST(expression AS RAW(2000)))` | `RAW` |
-
-Example serialized values:
+`_build_full_row_compare_sql()` 내부의 파싱 순서는 아래와 같다.
 
 ```text
-EMP_NO=<V:5:00001>
-EMP_NAME=<V:9:KIM MINJI>
-HIRE_DT=<D:2026-01-15 00:00:00>
+VERIFY_SQL 파싱
+  ├─ S inline SELECT 추출: ASIS_ROWS의 FROM / WHERE 범위
+  ├─ T inline SELECT 추출: TOBE_ROWS의 FROM / WHERE EXISTS 범위
+  └─ T SELECT의 COUNT(target_column) 목록 추출: 비교 대상 TO 컬럼 순서
+
+MIG_SQL 파싱
+  ├─ INSERT INTO (...) 대상 컬럼 목록 추출
+  ├─ SELECT ... 표현식 목록 추출
+  └─ 대상 컬럼 위치 -> 같은 위치의 source expression 사전 생성
+
+조합
+  ├─ T Count 컬럼을 차례대로 MIG_SQL 매핑 사전에서 조회
+  ├─ ASIS_ROWS: Verify S scope + 찾은 source expression CONCAT
+  ├─ TOBE_ROWS: Verify T scope + T2.target_column CONCAT
+  └─ ROW_CONCAT 정렬, ROW_NUMBER 부여, 같은 순번끼리 MATCH/MISMATCH 비교
 ```
 
-One row payload becomes:
+### 4.2 코드 리뷰: VERIFY_SQL을 먼저 파싱하는 과정
+
+#### 단계 A. S/T inline SELECT 분리: `_extract_count_verify_datasets()`
+
+1. 외부 VERIFY_SQL에서 최상위 `FROM` 위치를 찾는다.
+2. 첫 번째 괄호 `(`부터 괄호 depth를 추적해 닫는 `)`까지 읽는다. 이것이 S dataset이다.
+3. S alias를 건너뛰고 쉼표 `,` 뒤의 두 번째 괄호 SELECT를 같은 방식으로 읽는다. 이것이 T dataset이다.
+4. 결과는 아래 두 문자열이다.
 
 ```text
-EMP_NO=<V:5:00001>|EMP_NAME=<V:9:KIM MINJI>|HIRE_DT=<D:2026-01-15 00:00:00>
+source_count_sql = SELECT COUNT(*) TOT, ... FROM <AS-IS 범위> WHERE ...
+target_count_sql = SELECT COUNT(*) TOT, ... FROM <TO-BE 범위> WHERE EXISTS (...)
 ```
 
-### 4.4 Generated SQL example
+#### 단계 B. T측 COUNT 컬럼 읽기: `_count_verify_target_columns()`
 
-The resulting SQL is conceptually as follows. The real SQL repeats expressions in `CASE`, `LENGTH`, and formatting calls to make null and delimiter handling explicit.
+`target_count_sql`의 최상위 SELECT projection을 쉼표 단위로 분리한다. 이때 `_split_sql_list()`는 작은따옴표 상태와 괄호 depth를 추적하므로 `SUBSTR(X.COL, 1, 4)` 내부 콤마는 분리하지 않는다.
+
+각 projection을 다음 규칙으로 처리한다.
+
+| T projection | 처리 결과 |
+|---|---|
+| `COUNT(*) AS TOT` | `TOT`이므로 제외 |
+| `COUNT(T2.EMP_NO) AS C1` | `EMP_NO` 추가 |
+| `COUNT(T2.EMP_NAME) AS C2` | `EMP_NAME` 추가 |
+| `COUNT(T2.HIRE_DT) AS C3` | `HIRE_DT` 추가 |
+
+따라서 최종 비교 컬럼 순서는 아래처럼 T측 Count 나열 순서를 그대로 따른다.
+
+```python
+compare_columns = ["EMP_NO", "EMP_NAME", "HIRE_DT"]
+```
+
+이 순서는 이후 AS-IS CONCAT과 TO-BE CONCAT의 컬럼 순서를 동시에 결정한다.
+
+### 4.3 코드 리뷰: MIG_SQL에서 source expression을 찾는 과정
+
+`_migration_target_expressions()`은 내부적으로 `_migration_select_parts()`를 호출한다.
+
+#### 단계 C. INSERT 대상 컬럼 목록 파싱
+
+MIG_SQL에서 `INSERT INTO 대상테이블 (`을 찾고, 첫 여는 괄호의 대응 닫는 괄호까지 읽는다. 그 내부를 `_split_sql_list()`로 나누면 다음 목록이 만들어진다.
+
+```sql
+INSERT INTO TARGET_SCHEMA.TO_EMP (EMP_NO, EMP_NAME, HIRE_DT)
+```
+
+```python
+target_columns = ["EMP_NO", "EMP_NAME", "HIRE_DT"]
+```
+
+#### 단계 D. SELECT 표현식 목록 파싱
+
+INSERT 대상 컬럼 괄호 뒤에서 최상위 `SELECT`와 최상위 `FROM` 사이를 읽는다. 동일한 `_split_sql_list()`를 적용한다.
+
+```sql
+SELECT LPAD(S.EMP_NO, 5, '0'),
+       S.LAST_NAME || ' ' || S.FIRST_NAME,
+       S.HIRE_DATE
+```
+
+```python
+source_expressions = [
+    "LPAD(S.EMP_NO, 5, '0')",
+    "S.LAST_NAME || ' ' || S.FIRST_NAME",
+    "S.HIRE_DATE",
+]
+```
+
+대상 컬럼 수와 표현식 수가 다르면 위치 매핑이 불가능하므로 `FAIL-TEST2`로 처리한다.
+
+#### 단계 E. 위치 기반 사전 생성
+
+두 목록을 같은 index로 묶는다. 이것이 “COUNT 컬럼명에서 MIG_SQL AS-IS 표현식으로 가는” 핵심 경로다.
+
+```python
+migration_expressions = {
+    "EMP_NO": "LPAD(S.EMP_NO, 5, '0')",
+    "EMP_NAME": "S.LAST_NAME || ' ' || S.FIRST_NAME",
+    "HIRE_DT": "S.HIRE_DATE",
+}
+```
+
+그러므로 T측에서 `COUNT(T2.EMP_NAME)`을 읽었을 때의 실제 조회 과정은 다음과 같다.
+
+```text
+COUNT(T2.EMP_NAME)
+  -> alias 제거
+  -> 비교 대상 컬럼 "EMP_NAME"
+  -> migration_expressions["EMP_NAME"] 조회
+  -> "S.LAST_NAME || ' ' || S.FIRST_NAME" 획득
+  -> ASIS_ROWS의 EMP_NAME CONCAT 항목으로 사용
+```
+
+### 4.4 ASIS_ROWS와 TOBE_ROWS가 사용하는 scope
+
+원래 요구대로 `ASIS_ROWS`는 Verify SQL S측의 `FROM/WHERE`를 그대로 사용한다. 단, SELECT projection의 `COUNT(...)`만 MIG_SQL에서 찾은 source expression CONCAT으로 교체한다.
+
+```text
+ASIS_ROWS
+  SELECT CONCAT(MIG_SQL의 위치 기반 source expression들)
+  FROM   Verify SQL S측 FROM/WHERE
+```
+
+`TOBE_ROWS`는 Verify SQL T측의 `FROM/WHERE EXISTS`를 그대로 사용하고, T측 Count 대상 컬럼 자체를 CONCAT한다.
+
+```text
+TOBE_ROWS
+  SELECT CONCAT(T2.EMP_NO, T2.EMP_NAME, T2.HIRE_DT)
+  FROM   Verify SQL T측 FROM/WHERE EXISTS
+```
+
+따라서 Verify SQL S측은 MIG_SQL의 매핑 표현식에서 참조하는 alias와 컬럼을 모두 제공해야 한다. 예를 들어 MIG_SQL 매핑식이 `S.UPD_TM`이면 Verify SQL S측 `FROM`에서도 `S` alias와 `UPD_TM` 컬럼을 제공해야 한다. 그렇지 않으면 생성된 WITH SQL이 `ORA-00904`로 실패한다.
+
+### 4.5 컬럼 매핑 알고리즘 요약
+
+T측 `COUNT(target_column)` 목록에 있는 각 TO 컬럼에 대해 다음을 수행한다.
+
+1. `T2.EMP_NAME`처럼 alias가 붙은 컬럼을 `EMP_NAME`으로 정규화한다.
+2. MIG_SQL의 `INSERT INTO (...)` 대상 컬럼 목록에서 `EMP_NAME`의 위치를 찾는다.
+3. MIG_SQL `SELECT`에서 같은 위치의 표현식을 가져온다.
+4. AS-IS payload에는 그 표현식 전체를 `EMP_NAME` 라벨로 넣는다.
+5. TO-BE payload에는 실제 `T2.EMP_NAME`을 같은 라벨로 넣는다.
+
+```text
+COUNT(T2.EMP_NAME)
+    -> 비교 대상 EMP_NAME
+    -> MIG INSERT 위치 2
+    -> MIG SELECT 위치 2
+    -> AS-IS: (S.LAST_NAME || ' ' || S.FIRST_NAME)
+    -> TO-BE: T2.EMP_NAME
+```
+
+### 4.6 타입별 CONCAT 직렬화 규칙
+
+각 값에는 읽기 쉬운 `컬럼명=값`과 명시적 NULL 표식만 넣는다. 타입 태그와 길이 표식은 로그 가독성을 위해 사용하지 않는다. 다만 날짜·숫자는 AS-IS와 TO-BE가 같은 문자열 기준으로 비교되도록 명시 포맷을 적용한다.
+
+| Target DDL 타입 | 표준화 방식 |
+|---|---|
+| `VARCHAR2`, `CHAR` 계열 | `TO_CHAR(expression)` |
+| `NUMBER`, `FLOAT` 계열 | `TO_CHAR(CAST(expression AS NUMBER), 'TM9', 'NLS_NUMERIC_CHARACTERS=''.,''')` |
+| `DATE` | `TO_CHAR(CAST(expression AS DATE), 'YYYY-MM-DD HH24:MI:SS')` |
+| `TIMESTAMP` 계열 | `TO_CHAR(CAST(expression AS TIMESTAMP), 'YYYY-MM-DD HH24:MI:SS.FF9')` |
+| `RAW` | `RAWTOHEX(CAST(expression AS RAW(2000)))` |
+
+예시 값과 한 행의 payload는 다음과 같다.
+
+```text
+EMP_NO=00001
+EMP_NAME=KIM MINJI
+HIRE_DT=2026-01-15 00:00:00
+
+EMP_NO=00001|EMP_NAME=KIM MINJI|HIRE_DT=2026-01-15 00:00:00
+```
+
+## 5. 생성되는 전체 행 비교 SQL 예시
+
+아래는 앞의 MIG_SQL과 VERIFY_SQL로부터 조합되는 SQL의 축약 예시다. 실제 SQL은 NULL과 날짜·숫자 포맷을 명시하기 위해 표현식을 여러 번 사용한다.
 
 ```sql
 WITH
@@ -193,18 +327,11 @@ ASIS_ROWS AS (
     SELECT
         'EMP_NO=' || CASE
             WHEN (LPAD(S.EMP_NO, 5, '0')) IS NULL THEN '<NULL>'
-            ELSE '<V:' || LENGTH(LPAD(S.EMP_NO, 5, '0')) || ':' ||
-                 LPAD(S.EMP_NO, 5, '0') || '>'
+            ELSE LPAD(S.EMP_NO, 5, '0')
         END ||
         '|EMP_NAME=' || CASE
             WHEN (S.LAST_NAME || ' ' || S.FIRST_NAME) IS NULL THEN '<NULL>'
-            ELSE '<V:' || LENGTH(S.LAST_NAME || ' ' || S.FIRST_NAME) || ':' ||
-                 (S.LAST_NAME || ' ' || S.FIRST_NAME) || '>'
-        END ||
-        '|HIRE_DT=' || CASE
-            WHEN TO_CHAR(CAST((S.HIRE_DATE) AS DATE), 'YYYY-MM-DD HH24:MI:SS') IS NULL THEN '<NULL>'
-            ELSE '<D:' || LENGTH(TO_CHAR(CAST((S.HIRE_DATE) AS DATE), 'YYYY-MM-DD HH24:MI:SS')) || ':' ||
-                 TO_CHAR(CAST((S.HIRE_DATE) AS DATE), 'YYYY-MM-DD HH24:MI:SS') || '>'
+            ELSE (S.LAST_NAME || ' ' || S.FIRST_NAME)
         END AS ROW_CONCAT
     FROM SOURCE_SCHEMA.ASIS_EMP S
     WHERE S.ACTIVE_YN = 'Y'
@@ -212,12 +339,9 @@ ASIS_ROWS AS (
 TOBE_ROWS AS (
     SELECT
         'EMP_NO=' || CASE WHEN T2.EMP_NO IS NULL THEN '<NULL>'
-                          ELSE '<V:' || LENGTH(T2.EMP_NO) || ':' || T2.EMP_NO || '>' END ||
+                          ELSE T2.EMP_NO END ||
         '|EMP_NAME=' || CASE WHEN T2.EMP_NAME IS NULL THEN '<NULL>'
-                            ELSE '<V:' || LENGTH(T2.EMP_NAME) || ':' || T2.EMP_NAME || '>' END ||
-        '|HIRE_DT=' || CASE WHEN T2.HIRE_DT IS NULL THEN '<NULL>'
-                           ELSE '<D:' || LENGTH(TO_CHAR(CAST(T2.HIRE_DT AS DATE), 'YYYY-MM-DD HH24:MI:SS')) || ':' ||
-                                TO_CHAR(CAST(T2.HIRE_DT AS DATE), 'YYYY-MM-DD HH24:MI:SS') || '>' END AS ROW_CONCAT
+                            ELSE T2.EMP_NAME END AS ROW_CONCAT
     FROM TARGET_SCHEMA.TO_EMP T2
     WHERE EXISTS (
         SELECT 1
@@ -227,13 +351,11 @@ TOBE_ROWS AS (
     )
 ),
 ASIS_ORDERED AS (
-    SELECT ROW_NUMBER() OVER (ORDER BY ROW_CONCAT) AS ROW_NO,
-           ROW_CONCAT
+    SELECT ROW_NUMBER() OVER (ORDER BY ROW_CONCAT) AS ROW_NO, ROW_CONCAT
     FROM ASIS_ROWS
 ),
 TOBE_ORDERED AS (
-    SELECT ROW_NUMBER() OVER (ORDER BY ROW_CONCAT) AS ROW_NO,
-           ROW_CONCAT
+    SELECT ROW_NUMBER() OVER (ORDER BY ROW_CONCAT) AS ROW_NO, ROW_CONCAT
     FROM TOBE_ROWS
 )
 SELECT A.ROW_NO,
@@ -241,44 +363,33 @@ SELECT A.ROW_NO,
        A.ROW_CONCAT AS ASIS_CONCAT,
        T.ROW_CONCAT AS TOBE_CONCAT
 FROM ASIS_ORDERED A
-JOIN TOBE_ORDERED T
-  ON T.ROW_NO = A.ROW_NO
+JOIN TOBE_ORDERED T ON T.ROW_NO = A.ROW_NO
 ORDER BY A.ROW_NO
 ```
 
-## 5. Why rows are sorted and paired by ROW_NO
+## 6. 정렬·비교와 결과 형식
 
-The count step already guarantees the two populations have equal total counts. Full-row verification therefore sorts both serialized row sets by the same complete `ROW_CONCAT` value, assigns `ROW_NUMBER()`, and compares position 1 to position 1, position 2 to position 2, and so on.
-
-```text
-ASIS_ORDERED                         TOBE_ORDERED
-ROW_NO  ROW_CONCAT                   ROW_NO  ROW_CONCAT
-1       EMP_NO=00001|...             1       EMP_NO=00001|...
-2       EMP_NO=00002|...JISU         2       EMP_NO=00002|...JISOO
-3       EMP_NO=00003|...             3       EMP_NO=00003|...
-```
-
-The final result is intentionally column-ordered for log scanning:
+1차 Count Verify가 전체 건수가 같음을 보장한 뒤, AS-IS와 TO-BE 양쪽을 동일한 `ROW_CONCAT` 오름차순으로 정렬한다. 각각 `ROW_NUMBER()`를 부여한 뒤 같은 순번끼리 비교한다.
 
 ```text
-ROW_NO | COMPARE_RESULT | ASIS_CONCAT                     | TOBE_CONCAT
-1      | MATCH          | EMP_NO=<V:5:00001>|...         | EMP_NO=<V:5:00001>|...
-2      | MISMATCH       | EMP_NO=<V:5:00002>|...JISU     | EMP_NO=<V:5:00002>|...JISOO
-3      | MATCH          | EMP_NO=<V:5:00003>|...         | EMP_NO=<V:5:00003>|...
+ROW_NO | COMPARE_RESULT | ASIS_CONCAT                         | TOBE_CONCAT
+1      | MATCH          | EMP_NO=00001|...                   | EMP_NO=00001|...
+2      | MISMATCH       | EMP_NO=00002|...LEE JISU           | EMP_NO=00002|...LEE JISOO
+3      | MATCH          | EMP_NO=00003|...                   | EMP_NO=00003|...
 ```
 
-The database evaluates every paired row. Python streams the result set, counts mismatches, and retains only five log examples:
+DB는 모든 행을 평가한다. Python은 결과를 streaming으로 읽어 전체 mismatch 수를 세고, 로그에는 다음만 남긴다.
 
-- if one or more mismatches exist: first five `MISMATCH` rows;
-- if all rows match: first five `MATCH` rows.
+- 불일치가 있으면 첫 5개 `MISMATCH` 행
+- 불일치가 없으면 첫 5개 `MATCH` 행
 
-## 6. Logging and statuses
+## 7. 로그와 상태 전이
 
-`VERIFY_RECORDS` writes the following body to the workflow log.
+`VERIFY_RECORDS` 로그에는 아래 내용이 남는다.
 
 ```text
 [FULL_ROW_CONCAT_COMPARE_SQL]
-<the exact generated WITH SQL>
+<실제로 실행한 WITH SQL 전문>
 
 [FULL_ROW_CONCAT_COMPARE_SUMMARY]
 compared_columns=['EMP_NO', 'EMP_NAME', 'HIRE_DT']
@@ -288,48 +399,48 @@ result=full-row concat verification compared=12345, mismatched=1
 
 [CASE 1] ROW_NO=2 RESULT=MISMATCH
 [ASIS_CONCAT]
-EMP_NO=<V:5:00002>|EMP_NAME=<V:8:LEE JISU>|...
+EMP_NO=00002|EMP_NAME=LEE JISU|...
 [TOBE_CONCAT]
-EMP_NO=<V:5:00002>|EMP_NAME=<V:9:LEE JISOO>|...
+EMP_NO=00002|EMP_NAME=LEE JISOO|...
 ```
 
-| Condition | Executor2 status | Retry behavior |
+| 조건 | 최종 상태 | 재시도 범위 |
 |---|---|---|
-| Count Verify returns a non-zero value or errors | `FAIL-TEST` | Regenerate/re-execute Verify SQL only. |
-| Full-row SQL executes and all rows are `MATCH` | `PASS` | Complete. |
-| Full-row SQL executes and any row is `MISMATCH` | `FAIL-TEST2` | Full-row verification only. |
-| Full-row SQL cannot be built or Oracle rejects it | `FAIL-TEST2` | Full-row verification only; exact generated WITH SQL remains in the log when construction succeeded. |
+| 1차 Count Verify가 non-zero 또는 오류 | `FAIL-TEST` | VERIFY_SQL 생성·실행만 재시도 |
+| 전체 행 SQL 실행 후 모든 행 `MATCH` | `PASS` | 종료 |
+| 한 행 이상 `MISMATCH` | `FAIL-TEST2` | 전체 행 검증만 재시도 |
+| 전체 행 SQL 조합 또는 Oracle 실행 오류 | `FAIL-TEST2` | 전체 행 검증만 재시도. 조합 성공 시 WITH SQL 전문도 로그에 유지 |
 
-## 7. Parser behavior and limits
+## 8. 파서의 동작 범위와 제한
 
-Executor2 uses a lightweight SQL scanner; it is not a full Oracle grammar parser.
+Executor2는 가벼운 SQL scanner를 사용하며 완전한 Oracle SQL 문법 parser는 아니다.
 
-Supported behavior:
+지원하는 동작:
 
-- Commas inside ordinary parentheses are preserved: `SUBSTR(S.CODE, 1, 4)` remains one SELECT expression.
-- Commas inside normal single-quoted literals are preserved.
-- Nested parentheses are tracked.
-- An optional `AS alias` at the end of a MIG SELECT expression is removed before the target-column alias is applied.
-- A `WITH` clause before the final SELECT can be located at top level.
+- `SUBSTR(S.CODE, 1, 4)`처럼 괄호 안에 있는 콤마는 표현식 분리 기준으로 사용하지 않는다.
+- 일반 작은따옴표 문자열 안의 콤마는 표현식 분리 기준으로 사용하지 않는다.
+- 중첩 괄호 depth를 추적한다.
+- SELECT 표현식 끝의 `AS alias`는 제거하고 INSERT 대상 컬럼명으로 다시 연결한다.
+- 최상위 SELECT를 찾아 `WITH` 뒤의 SELECT를 처리할 수 있다.
 
-Current restrictions requiring an Executor2 failure or a different SQL shape:
+제한 사항:
 
-- `INSERT ... VALUES (...)` has no SELECT mapping and cannot be full-row compared.
-- `INSERT ALL`, multiple unrelated INSERT statements, or PL/SQL blocks are not a single positional mapping.
-- The T-side Count Verify expressions must be simple `COUNT(T2.TARGET_COLUMN)` expressions. `COUNT(function(...))` is intentionally rejected because a target column cannot be identified safely.
-- The generated target Count Verify scope is expected to use alias `T2`, as instructed by the 10C Verify prompt.
-- Oracle q-quoted literals, complex quoted identifiers, and comments embedded in unusual SQL positions are not a complete grammar implementation.
+- `INSERT ... VALUES (...)`는 SELECT 매핑이 없으므로 전체 행 비교 대상이 아니다.
+- `INSERT ALL`, 여러 독립 INSERT, PL/SQL block은 단일 위치 매핑이 아니므로 지원하지 않는다.
+- T측 Count Verify는 `COUNT(T2.TARGET_COLUMN)` 같은 단순 컬럼 count여야 한다. 함수가 들어간 `COUNT(function(...))`은 대상 TO 컬럼을 안전하게 결정할 수 없어 거부한다.
+- Count Verify T측 alias는 10C 프롬프트가 생성하는 `T2`를 전제로 한다.
+- Oracle q-quote, 매우 복잡한 quoted identifier, 특수 위치 주석까지 완전한 문법 보장은 하지 않는다.
 
-## 8. Diagnosing ORA-00904 invalid identifier
+## 9. ORA-00904 invalid identifier 진단
 
-An error such as `ORA-00904: "S"."UPD_TM": invalid identifier` means the generated full-row SQL references a column outside the alias/table scope of its AS-IS CTE. It does **not** prove that the persisted MIG_SQL is invalid.
+`ORA-00904: "S"."UPD_TM": invalid identifier`는 생성된 WITH SQL의 ASIS_ROWS scope에서 `S.UPD_TM`을 찾지 못했다는 뜻이다. 저장된 MIG_SQL 자체가 실행 불가라는 뜻은 아니다.
 
-Check the logged `[FULL_ROW_CONCAT_COMPARE_SQL]` in this order:
+`NEXT_MIG_LOG`의 `[FULL_ROW_CONCAT_COMPARE_SQL]`에서 다음 순서로 확인한다.
 
-1. Find the failing expression, for example `S.UPD_TM`.
-2. Inspect `ASIS_ROWS` and confirm its `FROM` clause defines alias `S` and exposes `UPD_TM`.
-3. Confirm the source schema/table is qualified as expected.
-4. Confirm the MIG_SQL expression is mapped to the same target column that appears in the T-side `COUNT(T2.target_column)` list.
-5. If alias/CTE scope differs too much for deterministic parsing, test Executor3, which asks the LLM to generate `full_row_compare_sql` together with MIG_SQL and VERIFY_SQL.
+1. 오류 메시지에 나온 표현식(예: `S.UPD_TM`)을 찾는다.
+2. `ASIS_ROWS`의 `FROM` 절이 alias `S`를 정의하는지 확인한다.
+3. source schema/table qualification이 기대한 값인지 확인한다.
+4. 해당 표현식이 MIG_SQL에서 실제로 어떤 INSERT 대상 컬럼에 매핑됐는지 확인한다.
+5. T측 `COUNT(T2.target_column)`에 그 대상 컬럼이 포함되는지 확인한다.
 
-Executor3 is experimental. Executor2 remains preferable when the standard `INSERT INTO (...) SELECT ... FROM ...` structure is available because its result is deterministic and directly traceable to the stored SQL.
+alias/CTE 구조가 Executor2의 결정적 파싱 범위를 크게 벗어나면, MIG_SQL·VERIFY_SQL·전체 행 SQL을 한 번에 LLM으로 생성하는 Executor3를 실험할 수 있다. 다만 표준 `INSERT INTO (...) SELECT ... FROM ...` 구조에서는 저장 SQL을 직접 추적하는 Executor2가 더 결정적이고 원인 추적이 쉽다.
