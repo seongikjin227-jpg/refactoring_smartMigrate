@@ -573,7 +573,6 @@ class NewType10CMigOneJobPocExecutor3(Component):
             result = self._execute_pk_comparison(
                 dict(context.get("db_config") or {}),
                 comparison_sql,
-                pk_columns,
             )
             result["compared_columns"] = compare_columns
             result["pk_columns"] = pk_columns
@@ -650,14 +649,8 @@ class NewType10CMigOneJobPocExecutor3(Component):
         pk_join = "\n    AND ".join(
             f"A.{column} = T.{column}" for column in pk_columns
         )
-        pk_projection = ",\n    ".join(
-            f"COALESCE(A.{column}, T.{column}) AS {column}" for column in pk_columns
-        )
         sql = f"""SELECT
-    {pk_projection},
-    CASE WHEN A.ROW_CONCAT = T.ROW_CONCAT THEN 'MATCH' ELSE 'MISMATCH' END AS COMPARE_RESULT,
-    A.ROW_CONCAT AS ASIS_CONCAT,
-    T.ROW_CONCAT AS TOBE_CONCAT
+    CASE WHEN A.ROW_CONCAT = T.ROW_CONCAT THEN 'MATCH' ELSE 'MISMATCH' END AS COMPARE_RESULT
 FROM (
     SELECT
         {asis_pk_projection},
@@ -855,11 +848,8 @@ FULL OUTER JOIN (
         self,
         db_config: dict[str, Any],
         comparison_sql: str,
-        pk_columns: list[str],
     ) -> dict[str, Any]:
-        """Run PK comparison and retain paired concat values for log samples."""
-        mismatch_samples: list[dict[str, Any]] = []
-        match_samples: list[dict[str, Any]] = []
+        """Run PK comparison and retain only aggregate result counts."""
         mismatch_count = 0
         compared_rows = 0
         with self._connect(db_config) as conn:
@@ -867,34 +857,15 @@ FULL OUTER JOIN (
             cur.execute(comparison_sql)
             for db_row in cur:
                 compared_rows += 1
-                pk_value_count = len(pk_columns)
-                pk_values = db_row[:pk_value_count]
-                compare_result = db_row[pk_value_count]
-                asis_concat = db_row[pk_value_count + 1]
-                tobe_concat = db_row[pk_value_count + 2]
-                row = {
-                    "pk_values": {
-                        column: self._record_log_value(value)
-                        for column, value in zip(pk_columns, pk_values, strict=True)
-                    },
-                    "compare_result": str(compare_result or ""),
-                    "asis_concat": self._record_log_value(asis_concat),
-                    "tobe_concat": self._record_log_value(tobe_concat),
-                }
-                if row["compare_result"] == "MISMATCH":
+                compare_result = db_row[0]
+                if str(compare_result or "") == "MISMATCH":
                     mismatch_count += 1
-                    if len(mismatch_samples) < 5:
-                        mismatch_samples.append(row)
-                elif len(match_samples) < 5:
-                    match_samples.append(row)
-        samples = mismatch_samples if mismatch_samples else match_samples
         return {
             "ok": mismatch_count == 0,
             "comparison_sql": comparison_sql,
             "compared_rows": compared_rows,
             "mismatch_count": mismatch_count,
             "summary": f"PK verification compared={compared_rows}, mismatched={mismatch_count}",
-            "rows": samples,
         }
 
     def _record_log_value(self, value: Any) -> Any:
@@ -1481,17 +1452,6 @@ FULL OUTER JOIN (
             f"mismatch_count={result.get('mismatch_count') or 0}",
             f"result={result.get('summary') or ''}",
         ]
-        for index, row in enumerate(result.get("rows") or [], start=1):
-            parts.extend(
-                [
-                    "",
-                    f"[CASE {index}] PK={row.get('pk_values') or {}} RESULT={row.get('compare_result') or ''}",
-                    "[ASIS_CONCAT]",
-                    str(row.get("asis_concat") or ""),
-                    "[TOBE_CONCAT]",
-                    str(row.get("tobe_concat") or ""),
-                ]
-            )
         if not result:
             detail = str(state.get("record_verify_detail") or "").strip()
             if detail:
