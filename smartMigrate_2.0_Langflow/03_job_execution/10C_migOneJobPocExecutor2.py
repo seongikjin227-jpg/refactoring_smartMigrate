@@ -301,6 +301,11 @@ class NewType10CMigOneJobPocExecutor2(Component):
                     "failure_status": current_status if current_status in {"FAIL-TEST", FAIL_TEST2} else "",
                     "migration_sql": (fetch_step.get("outputs") or {}).get("saved_migration_sql", "") if current_status in {"FAIL-TEST", FAIL_TEST2} else "",
                     "verification_sql": (fetch_step.get("outputs") or {}).get("saved_verification_sql", "") if current_status == FAIL_TEST2 else "",
+                    # VERIFY2_SQL is the generated read-only full-row comparison
+                    # statement.  It is retained for diagnostics and resume,
+                    # although Executor2 deterministically rebuilds it from
+                    # MIG_SQL/VERIFY_SQL before each execution.
+                    "verification2_sql": (fetch_step.get("outputs") or {}).get("saved_verification2_sql", "") if current_status == FAIL_TEST2 else "",
                 }
                 graph_result = self._run_migration_graph(pipeline_context, db_config, max_retry)
                 attempts = list(graph_result.get("attempts") or [])
@@ -333,6 +338,7 @@ class NewType10CMigOneJobPocExecutor2(Component):
                         "message": message,
                         "migration_sql": graph_result.get("current_migration_sql", ""),
                         "verification_sql": graph_result.get("current_v_sql", ""),
+                        "verification2_sql": graph_result.get("record_projection_sql", "") or graph_result.get("saved_verification2_sql", ""),
                         "record_projection_sql": graph_result.get("record_projection_sql", ""),
                         "record_verify_result": graph_result.get("record_verify_result", {}),
                         "record_verify_detail": graph_result.get("record_verify_detail", ""),
@@ -557,6 +563,14 @@ class NewType10CMigOneJobPocExecutor2(Component):
                 str(context.get("current_v_sql") or context.get("verification_sql") or ""),
                 list(context.get("target_ddl") or []),
             )
+            # Save immediately after deterministic generation, before Oracle
+            # executes it.  Thus VERIFY2_SQL remains available even when the
+            # comparison itself fails or produces mismatches.
+            self._save_verify2_sql(
+                dict(context.get("db_config") or {}),
+                int(context["map_id"]),
+                comparison_sql,
+            )
             result = self._execute_full_row_comparison(
                 dict(context.get("db_config") or {}),
                 comparison_sql,
@@ -567,17 +581,27 @@ class NewType10CMigOneJobPocExecutor2(Component):
                 "stage": "VERIFY_RECORDS",
                 "status": "PASS" if result["ok"] else FAIL_TEST2,
                 "message": result["summary"],
-                "outputs": {"record_projection_sql": comparison_sql, "record_verify_result": result, "record_verify_detail": detail_json},
+                "outputs": {
+                    "record_projection_sql": comparison_sql,
+                    "full_row_compare_sql": comparison_sql,
+                    "saved_verification2_sql": comparison_sql,
+                    "record_verify_result": result,
+                    "record_verify_detail": detail_json,
+                },
             }
         except Exception as exc:
             return {
                 "stage": "VERIFY_RECORDS",
                 "status": FAIL_TEST2,
                 "message": f"full-row verification failed: {exc}",
-                # If Oracle rejects the generated WITH SQL, retain that exact
+                # If Oracle rejects the generated comparison SELECT, retain that exact
                 # statement in the workflow log.  The input MIG_SQL itself is
                 # not a verification artifact and is intentionally omitted.
-                "outputs": {"record_projection_sql": comparison_sql},
+                "outputs": {
+                    "record_projection_sql": comparison_sql,
+                    "full_row_compare_sql": comparison_sql,
+                    "saved_verification2_sql": comparison_sql,
+                },
             }
 
     def _build_full_row_compare_sql(self, migration_sql: str, verification_sql: str, target_ddl: list[dict[str, Any]]) -> tuple[str, list[str]]:
@@ -608,39 +632,38 @@ class NewType10CMigOneJobPocExecutor2(Component):
         asis_payload = self._row_concat_sql(
             [(column, migration_expressions[column], type_by_column[column]) for column in compare_columns]
         )
+        target_from_clause = self._select_from_clause(target_count_sql)
+        target_alias = self._target_from_alias(target_from_clause)
         tobe_payload = self._row_concat_sql(
-            [(column, f"T2.{column}", type_by_column[column]) for column in compare_columns]
+            [
+                (column, f"{target_alias}.{column}" if target_alias else column, type_by_column[column])
+                for column in compare_columns
+            ]
         )
         # Source expressions came from MIG_SQL and can use aliases/CTEs that
         # the count Verify S dataset does not expose.  Keep the complete
         # MIG_SQL source scope for ASIS_ROWS; T-side scope remains Verify SQL.
         source_from_clause = self._migration_source_from_clause(migration_sql)
-        target_from_clause = self._select_from_clause(target_count_sql)
-        sql = f"""WITH
-ASIS_ROWS AS (
-    SELECT {asis_payload} AS ROW_CONCAT
-    {source_from_clause}
-),
-TOBE_ROWS AS (
-    SELECT {tobe_payload} AS ROW_CONCAT
-    {target_from_clause}
-),
-ASIS_ORDERED AS (
-    SELECT ROW_NUMBER() OVER (ORDER BY ROW_CONCAT) AS ROW_NO,
-           ROW_CONCAT
-      FROM ASIS_ROWS
-),
-TOBE_ORDERED AS (
-    SELECT ROW_NUMBER() OVER (ORDER BY ROW_CONCAT) AS ROW_NO,
-           ROW_CONCAT
-      FROM TOBE_ROWS
-)
-SELECT A.ROW_NO,
+        sql = f"""SELECT A.ROW_NO,
        CASE WHEN A.ROW_CONCAT = T.ROW_CONCAT THEN 'MATCH' ELSE 'MISMATCH' END AS COMPARE_RESULT,
        A.ROW_CONCAT AS ASIS_CONCAT,
        T.ROW_CONCAT AS TOBE_CONCAT
-  FROM ASIS_ORDERED A
-  JOIN TOBE_ORDERED T
+  FROM (
+        SELECT ROW_NUMBER() OVER (ORDER BY ASIS_ROWS.ROW_CONCAT) AS ROW_NO,
+               ASIS_ROWS.ROW_CONCAT
+          FROM (
+                SELECT {asis_payload} AS ROW_CONCAT
+                {source_from_clause}
+               ) ASIS_ROWS
+       ) A
+  JOIN (
+        SELECT ROW_NUMBER() OVER (ORDER BY TOBE_ROWS.ROW_CONCAT) AS ROW_NO,
+               TOBE_ROWS.ROW_CONCAT
+          FROM (
+                SELECT {tobe_payload} AS ROW_CONCAT
+                {target_from_clause}
+               ) TOBE_ROWS
+       ) T
     ON T.ROW_NO = A.ROW_NO
  ORDER BY A.ROW_NO"""
         return sql, compare_columns
@@ -745,6 +768,45 @@ SELECT A.ROW_NO,
         if from_index < 0:
             raise ValueError("RECORD_VERIFY dataset SELECT has no FROM clause")
         return select_sql[from_index:].strip()
+
+    def _target_from_alias(self, target_from_clause: str) -> str:
+        """Return the first TO-BE table alias actually declared after FROM.
+
+        The full-row SQL must never invent ``T2``.  If the Verify T-side is
+        ``FROM TO_EMP T2`` this returns ``T2`` and the projection uses
+        ``T2.EMP_NO``.  If it is ``FROM TO_EMP`` it returns an empty string and
+        the projection uses ``EMP_NO`` as well.
+        """
+        match = re.match(r"^\s*FROM\s+", target_from_clause, flags=re.IGNORECASE)
+        if not match:
+            return ""
+        remainder = target_from_clause[match.end():].lstrip()
+        if not remainder:
+            return ""
+
+        # Consume one table reference (schema.table or a parenthesised inline
+        # view), then inspect the immediately following token as its alias.
+        if remainder.startswith("("):
+            try:
+                end = self._matching_parenthesis(remainder, 0)
+            except ValueError:
+                return ""
+            remainder = remainder[end + 1:].lstrip()
+        else:
+            table_match = re.match(r'(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_$#]*)(?:\.(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_$#]*))*', remainder)
+            if not table_match:
+                return ""
+            remainder = remainder[table_match.end():].lstrip()
+
+        if remainder.upper().startswith("AS "):
+            remainder = remainder[3:].lstrip()
+        alias_match = re.match(r'("[^"]+"|[A-Za-z_][A-Za-z0-9_$#]*)', remainder)
+        if not alias_match:
+            return ""
+        alias = alias_match.group(1)
+        if alias.upper() in {"WHERE", "JOIN", "LEFT", "RIGHT", "INNER", "FULL", "CROSS", "ON", "GROUP", "ORDER", "HAVING", "CONNECT", "START", "UNION", "MINUS", "FETCH"}:
+            return ""
+        return alias
 
     def _row_concat_sql(self, columns: list[tuple[str, str, str]]) -> str:
         parts = [self._row_concat_column_sql(column, expression, data_type) for column, expression, data_type in columns]
@@ -986,6 +1048,7 @@ SELECT A.ROW_NO,
             "attempts": [],
             "current_migration_sql": context.get("migration_sql") or context.get("saved_migration_sql", ""),
             "current_v_sql": context.get("verification_sql", ""),
+            "full_row_compare_sql": context.get("verification2_sql") or context.get("saved_verification2_sql", ""),
             "last_error": "",
             "last_sql": "",
             "error_type": "",
@@ -1569,6 +1632,26 @@ SELECT A.ROW_NO,
             )
             conn.commit()
 
+    # 2차 전체 행 비교용 읽기 전용 SELECT를 NEXT_MIG_INFO에 저장한다.
+    def _save_verify2_sql(self, db_config: dict[str, Any], map_id: int, verification2_sql: str) -> None:
+        """Store the generated full-row comparison SELECT in VERIFY2_SQL."""
+        sql = str(verification2_sql or "").strip()
+        if not sql:
+            return
+        table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
+        with self._connect(db_config) as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                UPDATE {table}
+                   SET VERIFY2_SQL = :verify2_sql,
+                       UPD_TS = CURRENT_TIMESTAMP
+                 WHERE MAP_ID = :map_id
+                """,
+                {"verify2_sql": sql, "map_id": map_id},
+            )
+            conn.commit()
+
     # MAP_ID 기준으로 migration row와 관련 컬럼 매핑/DDL 입력 데이터를 로드한다.
     def _load_mig_metadata(self, db_config: dict[str, Any], map_id: int | None) -> dict[str, Any]:
         """MAP_ID 한 건의 NEXT_MIG_INFO와 NEXT_MIG_INFO_DTL metadata를 로드한다."""
@@ -1587,7 +1670,8 @@ SELECT A.ROW_NO,
                        CONDITION,
                        MIG_SQL,
                        VERIFY_SQL,
-                       USER_EDITED
+                       USER_EDITED,
+                       VERIFY2_SQL
                   FROM {info_table}
                  WHERE MAP_ID = :1
                 """,
@@ -1604,6 +1688,7 @@ SELECT A.ROW_NO,
             saved_migration_sql = self._lob_to_str(row[5])
             saved_verification_sql = self._lob_to_str(row[6])
             user_edited = self._lob_to_str(row[7])
+            saved_verification2_sql = self._lob_to_str(row[8])
             cur.execute(
                 f"""
                 SELECT MAP_DTL,
@@ -1632,6 +1717,7 @@ SELECT A.ROW_NO,
             "condition": condition,
             "saved_migration_sql": saved_migration_sql,
             "saved_verification_sql": saved_verification_sql,
+            "saved_verification2_sql": saved_verification2_sql,
             "mapping_details": details,
             "source_ddl": self._source_ddl_for_prompt(db_config, map_type, fr_table),
             "target_ddl": self._fetch_table_columns(db_config, self._qualify_to_table(to_table, db_config)) if self._looks_like_table(to_table) else [],

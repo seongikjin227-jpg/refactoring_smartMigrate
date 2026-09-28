@@ -77,8 +77,8 @@ class NewType10CMigOneJobPocExecutor3(Executor2Base):
             if not comparison_sql:
                 comparison_sql, used_model = self._generate_full_row_compare_only(context)
             comparison_sql = self._clean_sql_statement(comparison_sql)
-            if not comparison_sql.upper().startswith("WITH"):
-                raise ValueError("full_row_compare_sql must start with WITH")
+            if not comparison_sql.upper().startswith("SELECT"):
+                raise ValueError("full_row_compare_sql must start with SELECT")
             result = self._execute_full_row_comparison(
                 dict(context.get("db_config") or {}),
                 comparison_sql,
@@ -137,10 +137,10 @@ Return one Oracle SELECT with FROM (SELECT COUNT(*) TOT, COUNT(source non-LOB co
 Apply the identical source filter to MIG_SQL and the S-side dataset. The T-side dataset must identify only this migration job's target rows.
 
 [Required full-row verification SQL]
-Return one executable Oracle WITH query. It must:
-1. Include ASIS_ROWS and TOBE_ROWS CTEs.
-2. Use the exact MIG_SQL SELECT FROM/JOIN/WHERE scope inside ASIS_ROWS, so every MIG_SQL mapping alias and CTE remains valid. Do not use verification_sql S-side scope for ASIS_ROWS.
-3. Use the exact T-side FROM/WHERE EXISTS scope from verification_sql inside TOBE_ROWS.
+Return one executable Oracle SELECT statement. Do not use a WITH clause or CTEs; use nested inline views only.
+1. Build ASIS and TOBE datasets as inline views inside one SELECT statement.
+2. Use the exact MIG_SQL SELECT FROM/JOIN/WHERE scope inside the ASIS inline view, so every MIG_SQL mapping alias and CTE remains valid. Do not use verification_sql S-side scope for ASIS values.
+3. Use the exact T-side FROM/WHERE EXISTS scope from verification_sql inside the TOBE inline view.
 4. Read only T-side COUNT(target_column) expressions. Exclude COUNT(*) TOT and LOB/LONG columns.
 5. For each target column from step 4, find the same target column in MIG_SQL INSERT INTO (...), then use the SELECT expression at the identical ordinal position as the AS-IS value.
 6. Serialize the AS-IS mapping expression and the corresponding TO-BE target column in identical target-column order. Use readable COLUMN_NAME=value text, an explicit <NULL> marker, and type-safe date/number formatting. Do not add type tags or value lengths.
@@ -168,7 +168,7 @@ Return one executable Oracle WITH query. It must:
         migration_sql = str(context.get("saved_migration_sql") or context.get("current_migration_sql") or "")
         verification_sql = str(context.get("saved_verification_sql") or context.get("current_v_sql") or context.get("verification_sql") or "")
         prompt = f"""Return exactly one valid JSON object: {{"full_row_compare_sql":"..."}}.
-Create an executable Oracle 19c WITH query for full-row comparison.
+Create one executable Oracle 19c SELECT statement for full-row comparison. Do not use a WITH clause or CTEs; use nested inline views only.
 Use this existing MIG_SQL for target-column to source-expression mapping:
 {migration_sql}
 
