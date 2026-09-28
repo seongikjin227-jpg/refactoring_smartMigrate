@@ -650,7 +650,9 @@ class NewType10CMigOneJobPocExecutor3(Component):
             f"A.{column} = T.{column}" for column in pk_columns
         )
         sql = f"""SELECT
-    CASE WHEN A.ROW_CONCAT = T.ROW_CONCAT THEN 'MATCH' ELSE 'MISMATCH' END AS COMPARE_RESULT
+    CASE WHEN A.ROW_CONCAT = T.ROW_CONCAT THEN 'MATCH' ELSE 'MISMATCH' END AS COMPARE_RESULT,
+    A.ROW_CONCAT AS ASIS_CONCAT,
+    T.ROW_CONCAT AS TOBE_CONCAT
 FROM (
     SELECT
         {asis_pk_projection},
@@ -857,7 +859,7 @@ FULL OUTER JOIN (
             cur.execute(comparison_sql)
             for db_row in cur:
                 compared_rows += 1
-                compare_result = db_row[0]
+                compare_result, _asis_concat, _tobe_concat = db_row
                 if str(compare_result or "") == "MISMATCH":
                     mismatch_count += 1
         return {
