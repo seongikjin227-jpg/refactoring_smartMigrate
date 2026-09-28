@@ -219,6 +219,9 @@ class NewType10CMigOneJobPocExecutor(Component):
             max_retry = max(0, int(job.get("max_retry") if job.get("max_retry") is not None else (getattr(self, "max_retry", None) or 2)))
             db_config = self._db_config(job)
             current_status = self._load_mig_status(db_config, map_id)
+            # Holds the failure stage appropriate for an unexpected system
+            # error.  Graph nodes update this as business stages complete.
+            status_tracker = {"failure_status": current_status if current_status.startswith("FAIL") else "FAIL-INSERT"}
             if current_status == "PASS":
                 elapsed = int(time.perf_counter() - started)
                 message = f"MAP_ID={map_id} is already PASS; migration execution skipped."
@@ -269,7 +272,16 @@ class NewType10CMigOneJobPocExecutor(Component):
 
                 # 2. 작업을 RUNNING으로 바꾸고 프롬프트 생성에 필요한 DDL/매핑 metadata를 읽는다.
                 self._mark_running(db_config, map_id)
-                base_context = {"job": job, "map_id": map_id, "attempt": 1, "llm_config": self._llm_config(job)}
+                base_context = {
+                    "job": job,
+                    "map_id": map_id,
+                    "attempt": 1,
+                    "llm_config": self._llm_config(job),
+                    # FETCH_DDL also needs the resume stage so a FAIL-TEST
+                    # retry looks up VERIFY_SQL hints, not MIG_SQL hints.
+                    "failure_status": current_status if current_status == "FAIL-TEST" else "",
+                    "status_tracker": status_tracker,
+                }
                 fetch_step = self._node_fetch_ddl(base_context)
                 if fetch_step.get("status") != "PASS":
                     raise ValueError(fetch_step.get("message") or "FETCH_DDL failed")
@@ -338,8 +350,9 @@ class NewType10CMigOneJobPocExecutor(Component):
                 elapsed = int(time.perf_counter() - started)
                 error_message = message or str(exc)
                 stage_sql = graph_result.get("stage_sql", "") if isinstance(graph_result, dict) else ""
+                error_status = str(status_tracker.get("failure_status") or "FAIL-INSERT")
                 try:
-                    self._update_job(db_config, map_id, "FAIL-INSERT", elapsed, max(0, len(attempts) - 1))
+                    self._update_job(db_config, map_id, error_status, elapsed, max(0, len(attempts) - 1))
                     logger.error(
                         error_message,
                         extra={"workflow_log": [map_id, "DB_MIGRATION", "JOB_FAIL", "ERROR", "FINAL", final_status, retry_count, stage_sql]},
@@ -350,7 +363,7 @@ class NewType10CMigOneJobPocExecutor(Component):
                         extra={"workflow_log": [map_id, "DB_MIGRATION", "JOB_FAIL", "WARN", "FINAL", final_status, retry_count, str(exc)]},
                         exc_info=True,
                     )
-                result = self._result(job, ok=False, status="FAIL-INSERT", elapsed=elapsed, attempts=attempts)
+                result = self._result(job, ok=False, status=error_status, elapsed=elapsed, attempts=attempts)
                 result.update({"error_type": "SYSTEM_ERROR", "error": str(exc), "message": f"migration executor error: {exc}"})
                 self.status = result
                 __log_result = Data(data=result)
@@ -459,7 +472,9 @@ class NewType10CMigOneJobPocExecutor(Component):
         except Exception as exc:
             return {
                 "stage": "GENERATE_SQL",
-                "status": "FAIL-INSERT",
+                # The failure status is the stage being retried, rather than
+                # the status with which this executor invocation began.
+                "status": "FAIL-TEST" if verify_only else "FAIL-INSERT",
                 "message": f"migration SQL generation failed: {exc}",
                 "outputs": {
                     "migration_sql": context.get("current_migration_sql") or context.get("migration_sql", ""),
@@ -644,8 +659,17 @@ class NewType10CMigOneJobPocExecutor(Component):
 
     # 각 graph node 결과를 공통 state 구조에 병합한다. 12C도 유사한 state 누적 패턴을 쓴다.
     def _apply_step(self, state: dict[str, Any], step: dict[str, Any]) -> dict[str, Any]:
-        """LangGraph node 결과를 state에 병합하고 workflow 로그를 남긴다."""
+        """Merge a graph step and retain the last completed business stage."""
         outputs = dict(step.get("outputs") or {})
+        step_status = str(step.get("status") or "")
+        step_stage = str(step.get("stage") or "")
+        status_tracker = state.get("status_tracker")
+        if isinstance(status_tracker, dict):
+            if step_status.startswith("FAIL"):
+                status_tracker["failure_status"] = step_status
+            elif step_stage == "EXECUTE_SQL":
+                # INSERT completed; later unexpected errors belong to VERIFY.
+                status_tracker["failure_status"] = "FAIL-TEST"
         next_state = {
             **state,
             **outputs,
