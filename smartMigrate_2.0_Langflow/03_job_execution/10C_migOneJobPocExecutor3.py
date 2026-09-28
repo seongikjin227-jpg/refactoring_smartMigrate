@@ -574,6 +574,7 @@ class NewType10CMigOneJobPocExecutor3(Component):
                 dict(context.get("db_config") or {}),
                 comparison_sql,
                 pk_columns,
+                compare_columns,
             )
             result["compared_columns"] = compare_columns
             result["pk_columns"] = pk_columns
@@ -635,13 +636,20 @@ class NewType10CMigOneJobPocExecutor3(Component):
         pk_projection = ",\n       ".join(
             f"COALESCE(A.{column}, T.{column}) AS {column}" for column in pk_columns
         )
+        diagnostic_projection = ",\n       ".join(
+            [
+                *(f"A.{column} AS ASIS_VALUE_{index}" for index, column in enumerate(compare_columns, start=1)),
+                *(f"T.{column} AS TOBE_VALUE_{index}" for index, column in enumerate(compare_columns, start=1)),
+            ]
+        )
         presence_column = pk_columns[0]
         sql = f"""SELECT {pk_projection},
        CASE
            WHEN A.{presence_column} IS NULL OR T.{presence_column} IS NULL THEN 'MISMATCH'
            WHEN {value_match} THEN 'MATCH'
            ELSE 'MISMATCH'
-       END AS COMPARE_RESULT
+       END AS COMPARE_RESULT,
+       {diagnostic_projection}
   FROM (
         SELECT {asis_projection}
         {source_from_clause}
@@ -799,8 +807,14 @@ class NewType10CMigOneJobPocExecutor3(Component):
             raise ValueError("PK_VERIFY requires target primary-key columns; target table has no usable PK")
         return columns
 
-    def _execute_pk_comparison(self, db_config: dict[str, Any], comparison_sql: str, pk_columns: list[str]) -> dict[str, Any]:
-        """Run PK-based comparison SQL returning PK columns and COMPARE_RESULT only."""
+    def _execute_pk_comparison(
+        self,
+        db_config: dict[str, Any],
+        comparison_sql: str,
+        pk_columns: list[str],
+        compare_columns: list[str],
+    ) -> dict[str, Any]:
+        """Run PK comparison and retain paired values for diagnostic log samples."""
         mismatch_samples: list[dict[str, Any]] = []
         match_samples: list[dict[str, Any]] = []
         mismatch_count = 0
@@ -810,13 +824,19 @@ class NewType10CMigOneJobPocExecutor3(Component):
             cur.execute(comparison_sql)
             for db_row in cur:
                 compared_rows += 1
-                *pk_values, compare_result = db_row
+                pk_value_count = len(pk_columns)
+                pk_values = db_row[:pk_value_count]
+                compare_result = db_row[pk_value_count]
+                asis_values = db_row[pk_value_count + 1:pk_value_count + 1 + len(compare_columns)]
+                tobe_values = db_row[pk_value_count + 1 + len(compare_columns):]
                 row = {
                     "pk_values": {
                         column: self._record_log_value(value)
                         for column, value in zip(pk_columns, pk_values, strict=True)
                     },
                     "compare_result": str(compare_result or ""),
+                    "asis_values": self._diagnostic_concat(asis_values),
+                    "tobe_values": self._diagnostic_concat(tobe_values),
                 }
                 if row["compare_result"] == "MISMATCH":
                     mismatch_count += 1
@@ -833,6 +853,20 @@ class NewType10CMigOneJobPocExecutor3(Component):
             "summary": f"PK verification compared={compared_rows}, mismatched={mismatch_count}",
             "rows": samples,
         }
+
+    def _diagnostic_concat(self, values: tuple[Any, ...]) -> str:
+        """Make a log-only value list; SQL itself keeps native column types."""
+        rendered: list[str] = []
+        for value in values:
+            if value is None:
+                rendered.append("<NULL>")
+                continue
+            safe_value = self._record_log_value(value)
+            if isinstance(safe_value, (dict, list)):
+                rendered.append(self._json_dump(safe_value))
+            else:
+                rendered.append(str(safe_value))
+        return " | ".join(rendered)
 
     def _record_log_value(self, value: Any) -> Any:
         value = value.read() if hasattr(value, "read") else value
@@ -1423,6 +1457,10 @@ class NewType10CMigOneJobPocExecutor3(Component):
                 [
                     "",
                     f"[CASE {index}] PK={row.get('pk_values') or {}} RESULT={row.get('compare_result') or ''}",
+                    "[ASIS_VALUES]",
+                    str(row.get("asis_values") or ""),
+                    "[TOBE_VALUES]",
+                    str(row.get("tobe_values") or ""),
                 ]
             )
         if not result:
