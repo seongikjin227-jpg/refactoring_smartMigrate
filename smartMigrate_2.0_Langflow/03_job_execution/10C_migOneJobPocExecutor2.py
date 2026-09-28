@@ -816,21 +816,19 @@ class NewType10CMigOneJobPocExecutor2(Component):
 
     def _row_concat_column_sql(self, column: str, expression: str, data_type: str) -> str:
         value_sql = self._normalized_compare_value_sql(expression, data_type)
-        return f"'{column}=' || CASE WHEN ({value_sql}) IS NULL THEN '<NULL>' ELSE ({value_sql}) END"
+        # ``|| ''`` lets Oracle apply the same session conversion to the
+        # already target-typed AS-IS expression and the TO-BE value.  NVL is
+        # applied after that conversion, so DATE/NUMBER NULL values do not try
+        # to cast the '<NULL>' marker back to their original datatype.
+        return f"'{column}=' || NVL(({value_sql}) || '', '<NULL>')"
 
     def _normalized_compare_value_sql(self, expression: str, data_type: str) -> str:
-        """Render AS-IS and TO-BE values with a readable, target-type-safe format."""
+        """Keep migrated target-typed expressions intact, except binary RAW."""
         expr = f"({expression})"
         normalized_type = re.sub(r"\s+", " ", str(data_type or "").upper()).strip()
-        if normalized_type.startswith("NUMBER") or normalized_type in {"FLOAT", "BINARY_FLOAT", "BINARY_DOUBLE"}:
-            return f"TO_CHAR(CAST({expr} AS NUMBER), 'TM9', 'NLS_NUMERIC_CHARACTERS=''.,''')"
-        if normalized_type == "DATE":
-            return f"TO_CHAR(CAST({expr} AS DATE), 'YYYY-MM-DD HH24:MI:SS')"
-        if normalized_type.startswith("TIMESTAMP"):
-            return f"TO_CHAR(CAST({expr} AS TIMESTAMP), 'YYYY-MM-DD HH24:MI:SS.FF9')"
-        if normalized_type == "RAW":
+        if normalized_type.startswith("RAW"):
             return f"RAWTOHEX(CAST({expr} AS RAW(2000)))"
-        return f"TO_CHAR({expr})"
+        return expr
 
     def _execute_full_row_comparison(self, db_config: dict[str, Any], comparison_sql: str, compare_columns: list[str]) -> dict[str, Any]:
         """Run the full row-pair query; retain at most five audit rows in logs."""

@@ -313,15 +313,21 @@ COUNT(T2.EMP_NAME)
 
 ### 4.6 타입별 CONCAT 직렬화 규칙
 
-각 값에는 읽기 쉬운 `컬럼명=값`과 명시적 NULL 표식만 넣는다. 타입 태그와 길이 표식은 로그 가독성을 위해 사용하지 않는다. 다만 날짜·숫자는 AS-IS와 TO-BE가 같은 문자열 기준으로 비교되도록 명시 포맷을 적용한다.
+각 값에는 읽기 쉬운 `컬럼명=값`과 명시적 NULL 표식만 넣는다. 타입 태그와 길이 표식은 로그 가독성을 위해 사용하지 않는다. MIG_SQL의 AS-IS 표현식은 이미 INSERT 대상 타입으로 변환된 것으로 보고, 날짜·숫자·타임스탬프에도 추가 `CAST`나 명시 포맷 `TO_CHAR`를 적용하지 않는다. 양쪽 값은 같은 Verify2 SELECT 안에서 `|| ''`로 문자열화되므로 같은 Oracle session 변환 규칙을 적용받는다.
 
 | Target DDL 타입 | 표준화 방식 |
 |---|---|
-| `VARCHAR2`, `CHAR` 계열 | `TO_CHAR(expression)` |
-| `NUMBER`, `FLOAT` 계열 | `TO_CHAR(CAST(expression AS NUMBER), 'TM9', 'NLS_NUMERIC_CHARACTERS=''.,''')` |
-| `DATE` | `TO_CHAR(CAST(expression AS DATE), 'YYYY-MM-DD HH24:MI:SS')` |
-| `TIMESTAMP` 계열 | `TO_CHAR(CAST(expression AS TIMESTAMP), 'YYYY-MM-DD HH24:MI:SS.FF9')` |
+| `VARCHAR2`, `CHAR` 계열 | `expression`을 그대로 사용 |
+| `NUMBER`, `FLOAT` 계열 | `expression`을 그대로 사용 |
+| `DATE` | `expression`을 그대로 사용 |
+| `TIMESTAMP` 계열 | `expression`을 그대로 사용 |
 | `RAW` | `RAWTOHEX(CAST(expression AS RAW(2000)))` |
+
+실제 각 항목은 아래처럼 조합한다. `NVL(expression, '<NULL>')`를 직접 쓰면 DATE/NUMBER NULL에서 `'<NULL>'`을 원래 타입으로 변환하려 할 수 있으므로 사용하지 않는다.
+
+```sql
+'COL=' || NVL((expression) || '', '<NULL>')
+```
 
 예시 값과 한 행의 payload는 다음과 같다.
 
@@ -347,10 +353,8 @@ FROM (
            ASIS_ROWS.ROW_CONCAT
     FROM (
         SELECT
-            'EMP_NO=' || CASE WHEN LPAD(S.EMP_NO, 5, '0') IS NULL THEN '<NULL>'
-                               ELSE LPAD(S.EMP_NO, 5, '0') END ||
-            '|EMP_NAME=' || CASE WHEN (S.LAST_NAME || ' ' || S.FIRST_NAME) IS NULL THEN '<NULL>'
-                                  ELSE (S.LAST_NAME || ' ' || S.FIRST_NAME) END AS ROW_CONCAT
+            'EMP_NO=' || NVL((LPAD(S.EMP_NO, 5, '0')) || '', '<NULL>') ||
+            '|EMP_NAME=' || NVL((S.LAST_NAME || ' ' || S.FIRST_NAME) || '', '<NULL>') AS ROW_CONCAT
         FROM SOURCE_SCHEMA.ASIS_EMP S
         WHERE S.ACTIVE_YN = 'Y'
     ) ASIS_ROWS
@@ -360,8 +364,8 @@ JOIN (
            TOBE_ROWS.ROW_CONCAT
     FROM (
         SELECT
-            'EMP_NO=' || CASE WHEN T2.EMP_NO IS NULL THEN '<NULL>' ELSE T2.EMP_NO END ||
-            '|EMP_NAME=' || CASE WHEN T2.EMP_NAME IS NULL THEN '<NULL>' ELSE T2.EMP_NAME END AS ROW_CONCAT
+            'EMP_NO=' || NVL((T2.EMP_NO) || '', '<NULL>') ||
+            '|EMP_NAME=' || NVL((T2.EMP_NAME) || '', '<NULL>') AS ROW_CONCAT
         FROM TARGET_SCHEMA.TO_EMP T2
         WHERE EXISTS (
             SELECT 1
