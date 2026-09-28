@@ -247,8 +247,6 @@ python -m py_compile `
 | `00_guide/00_architecture_chapter2_chat_management.md` | 채팅/관리 요청 처리 |
 | `00_guide/00_architecture_chapter3_job_execution.md` | 작업 실행 라우팅과 Loop 구조 |
 | `00_guide/00_architecture_chapter4_domain_executors.md` | 10C/12C/15C/17C 실행기 상세 |
-| `00_guide/00_db_migration_verification_guide.md` | 10C2 DB Migration count·record 검증 알고리즘과 로그 |
-| `00_guide/00_executor2_full_row_verify_guide.md` | 10C Executor2 full-row WITH SQL 조합, 실행·로그 가이드 |
 | `00_guide/00_architecture_chapter5_logging_operations.md` | logging, 운영, 장애 확인 |
 | `00_guide/00_architecture_chapter6_oracle_ddl.md` | Oracle 테이블 DDL, 컬럼 코멘트, 주요 인덱스 |
 | `00_guide/00_job_execution_payload_plan.md` | 개발자용 실행 요청 payload 전달 규칙 |

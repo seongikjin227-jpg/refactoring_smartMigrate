@@ -811,16 +811,16 @@ class NewType10CMigOneJobPocExecutor2(Component):
         return alias
 
     def _row_concat_sql(self, columns: list[tuple[str, str, str]]) -> str:
-        parts = [self._row_concat_column_sql(column, expression, data_type) for column, expression, data_type in columns]
+        parts = [self._row_concat_value_sql(expression, data_type) for _, expression, data_type in columns]
         return " || '|' || ".join(parts)
 
-    def _row_concat_column_sql(self, column: str, expression: str, data_type: str) -> str:
+    def _row_concat_value_sql(self, expression: str, data_type: str) -> str:
         value_sql = self._normalized_compare_value_sql(expression, data_type)
         # ``|| ''`` lets Oracle apply the same session conversion to the
         # already target-typed AS-IS expression and the TO-BE value.  NVL is
         # applied after that conversion, so DATE/NUMBER NULL values do not try
         # to cast the '<NULL>' marker back to their original datatype.
-        return f"'{column}=' || NVL(({value_sql}) || '', '<NULL>')"
+        return f"NVL(({value_sql}) || '', '<NULL>')"
 
     def _normalized_compare_value_sql(self, expression: str, data_type: str) -> str:
         """Keep migrated target-typed expressions intact, except binary RAW."""
