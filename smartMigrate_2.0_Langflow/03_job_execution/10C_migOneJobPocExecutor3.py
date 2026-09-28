@@ -621,13 +621,15 @@ class NewType10CMigOneJobPocExecutor3(Component):
             for item in context.get("target_ddl") or []
             if str(item.get("column_name") or "").strip()
         }
-        ddl_missing = [column for column in required_columns if column not in type_by_column]
+        ddl_missing = [column for column in compare_columns if column not in type_by_column]
         if ddl_missing:
             raise ValueError(f"PK_VERIFY target DDL types are unavailable: {ddl_missing}")
 
         target_from_clause = self._select_from_clause(target_count_sql)
         target_alias = self._target_from_alias(target_from_clause)
         source_from_clause = self._migration_source_from_clause(migration_sql)
+        source_scope = self._format_from_scope(source_from_clause, "    ")
+        target_scope = self._format_from_scope(target_from_clause, "    ")
         asis_pk_projection = ",\n               ".join(
             f"{migration_expressions[column]} AS {column}" for column in pk_columns
         )
@@ -635,56 +637,55 @@ class NewType10CMigOneJobPocExecutor3(Component):
             f"{target_alias + '.' if target_alias else ''}{column} AS {column}" for column in pk_columns
         )
         asis_concat = self._row_concat_sql(
-            [(column, migration_expressions[column], type_by_column[column]) for column in compare_columns]
+            [(column, migration_expressions[column], type_by_column[column]) for column in compare_columns],
+            continuation_indent="        ",
         )
         tobe_concat = self._row_concat_sql(
             [
                 (column, f"{target_alias}.{column}" if target_alias else column, type_by_column[column])
                 for column in compare_columns
-            ]
+            ],
+            continuation_indent="        ",
         )
-        asis_pk_concat = self._row_concat_sql(
-            [(column, f"A.{column}", type_by_column[column]) for column in pk_columns]
-        )
-        tobe_pk_concat = self._row_concat_sql(
-            [(column, f"T.{column}", type_by_column[column]) for column in pk_columns]
-        )
-        pk_join = "\n   AND ".join(
+        pk_join = "\n    AND ".join(
             f"A.{column} = T.{column}" for column in pk_columns
         )
-        pk_projection = ",\n       ".join(
+        pk_projection = ",\n    ".join(
             f"COALESCE(A.{column}, T.{column}) AS {column}" for column in pk_columns
         )
-        pk_presence_column = pk_columns[0]
         sql = f"""SELECT
-       {pk_projection},
-       CASE
-           WHEN A.{pk_presence_column} IS NULL OR T.{pk_presence_column} IS NULL THEN 'MISMATCH'
-           ELSE 'MATCH'
-       END AS PK_COMPARE_RESULT,
-       {asis_pk_concat} AS ASIS_PK,
-       {tobe_pk_concat} AS TOBE_PK,
-       CASE WHEN A.ROW_CONCAT = T.ROW_CONCAT THEN 'MATCH' ELSE 'MISMATCH' END AS COMPARE_RESULT,
-       A.ROW_CONCAT AS ASIS_CONCAT,
-       T.ROW_CONCAT AS TOBE_CONCAT
-  FROM (
-        SELECT
-               {asis_pk_projection},
-               {asis_concat} AS ROW_CONCAT
-        {source_from_clause}
-       ) A
-  FULL OUTER JOIN (
-        SELECT
-               {tobe_pk_projection},
-               {tobe_concat} AS ROW_CONCAT
-        {target_from_clause}
-       ) T
+    {pk_projection},
+    CASE WHEN A.ROW_CONCAT = T.ROW_CONCAT THEN 'MATCH' ELSE 'MISMATCH' END AS COMPARE_RESULT,
+    A.ROW_CONCAT AS ASIS_CONCAT,
+    T.ROW_CONCAT AS TOBE_CONCAT
+FROM (
+    SELECT
+        {asis_pk_projection},
+        {asis_concat}
+        AS ROW_CONCAT
+    {source_scope}
+) A
+FULL OUTER JOIN (
+    SELECT
+        {tobe_pk_projection},
+        {tobe_concat}
+        AS ROW_CONCAT
+    {target_scope}
+) T
     ON {pk_join}"""
         return sql, compare_columns, pk_columns
 
-    def _row_concat_sql(self, columns: list[tuple[str, str, str]]) -> str:
+    def _row_concat_sql(self, columns: list[tuple[str, str, str]], *, continuation_indent: str) -> str:
         parts = [self._row_concat_value_sql(expression, data_type) for _, expression, data_type in columns]
-        return " || '|' || ".join(parts)
+        return f" || '|' ||\n{continuation_indent}".join(parts)
+
+    def _format_from_scope(self, from_clause: str, indent: str) -> str:
+        """Align the outer FROM/WHERE keywords of an extracted source scope."""
+        scope = str(from_clause or "").strip()
+        where_index = self._top_level_keyword(scope, "WHERE")
+        if where_index < 0:
+            return scope
+        return f"{scope[:where_index].rstrip()}\n{indent}WHERE{scope[where_index + len('WHERE'):] }"
 
     def _row_concat_value_sql(self, expression: str, data_type: str) -> str:
         value_sql = self._normalized_compare_value_sql(expression, data_type)
@@ -868,20 +869,14 @@ class NewType10CMigOneJobPocExecutor3(Component):
                 compared_rows += 1
                 pk_value_count = len(pk_columns)
                 pk_values = db_row[:pk_value_count]
-                pk_compare_result = db_row[pk_value_count]
-                asis_pk = db_row[pk_value_count + 1]
-                tobe_pk = db_row[pk_value_count + 2]
-                compare_result = db_row[pk_value_count + 3]
-                asis_concat = db_row[pk_value_count + 4]
-                tobe_concat = db_row[pk_value_count + 5]
+                compare_result = db_row[pk_value_count]
+                asis_concat = db_row[pk_value_count + 1]
+                tobe_concat = db_row[pk_value_count + 2]
                 row = {
                     "pk_values": {
                         column: self._record_log_value(value)
                         for column, value in zip(pk_columns, pk_values, strict=True)
                     },
-                    "pk_compare_result": str(pk_compare_result or ""),
-                    "asis_pk": self._record_log_value(asis_pk),
-                    "tobe_pk": self._record_log_value(tobe_pk),
                     "compare_result": str(compare_result or ""),
                     "asis_concat": self._record_log_value(asis_concat),
                     "tobe_concat": self._record_log_value(tobe_concat),
@@ -1490,11 +1485,7 @@ class NewType10CMigOneJobPocExecutor3(Component):
             parts.extend(
                 [
                     "",
-                    f"[CASE {index}] PK={row.get('pk_values') or {}} PK_RESULT={row.get('pk_compare_result') or ''} RESULT={row.get('compare_result') or ''}",
-                    "[ASIS_PK]",
-                    str(row.get("asis_pk") or ""),
-                    "[TOBE_PK]",
-                    str(row.get("tobe_pk") or ""),
+                    f"[CASE {index}] PK={row.get('pk_values') or {}} RESULT={row.get('compare_result') or ''}",
                     "[ASIS_CONCAT]",
                     str(row.get("asis_concat") or ""),
                     "[TOBE_CONCAT]",
