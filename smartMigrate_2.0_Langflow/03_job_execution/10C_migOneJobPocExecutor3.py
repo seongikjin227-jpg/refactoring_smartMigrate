@@ -551,7 +551,7 @@ class NewType10CMigOneJobPocExecutor3(Component):
             }
 
     def _node_verify_records(self, context: dict[str, Any]) -> dict[str, Any]:
-        """Compare count-verified rows by target PK without row-order or payload concat."""
+        """Compare count-verified rows by target PK without row-order matching."""
         migration_sql = str(
             context.get("saved_migration_sql")
             or context.get("current_migration_sql")
@@ -574,7 +574,6 @@ class NewType10CMigOneJobPocExecutor3(Component):
                 dict(context.get("db_config") or {}),
                 comparison_sql,
                 pk_columns,
-                compare_columns,
             )
             result["compared_columns"] = compare_columns
             result["pk_columns"] = pk_columns
@@ -605,7 +604,7 @@ class NewType10CMigOneJobPocExecutor3(Component):
             }
 
     def _build_pk_compare_sql(self, migration_sql: str, verification_sql: str, context: dict[str, Any]) -> tuple[str, list[str], list[str]]:
-        """Build Verify2 from MIG/VERIFY parsing, matching rows only by target PK."""
+        """Keep Executor2 concat comparison and replace only row-order pairing with PK pairing."""
         _, target_count_sql = self._extract_count_verify_datasets(verification_sql)
         compare_columns = self._count_verify_target_columns(target_count_sql)
         if not compare_columns:
@@ -617,49 +616,71 @@ class NewType10CMigOneJobPocExecutor3(Component):
         if missing:
             raise ValueError(f"PK_VERIFY target columns are absent from MIG_SQL INSERT list: {missing}")
 
+        type_by_column = {
+            self._clean_identifier(str(item.get("column_name") or "")): str(item.get("data_type") or "").upper()
+            for item in context.get("target_ddl") or []
+            if str(item.get("column_name") or "").strip()
+        }
+        ddl_missing = [column for column in compare_columns if column not in type_by_column]
+        if ddl_missing:
+            raise ValueError(f"PK_VERIFY target DDL types are unavailable: {ddl_missing}")
+
         target_from_clause = self._select_from_clause(target_count_sql)
         target_alias = self._target_from_alias(target_from_clause)
         source_from_clause = self._migration_source_from_clause(migration_sql)
-        asis_projection = ",\n                       ".join(
-            f"{migration_expressions[column]} AS {column}" for column in required_columns
+        asis_pk_projection = ",\n               ".join(
+            f"{migration_expressions[column]} AS {column}" for column in pk_columns
         )
-        tobe_projection = ",\n                       ".join(
-            f"{target_alias + '.' if target_alias else ''}{column} AS {column}" for column in required_columns
+        tobe_pk_projection = ",\n               ".join(
+            f"{target_alias + '.' if target_alias else ''}{column} AS {column}" for column in pk_columns
+        )
+        asis_concat = self._row_concat_sql(
+            [(column, migration_expressions[column], type_by_column[column]) for column in compare_columns]
+        )
+        tobe_concat = self._row_concat_sql(
+            [
+                (column, f"{target_alias}.{column}" if target_alias else column, type_by_column[column])
+                for column in compare_columns
+            ]
         )
         pk_join = "\n   AND ".join(
-            f"(A.{column} = T.{column} OR (A.{column} IS NULL AND T.{column} IS NULL))" for column in pk_columns
+            f"A.{column} = T.{column}" for column in pk_columns
         )
-        value_compare_columns = [column for column in compare_columns if column not in pk_columns]
-        value_match = "\n           AND ".join(
-            f"(A.{column} = T.{column} OR (A.{column} IS NULL AND T.{column} IS NULL))" for column in value_compare_columns
-        ) or "1 = 1"
         pk_projection = ",\n       ".join(
             f"COALESCE(A.{column}, T.{column}) AS {column}" for column in pk_columns
         )
-        diagnostic_projection = ",\n       ".join(
-            [
-                *(f"A.{column} AS ASIS_VALUE_{index}" for index, column in enumerate(compare_columns, start=1)),
-                *(f"T.{column} AS TOBE_VALUE_{index}" for index, column in enumerate(compare_columns, start=1)),
-            ]
-        )
-        presence_column = pk_columns[0]
         sql = f"""SELECT {pk_projection},
-       CASE
-           WHEN A.{presence_column} IS NULL OR T.{presence_column} IS NULL THEN 'MISMATCH'
-           WHEN {value_match} THEN 'MATCH'
-           ELSE 'MISMATCH'
-       END AS COMPARE_RESULT,
-       {diagnostic_projection}
+       CASE WHEN A.ROW_CONCAT = T.ROW_CONCAT THEN 'MATCH' ELSE 'MISMATCH' END AS COMPARE_RESULT,
+       A.ROW_CONCAT AS ASIS_CONCAT,
+       T.ROW_CONCAT AS TOBE_CONCAT
   FROM (
-        SELECT {asis_projection}
+        SELECT {asis_pk_projection},
+               {asis_concat} AS ROW_CONCAT
         {source_from_clause}
        ) A
   FULL OUTER JOIN (
-        SELECT {tobe_projection}
+        SELECT {tobe_pk_projection},
+               {tobe_concat} AS ROW_CONCAT
         {target_from_clause}
        ) T
     ON {pk_join}"""
         return sql, compare_columns, pk_columns
+
+    def _row_concat_sql(self, columns: list[tuple[str, str, str]]) -> str:
+        parts = [self._row_concat_value_sql(expression, data_type) for _, expression, data_type in columns]
+        return " || '|' || ".join(parts)
+
+    def _row_concat_value_sql(self, expression: str, data_type: str) -> str:
+        value_sql = self._normalized_compare_value_sql(expression, data_type)
+        return f"NVL(({value_sql}) || '', '<NULL>')"
+
+    def _normalized_compare_value_sql(self, expression: str, data_type: str) -> str:
+        """Keep target-typed values intact; RAW is converted only for display concat."""
+        expr = f"({expression})"
+        normalized_type = re.sub(r"\s+", " ", str(data_type or "").upper()).strip()
+        if normalized_type.startswith("RAW"):
+            return f"RAWTOHEX(CAST({expr} AS RAW(2000)))"
+        return expr
 
     def _extract_count_verify_datasets(self, verification_sql: str) -> tuple[str, str]:
         """Extract the two inline SELECTs from ``FROM (SELECT ...) S, (SELECT ...) T``."""
@@ -812,9 +833,8 @@ class NewType10CMigOneJobPocExecutor3(Component):
         db_config: dict[str, Any],
         comparison_sql: str,
         pk_columns: list[str],
-        compare_columns: list[str],
     ) -> dict[str, Any]:
-        """Run PK comparison and retain paired values for diagnostic log samples."""
+        """Run PK comparison and retain paired concat values for log samples."""
         mismatch_samples: list[dict[str, Any]] = []
         match_samples: list[dict[str, Any]] = []
         mismatch_count = 0
@@ -827,16 +847,16 @@ class NewType10CMigOneJobPocExecutor3(Component):
                 pk_value_count = len(pk_columns)
                 pk_values = db_row[:pk_value_count]
                 compare_result = db_row[pk_value_count]
-                asis_values = db_row[pk_value_count + 1:pk_value_count + 1 + len(compare_columns)]
-                tobe_values = db_row[pk_value_count + 1 + len(compare_columns):]
+                asis_concat = db_row[pk_value_count + 1]
+                tobe_concat = db_row[pk_value_count + 2]
                 row = {
                     "pk_values": {
                         column: self._record_log_value(value)
                         for column, value in zip(pk_columns, pk_values, strict=True)
                     },
                     "compare_result": str(compare_result or ""),
-                    "asis_values": self._diagnostic_concat(asis_values),
-                    "tobe_values": self._diagnostic_concat(tobe_values),
+                    "asis_concat": self._record_log_value(asis_concat),
+                    "tobe_concat": self._record_log_value(tobe_concat),
                 }
                 if row["compare_result"] == "MISMATCH":
                     mismatch_count += 1
@@ -853,20 +873,6 @@ class NewType10CMigOneJobPocExecutor3(Component):
             "summary": f"PK verification compared={compared_rows}, mismatched={mismatch_count}",
             "rows": samples,
         }
-
-    def _diagnostic_concat(self, values: tuple[Any, ...]) -> str:
-        """Make a log-only value list; SQL itself keeps native column types."""
-        rendered: list[str] = []
-        for value in values:
-            if value is None:
-                rendered.append("<NULL>")
-                continue
-            safe_value = self._record_log_value(value)
-            if isinstance(safe_value, (dict, list)):
-                rendered.append(self._json_dump(safe_value))
-            else:
-                rendered.append(str(safe_value))
-        return " | ".join(rendered)
 
     def _record_log_value(self, value: Any) -> Any:
         value = value.read() if hasattr(value, "read") else value
@@ -1457,10 +1463,10 @@ class NewType10CMigOneJobPocExecutor3(Component):
                 [
                     "",
                     f"[CASE {index}] PK={row.get('pk_values') or {}} RESULT={row.get('compare_result') or ''}",
-                    "[ASIS_VALUES]",
-                    str(row.get("asis_values") or ""),
-                    "[TOBE_VALUES]",
-                    str(row.get("tobe_values") or ""),
+                    "[ASIS_CONCAT]",
+                    str(row.get("asis_concat") or ""),
+                    "[TOBE_CONCAT]",
+                    str(row.get("tobe_concat") or ""),
                 ]
             )
         if not result:
