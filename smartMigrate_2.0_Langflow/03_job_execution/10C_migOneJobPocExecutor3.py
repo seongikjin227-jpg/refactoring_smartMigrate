@@ -621,7 +621,7 @@ class NewType10CMigOneJobPocExecutor3(Component):
             for item in context.get("target_ddl") or []
             if str(item.get("column_name") or "").strip()
         }
-        ddl_missing = [column for column in compare_columns if column not in type_by_column]
+        ddl_missing = [column for column in required_columns if column not in type_by_column]
         if ddl_missing:
             raise ValueError(f"PK_VERIFY target DDL types are unavailable: {ddl_missing}")
 
@@ -643,23 +643,39 @@ class NewType10CMigOneJobPocExecutor3(Component):
                 for column in compare_columns
             ]
         )
+        asis_pk_concat = self._row_concat_sql(
+            [(column, f"A.{column}", type_by_column[column]) for column in pk_columns]
+        )
+        tobe_pk_concat = self._row_concat_sql(
+            [(column, f"T.{column}", type_by_column[column]) for column in pk_columns]
+        )
         pk_join = "\n   AND ".join(
             f"A.{column} = T.{column}" for column in pk_columns
         )
         pk_projection = ",\n       ".join(
             f"COALESCE(A.{column}, T.{column}) AS {column}" for column in pk_columns
         )
-        sql = f"""SELECT {pk_projection},
+        pk_presence_column = pk_columns[0]
+        sql = f"""SELECT
+       {pk_projection},
+       CASE
+           WHEN A.{pk_presence_column} IS NULL OR T.{pk_presence_column} IS NULL THEN 'MISMATCH'
+           ELSE 'MATCH'
+       END AS PK_COMPARE_RESULT,
+       {asis_pk_concat} AS ASIS_PK,
+       {tobe_pk_concat} AS TOBE_PK,
        CASE WHEN A.ROW_CONCAT = T.ROW_CONCAT THEN 'MATCH' ELSE 'MISMATCH' END AS COMPARE_RESULT,
        A.ROW_CONCAT AS ASIS_CONCAT,
        T.ROW_CONCAT AS TOBE_CONCAT
   FROM (
-        SELECT {asis_pk_projection},
+        SELECT
+               {asis_pk_projection},
                {asis_concat} AS ROW_CONCAT
         {source_from_clause}
        ) A
   FULL OUTER JOIN (
-        SELECT {tobe_pk_projection},
+        SELECT
+               {tobe_pk_projection},
                {tobe_concat} AS ROW_CONCAT
         {target_from_clause}
        ) T
@@ -675,9 +691,15 @@ class NewType10CMigOneJobPocExecutor3(Component):
         return f"NVL(({value_sql}) || '', '<NULL>')"
 
     def _normalized_compare_value_sql(self, expression: str, data_type: str) -> str:
-        """Keep target-typed values intact; RAW is converted only for display concat."""
+        """Normalize only types whose implicit concat representation is unstable."""
         expr = f"({expression})"
         normalized_type = re.sub(r"\s+", " ", str(data_type or "").upper()).strip()
+        if normalized_type == "DATE":
+            # Oracle's implicit DATE-to-character conversion follows the
+            # session NLS_DATE_FORMAT and can omit the time portion.  Both
+            # sides must use an explicit, identical representation because
+            # ROW_CONCAT is the actual value-comparison key in Executor3.
+            return f"TO_CHAR(CAST({expr} AS DATE), 'YYYY-MM-DD HH24:MI:SS')"
         if normalized_type.startswith("RAW"):
             return f"RAWTOHEX(CAST({expr} AS RAW(2000)))"
         return expr
@@ -846,14 +868,20 @@ class NewType10CMigOneJobPocExecutor3(Component):
                 compared_rows += 1
                 pk_value_count = len(pk_columns)
                 pk_values = db_row[:pk_value_count]
-                compare_result = db_row[pk_value_count]
-                asis_concat = db_row[pk_value_count + 1]
-                tobe_concat = db_row[pk_value_count + 2]
+                pk_compare_result = db_row[pk_value_count]
+                asis_pk = db_row[pk_value_count + 1]
+                tobe_pk = db_row[pk_value_count + 2]
+                compare_result = db_row[pk_value_count + 3]
+                asis_concat = db_row[pk_value_count + 4]
+                tobe_concat = db_row[pk_value_count + 5]
                 row = {
                     "pk_values": {
                         column: self._record_log_value(value)
                         for column, value in zip(pk_columns, pk_values, strict=True)
                     },
+                    "pk_compare_result": str(pk_compare_result or ""),
+                    "asis_pk": self._record_log_value(asis_pk),
+                    "tobe_pk": self._record_log_value(tobe_pk),
                     "compare_result": str(compare_result or ""),
                     "asis_concat": self._record_log_value(asis_concat),
                     "tobe_concat": self._record_log_value(tobe_concat),
@@ -1462,7 +1490,11 @@ class NewType10CMigOneJobPocExecutor3(Component):
             parts.extend(
                 [
                     "",
-                    f"[CASE {index}] PK={row.get('pk_values') or {}} RESULT={row.get('compare_result') or ''}",
+                    f"[CASE {index}] PK={row.get('pk_values') or {}} PK_RESULT={row.get('pk_compare_result') or ''} RESULT={row.get('compare_result') or ''}",
+                    "[ASIS_PK]",
+                    str(row.get("asis_pk") or ""),
+                    "[TOBE_PK]",
+                    str(row.get("tobe_pk") or ""),
                     "[ASIS_CONCAT]",
                     str(row.get("asis_concat") or ""),
                     "[TOBE_CONCAT]",
