@@ -316,11 +316,13 @@ class NewType10CMigOneJobPocExecutor2(Component):
 
                 elapsed = int(time.perf_counter() - started)
                 if final_ok:
-                    # 4. 최종 PASS를 저장하고 migration 성공을 증명한 검증 SQL을 로그에 남긴다.
+                    # 4. 최종 PASS는 상태 결과만 남긴다. 생성 SQL 전문은
+                    # GENERATE_SQL 단계 로그와 NEXT_MIG_INFO의 SQL 컬럼에 이미
+                    # 보관되므로 성공 로그에 중복 저장하지 않는다.
                     self._update_job(db_config, map_id, "PASS", elapsed, retry_count)
                     logger.info(
                         message,
-                        extra={"workflow_log": [map_id, "DB_MIGRATION", "VERIFY_SQL", "INFO", "VERIFY", "PASS", retry_count, graph_result.get("verification_sql", "")]},
+                        extra={"workflow_log": [map_id, "DB_MIGRATION", "MIGRATION_SUCCESS", "INFO", "FINAL", "PASS", retry_count, ""]},
                     )
                 else:
                     # 4. 재시도를 모두 소진하면 최종 실패 상태와 실패 SQL을 함께 저장한다.
@@ -2227,7 +2229,10 @@ class NewType10CMigOneJobPocExecutor2(Component):
 
     # migration 결과에 포함할 generated_sqls 목록을 표준 구조로 만든다.
     def _generated_sql_list(self, existing: Any, map_id: Any, migration_sql: Any, verification_sql: Any, generated_columns: list[str]) -> list[dict[str, Any]]:
-        result = [dict(item) for item in existing or [] if isinstance(item, dict)]
+        # This list is an attempt-scoped handoff to 17C, not a cumulative
+        # history.  In particular, FAIL-TEST2 must not reformat MIG_SQL or
+        # VERIFY_SQL generated during an older attempt.
+        result: list[dict[str, Any]] = []
         for column, value in (("MIG_SQL", migration_sql), ("VERIFY_SQL", verification_sql)):
             if column in {str(item).upper() for item in generated_columns} and str(value or "").strip():
                 result.append(

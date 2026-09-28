@@ -86,6 +86,24 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             payload = self._parse_payload(getattr(self, "job_item", ""))
             self._log_run_job(payload, job, status="START", message="before run_job")
             prior_failure = self._prior_failure_status(payload)
+            is_single_sql_formatting = self._job_name(payload) == "formatting"
+            # Batch formatting is allowed only through the explicit upstream
+            # contract.  Do not infer old MIG_SQL/VERIFY_SQL rows when the
+            # producer omitted the list.
+            if not is_single_sql_formatting and "generated_sql_list" not in payload:
+                message = "generated_sql_list is missing; skipped SQL formatting without DB fallback."
+                self._log_run_job(payload, job, status="MISSING_GENERATED_SQL_LIST", message=message, log_level="ERROR", require_identity=False)
+                result = self._skip_batch_formatting(payload, job, started, prior_failure, "MISSING_GENERATED_SQL_LIST", message)
+                self.status = result
+                self._log_run_job(payload, job, status="END", message="after run_job", require_identity=False)
+                return Data(data=result)
+            if not is_single_sql_formatting and not isinstance(payload.get("generated_sql_list"), list):
+                message = "generated_sql_list must be a list; skipped SQL formatting without DB fallback."
+                self._log_run_job(payload, job, status="INVALID_GENERATED_SQL_LIST", message=message, log_level="ERROR", require_identity=False)
+                result = self._skip_batch_formatting(payload, job, started, prior_failure, "INVALID_GENERATED_SQL_LIST", message)
+                self.status = result
+                self._log_run_job(payload, job, status="END", message="after run_job", require_identity=False)
+                return Data(data=result)
             generated_sql_list = self._formatting_candidates(payload)
             payload["generated_sql_list"] = generated_sql_list
             if generated_sql_list:
@@ -100,7 +118,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                 self.status = result
                 self._log_run_job(payload, job, status="END", message="after run_job")
                 return Data(data=result)
-            if self._job_name(payload) == "formatting":
+            if is_single_sql_formatting:
                 db_config = self._db_config(payload)
                 self._require_db_config(db_config)
                 job = self._load_sql_job(db_config, payload)
@@ -108,7 +126,16 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                 self.status = result
                 self._log_run_job(payload, job, status="END", message="after run_job")
                 return Data(data=result)
-            result = self._run_batch_formatting(payload, {}, started)
+            no_target_message = "No generated SQL items for formatting; skipped SQL formatting."
+            self._log_run_job(payload, job, status="NO_FORMATTING_TARGETS", message=no_target_message, require_identity=False)
+            result = self._skip_batch_formatting(
+                payload,
+                job,
+                started,
+                prior_failure,
+                "NO_FORMATTING_TARGETS",
+                no_target_message,
+            )
             self.status = result
             self._log_run_job(payload, job, status="END", message="after run_job")
             return Data(data=result)
@@ -240,18 +267,8 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
     # generated_sqls에서 formatting 대상 SQL 항목을 골라 table/column/item 정보를 표준화한다.
     def _formatting_candidates(self, payload: dict[str, Any]) -> list[dict[str, Any]]:
         raw = payload.get("generated_sql_list")
-        if isinstance(raw, list) and raw:
+        if isinstance(raw, list):
             return list(raw)
-        route = str(payload.get("planned_job_route") or payload.get("job_route") or "").strip().upper()
-        job_name = self._job_name(payload)
-        if route == "MIG" or job_name == "migration":
-            map_id = payload.get("map_id") or payload.get("key_value")
-            if self._is_blank_log_value(map_id):
-                return []
-            return [
-                {"table": "NEXT_MIG_INFO", "key_column": "MAP_ID", "key_value": map_id, "column": "MIG_SQL"},
-                {"table": "NEXT_MIG_INFO", "key_column": "MAP_ID", "key_value": map_id, "column": "VERIFY_SQL"},
-            ]
         return []
 
     # 단독 SQL Formatting 실행에서 최종 tuned SQL을 FORMATTED_SQL로 저장한다.
@@ -644,6 +661,34 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             attempts=[],
             message=message,
             extra={"formatting_skipped": True, "next_node": self._dashboard_node(payload)},
+        )
+
+    # Batch upstream이 전달한 생성 SQL 목록이 비었거나 계약이 깨졌을 때,
+    # DB 컬럼을 추측하지 않고 formatting만 건너뛴다.
+    def _skip_batch_formatting(
+        self,
+        payload: dict[str, Any],
+        job: dict[str, Any],
+        started: float,
+        prior_failure: str,
+        formatting_status: str,
+        message: str,
+    ) -> dict[str, Any]:
+        status = prior_failure or "PASS"
+        return self._result(
+            payload=payload,
+            job=job,
+            ok=not bool(prior_failure),
+            status=status,
+            elapsed=time.perf_counter() - started,
+            attempts=[],
+            message=message,
+            extra={
+                "formatting_skipped": True,
+                "formatting_status": formatting_status,
+                "formatting_contract_error": formatting_status != "NO_FORMATTING_TARGETS",
+                "next_node": self._dashboard_node(payload),
+            },
         )
 
     # 현재 item이 17C 담당이 아닐 때 원본 payload를 유지한 채 넘긴다. 10C/12C/15C와 같은 패턴이다.
