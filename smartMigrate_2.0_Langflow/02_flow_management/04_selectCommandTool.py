@@ -161,11 +161,7 @@ class NewType04SelectCommandTool(Component):
         )
         logs = self._query_logs(
             {
-                # Exact MAP_ID allows the (MAP_ID, LOG_ID DESC) index to serve
-                # the failure-analysis log lookup.  map_id_like remains for
-                # deliberate partial-search requests only.
-                "map_id": map_id,
-                "map_id_like": command.get("map_id_like"),
+                "map_id_like": str(command.get("map_id_like") or f"%{map_id}%"),
                 "fail_only": bool(command.get("fail_only", False)),
                 "limit": limit,
             }
@@ -292,25 +288,7 @@ class NewType04SelectCommandTool(Component):
         if log_id:
             conditions.append("TO_CHAR(LOG_ID) = :log_id")
             params["log_id"] = log_id
-        if command.get("map_id") not in (None, ""):
-            raw_map_id = str(command.get("map_id")).strip()
-            if column_types.get("MAP_ID") in {"NUMBER", "FLOAT", "BINARY_FLOAT", "BINARY_DOUBLE", "DECIMAL"}:
-                conditions.append("MAP_ID = TO_NUMBER(:map_id_exact)")
-                params["map_id_exact"] = raw_map_id
-            else:
-                values = [raw_map_id]
-                if raw_map_id.endswith(".0"):
-                    values.append(raw_map_id[:-2])
-                elif re.fullmatch(r"[+-]?\d+", raw_map_id):
-                    values.append(f"{raw_map_id}.0")
-                values = list(dict.fromkeys(values))
-                placeholders = []
-                for index, value in enumerate(values):
-                    key = f"map_id_exact_{index}"
-                    placeholders.append(f":{key}")
-                    params[key] = value
-                conditions.append(f"MAP_ID IN ({', '.join(placeholders)})")
-        elif command.get("map_id_like"):
+        if command.get("map_id_like"):
             conditions.append("TO_CHAR(MAP_ID) LIKE :map_id_like")
             params["map_id_like"] = str(command.get("map_id_like")).strip()
         if command.get("mig_kind"):

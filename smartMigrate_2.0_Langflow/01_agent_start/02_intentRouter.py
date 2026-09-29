@@ -72,7 +72,7 @@ class NewType02IntentRouter(Component):
             # route가 추가되면 output 정의와 next_node 매핑도 함께 늘려야 한다.
             next_node = {
                 "GENERAL_CHAT": "03_llmResponse",
-                "MANAGEMENT": "04_managementAgent",
+                "MANAGEMENT": "04_managementRouter",
                 "JOB_EXECUTION": "06_getRemainingJobs",
             }.get(route, "03_llmResponse")
 
