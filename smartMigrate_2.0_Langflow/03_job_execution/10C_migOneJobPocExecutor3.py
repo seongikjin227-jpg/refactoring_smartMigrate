@@ -256,14 +256,24 @@ class NewType10CMigOneJobPocExecutor3(Component):
                 if dep_status != "READY":
                     elapsed = int(time.perf_counter() - started)
                     if self._is_dependency_failure_status(dep_status):
-                        status = "SKIP-PRIOR-FAIL"
-                        self._update_job(db_config, map_id, status, elapsed, 0)
+                        preserve_failed_status = current_status.startswith("FAIL")
+                        status = current_status if preserve_failed_status else ""
+                        retry_count = 3
+                        self._update_job(
+                            db_config,
+                            map_id,
+                            status,
+                            elapsed,
+                            retry_count,
+                            preserve_status=not preserve_failed_status,
+                        )
                         logger.warning(
-                            f"prior_map_id={job.get('prior_map_id')} status={dep_status}",
-                            extra={"workflow_log": [map_id, "DB_MIGRATION", "JOB_SKIP", "WARN", "DEP_CHECK", status, 0]},
+                            f"prior_map_id={job.get('prior_map_id')} status={dep_status}; "
+                            f"preserved_status={status}; retry disabled={preserve_failed_status}",
+                            extra={"workflow_log": [map_id, "DB_MIGRATION", "JOB_SKIP", "WARN", "DEP_CHECK", status, retry_count]},
                         )
                         result = self._result(job, ok=False, status=status, elapsed=elapsed, attempts=attempts)
-                        result.update({"skipped": True, "db_status_updated": True})
+                        result.update({"skipped": True, "db_status_updated": True, "retry_disabled": preserve_failed_status, "retry_count": retry_count})
                     else:
                         result = self._result(job, ok=False, status="NOT_RUNNABLE", elapsed=elapsed, attempts=attempts)
                         result.update({"not_runnable": True, "db_status_updated": False})
@@ -279,7 +289,7 @@ class NewType10CMigOneJobPocExecutor3(Component):
                     return __log_result
 
                 # 2. 작업을 RUNNING으로 바꾸고 프롬프트 생성에 필요한 DDL/매핑 metadata를 읽는다.
-                self._mark_running(db_config, map_id)
+                self._mark_running(db_config, map_id, current_status)
                 base_context = {
                     "job": job,
                     "map_id": map_id,
@@ -1589,8 +1599,10 @@ FULL OUTER JOIN (
         return value.startswith("FAIL-") or value.startswith("SKIP-")
 
     # migration row를 RUNNING으로 표시하고 실행 시작 상태를 DB에 반영한다.
-    def _mark_running(self, db_config: dict[str, Any], map_id: int) -> None:
-        """NEXT_MIG_INFO의 migration 작업을 RUNNING으로 표시한다."""
+    def _mark_running(self, db_config: dict[str, Any], map_id: int, prior_status: str = "") -> None:
+        """Mark migration running without discarding a persisted FAIL stage."""
+        normalized_prior = str(prior_status or "").strip().upper()
+        running_status = f"RUNNING-{normalized_prior}" if normalized_prior.startswith("FAIL") else "RUNNING"
         table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
         with self._connect(db_config) as conn:
             cur = conn.cursor()
@@ -1602,16 +1614,29 @@ FULL OUTER JOIN (
                        UPD_TS = CURRENT_TIMESTAMP
                  WHERE MAP_ID = :2
                 """,
-                ["RUNNING", map_id],
+                [running_status, map_id],
             )
             conn.commit()
 
     # migration 최종 상태, 소요 시간, retry count를 NEXT_MIG_INFO에 저장한다.
-    def _update_job(self, db_config: dict[str, Any], map_id: int, status: str, elapsed: int, retry_count: int) -> None:
+    def _update_job(self, db_config: dict[str, Any], map_id: int, status: str, elapsed: int, retry_count: int, *, preserve_status: bool = False) -> None:
         """현재 작업 status, elapsed time, retry count를 저장한다."""
         table = self._qualify("NEXT_MIG_INFO", db_config.get("system_schema"))
         with self._connect(db_config) as conn:
             cur = conn.cursor()
+            if preserve_status:
+                cur.execute(
+                    f"""
+                    UPDATE {table}
+                       SET ELAPSED_SECONDS = :1,
+                           RETRY_COUNT = :2,
+                           UPD_TS = CURRENT_TIMESTAMP
+                     WHERE MAP_ID = :3
+                    """,
+                    [elapsed, retry_count, map_id],
+                )
+                conn.commit()
+                return
             cur.execute(
                 f"""
                 UPDATE {table}
