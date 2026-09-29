@@ -58,9 +58,10 @@ smartMigrate_2.0_Langflow/
     03_llmResponsePrompt.md
 
   02_flow_management/
-    04_managementRouter.py
     04_dashboard.py
     04_currentProgress.py
+    04_dashboardCommandTool.py
+    04_currentProgressCommandTool.py
     04_managementAgentPrompt.md
     04_selectCommandTool.py
     04_updateCommandTool.py

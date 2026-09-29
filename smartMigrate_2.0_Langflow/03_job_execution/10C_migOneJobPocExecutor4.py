@@ -88,7 +88,6 @@ MIGRATION_PROMPT_TEMPLATE: dict[str, str] = {
 """,
     "verification_append": """
 [Verification SQL requirements - append mode]
-- Exclude the four standard audit fields (registered/created timestamp, registered/created by, modified/updated timestamp, modified/updated by) from every COUNT(column) comparison. Infer their physical names from the supplied DDL.
 - target table에는 이전 job이 insert한 row가 이미 있을 수 있습니다.
 - 전체 target table count를 source count와 비교하지 마십시오.
 - current source scope에 대한 EXISTS 조건으로 target side를 필터링하여 이 job이 insert한 row만 검증하십시오.
@@ -119,7 +118,6 @@ MIGRATION_PROMPT_TEMPLATE: dict[str, str] = {
 - 단일 결과 row의 모든 DIFF_* 컬럼이 0일 때만 verification이 통과합니다.""",
     "verification_regular": """
 [Verification SQL requirements]
-- Exclude the four standard audit fields (registered/created timestamp, registered/created by, modified/updated timestamp, modified/updated by) from every COUNT(column) comparison. Infer their physical names from the supplied DDL.
 - UNION ALL 없이 SELECT 문 하나만 사용하십시오.
 - source와 target 사이의 total row count 및 mapped non-null column count를 비교하십시오.
 - 제공된 DDL로 data type을 판단하십시오.
@@ -173,11 +171,11 @@ FAIL_TEST2 = "FAIL-TEST2"
 AUTO_SELECTION_RETRY_LIMIT = 2
 
 
-class NewType10CMigOneJobPocExecutor3(Component):
+class NewType10CMigOneJobPocExecutor4(Component):
 
-    display_name = "10C MIG One Job Executor 3 (PK Verify)"
-    description = "Runs one DB Migration job with count verification followed by primary-key-based column comparison."
-    name = "NewType10CMigOneJobPocExecutor3"
+    display_name = "10C MIG One Job Executor 4 (Private LLM Experiment)"
+    description = "Executor 3 clone using only a direct private OpenAI-compatible LLM endpoint."
+    name = "NewType10CMigOneJobPocExecutor4"
     icon = "DatabaseZap"
 
     inputs = [
@@ -185,13 +183,12 @@ class NewType10CMigOneJobPocExecutor3(Component):
         IntInput(name="max_retry", display_name="Max Retry", value=2, required=False),
         StrInput(name="source_schema", display_name="Source Schema", required=False),
         StrInput(name="target_schema", display_name="Target Schema", required=False),
-        StrInput(name="llm_base_url", display_name="LLM Base URL", required=False),
-        SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=False),
-        StrInput(name="llm_provider", display_name="LLM Provider", required=False),
-        StrInput(name="llm_model", display_name="LLM Model", value="GLM-5.1", required=False),
-        StrInput(name="llm_fallback_models", display_name="LLM Fallback Models", value="GLM-5.1,Qwen3.6-35B-A3B,Kimi-K2.5", required=False),
-        IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=4096, required=False),
-        IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=900, required=False),
+        StrInput(name="private_llm_endpoint", display_name="Private LLM Endpoint", required=False),
+        SecretStrInput(name="private_llm_api_key", display_name="Private LLM API Key", required=False),
+        StrInput(name="private_llm_model_name", display_name="Private LLM Model Name", required=False),
+        StrInput(name="private_llm_fallback_models", display_name="Private LLM Fallback Models", required=False),
+        IntInput(name="private_llm_max_tokens", display_name="Private LLM Max Tokens", value=0, required=False),
+        IntInput(name="private_llm_timeout_seconds", display_name="Private LLM Timeout Seconds", value=0, required=False),
         StrInput(name="rag_embed_base_url", display_name="RAG Embedding Base URL", required=False),
         SecretStrInput(name="rag_embed_api_key", display_name="RAG Embedding API Key", required=False),
         StrInput(name="rag_embed_model", display_name="RAG Embedding Model", value="BAAI/bge-m3", required=False),
@@ -526,6 +523,12 @@ class NewType10CMigOneJobPocExecutor3(Component):
     def _node_generate_sql(self, context: dict[str, Any]) -> dict[str, Any]:
         """설정된 LLM으로 migration SQL과 verification SQL을 생성한다."""
         job = context["job"]
+        started = time.monotonic()
+        self._emit_progress(
+            context,
+            "llm_request_started",
+            "Private LLM SQL generation started.",
+        )
         try:
             verify_only = context.get("failure_status") == "FAIL-TEST"
             migration_sql, verification_sql, used_model = self._generate_migration_sqls(context, verify_only=verify_only)
@@ -537,6 +540,12 @@ class NewType10CMigOneJobPocExecutor3(Component):
                 raise ValueError("LLM response did not include migration_sql")
             if not verification_sql:
                 raise ValueError("LLM response did not include verification_sql")
+            self._emit_progress(
+                context,
+                "llm_request_completed",
+                f"Private LLM response received; model={used_model}",
+                elapsed_ms=round((time.monotonic() - started) * 1000),
+            )
             return {
                 "stage": "GENERATE_SQL",
                 "status": "PASS",
@@ -550,6 +559,12 @@ class NewType10CMigOneJobPocExecutor3(Component):
                 },
             }
         except Exception as exc:
+            self._emit_progress(
+                context,
+                "llm_request_failed",
+                f"Private LLM SQL generation failed: {exc}",
+                elapsed_ms=round((time.monotonic() - started) * 1000),
+            )
             return {
                 "stage": "GENERATE_SQL",
                 # The failure status is the stage being retried, rather than
@@ -563,6 +578,33 @@ class NewType10CMigOneJobPocExecutor3(Component):
             }
 
     # 생성된 MIG_SQL을 Oracle에 실행하고 실행 건수 또는 오류를 state에 기록한다.
+    def _emit_progress(
+        self,
+        context: dict[str, Any],
+        event: str,
+        message: str,
+        *,
+        elapsed_ms: int | None = None,
+    ) -> None:
+        """Emit Executor 4 private-LLM progress to a LangGraph custom stream."""
+        payload: dict[str, Any] = {
+            "type": "private_llm_progress",
+            "event": event,
+            "map_id": context.get("map_id"),
+            "message": message,
+        }
+        if elapsed_ms is not None:
+            payload["elapsed_ms"] = elapsed_ms
+        logging.getLogger("smartmigrate.workflow").info("[executor4] %s", payload)
+        try:
+            from langgraph.config import get_stream_writer
+
+            get_stream_writer()(payload)
+        except Exception:
+            # graph.invoke() has no custom-stream consumer; telemetry must not
+            # affect the migration itself.
+            pass
+
     def _node_execute_sql(self, context: dict[str, Any]) -> dict[str, Any]:
         """Oracle target truncate와 migration SQL 실행을 수행한다."""
         db_config = dict(context.get("db_config") or {})
@@ -727,7 +769,7 @@ FROM (
         AS ROW_CONCAT
     {source_scope}
 ) A
-LEFT JOIN (
+FULL OUTER JOIN (
     SELECT
         {tobe_pk_projection},
         {tobe_concat}
@@ -751,18 +793,11 @@ LEFT JOIN (
 
     def _row_concat_value_sql(self, expression: str, data_type: str) -> str:
         value_sql = self._normalized_compare_value_sql(expression, data_type)
-        return f"NVL({value_sql} || '', '<NULL>')"
+        return f"NVL(({value_sql}) || '', '<NULL>')"
 
     def _normalized_compare_value_sql(self, expression: str, data_type: str) -> str:
         """Normalize only types whose implicit concat representation is unstable."""
-        raw_expression = str(expression or "").strip()
-        # Bare column references need no grouping parentheses. Keep grouping
-        # only for compound expressions so concatenation precedence is stable.
-        simple_column = re.fullmatch(
-            r'(?:(?:[A-Za-z_][A-Za-z0-9_$#]*|"[^"]+")\.)?(?:[A-Za-z_][A-Za-z0-9_$#]*|"[^"]+")',
-            raw_expression,
-        )
-        expr = raw_expression if simple_column else f"({raw_expression})"
+        expr = f"({expression})"
         normalized_type = re.sub(r"\s+", " ", str(data_type or "").upper()).strip()
         if normalized_type == "DATE":
             # Oracle's implicit DATE-to-character conversion follows the
@@ -926,23 +961,22 @@ LEFT JOIN (
         comparison_sql: str,
     ) -> dict[str, Any]:
         """Run PK comparison and retain only aggregate result counts."""
-        match_count = 0
         mismatch_count = 0
+        compared_rows = 0
         with self._connect(db_config) as conn:
             cur = conn.cursor()
             cur.execute(comparison_sql)
             for db_row in cur:
+                compared_rows += 1
                 compare_result, _asis_concat, _tobe_concat = db_row
                 if str(compare_result or "") == "MISMATCH":
                     mismatch_count += 1
-                else:
-                    match_count += 1
         return {
             "ok": mismatch_count == 0,
             "comparison_sql": comparison_sql,
-            "match_count": match_count,
+            "compared_rows": compared_rows,
             "mismatch_count": mismatch_count,
-            "summary": f"MATCH_CNT={match_count}, MISMATCH_CNT={mismatch_count}",
+            "summary": f"PK verification compared={compared_rows}, mismatched={mismatch_count}",
         }
 
     def _record_log_value(self, value: Any) -> Any:
@@ -1527,7 +1561,7 @@ LEFT JOIN (
         return self._stage_sql_from_state(state, str(step.get("status") or ""))
 
     def _record_verify_log_body(self, state: dict[str, Any]) -> str:
-        """Render the PK comparison SQL and aggregate result counts only."""
+        """Render the PK comparison SQL and up to five representative results."""
         comparison_sql = str(state.get("record_projection_sql") or "").strip()
         result = dict(state.get("record_verify_result") or {})
         parts = [
@@ -1537,8 +1571,8 @@ LEFT JOIN (
             "[PK_COMPARE_SUMMARY]",
             f"pk_columns={result.get('pk_columns') or []}",
             f"compared_columns={result.get('compared_columns') or []}",
-            f"MATCH_CNT={result.get('match_count') or 0}",
-            f"MISMATCH_CNT={result.get('mismatch_count') or 0}",
+            f"compared_rows={result.get('compared_rows') or 0}",
+            f"mismatch_count={result.get('mismatch_count') or 0}",
             f"result={result.get('summary') or ''}",
         ]
         if not result:
@@ -2068,13 +2102,13 @@ LEFT JOIN (
     def _call_llm_json(self, *, system_anthropic: str, system_openai: str, prompt: str, config: dict[str, Any] | None = None) -> tuple[str, str]:
         self._load_env_files()
         llm_config = dict(config or {})
-        api_key = str(llm_config.get("llm_api_key") or os.getenv("LLM_API_KEY") or os.getenv("OPEN_API_KEY") or "").strip()
+        api_key = str(llm_config.get("llm_api_key") or "").strip()
         if not api_key:
             raise ValueError("LLM API key is required for DB Migration SQL generation")
-        base_url = str(llm_config.get("llm_base_url") or os.getenv("LLM_BASE_URL") or "").strip() or None
-        model = str(llm_config.get("llm_model") or os.getenv("LLM_MODEL") or "GLM-5.1").strip()
-        max_tokens = self._positive_int(llm_config.get("llm_max_tokens") or os.getenv("LLM_MAX_TOKENS"), 4096)
-        timeout_seconds = self._positive_int(llm_config.get("llm_timeout_seconds") or os.getenv("LLM_TIMEOUT_SECONDS"), 900)
+        base_url = str(llm_config.get("llm_base_url") or "").strip() or None
+        model = str(llm_config.get("llm_model") or "").strip()
+        max_tokens = self._positive_int(llm_config.get("llm_max_tokens"), 4096)
+        timeout_seconds = self._positive_int(llm_config.get("llm_timeout_seconds"), 900)
         provider = self._resolve_llm_provider(llm_config, base_url, model)
         candidates = self._model_candidates(model, llm_config)
         last_error: Exception | None = None
@@ -2179,7 +2213,7 @@ LEFT JOIN (
 
     # base_url/model 힌트로 사용할 LLM provider를 결정한다.
     def _resolve_llm_provider(self, llm_config: dict[str, Any], base_url: str | None, model: str) -> str:
-        provider = str(llm_config.get("llm_provider") or os.getenv("LLM_PROVIDER") or "").strip().lower()
+        provider = str(llm_config.get("llm_provider") or "").strip().lower()
         if provider:
             if provider not in {"anthropic", "openai"}:
                 raise ValueError("LLM_PROVIDER must be either 'anthropic' or 'openai'.")
@@ -2192,11 +2226,7 @@ LEFT JOIN (
 
     # primary model과 fallback model 문자열을 순서 있는 후보 목록으로 만든다.
     def _model_candidates(self, primary_model: str, llm_config: dict[str, Any]) -> list[str]:
-        fallback_raw = str(
-            llm_config.get("llm_fallback_models")
-            or os.getenv("LLM_FALLBACK_MODELS")
-            or "GLM-5.1,Qwen3.6-35B-A3B,Kimi-K2.5"
-        )
+        fallback_raw = str(llm_config.get("llm_fallback_models") or primary_model)
         candidates = [str(primary_model or "").strip()]
         candidates.extend(model.strip() for model in fallback_raw.split(",") if model.strip())
         deduped: list[str] = []
@@ -2449,16 +2479,24 @@ LEFT JOIN (
 
     # payload와 Langflow 입력에서 LLM 호출 설정을 모은다.
     def _llm_config(self, job: dict[str, Any]) -> dict[str, Any]:
-        """Langflow 입력을 우선하고 job payload를 fallback으로 사용해 LLM 설정을 추출한다."""
+        """Resolve only private-LLM configuration; never fall back to llm_* values."""
         item_config = dict(job.get("llm_config") or {})
+        endpoint = str(getattr(self, "private_llm_endpoint", "") or item_config.get("private_llm_endpoint") or os.getenv("PRIVATE_LLM_ENDPOINT") or "").strip()
+        api_key = self._secret_to_str(getattr(self, "private_llm_api_key", None)) or str(item_config.get("private_llm_api_key") or os.getenv("PRIVATE_LLM_API_KEY") or "").strip()
+        model = str(getattr(self, "private_llm_model_name", "") or item_config.get("private_llm_model_name") or os.getenv("PRIVATE_LLM_MODEL_NAME") or "").strip()
+        fallback_models = str(getattr(self, "private_llm_fallback_models", "") or item_config.get("private_llm_fallback_models") or os.getenv("PRIVATE_LLM_FALLBACK_MODELS") or "").strip()
+        max_tokens = self._positive_int(getattr(self, "private_llm_max_tokens", None) or item_config.get("private_llm_max_tokens") or os.getenv("PRIVATE_LLM_MAX_TOKENS"), 4096)
+        timeout_seconds = self._positive_int(getattr(self, "private_llm_timeout_seconds", None) or item_config.get("private_llm_timeout_seconds") or os.getenv("PRIVATE_LLM_TIMEOUT_SECONDS"), 180)
+        if not all((endpoint, api_key, model)):
+            raise ValueError("Executor 4 requires private_llm_endpoint, private_llm_api_key, private_llm_model_name or PRIVATE_LLM_ENDPOINT, PRIVATE_LLM_API_KEY, PRIVATE_LLM_MODEL_NAME.")
         return {
-            "llm_base_url": str(getattr(self, "llm_base_url", "") or item_config.get("llm_base_url") or "").strip(),
-            "llm_api_key": self._secret_to_str(getattr(self, "llm_api_key", None)) or str(item_config.get("llm_api_key") or "").strip(),
-            "llm_provider": str(getattr(self, "llm_provider", "") or item_config.get("llm_provider") or "").strip(),
-            "llm_model": str(getattr(self, "llm_model", "") or item_config.get("llm_model") or "").strip(),
-            "llm_fallback_models": str(getattr(self, "llm_fallback_models", "") or item_config.get("llm_fallback_models") or "").strip(),
-            "llm_max_tokens": self._positive_int(getattr(self, "llm_max_tokens", None) or item_config.get("llm_max_tokens"), 4096),
-            "llm_timeout_seconds": self._positive_int(getattr(self, "llm_timeout_seconds", None) or item_config.get("llm_timeout_seconds"), 900),
+            "llm_base_url": endpoint,
+            "llm_api_key": api_key,
+            "llm_provider": "openai",
+            "llm_model": model,
+            "llm_fallback_models": fallback_models or model,
+            "llm_max_tokens": max_tokens,
+            "llm_timeout_seconds": timeout_seconds,
         }
 
     # ##############################
