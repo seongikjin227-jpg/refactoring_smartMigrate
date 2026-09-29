@@ -176,7 +176,7 @@ class SmartMigrateDBHandler(logging.Handler):
     def _log_level_with_user(self, log_level: Any) -> str:
         """Keep the existing level, prefixed with this request's user ID when present."""
         level = str(log_level or "noLevelName").strip()
-        return f"{self.user_id} / {level}"[:20] if self.user_id else level[:20]
+        return f"{self.user_id or 'ID = NULL'} / {level}"[:20]
 
 
 class NewType00ALogRuntimeStart(Component):

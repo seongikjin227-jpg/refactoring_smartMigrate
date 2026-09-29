@@ -7,6 +7,7 @@ import re
 import time
 import urllib.request
 from contextlib import contextmanager
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -214,6 +215,7 @@ class NewType10CMigOneJobPocExecutor3(Component):
         logger.info("before run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "START", 0]})
         try:
             started = time.perf_counter()
+            started_at = datetime.now().astimezone()
             job = self._parse_payload(getattr(self, "job_item", ""))
             if self._job_name(job) != "migration":
                 result = self._pass_through(job, started, "10C skipped because job_name is not migration.")
@@ -335,15 +337,21 @@ class NewType10CMigOneJobPocExecutor3(Component):
                     # GENERATE_SQL 단계 로그와 NEXT_MIG_INFO의 SQL 컬럼에 이미
                     # 보관되므로 성공 로그에 중복 저장하지 않는다.
                     self._update_job(db_config, map_id, "PASS", elapsed, retry_count)
+                    final_receipt = self._final_result_markdown(
+                        job, map_id, "PASS", started_at, elapsed, retry_count, message
+                    )
                     logger.info(
-                        message,
+                        final_receipt,
                         extra={"workflow_log": [map_id, "DB_MIGRATION", "MIGRATION_SUCCESS", "INFO", "FINAL", "PASS", retry_count, ""]},
                     )
                 else:
                     # 4. 재시도를 모두 소진하면 최종 실패 상태와 실패 SQL을 함께 저장한다.
                     self._update_job(db_config, map_id, final_status, elapsed, retry_count)
+                    final_receipt = self._final_result_markdown(
+                        job, map_id, final_status, started_at, elapsed, retry_count, message
+                    )
                     logger.error(
-                        message,
+                        final_receipt,
                         extra={"workflow_log": [map_id, "DB_MIGRATION", "JOB_FAIL", "ERROR", "FINAL", final_status, retry_count, graph_result.get("stage_sql", "")]},
                     )
 
@@ -383,9 +391,12 @@ class NewType10CMigOneJobPocExecutor3(Component):
                 error_status = str(status_tracker.get("failure_status") or "FAIL-INSERT")
                 try:
                     self._update_job(db_config, map_id, error_status, elapsed, terminal_retry_count)
+                    final_receipt = self._final_result_markdown(
+                        job, map_id, error_status, started_at, elapsed, terminal_retry_count, error_message
+                    )
                     logger.error(
-                        error_message,
-                        extra={"workflow_log": [map_id, "DB_MIGRATION", "JOB_FAIL", "ERROR", "FINAL", final_status, terminal_retry_count, stage_sql]},
+                        final_receipt,
+                        extra={"workflow_log": [map_id, "DB_MIGRATION", "JOB_FAIL", "ERROR", "FINAL", error_status, terminal_retry_count, stage_sql]},
                     )
                 except Exception:
                     logger.warning(
@@ -408,6 +419,37 @@ class NewType10CMigOneJobPocExecutor3(Component):
     # ##############################
 
     # loop payload의 route/job_name 값을 10C가 처리할 migration 작업명으로 정규화한다.
+    def _final_result_markdown(
+        self,
+        job: dict[str, Any],
+        map_id: int,
+        status: str,
+        started_at: datetime,
+        elapsed_seconds: int,
+        retry_count: int,
+        result_message: str,
+    ) -> str:
+        """Create the compact execution receipt stored in NEXT_MIG_LOG.MESSAGE."""
+        requested_at = str(job.get("execution_requested_at") or "not supplied by upstream payload")
+        instruction = str(job.get("execution_request") or "not supplied by upstream payload")
+        completed_at = datetime.now().astimezone().isoformat(timespec="seconds")
+        safe_message = str(result_message or "-").strip()[:1500]
+        return "\n".join(
+            [
+                "# DB Migration execution receipt",
+                f"- MAP_ID: {map_id}",
+                f"- Status: {status}",
+                f"- Instruction: {instruction}",
+                f"- Requested at: {requested_at}",
+                f"- Started at: {started_at.isoformat(timespec='seconds')}",
+                f"- Completed at: {completed_at}",
+                f"- Elapsed seconds: {elapsed_seconds}",
+                f"- Retry count: {retry_count}",
+                "## Result",
+                safe_message,
+            ]
+        )
+
     def _job_name(self, payload: dict[str, Any]) -> str:
         value = str(payload.get("job_name") or "").strip().lower()
         if value:

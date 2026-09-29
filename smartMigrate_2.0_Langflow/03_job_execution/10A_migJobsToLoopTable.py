@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import json
 import re
+from datetime import datetime
 from contextlib import contextmanager
 from typing import Any
 
@@ -48,6 +49,8 @@ class NewType10AMigJobsToLoopTable(Component):
             # 컴포넌트에서 합쳐질 수 있으므로 Loop 투입 전에 한 번 더 제거한다.
             jobs = self._sort_by_dependency(self._dedupe_jobs(self._mig_jobs(payload, db_config)))
             total = len(jobs)
+            execution_request = self._execution_request(payload)
+            execution_requested_at = self._execution_requested_at(payload)
             rows: list[dict[str, Any]] = []
             for index, job in enumerate(jobs, start=1):
                 if job.get("map_id") is None or str(job.get("map_id")).strip() == "":
@@ -63,6 +66,10 @@ class NewType10AMigJobsToLoopTable(Component):
                     "completed_before": index - 1,
                     "db_config": db_config,
                     "history": list(payload.get("history") or []),
+                    # Retain the initiating management request for the final
+                    # per-job execution receipt written by 10C.
+                    "execution_request": execution_request,
+                    "execution_requested_at": execution_requested_at,
                 }
                 rows.append(row)
             status = {
@@ -78,6 +85,23 @@ class NewType10AMigJobsToLoopTable(Component):
         except Exception as exc:
             logging.getLogger("smartmigrate.workflow").error(f"error build_jobs_table: {exc}", extra={"workflow_log": [0, "WORKFLOW", "10A_MIG_JOBS", "ERROR", "BUILD_JOBS_TABLE", "ERROR", 0]})
             raise
+
+    def _execution_request(self, payload: dict[str, Any]) -> str:
+        """Return the resolved chat instruction without inventing one."""
+        return str(
+            payload.get("resolved_user_request")
+            or payload.get("effective_user_request")
+            or payload.get("user_request")
+            or payload.get("original_request")
+            or ""
+        ).strip()
+
+    def _execution_requested_at(self, payload: dict[str, Any]) -> str:
+        """Use an upstream request time when available, otherwise mark queue time."""
+        value = payload.get("execution_requested_at") or payload.get("requested_at") or payload.get("request_timestamp")
+        if value:
+            return str(value).strip()
+        return datetime.now().astimezone().isoformat(timespec="seconds")
 
     # payload 또는 DB에서 이번 loop에 넣을 DB Migration job 목록을 만든다.
     def _mig_jobs(self, payload: dict[str, Any], db_config: dict[str, Any]) -> list[dict[str, Any]]:
