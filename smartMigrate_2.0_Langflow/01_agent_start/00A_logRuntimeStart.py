@@ -39,10 +39,11 @@ class SmartMigrateDBHandler(logging.Handler):
     # logger.info(..., extra={"workflow_log": [...]}) 형태의 payload를 NEXT_MIG_LOG에 적재한다.
 
     # 컴포넌트나 helper 객체의 초기 상태와 설정 값을 준비한다.
-    def __init__(self, db_config: dict[str, Any]):
+    def __init__(self, db_config: dict[str, Any], user_id: str = ""):
         super().__init__(level=logging.DEBUG)
         self.handler_marker = HANDLER_MARKER
         self.db_config = dict(db_config)
+        self.user_id = str(user_id or "").strip()
         self.connection = create_db_connection(db_config)
         self.records: list[dict[str, Any]] = []
         self.insert_error = None
@@ -57,7 +58,7 @@ class SmartMigrateDBHandler(logging.Handler):
             "map_id": str(event.get("map_id") or 0)[:100],
             "mig_kind": str(event.get("mig_kind") or "WORKFLOW")[:100],
             "log_type": str(event.get("log_type") or "")[:20],
-            "log_level": str(event.get("log_level") or "noLevelName")[:20],
+            "log_level": self._log_level_with_user(event.get("log_level")),
             "step_name": str(event.get("step_name") or "")[:50],
             "status": str(event.get("status") or "noStatus")[:20],
             "message": str(event.get("message") or "noMessage")[:4000],
@@ -172,6 +173,11 @@ class SmartMigrateDBHandler(logging.Handler):
         except Exception:
             return default
 
+    def _log_level_with_user(self, log_level: Any) -> str:
+        """Keep the existing level, prefixed with this request's user ID when present."""
+        level = str(log_level or "noLevelName").strip()
+        return f"{self.user_id} / {level}"[:20] if self.user_id else level[:20]
+
 
 class NewType00ALogRuntimeStart(Component):
     display_name = "00A Log Runtime Start"
@@ -191,7 +197,9 @@ class NewType00ALogRuntimeStart(Component):
 
     # Langflow output 진입점에서 입력을 검증하고 이 컴포넌트의 주요 실행 흐름을 시작한다.
     def run(self) -> Message:
-        text = str(getattr(self, "input_text", "") or "")
+        raw_input = getattr(self, "input_text", "")
+        text = str(getattr(raw_input, "text", raw_input) or "")
+        user_id = self._user_id_from_metadata(raw_input)
         logger = logging.getLogger(LOGGER_NAME)
 
         # 같은 Langflow process에서 이전 요청의 handler가 남아 있으면 로그가 중복 insert될 수 있다.
@@ -205,7 +213,7 @@ class NewType00ALogRuntimeStart(Component):
 
         logger.setLevel(logging.DEBUG)
         logger.propagate = False
-        handler = SmartMigrateDBHandler(self._db_config())
+        handler = SmartMigrateDBHandler(self._db_config(), user_id=user_id)
         logger.addHandler(handler)
         logger.info(
             f"CHAT INPUT, MESSAGE : {text}",
@@ -213,6 +221,15 @@ class NewType00ALogRuntimeStart(Component):
         )
         self.status = {"ok": handler.insert_error is None, "db_insert_error": handler.insert_error}
         return Message(text=text)
+
+    def _user_id_from_metadata(self, value: Any) -> str:
+        """Read either supported user-id key from Langflow Message metadata."""
+        metadata = getattr(value, "metadata", None)
+        if metadata is None and isinstance(value, dict):
+            metadata = value.get("metadata")
+        if not isinstance(metadata, dict):
+            return ""
+        return str(metadata.get("user_id") or metadata.get("userId") or "").strip()
 
     # payload와 Langflow 입력에서 Oracle 접속 및 schema 설정을 모은다.
     def _db_config(self) -> dict[str, Any]:
