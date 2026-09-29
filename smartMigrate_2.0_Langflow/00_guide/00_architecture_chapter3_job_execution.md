@@ -43,9 +43,9 @@ flowchart TD
 
 | route | 테이블 | runnable 조건 |
 |---|---|---|
-| `MIG` | `NEXT_MIG_INFO` | `USE_YN='Y'`, `STATUS` is NULL/`FAIL`/`FAIL-*`, and `RETRY_COUNT < 2` |
-| `SQL_CONVERSION` | `NEXT_SQL_INFO` | `STATUS_CONVERSION` is NULL/`FAIL`/`FAIL-*` and `RETRY_COUNT < 2` |
-| `SQL_TUNING` | `NEXT_SQL_INFO` | Conversion PASS, `STATUS_TUNING` is NULL/`FAIL`/`FAIL-*`, and `RETRY_COUNT < 2` |
+| `MIG` | `NEXT_MIG_INFO` | `USE_YN='Y'`, `STATUS` is NULL/`FAIL-*`, and `RETRY_COUNT < 2` |
+| `SQL_CONVERSION` | `NEXT_SQL_INFO` | `STATUS_CONVERSION` is NULL/`FAIL-*` and `RETRY_COUNT < 2` |
+| `SQL_TUNING` | `NEXT_SQL_INFO` | Conversion PASS, `STATUS_TUNING` is NULL/`FAIL-*`, and `RETRY_COUNT < 2` |
 | `SQL_FORMATTING` | `NEXT_SQL_INFO` | `STATUS_TUNING IN ('PASS','PASS-TUNING')` and `FORMATTED_SQL IS NULL OR length=0` |
 
 ### 06 산출 구조

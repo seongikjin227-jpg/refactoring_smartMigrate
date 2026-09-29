@@ -202,6 +202,8 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         to_sql = str(payload.get("to_sql") or job.get("to_sql") or "").strip()
         if not to_sql:
             return self._finish_failure(payload, job, db_config, started, FAIL_TUNED, "TO_SQL is empty")
+        stored_tuned_sql = str(job.get("tuned_to_sql") or payload.get("tuned_to_sql") or "").strip()
+        initial_resume_stage = self._initial_resume_stage(job, stored_tuned_sql)
         state = {
             "payload": payload,
             "job": job,
@@ -214,8 +216,11 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             "max_retry": self._max_retry(),
             "retry_context": str(payload.get("retry_context") or "None"),
             "to_sql": to_sql,
-            "tuned_sql": "",
-            "tuned_result": "",
+            # A persisted FAIL-TEST means tuning generation already completed.
+            # Resume validation from that persisted TUNED_TO_SQL; USER_EDITED is
+            # deliberately not part of this decision.
+            "tuned_sql": stored_tuned_sql if initial_resume_stage == "VALIDATE_TUNED_SQL" else "",
+            "tuned_result": str(job.get("tuned_result") or payload.get("tuned_result") or "").strip() if initial_resume_stage == "VALIDATE_TUNED_SQL" else "",
             "generated_sql_columns": [],
             "tag_kind": str(payload.get("tag_kind") or job.get("tag_kind") or "").strip().upper(),
             "target_table": str(payload.get("target_table") or job.get("target_table") or "").strip(),
@@ -227,6 +232,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             "node_failed": False,
             "tuning_guides": [],
             "matched_rule_ids": [],
+            "resume_stage": initial_resume_stage,
         }
         final_state = self._run_tuning_graph(state)
         result = final_state.get("result")
@@ -430,7 +436,13 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         workflow.add_node("validate_tuned", validate_tuned_node)
         workflow.add_node("retry_prepare", retry_prepare_node)
         workflow.add_node("finalize", finalize_node)
-        workflow.set_entry_point("load_rules")
+        # A separately queued FAIL-TEST is not a new tuning request.  The
+        # previously persisted TUNED_TO_SQL is authoritative, so regenerate
+        # only the tuned validation SQL and execute it.
+        workflow.set_conditional_entry_point(
+            lambda state: "validate_tuned" if state.get("resume_stage") == "VALIDATE_TUNED_SQL" else "load_rules",
+            {"load_rules": "load_rules", "validate_tuned": "validate_tuned"},
+        )
         workflow.add_conditional_edges("load_rules", lambda state: route_after_stage(state) if state.get("node_failed") else "apply_tuning", {"apply_tuning": "apply_tuning", "retry_prepare": "retry_prepare", "finalize": "finalize"})
         workflow.add_conditional_edges("apply_tuning", route_after_stage, {"validate_tuned": "validate_tuned", "retry_prepare": "retry_prepare", "finalize": "finalize"})
         workflow.add_conditional_edges("validate_tuned", route_after_stage, {"validate_tuned": "validate_tuned", "retry_prepare": "retry_prepare", "finalize": "finalize"})
@@ -1030,6 +1042,14 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
     # 로그에 사용할 MAP_ID를 job/payload에서 문자열로 추출한다.
     def _map_id(self, job: dict[str, Any]) -> str:
         return f"{job.get('sql_id') or ''} / {job.get('space_nm') or ''}"[:100]
+
+    # Persisted tuning failure state determines an external re-entry point.
+    # Correct SQL metadata (including USER_EDITED) is intentionally unrelated.
+    def _initial_resume_stage(self, job: dict[str, Any], tuned_sql: str) -> str:
+        status = self._status(job.get("status_tuning"))
+        if status == FAIL_TEST and str(tuned_sql or "").strip():
+            return "VALIDATE_TUNED_SQL"
+        return "APPLY_TUNING_RULES"
 
     # tuning graph에서 허용할 전체 attempt 수를 계산한다.
     def _max_retry(self) -> int:

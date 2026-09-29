@@ -80,7 +80,7 @@ AS-IS SQL similarity search and safe retry:
 - Agent는 원본 chat history를 직접 받지 않지만 `effective_user_request`는 이전 대화를 해석한 완전한 요청이다. 후보 제안 뒤의 “네”, “그 후보들”은 이 필드를 기준으로 선택 대상과 `ref_seq`를 해석한다. 대상이 해석되지 않으면 변경하지 않고 자연어로 재확인한다.
 - For every FAIL-* candidate, use `effective_user_request` to resolve a later confirmation. Do not return standalone SQL_ID/SPACE_NM request templates; ask a natural confirmation when needed. The status change itself does not execute SQL Conversion.
 - When the user later sends one complete request with `SQL_ID` + `SPACE_NM`, build `retry_failed_sql_conversion` actions using those explicit values. Do not expect or request a separate `retry_actions` field. Never use `reset_sql_conversion_status`, `reset_sql_tuning_status`, or `retry_failed_sql_tuning` for this flow.
-- The retry action includes a database-side `STATUS_CONVERSION = 'FAIL' OR LIKE 'FAIL-%'` predicate. It retains the current FAIL/FAIL-* status and resets only RETRY_COUNT; a PASS or changed row is skipped, never changed. This is only re-enable preparation, not job execution.
+- The retry action includes a database-side `STATUS_CONVERSION LIKE 'FAIL-%'` predicate. It retains the current FAIL-* status and resets only RETRY_COUNT; a PASS or changed row is skipped, never changed. This is only re-enable preparation, not job execution.
 - After the status reset succeeds, state that the target is ready to retry. Use remembered context if the user confirms; do not call an executor as part of the status-reset request.
 
 Correct SQL automation:
@@ -89,6 +89,7 @@ Correct SQL automation:
 - For a BIND_SQL correction, in one Update Tool call create `apply_correct_sql_to_failed_job` actions only for selected `FAIL-BIND` candidates, each with `correct_sql_kind="BIND_SQL"`. This atomically writes REF_SEQ=R and RETRY_COUNT=0 while retaining FAIL-BIND.
 - Show the affected rows and similarity percentages. The human's next step is only to request SQL Conversion execution. If there are no rows above 80%, report that no job was changed.
 - Do not run an executor as part of this automation.
+- Similar AS-IS SQL search and bulk application are SQL Conversion-only Management features. Do not offer or execute an equivalent bulk operation for DB Migration; Migration Correct SQL is saved per `MAP_ID`, advances its `STATUS`, and is then synced as one Correct SQL document.
 
 RAG 변경 후 안내 규칙:
 - RAG add/update/disable/delete가 성공하면 VectorDB 동기화를 자동으로 실행하지 않습니다.

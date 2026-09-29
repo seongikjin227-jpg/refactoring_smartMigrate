@@ -72,8 +72,9 @@ smartMigrate_2.0_Langflow/
     08_jobExecutionRouter.py
     10A_migJobsToLoopTable.py
     10B_migLoop.py
-    10C_migOneJobPocExecutor.py
-    10C_migOneJobPocExecutor2.py  # count + record context verification variant
+    10C_migOneJobPocExecutor3.py  # 표준: count + record verification
+    10C_migOneJobPocExecutor.py   # 이전 호환 구현
+    10C_migOneJobPocExecutor2.py  # 이전 record verification 구현
     10D_migIterationDashboard.py
     11_finalDashboard.py
     11B_failureCauseAnalyzer.py
@@ -212,7 +213,7 @@ map_id, mig_kind, log_type, log_level, step_name, status, retry_count, generate_
 | Milvus `SM_CORRECT_SQL_CONVERSION` | 보정된 SQL Conversion 예시 검색 |
 | Milvus `SM_CORRECT_SQL_MIGRATION` | 보정된 Migration SQL 예시 검색 |
 
-`02_flow_management/04_saveVectorDB.py`는 RAG Guide/AS-IS SQL 동기화와 채팅으로 저장된 Correct SQL의 단건 동기화를 담당합니다. Conversion은 `USER_EDITED='Y'`인 요청 행의 지정 단계(`TO_SQL`/`BIND_SQL`/`TEST_SQL`)만 `sync_correct_sql(sql_seq, correct_sql_kind)`으로 upsert하며, Migration은 Correct `MIG_SQL` 또는 `VERIFY_SQL`만 `sync_correct_sql(map_id, correct_sql_kind)`으로 kind별 upsert합니다. 두 흐름 모두 PASS를 요구하지 않으며 `sync_all`은 Correct SQL을 대량 색인하지 않습니다. 컬렉션이 없으면 현재 스키마로 생성하지만, 기존 컬렉션의 schema를 자동 변경·삭제하지는 않습니다. 기존 `SM_CORRECT_SQL_MIGRATION`에 `correct_sql_kind` 또는 신규 schema 필드가 없으면 운영자가 해당 컬렉션을 삭제한 뒤 다음 단건 sync로 재생성해야 합니다.
+`02_flow_management/04_saveVectorDB.py`는 RAG Guide/AS-IS SQL 동기화와 채팅으로 저장된 Correct SQL의 단건 동기화를 담당합니다. Conversion은 `USER_EDITED='Y'`인 요청 행의 지정 단계(`TO_SQL`/`BIND_SQL`/`TEST_SQL`)만 `sync_correct_sql(sql_seq, correct_sql_kind)`으로 upsert하며, Migration은 Correct `MIG_SQL` 또는 `VERIFY_SQL`만 `sync_correct_sql(map_id, correct_sql_kind)`으로 kind별 upsert합니다. Migration Correct `MIG_SQL` 저장은 `STATUS='FAIL-TEST'`로 전이해 Verify부터 재개하고, Correct `VERIFY_SQL` 저장은 `STATUS='PASS'`로 종료한다. 두 흐름 모두 PASS를 요구하지 않으며 `sync_all`은 Correct SQL을 대량 색인하지 않습니다. Management의 유사 AS-IS SQL 검색 및 일괄 반영은 SQL Conversion 전용이며 DB Migration에는 제공하지 않습니다. 컬렉션이 없으면 현재 스키마로 생성하지만, 기존 컬렉션의 schema를 자동 변경·삭제하지는 않습니다. 기존 `SM_CORRECT_SQL_MIGRATION`에 `correct_sql_kind` 또는 신규 schema 필드가 없으면 운영자가 해당 컬렉션을 삭제한 뒤 다음 단건 sync로 재생성해야 합니다.
 
 ## 최소 검증
 
@@ -227,8 +228,7 @@ python -m compileall smartMigrate_2.0_Langflow\01_agent_start smartMigrate_2.0_L
 
 ```powershell
 python -m py_compile `
-  smartMigrate_2.0_Langflow\03_job_execution\10C_migOneJobPocExecutor.py `
-  smartMigrate_2.0_Langflow\03_job_execution\10C_migOneJobPocExecutor2.py `
+  smartMigrate_2.0_Langflow\03_job_execution\10C_migOneJobPocExecutor3.py `
   smartMigrate_2.0_Langflow\03_job_execution\12C_sqlConversionOneJobPocExecutor.py `
   smartMigrate_2.0_Langflow\03_job_execution\15C_sqlTuningOneJobPocExecutor.py `
   smartMigrate_2.0_Langflow\03_job_execution\17C_sqlFormattingOneJobPocExecutor.py `

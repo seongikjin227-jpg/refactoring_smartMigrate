@@ -285,7 +285,7 @@ class NewType04UpdateCommandTool(Component):
         return self._sql_statement(action, sql_id, space_nm, set_sql, params, f"{status_column} retained; RETRY_COUNT reset")
 
     def _sql_retry_failed_statement(self, raw: dict[str, Any], action: str, status_column: str) -> dict[str, Any]:
-        """Reset a SQL status only when its current value is FAIL or FAIL-*.
+        """Reset a SQL status only when its current value is FAIL-*.
 
         The predicate is evaluated at write time, rather than trusting a preceding
         vector search result, so a concurrently completed PASS row is protected.
@@ -295,14 +295,13 @@ class NewType04UpdateCommandTool(Component):
         return {
             "action": action,
             "identity": f"SQL_ID={sql_id}, SPACE_NM={space_nm}",
-            "summary": f"{status_column} retained; RETRY_COUNT reset (only if current status is FAIL or FAIL-*)",
+            "summary": f"{status_column} retained; RETRY_COUNT reset (only if current status is FAIL-*)",
             "sql": (
                 f"UPDATE {self._qualify('NEXT_SQL_INFO')} "
                 "SET RETRY_COUNT = :retry_count "
                 "WHERE UPPER(TRIM(SQL_ID)) = UPPER(TRIM(:sql_id)) "
                 "AND UPPER(TRIM(SPACE_NM)) = UPPER(TRIM(:space_nm)) "
-                f"AND (UPPER(TRIM(NVL({status_column}, ''))) = 'FAIL' "
-                f"OR UPPER(TRIM(NVL({status_column}, ''))) LIKE 'FAIL-%')"
+                f"AND UPPER(TRIM(NVL({status_column}, ''))) LIKE 'FAIL-%'"
             ),
             "params": {"sql_id": sql_id, "space_nm": space_nm, "retry_count": retry_count},
             "skip_when_not_matched": True,

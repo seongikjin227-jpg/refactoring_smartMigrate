@@ -139,9 +139,9 @@
 
 ## 잔여 조건
 
-- MIG 실행 대상: `NEXT_MIG_INFO.USE_YN='Y'`, `STATUS IS NULL` 또는 `STATUS='FAIL'` 또는 `FAIL-*`, `RETRY_COUNT < 2`
-- SQL Conversion 실행 대상: `STATUS_CONVERSION IS NULL` 또는 `STATUS_CONVERSION='FAIL'` 또는 `FAIL-*`, `RETRY_COUNT < 2`
-- SQL Tuning 실행 대상: Conversion PASS이고 `STATUS_TUNING IS NULL` 또는 `STATUS_TUNING='FAIL'` 또는 `FAIL-*`, `RETRY_COUNT < 2`
+- MIG 실행 대상: `NEXT_MIG_INFO.USE_YN='Y'`, `STATUS IS NULL` 또는 `FAIL-*`, `RETRY_COUNT < 2`
+- SQL Conversion 실행 대상: `STATUS_CONVERSION IS NULL` 또는 `FAIL-*`, `RETRY_COUNT < 2`
+- SQL Tuning 실행 대상: Conversion PASS이고 `STATUS_TUNING IS NULL` 또는 `FAIL-*`, `RETRY_COUNT < 2`
 
 `SKIP`, `NA`, `RUNNING`은 실행 대상이 아니다. `NULL`은 신규 실행 대상이며, 실패 행은 Update Command Tool로 상태를 유지한 채 `RETRY_COUNT`를 0으로 변경한 뒤 새 실행 요청을 만든다.
 - SQL Formatting 잔여: `STATUS_TUNING IN ('PASS', 'PASS-TUNING')` 이고 `FORMATTED_SQL`이 비어 있음
@@ -150,8 +150,10 @@
 
 - 운영 `src/smart_migrate/agents/db_migration` 코드는 이번 변경에서 수정하지 않는다.
 - 10C Langflow executor만 다음 기준을 적용한다.
-- `USER_EDITED='Y'`이고 `MIG_SQL`이 있으면 기존 `MIG_SQL`을 재사용한다.
-- `USER_EDITED='Y'`이고 `VERIFY_SQL`이 비어 있으면 LLM으로 `VERIFY_SQL`만 생성한다.
+- 10C의 시작 단계는 `USER_EDITED`나 저장 SQL 존재 여부가 아니라 `STATUS`로 결정한다.
+- `NULL`/`FAIL-TRUNCATE`/`FAIL-INSERT`는 `MIG_SQL`과 `VERIFY_SQL`을 생성한 뒤 INSERT와 검증을 수행한다.
+- `FAIL-TEST`는 INSERT가 성공한 상태이므로 저장된 `MIG_SQL`을 실행하지 않고 `VERIFY_SQL` 생성·검증부터 재개한다.
+- Management가 Correct `MIG_SQL`을 저장하면 `STATUS='FAIL-TEST'`, Correct `VERIFY_SQL`을 저장하면 `STATUS='PASS'`로 전이한다. `USER_EDITED='Y'`는 저장 이력과 Correct SQL Vector DB 동기화 표식이다.
 - LLM이 생성한 `MIG_SQL`/`VERIFY_SQL`은 생성 성공 직후 `NEXT_MIG_INFO`에 저장한다.
 - migration SQL 실행 결과 `affected_rows=0`이어도 실행은 `PASS`로 본다.
 - 단, `affected_rows=0`인 사실은 step log message에 남긴다.

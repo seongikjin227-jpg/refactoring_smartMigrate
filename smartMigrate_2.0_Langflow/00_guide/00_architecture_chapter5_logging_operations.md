@@ -142,8 +142,7 @@ flowchart TD
 SELECT COUNT(*)
   FROM NEXT_MIG_INFO
  WHERE UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
-   AND (UPPER(TRIM(NVL(STATUS, ''))) = 'FAIL'
-        OR UPPER(TRIM(NVL(STATUS, ''))) LIKE 'FAIL-%')
+   AND UPPER(TRIM(NVL(STATUS, ''))) LIKE 'FAIL-%'
    AND NVL(RETRY_COUNT, 0) < 2;
 ```
 
@@ -180,8 +179,8 @@ SELECT COUNT(*)
 
 | 확인 항목 | 설명 |
 |---|---|
-| `USER_EDITED='Y'` | SQL 보정 저장이 필요하면 `04_updateCommandTool.py`로 명시적으로 설정한다. |
-| status가 `FAIL-*`인지 | user-edited rerun 조건은 fail 상태와 결합된다. |
+| Correct SQL 저장 action | `04_updateCommandTool.py`의 정의된 save action으로 저장한다. action이 다음 재개 `STATUS`까지 함께 전이한다. |
+| status가 재개 가능한 상태인지 | executor는 `USER_EDITED`나 저장 SQL 존재 여부가 아니라 시작 `STATUS`로 다음 단계를 결정한다. |
 | retry re-enable 여부 | 필요하면 `04_updateCommandTool.py`로 FAIL status는 유지하고 retry 0 처리한다. |
 | SQL 저장 action 여부 | DB Migration과 SQL 계열 모두 정의된 save/clear action만 사용 가능 |
 

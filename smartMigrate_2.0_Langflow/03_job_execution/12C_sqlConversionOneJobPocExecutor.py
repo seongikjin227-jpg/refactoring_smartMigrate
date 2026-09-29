@@ -2225,11 +2225,11 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 f"""
                 SELECT
                        SUM(CASE WHEN STATUS IS NULL THEN 1 ELSE 0 END) AS PENDING_COUNT,
-                       SUM(CASE WHEN UPPER(TRIM(NVL(STATUS, ''))) = 'FAIL' OR UPPER(TRIM(NVL(STATUS, ''))) LIKE 'FAIL-%' THEN 1 ELSE 0 END) AS FAIL_COUNT,
+                       SUM(CASE WHEN UPPER(TRIM(NVL(STATUS, ''))) LIKE 'FAIL-%' THEN 1 ELSE 0 END) AS FAIL_COUNT,
                        SUM(
                            CASE
                                WHEN UPPER(TRIM(NVL(USER_EDITED, 'N'))) = 'Y'
-                                AND (UPPER(TRIM(NVL(STATUS, ''))) = 'FAIL' OR UPPER(TRIM(NVL(STATUS, ''))) LIKE 'FAIL-%')
+                                AND UPPER(TRIM(NVL(STATUS, ''))) LIKE 'FAIL-%'
                                THEN 1 ELSE 0
                            END
                        ) AS USER_EDITED_FAIL_COUNT

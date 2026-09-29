@@ -15,9 +15,9 @@ MIG → SQL_CONVERSION → SQL_TUNING → SQL_FORMATTING
 
 | Route | queue 원천 | 식별자 | 자동 실행 대상 선정 조건 |
 | --- | --- | --- | --- |
-| `MIG` | `NEXT_MIG_INFO` | `MAP_ID` | `USE_YN='Y' AND STATUS is NULL/FAIL/FAIL-* AND RETRY_COUNT < 2` |
-| `SQL_CONVERSION` | `NEXT_SQL_INFO` | `SPACE_NM`, `SQL_ID` | `STATUS_CONVERSION is NULL/FAIL/FAIL-* AND RETRY_COUNT < 2` |
-| `SQL_TUNING` | `NEXT_SQL_INFO` | `SPACE_NM`, `SQL_ID` | conversion이 PASS이고 `STATUS_TUNING is NULL/FAIL/FAIL-* AND RETRY_COUNT < 2` |
+| `MIG` | `NEXT_MIG_INFO` | `MAP_ID` | `USE_YN='Y' AND STATUS is NULL/FAIL-* AND RETRY_COUNT < 2` |
+| `SQL_CONVERSION` | `NEXT_SQL_INFO` | `SPACE_NM`, `SQL_ID` | `STATUS_CONVERSION is NULL/FAIL-* AND RETRY_COUNT < 2` |
+| `SQL_TUNING` | `NEXT_SQL_INFO` | `SPACE_NM`, `SQL_ID` | conversion이 PASS이고 `STATUS_TUNING is NULL/FAIL-* AND RETRY_COUNT < 2` |
 | `SQL_FORMATTING` | `NEXT_SQL_INFO` | `SPACE_NM`, `SQL_ID` | tuning이 PASS이고 `FORMATTED_SQL`이 비어 있음 |
 
 `18A`는 `MIG`를 `PRIORITY`, `PRIOR_MAP_ID` 의존성 순으로 정렬한다. 또 payload에 같은 job이 중복되어도 MIG는 `MAP_ID`, SQL 계열은 `(SPACE_NM, SQL_ID)` 기준으로 하나만 queue에 넣는다. 따라서 하나의 Full Workflow plan 안에서 동일 Migration job이 두 번 실행되지 않는다.
@@ -49,7 +49,7 @@ sequenceDiagram
 
 ## 3. 10C 이후 다음 item으로 진행되는 조건
 
-`MIG` item은 `10C_migOneJobPocExecutor.py`에서 한 건의 generate → execute → verify → retry → final status 저장을 끝낸 뒤 result를 돌려준다. 레코드 검증을 활성화한 흐름은 `10C_migOneJobPocExecutor2.py`를 연결하며, execute → count verify → PK 기반 record verify 순서로 처리한다. record verify는 count PASS 이후에만 실행하며 불일치는 `FAIL-TEST2`로 저장한다. Full Workflow의 모든 item은 결과와 무관하게 `18B → 10C → 12C → 15C → 17C → 18D → 18B` 체인을 한 번 돈다. 선행 단계가 `FAIL-*`이면 후속 executor는 DB/LLM 작업을 실행하지 않고 pass-through/skip payload만 보강한다. 18B는 result의 성공/실패와 관계없이 다음 item으로 진행한다. 즉, 한 job의 최종 실패는 Loop 자체의 예외가 아니다.
+`MIG` item은 표준 `10C_migOneJobPocExecutor3.py`에서 한 건의 generate → execute → count verify → PK 기반 record verify → retry → final status 저장을 끝낸 뒤 result를 돌려준다. record verify는 count PASS 이후에만 실행하며 불일치는 `FAIL-TEST2`로 저장한다. Full Workflow의 모든 item은 결과와 무관하게 `18B → 10C → 12C → 15C → 17C → 18D → 18B` 체인을 한 번 돈다. 선행 단계가 `FAIL-*`이면 후속 executor는 DB/LLM 작업을 실행하지 않고 pass-through/skip payload만 보강한다. 18B는 result의 성공/실패와 관계없이 다음 item으로 진행한다. 즉, 한 job의 최종 실패는 Loop 자체의 예외가 아니다.
 
 다만 첫 SQL phase item을 실행하기 직전에 `18B._db_migration_phase_gate()`가 `NEXT_MIG_INFO`를 재확인한다.
 

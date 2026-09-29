@@ -101,7 +101,7 @@ flowchart TD
 
 | 도메인 | Master 테이블 | 상태 컬럼 | 성공 상태 | 실패 상태 예 |
 |---|---|---|---|---|
-| DB Migration | `NEXT_MIG_INFO` | `STATUS` | `PASS` | `FAIL-TRUNCATE`, `FAIL-INSERT`, `FAIL-TEST`, `SKIP-PRIOR-FAIL` |
+| DB Migration | `NEXT_MIG_INFO` | `STATUS` | `PASS` | `FAIL-TRUNCATE`, `FAIL-INSERT`, `FAIL-TEST`, `FAIL-TEST2` |
 | SQL Conversion | `NEXT_SQL_INFO` | `STATUS_CONVERSION` | `PASS-CONVERSION`, 일부 호환 `PASS` | `FAIL-TOBE`, `FAIL-BIND`, `FAIL-TEST` |
 | SQL Tuning | `NEXT_SQL_INFO` | `STATUS_TUNING` | `PASS-TUNING`, 일부 호환 `PASS` | `FAIL-TUNED`, `FAIL-TEST` |
 | SQL Formatting | `NEXT_SQL_INFO` | `FORMATTED_SQL` 존재 여부 | `FORMATTED_SQL` non-empty | `FAIL-FORMATTING` |

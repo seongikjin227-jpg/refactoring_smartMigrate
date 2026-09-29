@@ -87,6 +87,7 @@ MIGRATION_PROMPT_TEMPLATE: dict[str, str] = {
 """,
     "verification_append": """
 [Verification SQL requirements - append mode]
+- Exclude the four standard audit fields (registered/created timestamp, registered/created by, modified/updated timestamp, modified/updated by) from every COUNT(column) comparison. Infer their physical names from the supplied DDL.
 - target table에는 이전 job이 insert한 row가 이미 있을 수 있습니다.
 - 전체 target table count를 source count와 비교하지 마십시오.
 - current source scope에 대한 EXISTS 조건으로 target side를 필터링하여 이 job이 insert한 row만 검증하십시오.
@@ -117,6 +118,7 @@ MIGRATION_PROMPT_TEMPLATE: dict[str, str] = {
 - 단일 결과 row의 모든 DIFF_* 컬럼이 0일 때만 verification이 통과합니다.""",
     "verification_regular": """
 [Verification SQL requirements]
+- Exclude the four standard audit fields (registered/created timestamp, registered/created by, modified/updated timestamp, modified/updated by) from every COUNT(column) comparison. Infer their physical names from the supplied DDL.
 - UNION ALL 없이 SELECT 문 하나만 사용하십시오.
 - source와 target 사이의 total row count 및 mapped non-null column count를 비교하십시오.
 - 제공된 DDL로 data type을 판단하십시오.
@@ -683,7 +685,7 @@ FROM (
         AS ROW_CONCAT
     {source_scope}
 ) A
-FULL OUTER JOIN (
+LEFT JOIN (
     SELECT
         {tobe_pk_projection},
         {tobe_concat}
@@ -707,11 +709,18 @@ FULL OUTER JOIN (
 
     def _row_concat_value_sql(self, expression: str, data_type: str) -> str:
         value_sql = self._normalized_compare_value_sql(expression, data_type)
-        return f"NVL(({value_sql}) || '', '<NULL>')"
+        return f"NVL({value_sql} || '', '<NULL>')"
 
     def _normalized_compare_value_sql(self, expression: str, data_type: str) -> str:
         """Normalize only types whose implicit concat representation is unstable."""
-        expr = f"({expression})"
+        raw_expression = str(expression or "").strip()
+        # Bare column references need no grouping parentheses. Keep grouping
+        # only for compound expressions so concatenation precedence is stable.
+        simple_column = re.fullmatch(
+            r'(?:(?:[A-Za-z_][A-Za-z0-9_$#]*|"[^"]+")\.)?(?:[A-Za-z_][A-Za-z0-9_$#]*|"[^"]+")',
+            raw_expression,
+        )
+        expr = raw_expression if simple_column else f"({raw_expression})"
         normalized_type = re.sub(r"\s+", " ", str(data_type or "").upper()).strip()
         if normalized_type == "DATE":
             # Oracle's implicit DATE-to-character conversion follows the
@@ -875,22 +884,23 @@ FULL OUTER JOIN (
         comparison_sql: str,
     ) -> dict[str, Any]:
         """Run PK comparison and retain only aggregate result counts."""
+        match_count = 0
         mismatch_count = 0
-        compared_rows = 0
         with self._connect(db_config) as conn:
             cur = conn.cursor()
             cur.execute(comparison_sql)
             for db_row in cur:
-                compared_rows += 1
                 compare_result, _asis_concat, _tobe_concat = db_row
                 if str(compare_result or "") == "MISMATCH":
                     mismatch_count += 1
+                else:
+                    match_count += 1
         return {
             "ok": mismatch_count == 0,
             "comparison_sql": comparison_sql,
-            "compared_rows": compared_rows,
+            "match_count": match_count,
             "mismatch_count": mismatch_count,
-            "summary": f"PK verification compared={compared_rows}, mismatched={mismatch_count}",
+            "summary": f"MATCH_CNT={match_count}, MISMATCH_CNT={mismatch_count}",
         }
 
     def _record_log_value(self, value: Any) -> Any:
@@ -1475,7 +1485,7 @@ FULL OUTER JOIN (
         return self._stage_sql_from_state(state, str(step.get("status") or ""))
 
     def _record_verify_log_body(self, state: dict[str, Any]) -> str:
-        """Render the PK comparison SQL and up to five representative results."""
+        """Render the PK comparison SQL and aggregate result counts only."""
         comparison_sql = str(state.get("record_projection_sql") or "").strip()
         result = dict(state.get("record_verify_result") or {})
         parts = [
@@ -1485,8 +1495,8 @@ FULL OUTER JOIN (
             "[PK_COMPARE_SUMMARY]",
             f"pk_columns={result.get('pk_columns') or []}",
             f"compared_columns={result.get('compared_columns') or []}",
-            f"compared_rows={result.get('compared_rows') or 0}",
-            f"mismatch_count={result.get('mismatch_count') or 0}",
+            f"MATCH_CNT={result.get('match_count') or 0}",
+            f"MISMATCH_CNT={result.get('mismatch_count') or 0}",
             f"result={result.get('summary') or ''}",
         ]
         if not result:

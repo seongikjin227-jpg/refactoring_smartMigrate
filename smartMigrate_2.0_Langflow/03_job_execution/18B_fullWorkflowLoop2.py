@@ -344,7 +344,7 @@ class NewType18BFullWorkflowLoop2(Component):
                     SUM(
                         CASE
                             WHEN NVL(UPPER(USE_YN), 'N') = 'Y'
-                             AND (UPPER(STATUS) = 'FAIL' OR UPPER(STATUS) LIKE 'FAIL-%')
+                             AND UPPER(STATUS) LIKE 'FAIL-%'
                             THEN 1 ELSE 0
                         END
                     ) AS FAIL_COUNT
@@ -543,7 +543,7 @@ class NewType18BFullWorkflowLoop2(Component):
             cur = conn.cursor()
             jobs: list[dict[str, Any]] = []
 
-            # MIG 자동 실행 대상: USE_YN='Y', STATUS=NULL/FAIL/FAIL-*, RETRY_COUNT<2.
+            # MIG 자동 실행 대상: USE_YN='Y', STATUS=NULL/FAIL-*, RETRY_COUNT<2.
             jobs.extend(
                 self._query_pending_jobs(
                     cur,
@@ -551,7 +551,7 @@ class NewType18BFullWorkflowLoop2(Component):
                     SELECT MAP_ID, PRIORITY, PRIOR_MAP_ID
                       FROM {mig_table}
                      WHERE UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
-                       AND (STATUS IS NULL OR UPPER(TRIM(NVL(STATUS, ''))) = 'FAIL' OR UPPER(TRIM(NVL(STATUS, ''))) LIKE 'FAIL-%')
+                       AND (STATUS IS NULL OR UPPER(TRIM(NVL(STATUS, ''))) LIKE 'FAIL-%')
                        AND NVL(RETRY_COUNT, 0) < 2
                      ORDER BY PRIORITY ASC NULLS LAST, MAP_ID ASC
                     """,
@@ -562,7 +562,7 @@ class NewType18BFullWorkflowLoop2(Component):
                 )
             )
 
-            # SQL Conversion 자동 실행 대상: STATUS_CONVERSION=NULL/FAIL/FAIL-*, RETRY_COUNT<2.
+            # SQL Conversion 자동 실행 대상: STATUS_CONVERSION=NULL/FAIL-*, RETRY_COUNT<2.
             # Correct SQL 저장 action은 다음 FAIL stage와 RETRY_COUNT=0을 직접 저장한다.
             jobs.extend(
                 self._query_pending_jobs(
@@ -570,7 +570,7 @@ class NewType18BFullWorkflowLoop2(Component):
                     f"""
                     SELECT SQL_SEQ, TO_CHAR(SQL_ID) AS SQL_ID, TO_CHAR(SPACE_NM) AS SPACE_NM, PRIORITY
                       FROM {sql_table}
-                     WHERE (STATUS_CONVERSION IS NULL OR UPPER(TRIM(NVL(STATUS_CONVERSION, ''))) = 'FAIL' OR UPPER(TRIM(NVL(STATUS_CONVERSION, ''))) LIKE 'FAIL-%')
+                     WHERE (STATUS_CONVERSION IS NULL OR UPPER(TRIM(NVL(STATUS_CONVERSION, ''))) LIKE 'FAIL-%')
                        AND NVL(RETRY_COUNT, 0) < 2
                      ORDER BY PRIORITY ASC NULLS LAST, UPD_TS ASC NULLS FIRST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                     """,
@@ -581,7 +581,7 @@ class NewType18BFullWorkflowLoop2(Component):
                 )
             )
 
-            # SQL Tuning 자동 실행 대상: Conversion PASS, STATUS_TUNING=NULL/FAIL/FAIL-*, RETRY_COUNT<2.
+            # SQL Tuning 자동 실행 대상: Conversion PASS, STATUS_TUNING=NULL/FAIL-*, RETRY_COUNT<2.
             jobs.extend(
                 self._query_pending_jobs(
                     cur,
@@ -589,7 +589,7 @@ class NewType18BFullWorkflowLoop2(Component):
                     SELECT SQL_SEQ, TO_CHAR(SQL_ID) AS SQL_ID, TO_CHAR(SPACE_NM) AS SPACE_NM, PRIORITY
                       FROM {sql_table}
                      WHERE UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')
-                       AND (STATUS_TUNING IS NULL OR UPPER(TRIM(NVL(STATUS_TUNING, ''))) = 'FAIL' OR UPPER(TRIM(NVL(STATUS_TUNING, ''))) LIKE 'FAIL-%')
+                       AND (STATUS_TUNING IS NULL OR UPPER(TRIM(NVL(STATUS_TUNING, ''))) LIKE 'FAIL-%')
                        AND NVL(RETRY_COUNT, 0) < 2
                      ORDER BY PRIORITY ASC NULLS LAST, UPD_TS ASC NULLS FIRST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                     """,

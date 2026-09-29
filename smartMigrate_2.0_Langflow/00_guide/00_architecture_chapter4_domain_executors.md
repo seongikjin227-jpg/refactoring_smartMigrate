@@ -38,15 +38,15 @@ flowchart LR
 
 | 입력 | 준비 | 생성 보조 | 생성 | 검증 | 종료 |
 |---|---|---|---|---|---|
-| `Loop item` | 대상 row 로드, 선행 조건 확인, `RUNNING` 기록 | RAG rule / Correct SQL hint | LLM SQL 생성 또는 저장 SQL 재사용 | SQL 실행·count 비교·형식 확인 | CLOB 및 상태 저장 → `NEXT_MIG_LOG` → `Job Result` |
+| `Loop item` | 대상 row 로드, 선행 조건 확인, 시작 `STATUS`에 따른 재개 단계 결정 | RAG rule / Correct SQL hint | 시작 상태가 요구하는 SQL 생성 | 해당 단계 실행·count 비교·형식 확인 | CLOB 및 상태 저장 → `NEXT_MIG_LOG` → `Job Result` |
 
 실패 시에는 retry가 남으면 **생성 보조** 단계로 돌아가고, 모두 소진되면 `FAIL-*` 상태를 저장한 뒤 동일하게 log/result로 종료한다.
 
 ## 4.2 DB Migration Executor: 10C
 
-기본 `10C_migOneJobPocExecutor.py`는 `NEXT_MIG_INFO.MAP_ID` 한 건을 처리한다. 레코드 검증을 포함하는 신규 흐름은 `10C_migOneJobPocExecutor2.py`를 사용한다.
+표준 10C는 `10C_migOneJobPocExecutor3.py`이며 `NEXT_MIG_INFO.MAP_ID` 한 건을 처리한다. 이 구현은 INSERT 뒤 count 검증과 record 검증을 모두 수행한다. `10C_migOneJobPocExecutor.py`와 `10C_migOneJobPocExecutor2.py`는 이전 호환 구현으로 취급한다.
 
-`Executor2`는 `MIG_SQL` 실행 뒤 먼저 count 검증을 수행한다. count가 PASS인 경우에만 `INSERT INTO ... (target columns) SELECT ...`의 SELECT 부분을 가상 TOBE 데이터셋으로 만들어, target PK 기준의 결정적 표본(기본 3건)을 실제 TOBE row와 비교한다. 비교 로그에는 예상값(INSERT 대상 컬럼), 실제값(TOBE 전체 컬럼), 컬럼별 diff를 함께 남긴다. CLOB은 앞 4,000자, BLOB은 앞 4,000 byte까지만 비교·로그한다.
+`Executor3`는 `MIG_SQL` 실행 뒤 먼저 count 검증을 수행한다. count가 PASS인 경우에만 `INSERT INTO ... (target columns) SELECT ...`의 SELECT 부분을 가상 TOBE 데이터셋으로 만들어, source(AS-IS) PK 기준의 결정적 표본(기본 3건)을 실제 TOBE row와 비교한다. 비교 SQL은 source dataset을 기준으로 `LEFT JOIN`하므로 TOBE에만 새로 존재하는 행은 비교하지 않는다. 이는 Migration이 신규 데이터를 생성하지 않는다는 전제에 따른 것이다. Verify SQL은 등록일시·등록자·변경일시·변경자 성격의 기본 감사 컬럼을 DDL 기준으로 식별해 `COUNT(column)` 비교에서 제외한다. record verify 로그는 개별 MATCH 행 대신 `MATCH_CNT`, `MISMATCH_CNT` 요약만 출력한다. CLOB은 앞 4,000자, BLOB은 앞 4,000 byte까지만 비교·로그한다.
 
 count 불일치는 `FAIL-TEST`, 레코드 불일치 또는 레코드 검증 불가(MIG_SQL 구조 미지원 등)는 `FAIL-TEST2`다. 대상 PK가 있으면 그것을 row key로 사용한다. PK가 없는 target은 `Record Verify Key Columns` 입력값을 우선 사용하고, 없으면 MIG_SQL의 non-LOB INSERT 대상 컬럼 전체를 복합 key로 사용한다. 이 fallback에서 target row가 복수이면 검증 실패다. `FAIL-TEST2` 재실행은 INSERT·count verify·LLM generate를 반복하지 않고 `VERIFY_RECORDS`만 다시 수행한다.
 
@@ -66,35 +66,73 @@ count 불일치는 `FAIL-TEST`, 레코드 불일치 또는 레코드 검증 불�
 
 ```mermaid
 flowchart TD
-    J[map_id] --> PRIOR[Check PRIOR_MAP_ID status]
-    PRIOR -->|prior fail/skip| SKIP[SKIP-PRIOR-FAIL]
+    J[Runnable MAP_ID<br/>USE_YN=Y, STATUS NULL or FAIL-*, RETRY_COUNT &lt; 2] --> PRIOR[Check PRIOR_MAP_ID status]
+    PRIOR -->|prior FAIL-* / SKIP-*| BLOCK[Preserve STATUS<br/>RETRY_COUNT=3]
+    PRIOR -->|prior pending/running| WAIT[NOT_RUNNABLE<br/>no DB update]
     PRIOR -->|dependency ok| META[Load NEXT_MIG_INFO + DTL]
-    META --> RUNNING[STATUS=RUNNING, BATCH_CNT + 1]
-    RUNNING --> USER{USER_EDITED='Y' and MIG_SQL exists?}
-    USER -->|yes| REUSE[Reuse MIG_SQL<br/>generate VERIFY_SQL if missing]
-    USER -->|no| HINT[Search SM_CORRECT_SQL_MIGRATION]
+    META --> STAGE{Start STATUS}
+    STAGE -->|NULL / FAIL-TRUNCATE / FAIL-INSERT| RUN[STATUS=RUNNING, BATCH_CNT + 1]
+    RUN --> HINT[Search SM_CORRECT_SQL_MIGRATION hint]
     HINT --> GEN[Generate MIG_SQL + VERIFY_SQL]
-    REUSE --> EXEC[Execute migration SQL]
     GEN --> SAVE_SQL[Persist MIG_SQL / VERIFY_SQL immediately]
-    SAVE_SQL --> EXEC
-    EXEC -->|truncate/insert error| FAILI[FAIL-TRUNCATE or FAIL-INSERT]
-    EXEC -->|ok| VERIFY[Execute VERIFY_SQL]
-    VERIFY -->|row/count mismatch| FAILT[FAIL-TEST]
-    VERIFY -->|ok| PASS[STATUS=PASS]
+    SAVE_SQL --> EXEC[Execute migration SQL]
+    GEN -->|generate error| FINSERT[FAIL-INSERT]
+    STAGE -->|FAIL-TEST| RESUME[STATUS=RUNNING-FAIL-TEST]
+    RESUME --> V_HINT[Search VERIFY_SQL hint]
+    V_HINT --> V_GEN[Generate VERIFY_SQL only]
+    V_GEN --> VERIFY[Execute Count Verify SQL]
+    STAGE -->|FAIL-TEST2| RECORD[STATUS=RUNNING-FAIL-TEST2]
+    RECORD --> VERIFY2[Execute record verify only]
+    EXEC -->|truncate error| FTRUNC[FAIL-TRUNCATE]
+    EXEC -->|insert error| FINSERT
+    EXEC -->|ok| VERIFY
+    VERIFY -->|count mismatch| FTEST[FAIL-TEST]
+    VERIFY -->|count PASS| VERIFY2[Execute Record Verify]
+    VERIFY2 -->|record mismatch / unsupported| FTEST2[FAIL-TEST2]
+    VERIFY2 -->|PASS| PASS[STATUS=PASS]
+    FTRUNC --> RTRUNC{Retry left?}
+    RTRUNC -->|yes: save RUNNING-FAIL-TRUNCATE,<br/>RETRY_COUNT + 1| EXEC
+    RTRUNC -->|no| FINALFAIL[Persist final FAIL-*<br/>RETRY_COUNT=2]
+    FINSERT --> RINSERT{Retry left?}
+    RINSERT -->|yes: save RUNNING-FAIL-INSERT,<br/>RETRY_COUNT + 1| GEN
+    RINSERT -->|no| FINALFAIL
+    FTEST --> RTEST{Retry left?}
+    RTEST -->|yes: save RUNNING-FAIL-TEST,<br/>RETRY_COUNT + 1| V_GEN
+    RTEST -->|no| FINALFAIL
+    FTEST2 --> RTEST2{Retry left?}
+    RTEST2 -->|yes: save RUNNING-FAIL-TEST2,<br/>RETRY_COUNT + 1| VERIFY2
+    RTEST2 -->|no| FINALFAIL
 ```
 
 #### 가로형 흐름
 
 ```mermaid
 flowchart LR
-    J[MAP_ID] --> PRIOR[Check PRIOR_MAP_ID] --> META[Load header + DTL] --> RUNNING[Mark RUNNING]
-    PRIOR -->|prior fail/skip| SKIP[SKIP-PRIOR-FAIL]
-    RUNNING --> USER{Edited MIG_SQL exists?}
-    USER -->|yes| REUSE[Reuse / complete VERIFY_SQL] --> EXEC[Execute migration SQL] --> VERIFY[Execute VERIFY_SQL]
-    USER -->|no| HINT[Correct SQL hint] --> GEN[Generate MIG_SQL + VERIFY_SQL] --> SAVE[Persist SQL] --> EXEC
-    VERIFY -->|PASS| PASS[STATUS=PASS]
-    EXEC -->|error| FAILI[FAIL-TRUNCATE / FAIL-INSERT]
-    VERIFY -->|mismatch| FAILT[FAIL-TEST]
+    J[Runnable MAP_ID<br/>STATUS NULL or FAIL-*<br/>RETRY_COUNT &lt; 2] --> PRIOR[Check PRIOR_MAP_ID] --> META[Load header + DTL] --> STAGE{Start STATUS}
+    PRIOR -->|prior FAIL-* / SKIP-*| BLOCK[Preserve STATUS, RETRY_COUNT=3]
+    PRIOR -->|prior pending/running| WAIT[NOT_RUNNABLE, no DB update]
+    STAGE -->|NULL / FAIL-TRUNCATE / FAIL-INSERT| RUN[Mark RUNNING] --> HINT[Correct MIG_SQL hint] --> GEN[Generate MIG_SQL + VERIFY_SQL] --> SAVE[Persist SQL] --> EXEC[Execute migration SQL] --> VERIFY[Execute Count Verify SQL]
+    STAGE -->|FAIL-TEST| RESUME[Mark RUNNING-FAIL-TEST] --> V_HINT[Correct VERIFY_SQL hint] --> V_GEN[Generate VERIFY_SQL only] --> VERIFY
+    STAGE -->|FAIL-TEST2| RECORD[Mark RUNNING-FAIL-TEST2] --> VERIFY2[Record Verify only]
+    EXEC -->|truncate error| FTRUNC[FAIL-TRUNCATE]
+    GEN -->|generate error| FINSERT[FAIL-INSERT]
+    EXEC -->|insert error| FINSERT
+    VERIFY -->|count mismatch| FTEST[FAIL-TEST]
+    VERIFY -->|count PASS| VERIFY2[Execute Record Verify]
+    VERIFY2 -->|record mismatch / unsupported| FTEST2[FAIL-TEST2]
+    VERIFY2 -->|PASS| PASS[STATUS=PASS]
+    FTRUNC --> RTRUNC{Retry left?}
+    RTRUNC -->|yes: RUNNING-FAIL-TRUNCATE,<br/>RETRY_COUNT + 1| EXEC
+    RTRUNC -->|no| FINALFAIL[Persist final FAIL-*<br/>RETRY_COUNT=2]
+    FINSERT --> RINSERT{Retry left?}
+    RINSERT -->|yes: RUNNING-FAIL-INSERT,<br/>RETRY_COUNT + 1| GEN
+    RINSERT -->|no| FINALFAIL
+    FTEST --> RTEST{Retry left?}
+    RTEST -->|yes: RUNNING-FAIL-TEST,<br/>RETRY_COUNT + 1| V_GEN
+    RTEST -->|no| FINALFAIL
+    FTEST2 --> RTEST2{Retry left?}
+    RTEST2 -->|yes: RUNNING-FAIL-TEST2,<br/>RETRY_COUNT + 1| VERIFY2
+    RTEST2 -->|no| FINALFAIL
 ```
 
 ### DB update
@@ -105,7 +143,9 @@ flowchart LR
 | SQL 생성 성공 직후 | `NEXT_MIG_INFO` | `MIG_SQL`, `VERIFY_SQL` 저장 |
 | retry 중 | `NEXT_MIG_INFO` | `STATUS='RUNNING-FAIL-*'`, `RETRY_COUNT` |
 | 최종 성공 | `NEXT_MIG_INFO` | `STATUS='PASS'`, `ELAPSED_SECONDS`, `RETRY_COUNT`, `UPD_TS` |
-| 최종 실패 | `NEXT_MIG_INFO` | `STATUS='FAIL-TRUNCATE'/'FAIL-INSERT'/'FAIL-TEST'`, `ELAPSED_SECONDS`, `RETRY_COUNT`, `UPD_TS` |
+| 최종 실패 | `NEXT_MIG_INFO` | `STATUS='FAIL-TRUNCATE'/'FAIL-INSERT'/'FAIL-TEST'/'FAIL-TEST2'`, `ELAPSED_SECONDS`, `RETRY_COUNT`, `UPD_TS` |
+| 선행 작업이 `FAIL-*`/`SKIP-*` | `NEXT_MIG_INFO` | 기존 `STATUS` 보존, `RETRY_COUNT=3`; 새 SKIP 상태는 저장하지 않음 |
+| 선행 작업 미완료 | 없음 | `NOT_RUNNABLE` 결과만 반환하며 DB 상태와 retry를 바꾸지 않음 |
 
 ### 상태 의미
 
@@ -115,9 +155,11 @@ flowchart LR
 | `FAIL-TRUNCATE` | truncate 단계 실패 |
 | `FAIL-INSERT` | migration SQL 생성/실행 또는 시스템 오류 |
 | `FAIL-TEST` | verify SQL 검증 실패 |
-| `SKIP-PRIOR-FAIL` | `PRIOR_MAP_ID`가 실패/미완료라 실행하지 않음 |
+| `FAIL-TEST2` | count 검증 후 record 검증이 실패하거나 검증 불가 |
 
 `affected_rows=0`이어도 migration SQL 실행 자체가 성공하면 실행 단계는 PASS로 본다.
+
+`USER_EDITED='Y'`와 `MIG_SQL`/`VERIFY_SQL`의 존재 여부는 10C의 분기 조건이 아니다. Management에서 Correct `MIG_SQL`을 저장하면 INSERT가 사용자 확인 완료됐다는 뜻으로 `STATUS='FAIL-TEST'`를 저장하며, 10C는 Verify SQL 생성·검증부터 재개한다. Correct `VERIFY_SQL` 저장은 검증도 사용자 확인 완료됐다는 뜻으로 `STATUS='PASS'`를 저장한다. `USER_EDITED`는 Correct SQL의 저장 이력과 Vector DB 단건 동기화 대상 표식이다.
 
 ## 4.3 SQL Conversion Executor: 12C
 
@@ -358,7 +400,7 @@ stateDiagram-v2
 
 | 도메인 | 자동 실행 대상 선정 조건 | Running | Pass | Fail |
 |---|---|---|---|---|
-| MIG | `STATUS` is NULL/`FAIL`/`FAIL-*`, `RETRY_COUNT < 2` | `RUNNING`, `RUNNING-FAIL-*` | `PASS` | `FAIL-TRUNCATE`, `FAIL-INSERT`, `FAIL-TEST`, `SKIP-PRIOR-FAIL` |
+| MIG | `STATUS` is NULL/`FAIL-*`, `RETRY_COUNT < 2` | `RUNNING`, `RUNNING-FAIL-*` | `PASS` | `FAIL-TRUNCATE`, `FAIL-INSERT`, `FAIL-TEST`, `FAIL-TEST2` |
 | Conversion | `STATUS_CONVERSION` is NULL/`FAIL`/`FAIL-*`, `RETRY_COUNT < 2` | `RUNNING` | `PASS-CONVERSION` | `FAIL-TOBE`, `FAIL-BIND`, `FAIL-TEST` |
 | Tuning | conversion pass; tuning is NULL/`FAIL`/`FAIL-*`; `RETRY_COUNT < 2` | `RUNNING` | `PASS-TUNING` | `FAIL-TUNED`, `FAIL-TEST` |
 | Formatting | tuning pass and `FORMATTED_SQL` empty | internal running result | `FORMATTED_SQL` saved | `FAIL-FORMATTING` |
