@@ -39,11 +39,10 @@ class SmartMigrateDBHandler(logging.Handler):
     # logger.info(..., extra={"workflow_log": [...]}) 형태의 payload를 NEXT_MIG_LOG에 적재한다.
 
     # 컴포넌트나 helper 객체의 초기 상태와 설정 값을 준비한다.
-    def __init__(self, db_config: dict[str, Any], user_id: str = ""):
+    def __init__(self, db_config: dict[str, Any]):
         super().__init__(level=logging.DEBUG)
         self.handler_marker = HANDLER_MARKER
         self.db_config = dict(db_config)
-        self.user_id = str(user_id or "").strip()
         self.connection = create_db_connection(db_config)
         self.records: list[dict[str, Any]] = []
         self.insert_error = None
@@ -58,7 +57,7 @@ class SmartMigrateDBHandler(logging.Handler):
             "map_id": str(event.get("map_id") or 0)[:100],
             "mig_kind": str(event.get("mig_kind") or "WORKFLOW")[:100],
             "log_type": str(event.get("log_type") or "")[:20],
-            "log_level": self._log_level_with_user(event.get("log_level")),
+            "log_level": str(event.get("log_level") or "noLevelName")[:20],
             "step_name": str(event.get("step_name") or "")[:50],
             "status": str(event.get("status") or "noStatus")[:20],
             "message": str(event.get("message") or "noMessage")[:4000],
@@ -173,11 +172,6 @@ class SmartMigrateDBHandler(logging.Handler):
         except Exception:
             return default
 
-    def _log_level_with_user(self, log_level: Any) -> str:
-        """Keep the existing level, prefixed with this request's user ID when present."""
-        level = str(log_level or "noLevelName").strip()
-        return f"{self.user_id or 'ID = NULL'} / {level}"[:20]
-
 
 class NewType00ALogRuntimeStart(Component):
     display_name = "00A Log Runtime Start"
@@ -213,11 +207,21 @@ class NewType00ALogRuntimeStart(Component):
 
         logger.setLevel(logging.DEBUG)
         logger.propagate = False
-        handler = SmartMigrateDBHandler(self._db_config(), user_id=user_id)
+        handler = SmartMigrateDBHandler(self._db_config())
         logger.addHandler(handler)
         logger.info(
             f"CHAT INPUT, MESSAGE : {text}",
-            extra={"workflow_log": [0, "WORKFLOW", "CHAT_INPUT", "INFO", "MESSAGE", "START", 0]},
+            extra={
+                "workflow_log": [
+                    0,
+                    "WORKFLOW",
+                    "CHAT_INPUT",
+                    f"{user_id or 'ID = NULL'} / INFO",
+                    "MESSAGE",
+                    "START",
+                    0,
+                ]
+            },
         )
         self.status = {"ok": handler.insert_error is None, "db_insert_error": handler.insert_error}
         return Message(text=text)
