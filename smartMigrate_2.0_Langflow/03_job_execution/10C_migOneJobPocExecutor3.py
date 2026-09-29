@@ -675,9 +675,8 @@ class NewType10CMigOneJobPocExecutor3(Component):
             f"A.{column} = T.{column}" for column in pk_columns
         )
         sql = f"""SELECT
-    CASE WHEN A.ROW_CONCAT = T.ROW_CONCAT THEN 'MATCH' ELSE 'MISMATCH' END AS COMPARE_RESULT,
-    A.ROW_CONCAT AS ASIS_CONCAT,
-    T.ROW_CONCAT AS TOBE_CONCAT
+    COUNT(CASE WHEN A.ROW_CONCAT = T.ROW_CONCAT THEN 1 END) AS MATCH_CNT,
+    COUNT(CASE WHEN A.ROW_CONCAT <> T.ROW_CONCAT OR T.ROW_CONCAT IS NULL THEN 1 END) AS MISMATCH_CNT
 FROM (
     SELECT
         {asis_pk_projection},
@@ -883,18 +882,15 @@ LEFT JOIN (
         db_config: dict[str, Any],
         comparison_sql: str,
     ) -> dict[str, Any]:
-        """Run PK comparison and retain only aggregate result counts."""
-        match_count = 0
-        mismatch_count = 0
+        """Run the aggregate PK comparison and pass only when mismatch is zero."""
         with self._connect(db_config) as conn:
             cur = conn.cursor()
             cur.execute(comparison_sql)
-            for db_row in cur:
-                compare_result, _asis_concat, _tobe_concat = db_row
-                if str(compare_result or "") == "MISMATCH":
-                    mismatch_count += 1
-                else:
-                    match_count += 1
+            db_row = cur.fetchone()
+        if not db_row:
+            raise ValueError("PK comparison returned no aggregate result row")
+        match_count = int(db_row[0] or 0)
+        mismatch_count = int(db_row[1] or 0)
         return {
             "ok": mismatch_count == 0,
             "comparison_sql": comparison_sql,
