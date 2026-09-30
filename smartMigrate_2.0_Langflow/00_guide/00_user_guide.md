@@ -1,131 +1,154 @@
-# SmartMigrate 이용 가이드
+# SmartMigrate 사용자 운영 가이드
 
-## 1. 요청할 수 있는 작업
+이 문서는 운영자와 SQL 검토자가 채팅/Management 화면에서 작업을 조회하고, Correct SQL을 저장하고, 재실행을 준비하는 방법을 설명한다. 사용자는 Langflow payload JSON이나 LLM endpoint를 직접 입력할 필요가 없다.
 
-| 구분 | 식별자 | 요청 예시 |
-|---|---|---|
-| DB Migration 조회·실행·재시도 | `MAP_ID` | `MAP_ID=101 DB Migration 실행해줘.` |
-| SQL Conversion 조회·실행·재시도 | `SQL_ID`, `SPACE_NM` | `SQL_ID=S001, SPACE_NM=PAYMENT SQL Conversion 실행해줘.` |
-| SQL Tuning 조회·실행·재시도 | `SQL_ID`, `SPACE_NM` | `SQL_ID=S001, SPACE_NM=PAYMENT SQL Tuning 실행해줘.` |
-| SQL Formatting | `SQL_ID`, `SPACE_NM` | `SQL_ID=S001, SPACE_NM=PAYMENT SQL Formatting 실행해줘.` |
-| Correct SQL 저장 | 작업 식별자, SQL 컬럼, SQL 본문 | `MAP_ID=101의 MIG_SQL을 아래 SQL로 저장해줘. SQL=...` |
-| RAG Guide 관리 | `CATEGORY`, `RULE_TYPE` 또는 `RAG_ID` | `SQL Tuning GENERAL RAG Guide 추가해줘. GUIDANCE_TEXT=...` |
+## 1. 핵심 원칙
 
-SQL job은 `SQL_ID`와 `SPACE_NM`을 함께 입력해야 한다. 상태·로그·SQL 조회는 read-only이며, 실행·재시도 준비·SQL 저장은 DB 상태 또는 CLOB을 변경한다.
+- 재개 위치는 `USER_EDITED`나 SQL CLOB 존재 여부가 아닌 **DB status**가 결정한다. `USER_EDITED='Y'`는 사람이 수정했음을 보여 주는 표시값이다.
+- Correct SQL을 저장하면 그 SQL 단계가 사람 확인을 통과했다는 뜻으로 다음 status와 `RETRY_COUNT=0`을 함께 저장한다. 같은 단계를 다시 생성하지 않는다.
+- Management에서 재시도 가능 상태로 만드는 일과 executor 실제 실행은 별도다. 준비 뒤에는 별도로 실행을 요청한다.
+- SQL Conversion의 유사 AS-IS SQL 검색/일괄 반영은 제공하지만 DB Migration에는 제공하지 않는다.
+- Correct SQL은 저장 성공 뒤 해당 한 단계만 Vector DB에 동기화한다. 상태 변경이나 RAG Guide 변경만으로는 자동 동기화하지 않는다.
 
-## 2. Correct SQL 입력 규칙
+## 2. 작업 조회와 자동 실행 후보
 
-Correct SQL은 한 번에 한 단계 SQL만 저장한다. Migration은 `MIG_SQL` 또는 `VERIFY_SQL`만 Correct SQL로 저장·벡터화한다. `VERIFY2_SQL`은 MIG_SQL과 VERIFY_SQL에서 자동 조합하는 검증 SQL이므로 직접 Correct SQL로 저장하거나 17C formatting 대상으로 보내지 않는다.
+SQL 작업은 `SQL_SEQ`로 찾는 것이 가장 정확하다. 이를 모르면 `SQL_ID`와 `SPACE_NM`을 함께 제공한다. DB Migration은 `MAP_ID`로 찾는다.
 
-### 2.1 Migration Correct SQL
-
-| 컬럼 | 요구 구조 | 저장 후 동작 |
-|---|---|---|
-| `MIG_SQL` | `INSERT INTO target (target_columns...) SELECT source_expressions... FROM ...` | `FAIL-TEST`, Count Verify부터 재개 |
-| `VERIFY_SQL` | `FROM (SELECT ...) S, (SELECT ...) T`의 Count Verify | migration 검증 완료로 처리 |
-
-`MIG_SQL`은 INSERT 대상 컬럼 수와 SELECT 표현식 수·순서가 일치해야 한다. target 컬럼에는 alias를 붙이지 않으며, 변환식은 SELECT 쪽에 둔다.
-
-```sql
-INSERT INTO TARGET_SCHEMA.TO_EMP (EMP_NO, EMP_NAME)
-SELECT LPAD(S.EMP_NO, 5, '0'),
-       S.LAST_NAME || ' ' || S.FIRST_NAME
-  FROM SOURCE_SCHEMA.ASIS_EMP S
- WHERE S.ACTIVE_YN = 'Y';
-```
-
-`VERIFY_SQL` T측의 `COUNT(target_column)` 목록은 Verify2가 비교할 target 컬럼 목록이 된다. `COUNT(*)`는 전체 건수 확인용이며 Verify2 컬럼 비교에서는 제외된다.
-
-```sql
-SELECT ABS(S.TOT - T.TOT) AS DIFF_TOT,
-       ABS(S.C1 - T.C1) AS DIFF_C1
-FROM (
-    SELECT COUNT(*) AS TOT,
-           COUNT(S.EMP_NO) AS C1
-      FROM SOURCE_SCHEMA.ASIS_EMP S
-) S,
-(
-    SELECT COUNT(*) AS TOT,
-           COUNT(T.EMP_NO) AS C1
-      FROM TARGET_SCHEMA.TO_EMP T
-) T;
-```
-
-### 2.2 Verify2 자동 검증
-
-1차 Count가 통과하면 Executor2가 `MIG_SQL`과 `VERIFY_SQL`을 읽어 `VERIFY2_SQL`을 자동 조합한다. MIG_SQL의 `INSERT` 컬럼과 동일 위치의 `SELECT` 표현식은 AS-IS 값으로, Verify SQL T측 `COUNT(target_column)`은 TO-BE 비교 컬럼으로 사용한다.
-
-```text
-MIG_SQL 변환식 + MIG_SQL source scope  → ASIS_CONCAT
-VERIFY_SQL T측 컬럼 + T측 target scope → TOBE_CONCAT
-ROW_CONCAT 정렬 후 같은 ROW_NO끼리    → MATCH / MISMATCH
-```
-
-- `COUNT(*)`는 1차에서 검증했으므로 제외한다.
-- `VERIFY2_SQL`은 실행 전 CLOB에 저장되고, `FAIL-TEST2`에서는 이것만 다시 조합·실행한다.
-- 최대 5건의 불일치 사례를 로그에 남긴다. 불일치가 없으면 일치 사례를 남긴다.
-- ASIS/TOBE payload는 컬럼명 없이 값만 `|` 순서로 연결한다. 컬럼 해석은 로그의 `compared_columns` 순서를 기준으로 한다.
-- Verify2 조합에는 `INSERT ... SELECT`와 단순 `COUNT(target_column)` 구조가 필요하다. `INSERT ... VALUES`, `INSERT ALL`, `COUNT(function(...))`은 지원하지 않는다.
-
-### 2.3 Conversion Correct SQL
-
-| 컬럼 | 필수 조건 | 저장 후 재개 단계 |
-|---|---|---|
-| `TO_SQL` | 실행 가능한 TO-BE SQL | Bind 생성부터 |
-| `BIND_SQL` | 실행 가능한 bind SQL과 비어 있지 않은 JSON 배열 `BIND_SET` | Test 생성·실행부터 |
-| `TEST_SQL` | 사람이 검증 완료한 test SQL | Conversion 완료 |
-
-Correct SQL 저장 직후 해당 단계의 SQL만 VectorDB에 동기화한다. 기존 SQL을 수정할 때는 SQL 본문 전체와 대상 컬럼을 함께 명시한다.
-
-## 3. Mapping Rule 입력 규칙
-
-Mapping rule은 `NEXT_MIG_INFO`와 `NEXT_MIG_INFO_DTL`에 작성한다. `NEXT_MIG_INFO_DTL`의 한 row는 `FR_COL → TO_COL` 한 건이다.
-
-| 입력 | 의미 |
+| 원하는 일 | 자연어 요청 예시 |
 |---|---|
-| `FR_TABLE`, `TO_TABLE` | source table과 target table의 명시적 매핑 |
-| `FR_COL → TO_COL` | Conversion과 Migration에서 사용할 컬럼 매핑 |
-| `TO_COL=NULL`, blank, `NONE`, `N/A`, `NA`, `-` | 해당 source 컬럼은 TO-BE에서 미사용 |
-| 이름이 같은 컬럼 | 그래도 `FR_COL → 동일한 TO_COL` row를 명시해야 사용 가능 |
+| Migration 상태/로그 | `MAP_ID 101의 Migration 상태와 최근 로그를 보여줘.` |
+| Migration SQL | `MAP_ID 101의 MIG_SQL과 VERIFY_SQL을 보여줘.` |
+| Conversion SQL | `SQL_SEQ 42의 Conversion 상태와 TO_SQL을 보여줘.` |
+| SQL_SEQ를 모르는 작업 | `SQL_ID S001, SPACE_NM PAYMENT의 상태를 보여줘.` |
+| 남은 작업 | `Conversion, Tuning, Formatting의 남은 작업을 보여줘.` |
+| 실패 원인 | `최근 SQL Conversion 실패 원인을 요약해줘.` |
 
-매핑에 없는 source table/column은 “같은 이름 유지”가 아니라 **TO-BE 미사용**으로 해석한다. 그러므로 SELECT, JOIN, WHERE, GROUP BY 등에 계속 써야 하는 object는 이름이 같아도 반드시 매핑한다.
+| 도메인 | 자동 실행 후보 조건 |
+|---|---|
+| DB Migration | `USE_YN='Y'`, `STATUS`가 NULL 또는 `FAIL-*`, `RETRY_COUNT < 2` |
+| SQL Conversion | `STATUS_CONVERSION`이 NULL 또는 `FAIL-*`, `RETRY_COUNT < 2` |
+| SQL Tuning | Conversion이 PASS이고 `STATUS_TUNING`이 NULL 또는 `FAIL-*`, `RETRY_COUNT < 2` |
+| SQL Formatting | Tuning이 PASS이고 `FORMATTED_SQL`이 비어 있음 |
 
-```text
-FR_TABLE = ASIS_CUSTOMER       → TO_TABLE = TOBE_MEMBER
-CUST_ID                        → MEMBER_ID
-CUST_NM                        → MEMBER_NAME
-LEGACY_YN                      → NULL       (TO-BE 미사용)
-```
+`RUNNING-*`은 이미 처리 중인 상태이므로 자동 후보가 아니다.
 
-자세한 Conversion mapping 계약은 `03_job_execution/12C_sql_conversion_mapping_rule_contract.md`를 따른다.
+## 3. DB Migration
 
-## 4. Conversion·Tuning RAG Guide 입력 규칙
+표준 실행기는 `10C_migOneJobPocExecutor3.py`다. 생성 → INSERT 실행 → 건수 검증 → 레코드 검증 순서로 진행한다.
 
-| 목적 | `CATEGORY` / `RULE_TYPE` | 필수 입력 | 입력하지 않는 값 |
+| status | 의미 | 다음 실행의 시작점 |
+|---|---|---|
+| `FAIL-TRUNCATE` | target 초기화/실행 준비 실패 | 새 executor 실행에서는 MIG_SQL 생성부터 다시 진행 |
+| `FAIL-INSERT` | MIG_SQL 생성 또는 INSERT 실행 실패 | MIG_SQL 생성부터 재시도 |
+| `FAIL-TEST` | INSERT 완료 후 건수 검증 실패 | VERIFY_SQL 생성·건수 검증부터 재시도 |
+| `FAIL-TEST2` | 건수 검증 통과 후 레코드 비교 실패 | 레코드 검증만 재시도 |
+| `PASS` | Migration 및 검증 완료 | 자동 재실행 대상 아님 |
+
+### Migration Correct SQL
+
+Correct SQL은 한 번에 한 종류만 저장한다.
+
+| 저장 대상 | 사용자가 보장하는 의미 | 저장 직후 status | 다음 동작 |
 |---|---|---|---|
-| Conversion 공통 범위 | `SQL_CONVERSION` / `GENERAL` | `SOURCE_TABLES` | 보통 `GUIDANCE_TEXT` |
-| Conversion 변환 예시 | `SQL_CONVERSION` / `SEARCH` | `SOURCE_TABLES`, `SOURCE_SQL`, `TARGET_SQL` | 보통 `GUIDANCE_TEXT` |
-| Tuning 공통 규칙 | `SQL_TUNING` / `GENERAL` | `GUIDANCE_TEXT` | `SOURCE_TABLES` |
-| Tuning 예시 | `SQL_TUNING` / `SEARCH` | `GUIDANCE_TEXT`, `SOURCE_SQL`, `TARGET_SQL` | `SOURCE_TABLES` |
+| `MIG_SQL` | INSERT가 이미 사람 확인을 통과함 | `FAIL-TEST`, `RETRY_COUNT=0` | INSERT를 다시 하지 않고 VERIFY_SQL 생성·건수 검증부터 시작 |
+| `VERIFY_SQL` | 검증까지 사람이 완료함 | `PASS`, `RETRY_COUNT=0` | Migration 완료 |
 
-- `SEARCH`의 `SOURCE_SQL`과 `TARGET_SQL`은 함께 입력한다.
-- 신규 추가 시 `RAG_ID`는 입력하지 않는다. 수정·비활성화에만 사용한다.
-- RAG Guide를 추가·수정한 뒤 `VectorDB 동기화 실행해줘.`를 요청해야 검색에 반영된다.
+예시: `MAP_ID 101의 Correct MIG_SQL을 아래 SQL로 저장해줘. SQL: ...`
 
-## 5. 실행과 formatting 규칙
+저장 성공 뒤 `MIG_SQL` 또는 `VERIFY_SQL` kind로 Vector DB 동기화를 수행한다. `VERIFY2_SQL`은 시스템이 `MIG_SQL`과 `VERIFY_SQL`로 조합하는 레코드 비교용 SQL이므로 Correct SQL로 직접 저장하거나 formatting 대상으로 지정하지 않는다. 레코드 비교 결과는 `MATCH_CNT`, `MISMATCH_CNT` 중심으로 확인하며, `MISMATCH_CNT=0`이면 통과다.
 
-- 재시도 준비는 상태를 임의로 PASS로 바꾸지 않고 `RETRY_COUNT=0`과 우선순위만 조정한다.
-- 17C는 이번 LLM 실행에서 생성된 SQL만 `generated_sql_list`로 받아 formatting한다.
-- `generated_sql_list=[]`이면 `NO_FORMATTING_TARGETS` 로그를 남기고 formatting 없이 넘어간다.
-- 목록 키가 누락되거나 list가 아니면 계약 오류 로그를 남기고 DB SQL을 추측해 formatting하지 않는다.
-- `VERIFY2_SQL`은 검증 전용 SQL이므로 formatting 대상이 아니다.
+## 4. SQL Conversion
 
-## 6. 자주 쓰는 조회 요청
+Conversion은 `TO_SQL` → `BIND_SQL`/`BIND_SET` → `TEST_SQL` 순서다. SELECT가 아닌 작업은 bind/test를 건너뛸 수 있다.
 
-| 목적 | 요청 예시 |
+| status | 의미 | 다음 실행의 시작점 |
+|---|---|---|
+| `FAIL-TOBE` | TO_SQL 생성 실패 | TO_SQL 생성 |
+| `FAIL-BIND` | BIND_SQL 생성 실패 | 저장된 TO_SQL을 재사용하고 bind 생성 |
+| `FAIL-TEST` | TEST_SQL 생성·실행 실패 | 저장된 TO_SQL/BIND 정보를 재사용하고 test 생성·실행 |
+| `PASS-CONVERSION` | Conversion 완료 | Tuning으로 진행 |
+
+`FAIL-BIND` 또는 `FAIL-TEST`에서 필요한 이전 단계 SQL이 비어 있으면 시스템은 이전 단계로 되돌아가 생성하지 않는다. 현재 failure status를 보존한 채 실패로 남긴다. 즉 `FAIL-BIND`가 `FAIL-TOBE`로 역행하지 않는다.
+
+### Conversion Correct SQL
+
+Correct SQL은 `TO_SQL`, `BIND_SQL`, `TEST_SQL` 중 정확히 하나만 저장한다. `USER_EDITED='Y'`도 기록되지만 재개 위치는 아래 status 전이로 정해진다.
+
+| 저장 대상 | 필수 추가값 | 저장 직후 status | 다음 실행 |
+|---|---|---|---|
+| `TO_SQL` | 없음 | `FAIL-BIND`, `RETRY_COUNT=0` | TO_SQL을 재생성하지 않고 bind 단계부터 시작 |
+| `BIND_SQL` | `BIND_SET` | `FAIL-TEST`, `RETRY_COUNT=0` | bind를 재생성하지 않고 test 단계부터 시작 |
+| `TEST_SQL` | 없음 | `PASS-CONVERSION`, `RETRY_COUNT=0` | Conversion 완료, Tuning 대상 |
+
+예시:
+
+- `SQL_SEQ 42의 Correct TO_SQL을 저장해줘. SQL: ...`
+- `SQL_SEQ 42의 Correct BIND_SQL과 BIND_SET을 저장해줘.`
+- `SQL_SEQ 42의 Correct TEST_SQL을 저장해줘.`
+
+저장 성공 후 해당 kind만 Vector DB에 동기화한다. 현재 Update Tool은 Correct `BIND_SQL` 저장 시 `BIND_SET`을 JSON 객체 배열로 검증하며 빈 배열은 허용하지 않는다. bind 변수가 없는 SELECT에서 빈 bind set을 허용해야 한다는 운영 정책과는 불일치하므로, 이 경우에는 자동 저장 전에 관리자 확인이 필요하다.
+
+### 유사 SQL 찾기 및 일괄 반영
+
+이 기능은 SQL Conversion 전용이다.
+
+1. Correct SQL을 저장하고 해당 kind의 Vector DB 동기화를 완료한다.
+2. `SQL_SEQ 42와 AS-IS SQL이 유사한 실패 Conversion 작업을 찾아줘.`라고 요청한다.
+3. 후보의 SQL 식별자, target table, `STATUS_CONVERSION`, 유사도를 확인한다.
+4. 승인된 후보에는 `REF_SEQ=42`와 `RETRY_COUNT=0`만 반영한다. 후보는 Correct SQL 종류와 같은 실패 단계여야 한다.
+5. `STATUS_CONVERSION`은 보존된다. 이후 실행 시 해당 stage에서 `REF_SEQ` Correct SQL을 힌트로 사용한다.
+
+유사도 검색은 읽기 전용이다. PASS 행이나 Tuning status를 기준으로 후보를 고르지 않으며, DB Migration에는 이 기능이 없다.
+
+## 5. SQL Tuning과 Formatting
+
+Conversion이 `PASS-CONVERSION`이면 같은 실행 흐름에서 Tuning으로 이어진다.
+
+| 도메인 | status/결과 | 재개 방식 |
+|---|---|---|
+| SQL Tuning | `FAIL-TUNED` | TUNED_TO_SQL 생성/튜닝 규칙 적용부터 재시도 |
+| SQL Tuning | `FAIL-TEST` | 저장된 TUNED_TO_SQL으로 tuned test 생성·검증만 재시도 |
+| SQL Tuning | `PASS-TUNING` | Formatting 대상 |
+| SQL Formatting | `FORMATTED_SQL` 비어 있음 | 이번 실행에서 생성된 SQL만 formatting |
+
+Formatting은 DB의 모든 SQL을 다시 포맷하지 않는다. 해당 실행에서 생성된 SQL 목록만 받아 `FORMATTED_SQL`에 저장한다. 대상이 없으면 `NO_FORMATTING_TARGETS`로 통과한다.
+
+## 6. RAG Guide 관리
+
+| 목적 | `CATEGORY` | `RULE_TYPE` | 주요 입력 |
+|---|---|---|---|
+| Conversion 공통 규칙 | `SQL_CONVERSION` | `GENERAL` | `SOURCE_TABLES`, `GUIDANCE_TEXT` |
+| Conversion 사례 | `SQL_CONVERSION` | `SEARCH` | `SOURCE_TABLES`, `SOURCE_SQL`, `TARGET_SQL` |
+| Tuning 공통 규칙 | `SQL_TUNING` | `GENERAL` | `GUIDANCE_TEXT` |
+| Tuning 사례 | `SQL_TUNING` | `SEARCH` | `GUIDANCE_TEXT`, `SOURCE_SQL`, `TARGET_SQL` |
+
+RAG Guide를 추가/수정/비활성화한 뒤에는 필요할 때 별도로 Vector DB 동기화를 요청한다. Correct SQL 동기화와 RAG Guide 동기화는 서로 다른 작업이다.
+
+## 7. LLM 연결과 실행 요청
+
+LLM 연결은 executor마다 endpoint/API key를 입력하는 방식이 아니다. Langflow에서 공식 OpenAI-compatible Chat Model을 설정하고 각 executor의 `Language Model` 입력에 연결한다.
+
+- 공식 모델 노드: `model_name`, `api_key`, `base_url`, `temperature` 설정
+- 배치 실행: `stream=False`, `stream_usage=False`
+- executor: 연결된 `LanguageModel`에 SQL/라우팅 프롬프트를 전달할 뿐 API key나 endpoint를 받지 않음
+- RAG embedding endpoint/API key/model은 Chat Model 설정과 별도
+
+실행 예시:
+
+- `MAP_ID 101 Migration을 실행해줘.`
+- `SQL_SEQ 42 Conversion을 재실행해줘.`
+- `PAYMENT 공간의 실패한 SQL Conversion 작업을 실행해줘.`
+- `전체 workflow의 남은 작업을 실행해줘.`
+
+## 8. 자주 보는 문제
+
+| 증상 | 확인할 내용 |
 |---|---|
-| Migration 상태·최근 로그 | `MAP_ID=101 상태와 최근 로그 5건 보여줘.` |
-| Migration SQL 조회 | `MAP_ID=101의 MIG_SQL, VERIFY_SQL, VERIFY2_SQL 원문 보여줘.` |
-| SQL job 상태 | `SQL_ID=S001, SPACE_NM=PAYMENT 상태와 최근 로그 보여줘.` |
-| 실패 원인 | `최근 SQL Conversion 실패 10건 원인 요약해줘.` |
-| RAG Guide 조회 | `SQL Conversion RAG Guide 중 CUSTOMER가 포함된 항목 20건 조회해줘.` |
+| 자동 실행 후보에 없음 | status가 NULL/`FAIL-*`인지, `RETRY_COUNT < 2`인지, Migration은 `USE_YN='Y'`인지 확인 |
+| Correct SQL 저장 뒤 실행되지 않음 | 저장은 실행 요청이 아니다. 저장된 status를 확인하고 별도로 실행 요청 |
+| `FAIL-BIND`인데 TO_SQL이 없음 | TO_SQL을 새로 만들지 않고 `FAIL-BIND`를 유지한다. 데이터 정합성을 확인 후 올바른 단계 SQL 저장 |
+| Correct SQL이 검색되지 않음 | 저장 뒤 해당 kind의 Vector DB 동기화가 완료됐는지 확인 |
+| Migration 유사 작업 일괄 반영 요청 | 지원하지 않는다. MAP_ID별 Correct SQL 저장과 동기화를 수행 |
+| Formatting 결과가 없음 | Tuning이 PASS인지, 이번 실행에서 생성된 SQL이 있는지 확인 |
+
+상세 상태 전이, LLM 연결 구조, DB 컬럼과 logging 규칙은 개발자용 [아키텍처 가이드](00_architecture.md)를 참고한다.

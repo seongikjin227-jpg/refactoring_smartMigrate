@@ -11,12 +11,6 @@ from lfx.custom.custom_component.component import Component
 from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
 from lfx.schema.data import Data
 
-try:
-    from lfx.io import DataInput
-except Exception:
-    DataInput = MessageTextInput
-
-
 class NewType04UpdateCommandTool(Component):
     display_name = "04 Update Command Tool"
     description = "Runs fixed SQL update actions for SmartMigrate management requests."
@@ -35,7 +29,6 @@ class NewType04UpdateCommandTool(Component):
                 '{"action":"clear_migration_mig_sql","map_id":101}]}'
             ),
         ),
-        DataInput(name="payload_json", display_name="Payload JSON", required=False),
         StrInput(name="db_host", display_name="DB Host", required=True),
         IntInput(name="db_port", display_name="DB Port", value=1521, required=False),
         StrInput(name="db_service_name", display_name="DB Service Name", required=True),
@@ -602,8 +595,6 @@ class NewType04UpdateCommandTool(Component):
 
     def _parse_command(self) -> dict[str, Any]:
         raw = getattr(self, "command_json", "")
-        if not raw:
-            raw = getattr(self, "payload_json", "")
         if isinstance(raw, Data):
             return dict(raw.data or {})
         if isinstance(raw, dict):

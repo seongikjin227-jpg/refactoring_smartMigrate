@@ -13,11 +13,6 @@ from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
 from lfx.schema.data import Data
 
 try:
-    from lfx.io import DataInput
-except Exception:
-    DataInput = MessageTextInput
-
-try:
     from lfx.io import FloatInput
 except Exception:
     FloatInput = IntInput
@@ -41,7 +36,6 @@ class NewType04RagCommandTool(Component):
             tool_mode=True,
             info='Examples: {"action":"query","category":"SQL_CONVERSION","limit":10}, {"action":"query_correct_sql","sql_seq":42}, {"action":"search_similar_asis_sql","sql_seq":42,"status_filter":"FAIL_ONLY"}',
         ),
-        DataInput(name="payload_json", display_name="Payload JSON", required=False),
         StrInput(name="db_host", display_name="DB Host", required=True),
         IntInput(name="db_port", display_name="DB Port", value=1521, required=False),
         StrInput(name="db_service_name", display_name="DB Service Name", required=True),
@@ -648,8 +642,6 @@ class NewType04RagCommandTool(Component):
     # Langflow 입력에서 명령 JSON을 읽어 딕셔너리로 파싱한다.
     def _parse_command(self) -> dict[str, Any]:
         raw = getattr(self, "command_json", "")
-        if not raw:
-            raw = getattr(self, "payload_json", "")
         if isinstance(raw, Data):
             parsed = dict(raw.data or {})
         elif isinstance(raw, dict):

@@ -68,7 +68,6 @@ class NewType04SaveVectorDB(Component):
                 'for Migration. Use {"action":"sync_all"} for RAG/AS-IS sync and collection creation.'
             ),
         ),
-        DataInput(name="payload_json", display_name="Payload JSON", required=False),
         StrInput(name="db_host", display_name="DB Host", required=True),
         IntInput(name="db_port", display_name="DB Port", value=1521, required=False),
         StrInput(name="db_service_name", display_name="DB Service Name", required=True),
@@ -231,7 +230,7 @@ class NewType04SaveVectorDB(Component):
         # 4. 필요한 Milvus collection이 존재하는지 확인하고 없으면 생성한다.
         # 5. 변경된 active row는 upsert하고, 더 이상 유효하지 않은 문서는 비활성화한다.
         started = time.perf_counter()
-        payload = self._parse_payload(getattr(self, "payload_json", ""))
+        payload: dict[str, Any] = {}
         db_config = self._db_config()
         milvus_config = self._milvus_config()
         embed_config = self._embed_config()
@@ -330,7 +329,7 @@ class NewType04SaveVectorDB(Component):
         clean = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.I)
         parsed = json.loads(clean)
         if not isinstance(parsed, dict):
-            raise ValueError("payload_json must be a JSON object")
+            raise ValueError("command_json must be a JSON object")
         return parsed
 
     # Milvus collection 존재 여부를 확인하고 없으면 schema에 맞춰 생성한다.

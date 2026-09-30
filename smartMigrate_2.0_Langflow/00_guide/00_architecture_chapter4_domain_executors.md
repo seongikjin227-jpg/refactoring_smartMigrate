@@ -81,6 +81,7 @@ flowchart TD
     RESUME --> V_HINT[Search VERIFY_SQL hint]
     V_HINT --> V_GEN[Generate VERIFY_SQL only]
     V_GEN --> VERIFY[Execute Count Verify SQL]
+    V_GEN -->|generate error| FTEST[FAIL-TEST]
     STAGE -->|FAIL-TEST2| RECORD[STATUS=RUNNING-FAIL-TEST2]
     RECORD --> VERIFY2[Execute record verify only]
     EXEC -->|truncate error| FTRUNC[FAIL-TRUNCATE]
@@ -113,6 +114,7 @@ flowchart LR
     PRIOR -->|prior pending/running| WAIT[NOT_RUNNABLE, no DB update]
     STAGE -->|NULL / FAIL-TRUNCATE / FAIL-INSERT| RUN[Mark RUNNING] --> HINT[Correct MIG_SQL hint] --> GEN[Generate MIG_SQL + VERIFY_SQL] --> SAVE[Persist SQL] --> EXEC[Execute migration SQL] --> VERIFY[Execute Count Verify SQL]
     STAGE -->|FAIL-TEST| RESUME[Mark RUNNING-FAIL-TEST] --> V_HINT[Correct VERIFY_SQL hint] --> V_GEN[Generate VERIFY_SQL only] --> VERIFY
+    V_GEN -->|generate error| FTEST[FAIL-TEST]
     STAGE -->|FAIL-TEST2| RECORD[Mark RUNNING-FAIL-TEST2] --> VERIFY2[Record Verify only]
     EXEC -->|truncate error| FTRUNC[FAIL-TRUNCATE]
     GEN -->|generate error| FINSERT[FAIL-INSERT]
@@ -177,8 +179,10 @@ DBA mapping rule 작성 기준은 `12C_sql_conversion_mapping_rule_contract.md`�
 
 | 항목 | 내용 |
 |---|---|
-| 대상 key | `SPACE_NM`, `SQL_ID` |
+| 대상 key | `SQL_SEQ` 우선, 없으면 `SPACE_NM` + `SQL_ID` |
 | workflow log `MAP_ID` | `SQL_SEQ`만 기록 (`SQL_SEQ` 누락 비정상 row는 `0`) |
+| `Language Model` | 필수 `LanguageModel` 입력. 공식 Chat Model 노드에서 model/API key/base URL/temperature를 설정한다. 배치 실행은 `stream=False`, `stream_usage=False`다. |
+| RAG 입력 | `rag_embed_*`, `milvus_*`, `rag_collection_name`, `correct_sql_collection_name`, `asis_sql_collection_name` |
 | 입력 SQL | 기본 `EDIT_FR_SQL`(없으면 `FR_SQL`), 저장된 `TUNED_FR_SQL`이 있으면 그것을 우선 사용 |
 | 필수 mapping | `TARGET_TABLE`이 있어야 mapping rule 조회 가능 |
 | 생성 CLOB | `TO_SQL`, `BIND_SQL`, `BIND_SET`, `TEST_SQL`, 마지막 재시도 사전 튜닝 결과인 `TUNED_FR_SQL` |
@@ -193,19 +197,19 @@ flowchart TD
     J[SQL_ID + SPACE_NM or SQL_SEQ] --> LOAD[Load NEXT_SQL_INFO row]
     LOAD --> CHECK{TARGET_TABLE exists?}
     CHECK -->|no| FTOBE[FAIL-TOBE]
-    CHECK -->|yes| STAGE{Start STATUS_CONVERSION}
+    CHECK -->|yes| CTX[Load mapping/RAG context<br/>and Correct SQL hints]
+    CTX --> REF{REF_SEQ set?}
+    REF -->|yes| EXACT[Load exact active Correct SQL<br/>TO_SQL/BIND_SQL/TEST_SQL]
+    REF -->|no| HINT[Search SM_CORRECT_SQL_CONVERSION]
+    EXACT --> STAGE{Start STATUS_CONVERSION}
+    HINT --> STAGE
     STAGE -->|NULL / FAIL-TOBE / other FAIL-*| RUN[STATUS_CONVERSION=RUNNING<br/>start TO_SQL generation]
     STAGE -->|FAIL-BIND| RUNB[STATUS_CONVERSION=RUNNING<br/>start BIND_SQL generation]
-    STAGE -->|FAIL-TEST and BIND_SQL exists| RUNT[STATUS_CONVERSION=RUNNING<br/>start TEST_SQL generation]
+    STAGE -->|FAIL-TEST| RUNT[STATUS_CONVERSION=RUNNING<br/>start TEST_SQL generation]
     RUN --> SOURCE[Use saved TUNED_FR_SQL<br/>or EDIT_FR_SQL / FR_SQL]
     RUNB --> BIND
     RUNT --> TEST
-    SOURCE --> RAG[Load GENERAL / SEARCH rules<br/>NEXT_MIG_RAG_INFO + Milvus]
-    RAG --> REF{REF_SEQ set?}
-    REF -->|yes| EXACT[Load exact active Correct SQL<br/>from SM_CORRECT_SQL_CONVERSION]
-    REF -->|no| HINT[Search SM_CORRECT_SQL_CONVERSION]
-    EXACT --> TOBE
-    HINT --> TOBE[Generate TO_SQL]
+    SOURCE --> TOBE[Generate TO_SQL]
     TOBE --> BIND[Generate BIND_SQL]
     BIND --> EXBIND[Execute BIND_SQL]
     EXBIND --> SET[Build up to 3 bind cases -> BIND_SET]
@@ -228,12 +232,16 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    J[SPACE_NM + SQL_ID] --> LOAD[Load SQL row] --> CHECK{TARGET_TABLE?} --> STAGE{Start STATUS_CONVERSION}
+    J[SQL_SEQ or SPACE_NM + SQL_ID] --> LOAD[Load SQL row] --> CHECK{TARGET_TABLE?}
+    CHECK -->|yes| CTX[Load mapping/RAG + Correct SQL hints]
+    CTX --> REF{REF_SEQ?}
+    REF -->|yes| EXACT[Exact Correct SQL] --> STAGE{Start STATUS_CONVERSION}
+    REF -->|no| HINT[Similar Correct SQL hint] --> STAGE
     STAGE -->|NULL / FAIL-TOBE / other FAIL-*| RUN[Mark RUNNING → TO_SQL] --> SOURCE[Saved TUNED_FR_SQL or original source]
     STAGE -->|FAIL-BIND| RUNB[Mark RUNNING → BIND_SQL] --> BIND
-    STAGE -->|FAIL-TEST + BIND_SQL| RUNT[Mark RUNNING → TEST_SQL] --> TEST
+    STAGE -->|FAIL-TEST| RUNT[Mark RUNNING → TEST_SQL] --> TEST
     CHECK -->|no| FTOBE[FAIL-TOBE]
-    SOURCE --> RAG[RAG rules] --> HINT[Correct SQL hint] --> TOBE[Generate TO_SQL] --> BIND[Generate + execute BIND_SQL] --> SET[Build BIND_SET] --> TEST[Generate + execute TEST_SQL] --> VAL{Counts valid and equal?}
+    SOURCE --> TOBE[Generate TO_SQL] --> BIND[Generate + execute BIND_SQL] --> SET[Build BIND_SET] --> TEST[Generate + execute TEST_SQL] --> VAL{Counts valid and equal?}
     VAL -->|yes| PASS[PASS-CONVERSION]
     VAL -->|no| FTEST[FAIL-TEST]
     TOBE -->|empty/error| RETRY{Retry left?}
@@ -250,10 +258,13 @@ flowchart LR
 |---|---|---|
 | `NULL`, `FAIL-TOBE`, 그 밖의 `FAIL-*` | `GENERATE_TOBE_SQL` | `TO_SQL`부터 다시 생성 |
 | `FAIL-BIND` | `GENERATE_BIND_SQL` | `TO_SQL`은 재사용하고 `BIND_SQL`·`BIND_SET`부터 다시 생성 |
-| `FAIL-TEST` + `BIND_SQL` 존재 | `GENERATE_TEST_SQL` | `TO_SQL`·`BIND_SQL`·`BIND_SET`을 재사용하고 `TEST_SQL`부터 다시 생성/검증 |
-| `FAIL-TEST` + `BIND_SQL` 없음 | `GENERATE_TOBE_SQL` | 불완전한 중간 산출물로 보아 `TO_SQL`부터 다시 생성 |
+| `FAIL-TEST` | `GENERATE_TEST_SQL` | `TO_SQL`·`BIND_SQL`·`BIND_SET`을 있는 값만 재사용하고 `TEST_SQL`부터 다시 생성/검증한다. `BIND_SET`이 비어 있으면 빈 값으로 Test SQL prompt에 전달한다. `TO_SQL`까지 없으면 `FAIL-TEST`를 보존하고 TO_SQL을 재생성하지 않는다. |
 
 `USER_EDITED` 및 SQL CLOB의 존재 여부는 시작 분기 자체가 아니라 Management가 저장 시 전진시킨 `STATUS_CONVERSION`과 위의 필수 중간 산출물 존재 여부로만 판단한다.
+
+`REF_SEQ`가 있으면 시작 상태와 무관하게, graph 시작 전에 해당 Correct SQL row의 `TO_SQL`·`BIND_SQL`·`TEST_SQL` hint를 exact 조회한다. 따라서 `FAIL-BIND` 재개도 exact Correct `BIND_SQL`이 Bind 생성 프롬프트에 포함된다. `REF_SEQ`가 없을 때만 유사도 검색 hint를 사용한다.
+
+재개 실행 중 RAG·LLM·중간 산출물 오류가 나더라도 시작 실패 상태보다 이전 상태로 역행하지 않는다. 즉 `FAIL-BIND`는 `FAIL-TOBE`로 내려가지 않고, `FAIL-TEST`는 `FAIL-BIND`/`FAIL-TOBE`로 내려가지 않는다. 이후 TEST 검증 실패처럼 더 뒤 단계의 실패만 상태를 전진시킬 수 있다.
 
 ### 마지막 재시도: `TUNED_FR_SQL` 사전 튜닝
 
@@ -381,7 +392,7 @@ SQL Formatting은 `STATUS_CONVERSION`, `STATUS_TUNING`을 변경하지 않는다
 | 도메인 | `MIG_KIND` | `MAP_ID` 저장 방식 | `GENERATE_SQL` |
 |---|---|---|---|
 | DB Migration | `DB_MIGRATION` | 실제 `MAP_ID` | prompt, MIG_SQL, VERIFY_SQL, 실패 SQL |
-| SQL Conversion | `SQL_CONVERSION` | `sql_seq` 또는 `sql_id / space_nm` | `TO_SQL`, `BIND_SQL`, `TEST_SQL`, prompt |
+| SQL Conversion | `SQL_CONVERSION` | `SQL_SEQ`만 기록; 누락 시 `0` | `TO_SQL`, `BIND_SQL`, `TEST_SQL`, prompt |
 | SQL Tuning | `SQL_TUNING` | `sql_id / space_nm` | `TUNED_TO_SQL`, tuned test SQL, prompt |
 | SQL Formatting | `SQL_FORMATTING` | `sql_id / space_nm` 또는 formatting item key | formatted SQL/prompt |
 
@@ -390,21 +401,70 @@ SQL Formatting은 `STATUS_CONVERSION`, `STATUS_TUNING`을 변경하지 않는다
 | 도메인 | 기본 retry | retry 기준 |
 |---|---|---|
 | DB Migration | `max_retry=2` | `FAIL-TRUNCATE`, `FAIL-INSERT`, `FAIL-TEST`(count), `FAIL-TEST2`(record context)에 따라 generate/execute/verify 단계 재시도 |
-| SQL Conversion | `max_retry=2` | `FAIL-TOBE`, `FAIL-BIND`, `FAIL-TEST` 단계별 재생성 |
+| SQL Conversion | `max_retry=2` | `FAIL-TOBE`, `FAIL-BIND`, `FAIL-TEST` 단계별 재개. 시작 실패 status보다 이전 실패 상태로 역행하지 않음 |
 | SQL Tuning | `max_retry=2` | `FAIL-TUNED`, `FAIL-TEST` 단계별 재시도 |
 | SQL Formatting | `max_retry=2` | formatting 결과 empty/error 시 재시도 |
 
-## 4.8 LLM 설정 공통 필드
+## 4.8 LLM 연결 공통 규칙
 
-| 필드 | 기본/의미 |
+| 설정 | 의미 |
 |---|---|
-| `llm_base_url` | OpenAI-compatible `/chat/completions` base URL |
-| `llm_api_key` | LLM API key |
-| `llm_provider` | provider 식별용 optional |
-| `llm_model` | 기본 `GLM-5.1` |
-| `llm_fallback_models` | 기본 `GLM-5.1,Qwen3.6-35B-A3B,Kimi-K2.5` |
-| `llm_max_tokens` | 10C/17C 4096, 15C 8192 등 컴포넌트별 기본값 |
-| `llm_timeout_seconds` | 긴 SQL 생성을 고려해 기본 900초 |
+| `Language Model` | 각 LLM 사용 컴포넌트의 필수 HandleInput. 공식 OpenAI-compatible Chat Model output을 연결한다. |
+| model/API key/base URL/temperature/max tokens | Executor가 아니라 공식 Chat Model 노드에서 설정한다. |
+| `stream`, `stream_usage` | SQL/라우팅/분석 배치 호출은 각각 `False`로 설정한다. |
+| fallback model / direct HTTP | 활성 실행 경로는 provider 판별, API key fallback, 직접 `/chat/completions` 호출을 하지 않는다. 모델 선택/재시도 정책은 연결된 모델 노드 또는 운영 flow가 담당한다. |
+
+### 4.8.1 AS-IS 직접 HTTP 방식과 현재 연결 방식 비교
+
+과거 executor는 LLM 연결 정보를 자기 입력/payload/environment에서 조합해 HTTP 요청을 직접 만들었다. 현재 executor는 **연결된 공식 Chat Model이 만든 LangChain `LanguageModel` 객체 하나만** 받는다. 따라서 endpoint, API key, 모델명은 executor의 책임이 아니다.
+
+| 구분 | AS-IS: executor가 직접 호출 | 현재: Langflow 공식 Chat Model 연결 |
+|---|---|---|
+| executor import | `urllib.request`, `json`, `os`로 URL/headers/body 구성 및 환경변수 fallback | `HandleInput`으로 `LanguageModel`을 받고, 호출 시 `langchain_core.messages.HumanMessage`, `SystemMessage`만 import |
+| 모델 생성 위치 | executor의 `_llm_config()` 및 direct HTTP helper 내부 | 공식 Chat Model 컴포넌트의 `build_model()` 내부. 이 컴포넌트가 `LCModelComponent`를 상속하고 `ChatOpenAI(...)`를 생성 |
+| executor LLM 입력 | `llm_base_url`, `llm_api_key`, `llm_provider`, `llm_model`, `llm_fallback_models`, `llm_timeout_seconds` 및 `payload.llm_config` | `HandleInput(name="llm", input_types=["LanguageModel"])` 하나 |
+| 인증/endpoint | executor가 `Authorization: Bearer ...`, `Content-Type: application/json`, `/chat/completions` URL을 조립 | 공식 Chat Model의 `api_key`, `base_url`이 `ChatOpenAI(openai_api_key=..., base_url=...)`로 전달 |
+| request body | executor가 `model`, `temperature`, `stream`, `messages` JSON body를 조립 | 공식 Chat Model이 `model_name`, `temperature`, `stream`으로 모델 객체를 만들고 LangChain이 provider 요청을 처리 |
+| 호출 | `urllib.request.Request`/`urlopen` 및 provider/fallback 분기 | executor가 `llm.invoke([SystemMessage(...), HumanMessage(...)])` 호출 |
+| 실패 처리 | executor가 provider별 응답 파싱 및 fallback model 순서를 직접 제어 | 모델 객체의 예외를 executor의 도메인 retry/status 흐름이 처리. provider/model fallback은 공식 모델 노드 또는 운영 flow 설정 영역 |
+
+현재 10C Executor3는 직접 HTTP helper도 활성 경로에 남기지 않았고, 12C/15C/17C의 `_legacy_direct_http_*` 및 `_llm_config()`은 과거 코드 보존용 정의일 뿐 **현재 `run_job()`에서 호출하지 않는다**. 활성 경로는 모두 `self._required_llm()`과 `.invoke()`다.
+
+### 4.8.2 공식 Chat Model의 변수와 executor의 전달 관계
+
+공식 OpenAI-compatible Chat Model 노드에서 사용하는 대표 변수는 아래와 같다. 이름을 executor의 옛 `llm_*` 이름으로 바꾸지 않는다.
+
+| 공식 Chat Model 변수 | 전달 대상/용도 | executor에서의 처리 |
+|---|---|---|
+| `model_name` | `build_model()` → `ChatOpenAI(model_name=...)` | executor는 모델명을 받지 않는다. 응답 모델 객체의 `model_name` 또는 `model`을 로그 식별용으로만 읽는다. |
+| `api_key` | `build_model()` → `ChatOpenAI(openai_api_key=...)` | executor/payload/환경변수로 전달하지 않는다. |
+| `base_url` | `build_model()` → `ChatOpenAI(base_url=...)` | executor/payload/환경변수로 전달하지 않는다. 사내 OpenAI-compatible endpoint는 여기 설정한다. |
+| `temperature` | `build_model()` → `ChatOpenAI(temperature=...)` | executor가 body에 다시 넣지 않는다. |
+| `stream` | `build_model()` → `ChatOpenAI(streaming=...)` 또는 해당 공식 컴포넌트의 stream 설정 | 배치 executor에서는 `False`. `.invoke()`의 완결 응답만 사용한다. |
+| `stream_usage` | 공식 모델 노드의 streaming usage 수집 설정 | stream을 사용하지 않으므로 `False`. |
+| `system_message`, `input_value` | 공식 Chat Model을 채팅 출력으로 직접 사용할 때 messages 구성에 쓰이는 값 | 10C/12C/15C/17C executor는 자신의 SQL/라우팅 프롬프트를 만들어 `SystemMessage`/`HumanMessage`로 `.invoke()`에 직접 전달한다. 따라서 executor 연결에서 이 두 값을 별도 payload로 넘기지 않는다. |
+
+정리하면 현재 flow 연결은 다음 한 줄이다.
+
+```text
+Official Chat Model output (LanguageModel)
+    → Executor `llm` HandleInput
+    → `_required_llm()`
+    → `_call_llm_json()` 또는 `_call_llm_text()` / `_call_formatter_prompt()`
+    → `llm.invoke([SystemMessage(system), HumanMessage(prompt)])`
+```
+
+### 4.8.3 컴포넌트별 실제 호출 함수
+
+| 컴포넌트 | 모델 객체 수집 | LLM 호출 함수 | 프롬프트 전달 형식 |
+|---|---|---|---|
+| 10C Executor3 | `_required_llm()` | `_call_llm_json(...)` | `system_anthropic`/`system_openai` 중 선택한 system + migration prompt를 message list로 전달 |
+| 12C SQL Conversion | `_required_llm()` | `_call_llm_text(prompt, llm)` | SQL conversion 단계별 system + prompt를 message list로 전달 |
+| 15C SQL Tuning | `_required_llm()` | `_call_llm_text(prompt, llm, system=...)` | tuning/test 목적별 system 문구 + prompt를 message list로 전달 |
+| 17C SQL Formatting | `_required_llm()` | `_call_formatter_prompt(prompt, llm, ...)` | formatter system 문구 + batch formatting prompt를 message list로 전달 |
+| Router / Failure Analyzer | `_required_llm()` 또는 동일 검증 | 각 컴포넌트의 invoke helper | router/analysis용 system + user prompt를 message list로 전달 |
+
+`RAG Embed Base URL`, `RAG Embed API Key`, `RAG Embed Model`은 embedding/Milvus 검색 전용 설정이다. Chat Model의 `base_url`/`api_key`와 혼용하지 않는다.
 
 ## 4.9 도메인별 상태 전이 요약
 

@@ -555,6 +555,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             "sql_conversion_examples": sql_conversion_examples, "correct_sql_hints": correct_sql_hints,
             "max_retry": self._max_retry(), "attempt_no": 1, "retry_count": 0,
             "last_status": FAIL_TOBE, "last_message": "SQL conversion failed.",
+            "initial_failure_status": self._status(job.get("status_conversion")),
             "to_sql": str(job.get("to_sql") or "").strip(),
             "bind_sql": str(job.get("bind_sql") or "").strip(),
             "bind_set": str(job.get("bind_set") or "") or None,
@@ -600,14 +601,24 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                     next_state["generated_sql_columns"] = [*(state.get("generated_sql_columns") or []), "TUNED_FR_SQL"]
                 return next_state
             except Exception as exc:
-                state["last_status"], state["last_message"], state["resume_stage"] = FAIL_TOBE, str(exc), "TUNE_FR_SQL"
+                state["last_status"] = self._non_regressive_failure_status(state, FAIL_TOBE)
+                state["last_message"] = str(exc)
+                state["resume_stage"] = "TUNE_FR_SQL" if state.get("resume_stage") == "GENERATE_TOBE_SQL" else state.get("resume_stage")
                 state["node_failed"] = True
-                state["attempts"].append({"attempt": state["attempt_no"], "stage": "TUNE_FR_SQL", "status": FAIL_TOBE, "reason": str(exc)})
-                logger.error(str(exc), extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "TUNED_FR_SQL", "ERROR", "TUNE_FR_SQL", FAIL_TOBE, state["retry_count"]]})
+                state["attempts"].append({"attempt": state["attempt_no"], "stage": "TUNE_FR_SQL", "status": state["last_status"], "reason": str(exc)})
+                logger.error(str(exc), extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "TUNED_FR_SQL", "ERROR", "TUNE_FR_SQL", state["last_status"], state["retry_count"]]})
                 return state
 
         # 2번 노드: TO_SQL을 생성하거나 재사용하고 NEXT_SQL_INFO에 저장한다.
         def generate_tobe_node(state: dict[str, Any]) -> dict[str, Any]:
+            if state.get("resume_stage") in {"GENERATE_BIND_SQL", "GENERATE_TEST_SQL"} and not state.get("to_sql"):
+                message = "Resume requires persisted TO_SQL; status is preserved and TO_SQL is not regenerated."
+                state["last_status"] = self._non_regressive_failure_status(state, FAIL_TOBE)
+                state["last_message"] = message
+                state["node_failed"] = True
+                state["attempts"].append({"attempt": state["attempt_no"], "stage": "REUSE_TOBE_SQL", "status": state["last_status"], "reason": message})
+                logger.error(message, extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "TOBE_SQL", "ERROR", "REUSE_TOBE_SQL", state["last_status"], state["retry_count"]]})
+                return state
             if state.get("resume_stage") != "GENERATE_TOBE_SQL" and state.get("to_sql"):
                 reason = self._stage_reuse_reason(state, "TOBE_SQL")
                 state["attempts"].append({"attempt": state["attempt_no"], "stage": "REUSE_TOBE_SQL", "status": CONVERSION_PASS, "reason": reason})
@@ -637,11 +648,12 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 state["resume_stage"] = "GENERATE_BIND_SQL" if state["tag_kind"] == "SELECT" else "SKIP_TEST_FOR_NON_SELECT"
                 return state
             except Exception as exc:
-                state["last_status"], state["last_message"], state["resume_stage"] = FAIL_TOBE, str(exc), "GENERATE_TOBE_SQL"
+                state["last_status"] = self._non_regressive_failure_status(state, FAIL_TOBE)
+                state["last_message"], state["resume_stage"] = str(exc), "GENERATE_TOBE_SQL"
                 state["to_sql"] = ""
                 state["node_failed"] = True
-                state["attempts"].append({"attempt": state["attempt_no"], "stage": "GENERATE_TOBE_SQL", "status": FAIL_TOBE, "reason": str(exc)})
-                logger.error(str(exc), extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "TOBE_SQL", "ERROR", "GENERATE_TOBE_SQL", FAIL_TOBE, state["retry_count"]]})
+                state["attempts"].append({"attempt": state["attempt_no"], "stage": "GENERATE_TOBE_SQL", "status": state["last_status"], "reason": str(exc)})
+                logger.error(str(exc), extra={"workflow_log": [state["map_id"], "SQL_CONVERSION", "TOBE_SQL", "ERROR", "GENERATE_TOBE_SQL", state["last_status"], state["retry_count"]]})
                 return state
 
         # 3번 노드: SELECT 작업이면 bind 후보 SQL과 BIND_SET을 만든다.
@@ -1007,6 +1019,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         retry_count_override: int | None = None,
     ) -> dict[str, Any]:
         """source status 값을 기준으로 SQL conversion 실패를 저장한다."""
+        status = self._non_regressive_failure_status({"initial_failure_status": self._status(job.get("status_conversion"))}, status)
         failure_attempts = attempts or [{"attempt": 1, "stage": self._failure_stage(status), "status": status, "reason": message}]
         if self._has_sql_key(job):
             update_values = {
@@ -1214,6 +1227,14 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             return "GENERATE_TEST_SQL"
         return "GENERATE_TOBE_SQL"
 
+    @staticmethod
+    def _non_regressive_failure_status(state: dict[str, Any], proposed_status: str) -> str:
+        """Never persist a failure stage earlier than the row's starting failure stage."""
+        rank = {FAIL_TOBE: 1, FAIL_BIND: 2, FAIL_TEST: 3}
+        initial = str(state.get("initial_failure_status") or "").strip().upper()
+        proposed = str(proposed_status or FAIL_TOBE).strip().upper()
+        return initial if rank.get(initial, 0) > rank.get(proposed, 0) else proposed
+
     # 사용자가 실패 row를 보정했고 일부 SQL이 남아 있을 때 재개 지점을 결정한다.
     # 사용자 보정 실패 row가 어느 생성 단계부터 재개해야 하는지 결정한다.
     def _initial_resume_stage(self, job: dict[str, Any], tag_kind: str, to_sql: str, bind_sql: str) -> str:
@@ -1225,7 +1246,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             return "GENERATE_BIND_SQL"
         if str(tag_kind or "").strip().upper() != "SELECT":
             return "SKIP_TEST_FOR_NON_SELECT"
-        if status == FAIL_TEST and str(bind_sql or "").strip():
+        if status == FAIL_TEST:
             return "GENERATE_TEST_SQL"
         if status.startswith("FAIL-"):
             return "GENERATE_TOBE_SQL"
