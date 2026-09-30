@@ -1400,8 +1400,9 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         return "TO_CHAR(SPACE_NM) = :space_nm AND TO_CHAR(SQL_ID) = :sql_id", {"space_nm": space_nm, "sql_id": sql_id}
 
     def _workflow_log_job_id(self, job: dict[str, Any]) -> str:
-        """Use SQL_SEQ only for the SQL Conversion workflow-log MAP_ID field."""
-        return str(job.get("sql_seq") or "0").strip() or "0"
+        """Use a self-describing SQL_SEQ value for the SQL workflow-log MAP_ID field."""
+        sql_seq = str(job.get("sql_seq") or "0").strip() or "0"
+        return f"SQL_SEQ = {sql_seq}"
 
     # payload/job에 SQL row를 특정할 key가 있는지 확인한다.
     def _has_sql_key(self, job: dict[str, Any]) -> bool:

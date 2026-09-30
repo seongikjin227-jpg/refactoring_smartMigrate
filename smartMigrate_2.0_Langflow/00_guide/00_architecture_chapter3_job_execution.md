@@ -190,9 +190,9 @@ flowchart LR
 | 파일 | route | 입력 | row key |
 |---|---|---|---|
 | `10A_migJobsToLoopTable.py` | `MIG` | selected jobs 또는 DB 자동 실행 대상 MIG | `map_id`, `priority`, `prior_map_id` |
-| `12A_sqlConversionJobsToLoopTable.py` | `SQL_CONVERSION` | selected jobs 또는 DB 자동 실행 대상 conversion | `space_nm`, `sql_id`, `priority` |
-| `15A_sqlTuningJobsToLoopTable.py` | `SQL_TUNING` | selected jobs 또는 DB 자동 실행 대상 tuning | `space_nm`, `sql_id`, `priority` |
-| `17A_sqlFormattingJobsToLoopTable.py` | `SQL_FORMATTING` | selected jobs 또는 DB 자동 실행 대상 formatting | `space_nm`, `sql_id`, `priority` |
+| `12A_sqlConversionJobsToLoopTable.py` | `SQL_CONVERSION` | selected jobs 또는 DB 자동 실행 대상 conversion | `sql_seq`, `priority` |
+| `15A_sqlTuningJobsToLoopTable.py` | `SQL_TUNING` | selected jobs 또는 DB 자동 실행 대상 tuning | `sql_seq`, `priority` |
+| `17A_sqlFormattingJobsToLoopTable.py` | `SQL_FORMATTING` | selected jobs 또는 DB 자동 실행 대상 formatting | `sql_seq`, `priority` |
 | `18A_fullWorkflowJobsToLoopTable.py` | `FULL_WORKFLOW` | 모든 route의 자동 실행 대상 job | `planned_job_route`, `phase_index`, route-level progress |
 
 공통 row 필드:

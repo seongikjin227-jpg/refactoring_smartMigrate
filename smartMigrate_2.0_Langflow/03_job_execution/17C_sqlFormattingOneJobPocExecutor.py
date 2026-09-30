@@ -334,13 +334,13 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
     # 로그에 사용할 MAP_ID 또는 SQL identity를 payload/job에서 추출한다.
     def _log_map_id(self, payload: dict[str, Any], job: dict[str, Any] | None = None, *, required: bool = True) -> str:
         job = job or {}
-        for key in ("map_id", "key_value"):
-            value = payload.get(key) if payload.get(key) is not None else job.get(key)
-            if not self._is_blank_log_value(value):
-                return str(value).strip()[:100]
         sql_identity = self._sql_log_identity(payload, job)
         if sql_identity:
             return sql_identity
+        for key in ("map_id", "key_value"):
+            value = payload.get(key) if payload.get(key) is not None else job.get(key)
+            if not self._is_blank_log_value(value):
+                return f"MAP_ID = {str(value).strip()}"[:100]
         for item in payload.get("generated_sql_list") or []:
             if not isinstance(item, dict):
                 continue
@@ -349,28 +349,22 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                 for key in ("key_value", "map_id"):
                     value = item.get(key)
                     if not self._is_blank_log_value(value):
-                        return str(value).strip()[:100]
+                        return f"MAP_ID = {str(value).strip()}"[:100]
             if table_name == "NEXT_SQL_INFO":
                 sql_identity = self._sql_log_identity(item)
                 if sql_identity:
                     return sql_identity
         if required:
-            raise ValueError("17C SQL formatting log requires NEXT_MIG_INFO.MAP_ID or NEXT_SQL_INFO.SQL_ID + SPACE_NM")
+            raise ValueError("17C SQL formatting log requires NEXT_MIG_INFO.MAP_ID or NEXT_SQL_INFO.SQL_SEQ")
         return "MISSING_IDENTIFIER"
 
     # SPACE_NM/SQL_ID 기반으로 로그 식별자를 만든다. 12C/15C와 같은 SQL row 기준이다.
     def _sql_log_identity(self, *sources: dict[str, Any]) -> str:
         sql_seq = ""
-        sql_id = ""
-        space_nm = ""
         for source in sources:
             if not sql_seq and not self._is_blank_log_value(source.get("sql_seq")):
                 sql_seq = str(source.get("sql_seq")).strip()
-            if not sql_id and not self._is_blank_log_value(source.get("sql_id")):
-                sql_id = str(source.get("sql_id")).strip()
-            if not space_nm and not self._is_blank_log_value(source.get("space_nm")):
-                space_nm = str(source.get("space_nm")).strip()
-        return f"SQL_SEQ={sql_seq} / SQL_ID={sql_id} / SPACE_NM={space_nm}"[:100]
+        return f"SQL_SEQ = {sql_seq}" if sql_seq else ""
 
     # formatting 대상 항목을 중복 없이 구분할 table/row/column key를 만든다.
     def _formatting_item_key(self, table_name: str, item: dict[str, Any]) -> str:

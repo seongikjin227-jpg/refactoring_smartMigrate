@@ -644,6 +644,11 @@ class NewType10CMigOneJobPocExecutor3(Component):
             for item in context.get("target_ddl") or []
             if str(item.get("column_name") or "").strip()
         }
+        nullable_by_column = {
+            self._clean_identifier(str(item.get("column_name") or "")): str(item.get("nullable") or "Y").strip().upper() != "N"
+            for item in context.get("target_ddl") or []
+            if str(item.get("column_name") or "").strip()
+        }
         ddl_missing = [column for column in compare_columns if column not in type_by_column]
         if ddl_missing:
             raise ValueError(f"PK_VERIFY target DDL types are unavailable: {ddl_missing}")
@@ -660,12 +665,17 @@ class NewType10CMigOneJobPocExecutor3(Component):
             f"{target_alias + '.' if target_alias else ''}{column} AS {column}" for column in pk_columns
         )
         asis_concat = self._row_concat_sql(
-            [(column, migration_expressions[column], type_by_column[column]) for column in compare_columns],
+            [(column, migration_expressions[column], type_by_column[column], nullable_by_column[column]) for column in compare_columns],
             continuation_indent="        ",
         )
         tobe_concat = self._row_concat_sql(
             [
-                (column, f"{target_alias}.{column}" if target_alias else column, type_by_column[column])
+                (
+                    column,
+                    f"{target_alias}.{column}" if target_alias else column,
+                    type_by_column[column],
+                    nullable_by_column[column],
+                )
                 for column in compare_columns
             ],
             continuation_indent="        ",
@@ -693,8 +703,11 @@ LEFT JOIN (
     ON {pk_join}"""
         return sql, compare_columns, pk_columns
 
-    def _row_concat_sql(self, columns: list[tuple[str, str, str]], *, continuation_indent: str) -> str:
-        parts = [self._row_concat_value_sql(expression, data_type) for _, expression, data_type in columns]
+    def _row_concat_sql(self, columns: list[tuple[str, str, str, bool]], *, continuation_indent: str) -> str:
+        parts = [
+            self._row_concat_value_sql(expression, data_type, is_nullable)
+            for _, expression, data_type, is_nullable in columns
+        ]
         return f" || '|' ||\n{continuation_indent}".join(parts)
 
     def _format_from_scope(self, from_clause: str, indent: str) -> str:
@@ -705,8 +718,13 @@ LEFT JOIN (
             return scope
         return f"{scope[:where_index].rstrip()}\n{indent}WHERE{scope[where_index + len('WHERE'):] }"
 
-    def _row_concat_value_sql(self, expression: str, data_type: str) -> str:
+    def _row_concat_value_sql(self, expression: str, data_type: str, is_nullable: bool) -> str:
         value_sql = self._normalized_compare_value_sql(expression, data_type)
+        # A target NOT NULL constraint guarantees both values after a successful
+        # INSERT, so the NULL sentinel is unnecessary.  Retain the sentinel for
+        # nullable columns to distinguish NULL from an empty concatenation part.
+        if not is_nullable:
+            return value_sql
         return f"NVL({value_sql} || '', '<NULL>')"
 
     def _normalized_compare_value_sql(self, expression: str, data_type: str) -> str:

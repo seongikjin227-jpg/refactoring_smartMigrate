@@ -46,7 +46,7 @@ flowchart LR
 
 표준 10C는 `10C_migOneJobPocExecutor3.py`이며 `NEXT_MIG_INFO.MAP_ID` 한 건을 처리한다. 이 구현은 INSERT 뒤 count 검증과 record 검증을 모두 수행한다. `10C_migOneJobPocExecutor.py`와 `10C_migOneJobPocExecutor2.py`는 이전 호환 구현으로 취급한다.
 
-`Executor3`는 `MIG_SQL` 실행 뒤 먼저 count 검증을 수행한다. count가 PASS인 경우에만 `INSERT INTO ... (target columns) SELECT ...`의 SELECT 부분을 가상 TOBE 데이터셋으로 만들어, source(AS-IS) PK 기준의 결정적 표본(기본 3건)을 실제 TOBE row와 비교한다. 비교 SQL은 source dataset을 기준으로 `LEFT JOIN`하므로 TOBE에만 새로 존재하는 행은 비교하지 않는다. 이는 Migration이 신규 데이터를 생성하지 않는다는 전제에 따른 것이다. 바깥 SELECT는 행별 concat 값을 반환하지 않고 `MATCH_CNT`, `MISMATCH_CNT` 한 행만 반환하며 `MISMATCH_CNT=0`일 때 PASS다. Verify SQL은 등록일시·등록자·변경일시·변경자 성격의 기본 감사 컬럼을 DDL 기준으로 식별해 `COUNT(column)` 비교에서 제외한다. record verify 로그도 같은 두 집계값만 출력한다. CLOB은 앞 4,000자, BLOB은 앞 4,000 byte까지만 비교·로그한다.
+`Executor3`는 `MIG_SQL` 실행 뒤 먼저 count 검증을 수행한다. count가 PASS인 경우에만 `INSERT INTO ... (target columns) SELECT ...`의 SELECT 부분을 가상 TOBE 데이터셋으로 만들어, source(AS-IS) PK 기준의 결정적 표본(기본 3건)을 실제 TOBE row와 비교한다. 비교 SQL은 source dataset을 기준으로 `LEFT JOIN`하므로 TOBE에만 새로 존재하는 행은 비교하지 않는다. 이는 Migration이 신규 데이터를 생성하지 않는다는 전제에 따른 것이다. 바깥 SELECT는 행별 concat 값을 반환하지 않고 `MATCH_CNT`, `MISMATCH_CNT` 한 행만 반환하며 `MISMATCH_CNT=0`일 때 PASS다. row concat은 target DDL에서 `NULLABLE='N'`인 컬럼에 `NVL` null sentinel을 붙이지 않고, nullable 컬럼에만 `NVL(..., '<NULL>')`을 적용한다. Verify SQL은 등록일시·등록자·변경일시·변경자 성격의 기본 감사 컬럼을 DDL 기준으로 식별해 `COUNT(column)` 비교에서 제외한다. record verify 로그도 같은 두 집계값만 출력한다. CLOB은 앞 4,000자, BLOB은 앞 4,000 byte까지만 비교·로그한다.
 
 count 불일치는 `FAIL-TEST`, 레코드 불일치 또는 레코드 검증 불가(MIG_SQL 구조 미지원 등)는 `FAIL-TEST2`다. 대상 PK가 있으면 그것을 row key로 사용한다. PK가 없는 target은 `Record Verify Key Columns` 입력값을 우선 사용하고, 없으면 MIG_SQL의 non-LOB INSERT 대상 컬럼 전체를 복합 key로 사용한다. 이 fallback에서 target row가 복수이면 검증 실패다. `FAIL-TEST2` 재실행은 INSERT·count verify·LLM generate를 반복하지 않고 `VERIFY_RECORDS`만 다시 수행한다.
 
@@ -180,7 +180,7 @@ DBA mapping rule 작성 기준은 `12C_sql_conversion_mapping_rule_contract.md`�
 | 항목 | 내용 |
 |---|---|
 | 대상 key | `SQL_SEQ` 우선, 없으면 `SPACE_NM` + `SQL_ID` |
-| workflow log `MAP_ID` | `SQL_SEQ`만 기록 (`SQL_SEQ` 누락 비정상 row는 `0`) |
+| workflow log `MAP_ID` | `SQL_SEQ = <값>`만 기록 (`SQL_SEQ` 누락 비정상 row는 `SQL_SEQ = 0`) |
 | `Language Model` | 필수 `LanguageModel` 입력. 공식 Chat Model 노드에서 model/API key/base URL/temperature를 설정한다. 배치 실행은 `stream=False`, `stream_usage=False`다. |
 | RAG 입력 | `rag_embed_*`, `milvus_*`, `rag_collection_name`, `correct_sql_collection_name`, `asis_sql_collection_name` |
 | 입력 SQL | 기본 `EDIT_FR_SQL`(없으면 `FR_SQL`), 저장된 `TUNED_FR_SQL`이 있으면 그것을 우선 사용 |
@@ -297,7 +297,7 @@ flowchart LR
 
 | 항목 | 내용 |
 |---|---|
-| 대상 key | `SPACE_NM`, `SQL_ID` |
+| 대상 key | `SQL_SEQ` |
 | 선행 조건 | `STATUS_CONVERSION IN ('PASS','PASS-CONVERSION')` |
 | 입력 SQL | `TO_SQL` |
 | 생성 CLOB | `TUNED_TO_SQL`, `TUNED_RESULT`, 내부 검증용 tuned test SQL |
@@ -309,7 +309,7 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    J[SQL_ID + SPACE_NM] --> LOAD[Load NEXT_SQL_INFO row]
+    J[SQL_SEQ] --> LOAD[Load NEXT_SQL_INFO row]
     LOAD --> PRE{STATUS_CONVERSION pass?}
     PRE -->|no| THROUGH[Pass-through / no update]
     PRE -->|yes| RUN[STATUS_TUNING=RUNNING]
@@ -329,7 +329,7 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    J[SPACE_NM + SQL_ID] --> LOAD[Load SQL row] --> PRE{Conversion PASS?}
+    J[SQL_SEQ] --> LOAD[Load SQL row] --> PRE{Conversion PASS?}
     PRE -->|no| THROUGH[Pass-through]
     PRE -->|yes| RUN[Mark RUNNING] --> SPLIT[Split TO_SQL blocks] --> RAG[SQL_TUNING RAG] --> TUNE[Generate tuned SQL + result] --> SAVE[Persist partial result] --> TEST[Generate + execute tuned test SQL] --> VAL{Baseline count = tuned count?}
     VAL -->|yes| PASS[PASS-TUNING]
@@ -392,9 +392,9 @@ SQL Formatting은 `STATUS_CONVERSION`, `STATUS_TUNING`을 변경하지 않는다
 | 도메인 | `MIG_KIND` | `MAP_ID` 저장 방식 | `GENERATE_SQL` |
 |---|---|---|---|
 | DB Migration | `DB_MIGRATION` | 실제 `MAP_ID` | prompt, MIG_SQL, VERIFY_SQL, 실패 SQL |
-| SQL Conversion | `SQL_CONVERSION` | `SQL_SEQ`만 기록; 누락 시 `0` | `TO_SQL`, `BIND_SQL`, `TEST_SQL`, prompt |
-| SQL Tuning | `SQL_TUNING` | `sql_id / space_nm` | `TUNED_TO_SQL`, tuned test SQL, prompt |
-| SQL Formatting | `SQL_FORMATTING` | `sql_id / space_nm` 또는 formatting item key | formatted SQL/prompt |
+| SQL Conversion | `SQL_CONVERSION` | `SQL_SEQ = <값>`; 누락 시 `SQL_SEQ = 0` | `TO_SQL`, `BIND_SQL`, `TEST_SQL`, prompt |
+| SQL Tuning | `SQL_TUNING` | `SQL_SEQ = <값>`; 누락 시 `SQL_SEQ = 0` | `TUNED_TO_SQL`, tuned test SQL, prompt |
+| SQL Formatting | `SQL_FORMATTING` | SQL row는 `SQL_SEQ = <값>`, Migration row는 `MAP_ID = <값>` | formatted SQL/prompt |
 
 ## 4.7 Retry 정책
 

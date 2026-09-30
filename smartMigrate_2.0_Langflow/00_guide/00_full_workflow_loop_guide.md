@@ -16,11 +16,11 @@ MIG → SQL_CONVERSION → SQL_TUNING → SQL_FORMATTING
 | Route | queue 원천 | 식별자 | 자동 실행 대상 선정 조건 |
 | --- | --- | --- | --- |
 | `MIG` | `NEXT_MIG_INFO` | `MAP_ID` | `USE_YN='Y' AND STATUS is NULL/FAIL-* AND RETRY_COUNT < 2` |
-| `SQL_CONVERSION` | `NEXT_SQL_INFO` | `SPACE_NM`, `SQL_ID` | `STATUS_CONVERSION is NULL/FAIL-* AND RETRY_COUNT < 2` |
-| `SQL_TUNING` | `NEXT_SQL_INFO` | `SPACE_NM`, `SQL_ID` | conversion이 PASS이고 `STATUS_TUNING is NULL/FAIL-* AND RETRY_COUNT < 2` |
-| `SQL_FORMATTING` | `NEXT_SQL_INFO` | `SPACE_NM`, `SQL_ID` | tuning이 PASS이고 `FORMATTED_SQL`이 비어 있음 |
+| `SQL_CONVERSION` | `NEXT_SQL_INFO` | `SQL_SEQ` | `STATUS_CONVERSION is NULL/FAIL-* AND RETRY_COUNT < 2` |
+| `SQL_TUNING` | `NEXT_SQL_INFO` | `SQL_SEQ` | conversion이 PASS이고 `STATUS_TUNING is NULL/FAIL-* AND RETRY_COUNT < 2` |
+| `SQL_FORMATTING` | `NEXT_SQL_INFO` | `SQL_SEQ` | tuning이 PASS이고 `FORMATTED_SQL`이 비어 있음 |
 
-`18A`는 `MIG`를 `PRIORITY`, `PRIOR_MAP_ID` 의존성 순으로 정렬한다. 또 payload에 같은 job이 중복되어도 MIG는 `MAP_ID`, SQL 계열은 `(SPACE_NM, SQL_ID)` 기준으로 하나만 queue에 넣는다. 따라서 하나의 Full Workflow plan 안에서 동일 Migration job이 두 번 실행되지 않는다.
+`18A`는 `MIG`를 `PRIORITY`, `PRIOR_MAP_ID` 의존성 순으로 정렬한다. 또 payload에 같은 job이 중복되어도 MIG는 `MAP_ID`, SQL 계열은 `SQL_SEQ` 기준으로 하나만 queue에 넣는다. 따라서 하나의 Full Workflow plan 안에서 동일 Migration job이 두 번 실행되지 않는다.
 
 ## 2. 18B의 `item`과 `done`
 

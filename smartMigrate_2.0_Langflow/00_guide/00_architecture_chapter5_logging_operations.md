@@ -19,7 +19,7 @@ flowchart LR
 | 컬럼 | 의미 |
 |---|---|
 | `LOG_ID` | DB sequence 또는 handler가 부여하는 log id |
-| `MAP_ID` | DB Migration은 실제 map id, SQL 계열은 `sql_id / space_nm` 문자열 |
+| `MAP_ID` | DB Migration은 실제 `MAP_ID`를 기록한다. SQL Conversion/Tuning은 `SQL_SEQ = <값>`으로 기록한다. 17C Formatting은 SQL row에 `SQL_SEQ = <값>`, Migration row에 `MAP_ID = <값>`을 기록한다. SQL_SEQ가 없는 비정상 SQL row는 `SQL_SEQ = 0`이다. |
 | `MIG_KIND` | `WORKFLOW`, `DB_MIGRATION`, `SQL_CONVERSION`, `SQL_TUNING`, `SQL_FORMATTING` |
 | `LOG_TYPE` | 기능/단계 대분류. 예: `PROMPT_BUILD`, `TOBE_SQL`, `BIND_SQL`, `VERIFY_SQL`, `JOB_FAIL` |
 | `LOG_LEVEL` | `INFO`, `WARN`, `ERROR` |
@@ -36,9 +36,9 @@ flowchart LR
 |---|---|---|
 | Workflow event | `WORKFLOW` | route, loop, dashboard 이벤트 |
 | DB Migration | `DB_MIGRATION` | SQL 계열 로그와 섞지 않는다. |
-| SQL Conversion | `SQL_CONVERSION` | `MAP_ID`가 `sql_id / space_nm` 형식이다. |
-| SQL Tuning | `SQL_TUNING` | tuning prompt/result/validation 로그 |
-| SQL Formatting | `SQL_FORMATTING` | formatting 대상과 결과 로그 |
+| SQL Conversion | `SQL_CONVERSION` | `MAP_ID` field는 `SQL_SEQ = <값>`만 기록한다. |
+| SQL Tuning | `SQL_TUNING` | `MAP_ID` field는 `SQL_SEQ = <값>`만 기록하며 tuning prompt/result/validation을 남긴다. |
+| SQL Formatting | `SQL_FORMATTING` | SQL row는 `SQL_SEQ = <값>`, Migration row는 `MAP_ID = <값>`만 기록한다. |
 
 `NEXT_SQL_LOG`는 사용하지 않는다. SQL Conversion/Tuning/Formatting 로그도 모두 `NEXT_MIG_LOG`에 저장한다.
 

@@ -1046,9 +1046,10 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
     def _failure_stage(self, status: str) -> str:
         return "GENERATE_TUNED_TEST_SQL" if status == FAIL_TEST else "APPLY_TUNING_RULES"
 
-    # 로그에 사용할 MAP_ID를 job/payload에서 문자열로 추출한다.
+    # SQL 계열 workflow log MAP_ID는 SQL_SEQ만 쓴다. SQL_ID/SPACE_NM은 row 식별·DB LOG 본문용이다.
     def _map_id(self, job: dict[str, Any]) -> str:
-        return f"{job.get('sql_id') or ''} / {job.get('space_nm') or ''}"[:100]
+        sql_seq = str(job.get("sql_seq") or "0").strip() or "0"
+        return f"SQL_SEQ = {sql_seq}"
 
     # Persisted tuning failure state determines an external re-entry point.
     # Correct SQL metadata (including USER_EDITED) is intentionally unrelated.
