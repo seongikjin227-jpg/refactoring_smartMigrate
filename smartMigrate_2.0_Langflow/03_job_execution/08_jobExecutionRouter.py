@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
+from lfx.inputs.inputs import HandleInput
 from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
 from lfx.schema.data import Data
 from lfx.schema.message import Message
@@ -83,11 +84,7 @@ class NewType08JobExecutionRouter(Component):
 
     inputs = [
         DataInput(name="payload_json", display_name="Payload JSON", required=True),
-        StrInput(name="llm_base_url", display_name="LLM Base URL", value="", required=True),
-        SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=True),
-        StrInput(name="llm_model", display_name="LLM Model", value="", required=True),
-        IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=1500, required=False),
-        IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=90, required=False),
+        HandleInput(name="llm", display_name="Language Model", input_types=["LanguageModel"]),
     ]
 
     outputs = [
@@ -240,58 +237,31 @@ class NewType08JobExecutionRouter(Component):
 
     # 관리 자연어 요청을 LLM에 보내 route/action/target 구조로 분류한다.
     def _route_with_llm(self, payload: dict[str, Any]) -> dict[str, Any]:
-        api_key = self._secret_to_str(getattr(self, "llm_api_key", None)).strip()
-        model = str(getattr(self, "llm_model", "") or "").strip()
-        base_url = str(getattr(self, "llm_base_url", "") or "").strip().rstrip("/")
-        if not api_key:
-            raise ValueError("llm_api_key is required for 08 Job Target Router")
-        if not model:
-            raise ValueError("llm_model is required for 08 Job Target Router")
-        if not base_url:
-            raise ValueError("llm_base_url is required for 08 Job Target Router")
+        from langchain_core.messages import HumanMessage, SystemMessage
 
-        body = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": JOB_EXECUTION_ROUTER_PROMPT},
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "user_request": self._effective_user_request(payload),
-                            "original_user_request": payload.get("user_request") or "",
-                            "is_follow_up": bool(payload.get("is_follow_up", False)),
-                            "confirmation": payload.get("confirmation") or "NOT_REQUIRED",
-                            "execution_scope": payload.get("execution_scope") or "unknown",
-                            "requested_domain": payload.get("requested_domain") or "UNKNOWN",
-                            "target_filter": payload.get("target_filter") or {},
-                            "job_availability": payload.get("job_availability") or payload.get("remaining_summary") or {},
-                            "requested_target_status": payload.get("requested_target_status") or {},
-                            "requested_job_identifiers": self._requested_job_identifiers(payload),
-                        },
-                        ensure_ascii=False,
-                        default=str,
-                    ),
-                },
-            ],
-            "temperature": 0,
-            "max_tokens": self._positive_int(getattr(self, "llm_max_tokens", None), 1500),
-        }
-        url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
-        request = urllib.request.Request(
-            url,
-            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=self._positive_int(getattr(self, "llm_timeout_seconds", None), 90)) as response:
-                raw = json.loads(response.read().decode("utf-8", errors="ignore"))
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="ignore")
-            raise ValueError(f"08 Job Target Router LLM HTTP {exc.code}: {detail[:1000]}") from exc
-        content = (((raw.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
-        return self._parse_json_object(content)
+        llm = getattr(self, "llm", None)
+        if llm is None or not hasattr(llm, "invoke"):
+            raise ValueError("Connect a LanguageModel to 08 Job Target Router.")
+        response = llm.invoke([SystemMessage(content=JOB_EXECUTION_ROUTER_PROMPT), HumanMessage(content=json.dumps({
+            "user_request": self._effective_user_request(payload),
+            "original_user_request": payload.get("user_request") or "",
+            "is_follow_up": bool(payload.get("is_follow_up", False)),
+            "confirmation": payload.get("confirmation") or "NOT_REQUIRED",
+            "execution_scope": payload.get("execution_scope") or "unknown",
+            "requested_domain": payload.get("requested_domain") or "UNKNOWN",
+            "target_filter": payload.get("target_filter") or {},
+            "job_availability": payload.get("job_availability") or payload.get("remaining_summary") or {},
+            "requested_target_status": payload.get("requested_target_status") or {},
+            "requested_job_identifiers": self._requested_job_identifiers(payload),
+        }, ensure_ascii=False, default=str))])
+        return self._parse_json_object(self._response_text(response))
+
+    @staticmethod
+    def _response_text(response: Any) -> str:
+        content = getattr(response, "content", response)
+        if isinstance(content, list):
+            return "".join(item if isinstance(item, str) else str(item.get("text") or "") for item in content).strip()
+        return str(content or "").strip()
 
     def _effective_user_request(self, payload: dict[str, Any]) -> str:
         """Prefer 01's history-resolved request over an isolated follow-up utterance."""

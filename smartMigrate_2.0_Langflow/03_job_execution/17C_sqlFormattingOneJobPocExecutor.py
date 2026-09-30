@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
+from lfx.inputs.inputs import HandleInput
 from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
 from lfx.schema.data import Data
 from lfx.schema.message import Message
@@ -66,13 +67,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         DataInput(name="job_item", display_name="Job Item", required=True),
         MessageTextInput(name="input_prompt", display_name="Formatting Guide", value="", required=False),
         IntInput(name="max_retry", display_name="Max Retry", value=2, required=False),
-        StrInput(name="llm_base_url", display_name="LLM Base URL", required=False),
-        SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=False),
-        StrInput(name="llm_provider", display_name="LLM Provider", required=False),
-        StrInput(name="llm_model", display_name="LLM Model", value="GLM-5.1", required=False),
-        StrInput(name="llm_fallback_models", display_name="LLM Fallback Models", value="GLM-5.1,Qwen3.6-35B-A3B,Kimi-K2.5", required=False),
-        IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=4096, required=False),
-        IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=900, required=False),
+        HandleInput(name="llm", display_name="Language Model", input_types=["LanguageModel"]),
     ]
 
     outputs = [Output(display_name="Job Result", name="job_result", method="run_job", types=["Data"])]
@@ -218,7 +213,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             prompt = self._build_formatter_batch_prompt(format_inputs)
             self._log_formatting_event(payload, step_name="FORMAT_PROMPT", status="PASS", message="Formatting prompt assembled", generate_sql=prompt)
             try:
-                raw_response = self._call_formatter_prompt(prompt, self._llm_config(payload), expected_item_ids={item["item_id"] for item in format_inputs})
+                raw_response = self._call_formatter_prompt(prompt, self._required_llm(), expected_item_ids={item["item_id"] for item in format_inputs})
                 self._log_formatting_event(payload, step_name="LLM_RESPONSE", status="PASS", message="LLM formatting response returned", generate_sql=raw_response)
                 formatted_by_id = self._format_sql_batch_response(format_inputs, raw_response)
             except Exception as exc:
@@ -290,7 +285,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
         format_inputs = [{"item_id": "1", "sql": source_sql}]
         prompt = self._build_formatter_batch_prompt(format_inputs)
         self._log_formatting_event(log_payload, step_name="FORMAT_PROMPT", status="PASS", message="Formatting prompt assembled", generate_sql=prompt)
-        raw_response = self._call_formatter_prompt(prompt, self._llm_config(payload), expected_item_ids={"1"})
+        raw_response = self._call_formatter_prompt(prompt, self._required_llm(), expected_item_ids={"1"})
         self._log_formatting_event(log_payload, step_name="LLM_RESPONSE", status="PASS", message="LLM formatting response returned", generate_sql=raw_response)
         formatted_by_id = self._format_sql_batch_response(format_inputs, raw_response)
         formatted_sql = (formatted_by_id.get("1") or ("", ""))[0]
@@ -551,6 +546,21 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
 
     # Formatting JSON schema까지 검증한 뒤 fallback model을 선택한다.
     def _call_formatter_prompt(self, prompt: str, config: dict[str, Any], *, expected_item_ids: set[str]) -> str:
+        from langchain_core.messages import HumanMessage, SystemMessage
+        llm = config
+        if llm is None or not hasattr(llm, "invoke"):
+            raise ValueError("Connect a LanguageModel to 17C SQL Formatting Executor.")
+        response = llm.invoke([SystemMessage(content="Return only the required JSON array. Format Oracle/MyBatis SQL without changing its meaning."), HumanMessage(content=prompt)])
+        content = getattr(response, "content", response)
+        text = str(content or "").strip()
+        if not text:
+            raise ValueError("Connected LanguageModel returned empty content")
+        parsed = self._parse_formatter_batch_response(text)
+        if set(parsed) != expected_item_ids:
+            raise ValueError(f"formatter item_id mismatch: expected={sorted(expected_item_ids)}, actual={sorted(parsed)}")
+        return text
+
+    def _legacy_direct_http_formatter_prompt(self, prompt: str, config: dict[str, Any], *, expected_item_ids: set[str]) -> str:
         """Treat malformed formatter output as a model failure and use fallback."""
         api_key = str(config.get("llm_api_key") or os.getenv("LLM_API_KEY") or os.getenv("OPEN_API_KEY") or "").strip()
         base_url = str(config.get("llm_base_url") or os.getenv("LLM_BASE_URL") or "").strip().rstrip("/")
@@ -847,6 +857,12 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             conn.close()
 
     # payload와 Langflow 입력에서 LLM 호출 설정을 모은다.
+    def _required_llm(self) -> Any:
+        llm = getattr(self, "llm", None)
+        if llm is None or not hasattr(llm, "invoke"):
+            raise ValueError("Connect a LanguageModel to 17C SQL Formatting Executor.")
+        return llm
+
     def _llm_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         item_config = dict(payload.get("llm_config") or {})
         return {

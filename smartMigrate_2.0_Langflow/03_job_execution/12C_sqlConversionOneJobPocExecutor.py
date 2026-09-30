@@ -10,6 +10,7 @@ from typing import Any
 import urllib.request
 
 from lfx.custom.custom_component.component import Component
+from lfx.inputs.inputs import HandleInput
 from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
 from lfx.schema.data import Data
 from lfx.schema.message import Message
@@ -254,13 +255,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         IntInput(name="max_retry", display_name="Max Retry", value=2, required=False),
         StrInput(name="source_schema", display_name="Source Schema", required=False),
         StrInput(name="target_schema", display_name="Target Schema", required=False),
-        StrInput(name="llm_base_url", display_name="LLM Base URL", required=False),
-        SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=False),
-        StrInput(name="llm_provider", display_name="LLM Provider", required=False),
-        StrInput(name="llm_model", display_name="LLM Model", value="GLM-5.1", required=False),
-        StrInput(name="llm_fallback_models", display_name="LLM Fallback Models", value="GLM-5.1,Qwen3.6-35B-A3B,Kimi-K2.5", required=False),
-        IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=4096, required=False),
-        IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=900, required=False),
+        HandleInput(name="llm", display_name="Language Model", input_types=["LanguageModel"]),
         StrInput(name="rag_embed_base_url", display_name="RAG Embedding Base URL", required=False),
         SecretStrInput(name="rag_embed_api_key", display_name="RAG Embedding API Key", required=False),
         StrInput(name="rag_embed_model", display_name="RAG Embedding Model", value="BAAI/bge-m3", required=False),
@@ -534,7 +529,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         map_id = self._workflow_log_job_id(job)
         tag_kind = str(job.get("tag_kind") or "").strip().upper()
         attempts: list[dict[str, Any]] = []
-        llm_config = self._llm_config(payload)
+        llm_config = self._required_llm()
         rag_config = self._rag_config()
         mapping_rules = self._load_mapping_rules(db_config, target_table)
         source_tables = self._source_tables(target_table)
@@ -1384,15 +1379,8 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         return "TO_CHAR(SPACE_NM) = :space_nm AND TO_CHAR(SQL_ID) = :sql_id", {"space_nm": space_nm, "sql_id": sql_id}
 
     def _workflow_log_job_id(self, job: dict[str, Any]) -> str:
-        """Use SQL_SEQ as the SQL Conversion workflow-log identifier.
-
-        SQL_ID and SPACE_NM remain a legacy fallback only for malformed rows
-        that do not carry SQL_SEQ, so diagnostic logs remain attributable.
-        """
-        sql_seq = str(job.get("sql_seq") or "").strip()
-        if sql_seq:
-            return sql_seq
-        return f"{job.get('sql_id') or ''} / {job.get('space_nm') or ''}"[:100]
+        """Use SQL_SEQ only for the SQL Conversion workflow-log MAP_ID field."""
+        return str(job.get("sql_seq") or "0").strip() or "0"
 
     # payload/job에 SQL row를 특정할 key가 있는지 확인한다.
     def _has_sql_key(self, job: dict[str, Any]) -> bool:
@@ -2029,6 +2017,21 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
     # 설정된 LLM을 fallback model 순서로 호출하고 원문 응답을 반환한다.
     # 설정된 LLM/fallback model 순서로 호출하고 raw text를 반환한다.
     def _call_llm_text(self, prompt: str, config: dict[str, Any]) -> tuple[str, str]:
+        from langchain_core.messages import HumanMessage, SystemMessage
+        llm = config
+        if llm is None or not hasattr(llm, "invoke"):
+            raise ValueError("Connect a LanguageModel to 12C SQL Conversion Executor.")
+        response = llm.invoke([
+            SystemMessage(content="Oracle/MyBatis SQL만 생성하십시오."),
+            HumanMessage(content=prompt),
+        ])
+        content = getattr(response, "content", response)
+        text = str(content or "").strip()
+        if not text:
+            raise ValueError("Connected LanguageModel returned empty content")
+        return text, str(getattr(llm, "model_name", None) or getattr(llm, "model", None) or type(llm).__name__)
+
+    def _legacy_direct_http_llm_text(self, prompt: str, config: dict[str, Any]) -> tuple[str, str]:
         api_key = str(config.get("llm_api_key") or os.getenv("LLM_API_KEY") or os.getenv("OPEN_API_KEY") or "").strip()
         base_url = str(config.get("llm_base_url") or os.getenv("LLM_BASE_URL") or "").strip()
         model = str(config.get("llm_model") or os.getenv("LLM_MODEL") or "GLM-5.1").strip()
@@ -2284,6 +2287,12 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
 
     # Langflow 입력과 payload fallback에서 LLM 설정을 추출한다.
     # payload와 Langflow 입력에서 LLM 호출 설정을 모은다.
+    def _required_llm(self) -> Any:
+        llm = getattr(self, "llm", None)
+        if llm is None or not hasattr(llm, "invoke"):
+            raise ValueError("Connect a LanguageModel to 12C SQL Conversion Executor.")
+        return llm
+
     def _llm_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         item_config = dict(payload.get("llm_config") or {})
         return {

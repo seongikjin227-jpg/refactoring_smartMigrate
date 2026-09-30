@@ -57,7 +57,7 @@ count 불일치는 `FAIL-TEST`, 레코드 불일치 또는 레코드 검증 불�
 | `job_item` | `10A` 또는 `18B`에서 넘어온 migration job row |
 | `max_retry` | 기본 2 |
 | `source_schema`, `target_schema` | runtime SQL schema 치환용 |
-| `Language Model` | 필수 `LanguageModel` 입력. 공식 OpenAI-compatible Chat Model의 model/API key/base URL/temperature/stream 설정을 연결한다. Executor3에는 직접 HTTP `llm_*` fallback이 없다. |
+| `Language Model` | 필수 `LanguageModel` 입력. 공식 OpenAI-compatible Chat Model의 model/API key/base URL/temperature를 설정해 연결한다. 10C 배치 실행에서는 `stream=False`, `stream_usage=False`로 설정한다. Executor3에는 직접 HTTP `llm_*` fallback이 없다. |
 | `rag_embed_*`, `milvus_*` | migration correct SQL hint 검색 설정 |
 | `correct_sql_migration_collection_name` | 기본 `SM_CORRECT_SQL_MIGRATION` |
 | `correct_sql_top_k` | 기본 1 |
@@ -178,6 +178,7 @@ DBA mapping rule 작성 기준은 `12C_sql_conversion_mapping_rule_contract.md`�
 | 항목 | 내용 |
 |---|---|
 | 대상 key | `SPACE_NM`, `SQL_ID` |
+| workflow log `MAP_ID` | `SQL_SEQ`만 기록 (`SQL_SEQ` 누락 비정상 row는 `0`) |
 | 입력 SQL | 기본 `EDIT_FR_SQL`(없으면 `FR_SQL`), 저장된 `TUNED_FR_SQL`이 있으면 그것을 우선 사용 |
 | 필수 mapping | `TARGET_TABLE`이 있어야 mapping rule 조회 가능 |
 | 생성 CLOB | `TO_SQL`, `BIND_SQL`, `BIND_SET`, `TEST_SQL`, 마지막 재시도 사전 튜닝 결과인 `TUNED_FR_SQL` |
@@ -192,8 +193,13 @@ flowchart TD
     J[SQL_ID + SPACE_NM or SQL_SEQ] --> LOAD[Load NEXT_SQL_INFO row]
     LOAD --> CHECK{TARGET_TABLE exists?}
     CHECK -->|no| FTOBE[FAIL-TOBE]
-    CHECK -->|yes| RUN[STATUS_CONVERSION=RUNNING]
+    CHECK -->|yes| STAGE{Start STATUS_CONVERSION}
+    STAGE -->|NULL / FAIL-TOBE / other FAIL-*| RUN[STATUS_CONVERSION=RUNNING<br/>start TO_SQL generation]
+    STAGE -->|FAIL-BIND| RUNB[STATUS_CONVERSION=RUNNING<br/>start BIND_SQL generation]
+    STAGE -->|FAIL-TEST and BIND_SQL exists| RUNT[STATUS_CONVERSION=RUNNING<br/>start TEST_SQL generation]
     RUN --> SOURCE[Use saved TUNED_FR_SQL<br/>or EDIT_FR_SQL / FR_SQL]
+    RUNB --> BIND
+    RUNT --> TEST
     SOURCE --> RAG[Load GENERAL / SEARCH rules<br/>NEXT_MIG_RAG_INFO + Milvus]
     RAG --> REF{REF_SEQ set?}
     REF -->|yes| EXACT[Load exact active Correct SQL<br/>from SM_CORRECT_SQL_CONVERSION]
@@ -222,7 +228,10 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    J[SPACE_NM + SQL_ID] --> LOAD[Load SQL row] --> CHECK{TARGET_TABLE?} --> RUN[Mark RUNNING] --> SOURCE[Saved TUNED_FR_SQL or original source]
+    J[SPACE_NM + SQL_ID] --> LOAD[Load SQL row] --> CHECK{TARGET_TABLE?} --> STAGE{Start STATUS_CONVERSION}
+    STAGE -->|NULL / FAIL-TOBE / other FAIL-*| RUN[Mark RUNNING → TO_SQL] --> SOURCE[Saved TUNED_FR_SQL or original source]
+    STAGE -->|FAIL-BIND| RUNB[Mark RUNNING → BIND_SQL] --> BIND
+    STAGE -->|FAIL-TEST + BIND_SQL| RUNT[Mark RUNNING → TEST_SQL] --> TEST
     CHECK -->|no| FTOBE[FAIL-TOBE]
     SOURCE --> RAG[RAG rules] --> HINT[Correct SQL hint] --> TOBE[Generate TO_SQL] --> BIND[Generate + execute BIND_SQL] --> SET[Build BIND_SET] --> TEST[Generate + execute TEST_SQL] --> VAL{Counts valid and equal?}
     VAL -->|yes| PASS[PASS-CONVERSION]
@@ -234,6 +243,17 @@ flowchart LR
     TUNEFR -->|error| FTOBE
     BIND -->|empty/error| FBIND[FAIL-BIND]
 ```
+
+### 시작 상태별 재개 위치
+
+| 시작 `STATUS_CONVERSION` | 시작 단계 | 기존 SQL 처리 |
+|---|---|---|
+| `NULL`, `FAIL-TOBE`, 그 밖의 `FAIL-*` | `GENERATE_TOBE_SQL` | `TO_SQL`부터 다시 생성 |
+| `FAIL-BIND` | `GENERATE_BIND_SQL` | `TO_SQL`은 재사용하고 `BIND_SQL`·`BIND_SET`부터 다시 생성 |
+| `FAIL-TEST` + `BIND_SQL` 존재 | `GENERATE_TEST_SQL` | `TO_SQL`·`BIND_SQL`·`BIND_SET`을 재사용하고 `TEST_SQL`부터 다시 생성/검증 |
+| `FAIL-TEST` + `BIND_SQL` 없음 | `GENERATE_TOBE_SQL` | 불완전한 중간 산출물로 보아 `TO_SQL`부터 다시 생성 |
+
+`USER_EDITED` 및 SQL CLOB의 존재 여부는 시작 분기 자체가 아니라 Management가 저장 시 전진시킨 `STATUS_CONVERSION`과 위의 필수 중간 산출물 존재 여부로만 판단한다.
 
 ### 마지막 재시도: `TUNED_FR_SQL` 사전 튜닝
 

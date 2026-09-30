@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
+from lfx.inputs.inputs import HandleInput
 from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
 from lfx.schema.data import Data
 from lfx.schema.message import Message
@@ -35,11 +36,7 @@ class NewType11BFailureCauseAnalyzer(Component):
         StrInput(name="db_username", display_name="DB Username", required=True),
         SecretStrInput(name="db_password", display_name="DB Password", required=True),
         StrInput(name="system_schema", display_name="System Schema", required=True),
-        StrInput(name="llm_base_url", display_name="LLM Base URL", required=False),
-        SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=False),
-        StrInput(name="llm_model", display_name="LLM Model", value="GLM-5.1", required=False),
-        IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=3000, required=False),
-        IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=120, required=False),
+        HandleInput(name="llm", display_name="Language Model", input_types=["LanguageModel"]),
         IntInput(name="max_failures", display_name="Max Failure Logs", value=50, required=False),
     ]
 
@@ -412,42 +409,17 @@ class NewType11BFailureCauseAnalyzer(Component):
 
     # 수집된 실패 근거를 LLM에 보내 원인 분석 답변을 생성한다.
     def _call_llm(self, evidence: dict[str, Any]) -> str:
-        api_key = self._secret_to_str(getattr(self, "llm_api_key", None)).strip() or os.getenv("LLM_API_KEY") or os.getenv("OPEN_API_KEY") or ""
-        model = str(getattr(self, "llm_model", "") or os.getenv("LLM_MODEL") or "GLM-5.1").strip()
-        base_url = str(getattr(self, "llm_base_url", "") or os.getenv("LLM_BASE_URL") or "").strip().rstrip("/")
-        if not api_key:
-            return self._fallback_answer(evidence, "LLM API key is missing.")
-        if not model:
-            return self._fallback_answer(evidence, "LLM model is missing.")
-        if not base_url:
-            return self._fallback_answer(evidence, "LLM base URL is missing.")
-
-        body = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": FAILURE_ANALYSIS_PROMPT},
-                {"role": "user", "content": json.dumps(evidence, ensure_ascii=False, default=str)},
-            ],
-            "temperature": 0,
-            "max_tokens": self._positive_int(getattr(self, "llm_max_tokens", None), 3000),
-        }
-        url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
-        request = urllib.request.Request(
-            url,
-            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-            method="POST",
-        )
         try:
-            with urllib.request.urlopen(request, timeout=self._positive_int(getattr(self, "llm_timeout_seconds", None), 120)) as response:
-                raw = json.loads(response.read().decode("utf-8", errors="ignore"))
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="ignore")
-            return self._fallback_answer(evidence, f"LLM HTTP {exc.code}: {detail[:1000]}")
+            from langchain_core.messages import HumanMessage, SystemMessage
+            llm = getattr(self, "llm", None)
+            if llm is None or not hasattr(llm, "invoke"):
+                raise ValueError("Connect a LanguageModel to 11B Failure Cause Analyzer.")
+            response = llm.invoke([SystemMessage(content=FAILURE_ANALYSIS_PROMPT), HumanMessage(content=json.dumps(evidence, ensure_ascii=False, default=str))])
+            content = getattr(response, "content", response)
+            answer = str(content or "").strip()
+            return answer or self._fallback_answer(evidence, "Connected LanguageModel returned an empty response.")
         except Exception as exc:
             return self._fallback_answer(evidence, f"LLM call failed: {exc}")
-        answer = (((raw.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
-        return answer or self._fallback_answer(evidence, "LLM returned an empty response.")
 
     # 현재 workflow 기준으로 실패 근거가 없을 때의 완료 메시지를 만든다.
     def _no_failure_answer(self, evidence: dict[str, Any]) -> str:

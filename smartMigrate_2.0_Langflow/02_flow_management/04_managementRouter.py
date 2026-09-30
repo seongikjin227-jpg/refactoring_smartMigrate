@@ -8,6 +8,7 @@ import urllib.request
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
+from lfx.inputs.inputs import HandleInput
 from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
 from lfx.schema.data import Data
 from lfx.schema.message import Message
@@ -59,11 +60,7 @@ class NewType04ManagementRouter(Component):
 
     inputs = [
         DataInput(name="payload_json", display_name="Payload JSON", required=True),
-        StrInput(name="llm_base_url", display_name="LLM Base URL", value="", required=True),
-        SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=True),
-        StrInput(name="llm_model", display_name="LLM Model", value="", required=True),
-        IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=800, required=False),
-        IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=90, required=False),
+        HandleInput(name="llm", display_name="Language Model", input_types=["LanguageModel"]),
     ]
     outputs = [
         Output(display_name="Dashboard", name="dashboard", method="dashboard_response", group_outputs=True),
@@ -128,47 +125,36 @@ class NewType04ManagementRouter(Component):
 
     # 자연어 요청은 여기서만 LLM에 전달한다. 이후 분기에서는 검증된 route 값만 사용한다.
     def _route_with_llm(self, payload: dict[str, Any]) -> dict[str, Any]:
-        api_key = self._secret_to_str(getattr(self, "llm_api_key", None)).strip()
-        model = str(getattr(self, "llm_model", "") or "").strip()
-        base_url = str(getattr(self, "llm_base_url", "") or "").strip().rstrip("/")
-        if not all((api_key, model, base_url)):
-            raise ValueError("llm_base_url, llm_api_key, and llm_model are required for 04 Management Router")
-        body = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": MANAGEMENT_ROUTER_PROMPT},
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "user_request": self._effective_user_request(payload),
-                            "original_user_request": payload.get("user_request") or "",
-                            "is_follow_up": bool(payload.get("is_follow_up", False)),
-                            "confirmation": payload.get("confirmation") or "NOT_REQUIRED",
-                            "target_filter": payload.get("target_filter") or {},
-                            "clarification_required": bool(payload.get("clarification_required", False)),
-                        },
-                        ensure_ascii=False,
-                        default=str,
-                    ),
-                },
-            ],
-            "temperature": 0,
-            "max_tokens": int(getattr(self, "llm_max_tokens", None) or 800),
-        }
-        url = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
-        request = urllib.request.Request(
-            url,
-            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-            method="POST",
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        llm = self._required_llm()
+        response = llm.invoke(
+            [
+                SystemMessage(content=MANAGEMENT_ROUTER_PROMPT),
+                HumanMessage(content=json.dumps({
+                    "user_request": self._effective_user_request(payload),
+                    "original_user_request": payload.get("user_request") or "",
+                    "is_follow_up": bool(payload.get("is_follow_up", False)),
+                    "confirmation": payload.get("confirmation") or "NOT_REQUIRED",
+                    "target_filter": payload.get("target_filter") or {},
+                    "clarification_required": bool(payload.get("clarification_required", False)),
+                }, ensure_ascii=False, default=str)),
+            ]
         )
-        try:
-            with urllib.request.urlopen(request, timeout=int(getattr(self, "llm_timeout_seconds", None) or 90)) as response:
-                raw = json.loads(response.read().decode("utf-8", errors="ignore"))
-        except urllib.error.HTTPError as exc:
-            raise ValueError(f"04 Management Router LLM HTTP {exc.code}: {exc.read().decode('utf-8', errors='ignore')[:1000]}") from exc
-        return self._parse_json_object((((raw.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip())
+        return self._parse_json_object(self._response_text(response))
+
+    def _required_llm(self) -> Any:
+        llm = getattr(self, "llm", None)
+        if llm is None or not hasattr(llm, "invoke"):
+            raise ValueError("Connect a LanguageModel to 04 Management Router.")
+        return llm
+
+    @staticmethod
+    def _response_text(response: Any) -> str:
+        content = getattr(response, "content", response)
+        if isinstance(content, list):
+            return "".join(item if isinstance(item, str) else str(item.get("text") or "") for item in content).strip()
+        return str(content or "").strip()
 
     def _effective_user_request(self, payload: dict[str, Any]) -> str:
         """Use the canonical request produced by the history-aware 01 classifier."""

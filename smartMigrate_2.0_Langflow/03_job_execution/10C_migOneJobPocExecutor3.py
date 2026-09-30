@@ -1220,10 +1220,6 @@ LEFT JOIN (
             prompt=prompt,
             llm=context.get("llm"),
         )
-        logging.getLogger("smartmigrate.workflow").info(
-            f"attempt={attempt} stage=LLM_INVOKE status=PASS source=LANGFLOW_LANGUAGE_MODEL model={used_model}",
-            extra={"workflow_log": [context.get("map_id") or 0, "DB_MIGRATION", "LLM_INVOKE", "INFO", "LANGFLOW_LANGUAGE_MODEL", "PASS", max(0, attempt - 1), used_model]},
-        )
         result = self._extract_json_object(content)
         return (
             self._merge_sql_value(result.get("migration_sql", "")),

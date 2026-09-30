@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
+from lfx.inputs.inputs import HandleInput
 from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
 from lfx.schema.data import Data
 from lfx.schema.message import Message
@@ -133,13 +134,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
         DataInput(name="job_item", display_name="Job Item", required=True),
         IntInput(name="max_retry", display_name="Max Retry", value=2, required=False),
         IntInput(name="tuning_iterations", display_name="Tuning Iterations", value=1, required=False),
-        StrInput(name="llm_base_url", display_name="LLM Base URL", required=False),
-        SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=False),
-        StrInput(name="llm_provider", display_name="LLM Provider", required=False),
-        StrInput(name="llm_model", display_name="LLM Model", value="GLM-5.1", required=False),
-        StrInput(name="llm_fallback_models", display_name="LLM Fallback Models", value="GLM-5.1,Qwen3.6-35B-A3B,Kimi-K2.5", required=False),
-        IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=8192, required=False),
-        IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=900, required=False),
+        HandleInput(name="llm", display_name="Language Model", input_types=["LanguageModel"]),
         StrInput(name="rag_embed_base_url", display_name="RAG Embed Base URL", required=False),
         SecretStrInput(name="rag_embed_api_key", display_name="RAG Embed API Key", required=False),
         StrInput(name="rag_embed_model", display_name="RAG Embed Model", value="BAAI/bge-m3", required=False),
@@ -208,7 +203,7 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             "payload": payload,
             "job": job,
             "db_config": db_config,
-            "llm_config": self._llm_config(payload),
+            "llm_config": self._required_llm(),
             "rag_config": self._rag_config(payload),
             "started": started,
             "attempt_no": 1,
@@ -794,6 +789,18 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
 
     # 설정된 LLM/fallback model 순서로 호출하고 raw text를 반환한다. 12C/17C와 같은 호출 방식이다.
     def _call_llm_text(self, prompt: str, config: dict[str, Any], system: str = "Oracle/MyBatis SQL만 생성하십시오.") -> tuple[str, str]:
+        from langchain_core.messages import HumanMessage, SystemMessage
+        llm = config
+        if llm is None or not hasattr(llm, "invoke"):
+            raise ValueError("Connect a LanguageModel to 15C SQL Tuning Executor.")
+        response = llm.invoke([SystemMessage(content=system), HumanMessage(content=prompt)])
+        content = getattr(response, "content", response)
+        text = str(content or "").strip()
+        if not text:
+            raise ValueError("Connected LanguageModel returned empty content")
+        return text, str(getattr(llm, "model_name", None) or getattr(llm, "model", None) or type(llm).__name__)
+
+    def _legacy_direct_http_llm_text(self, prompt: str, config: dict[str, Any], system: str = "Oracle/MyBatis SQL만 생성하십시오.") -> tuple[str, str]:
         api_key = str(config.get("llm_api_key") or os.getenv("LLM_API_KEY") or os.getenv("OPEN_API_KEY") or "").strip()
         base_url = str(config.get("llm_base_url") or os.getenv("LLM_BASE_URL") or "").strip()
         model = str(config.get("llm_model") or os.getenv("LLM_MODEL") or "GLM-5.1").strip()
@@ -1080,6 +1087,12 @@ class NewType15CSqlTuningOneJobPocExecutor(Component):
             conn.close()
 
     # payload와 Langflow 입력에서 LLM 호출 설정을 모은다.
+    def _required_llm(self) -> Any:
+        llm = getattr(self, "llm", None)
+        if llm is None or not hasattr(llm, "invoke"):
+            raise ValueError("Connect a LanguageModel to 15C SQL Tuning Executor.")
+        return llm
+
     def _llm_config(self, payload: dict[str, Any]) -> dict[str, Any]:
         item_config = dict(payload.get("llm_config") or {})
         return {
