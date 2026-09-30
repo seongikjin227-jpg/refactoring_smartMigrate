@@ -57,7 +57,7 @@ count 불일치는 `FAIL-TEST`, 레코드 불일치 또는 레코드 검증 불�
 | `job_item` | `10A` 또는 `18B`에서 넘어온 migration job row |
 | `max_retry` | 기본 2 |
 | `source_schema`, `target_schema` | runtime SQL schema 치환용 |
-| `llm_*` | LLM 호출 설정 |
+| `Language Model` | 필수 `LanguageModel` 입력. 공식 OpenAI-compatible Chat Model의 model/API key/base URL/temperature/stream 설정을 연결한다. Executor3에는 직접 HTTP `llm_*` fallback이 없다. |
 | `rag_embed_*`, `milvus_*` | migration correct SQL hint 검색 설정 |
 | `correct_sql_migration_collection_name` | 기본 `SM_CORRECT_SQL_MIGRATION` |
 | `correct_sql_top_k` | 기본 1 |

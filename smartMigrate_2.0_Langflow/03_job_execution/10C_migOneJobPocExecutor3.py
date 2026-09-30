@@ -8,10 +8,10 @@ import time
 import urllib.request
 from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
-from pathlib import Path
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
+from lfx.inputs.inputs import HandleInput
 from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
 from lfx.schema.data import Data
 from lfx.schema.message import Message
@@ -184,13 +184,12 @@ class NewType10CMigOneJobPocExecutor3(Component):
         IntInput(name="max_retry", display_name="Max Retry", value=2, required=False),
         StrInput(name="source_schema", display_name="Source Schema", required=False),
         StrInput(name="target_schema", display_name="Target Schema", required=False),
-        StrInput(name="llm_base_url", display_name="LLM Base URL", required=False),
-        SecretStrInput(name="llm_api_key", display_name="LLM API Key", required=False),
-        StrInput(name="llm_provider", display_name="LLM Provider", required=False),
-        StrInput(name="llm_model", display_name="LLM Model", value="GLM-5.1", required=False),
-        StrInput(name="llm_fallback_models", display_name="LLM Fallback Models", value="GLM-5.1,Qwen3.6-35B-A3B,Kimi-K2.5", required=False),
-        IntInput(name="llm_max_tokens", display_name="LLM Max Tokens", value=4096, required=False),
-        IntInput(name="llm_timeout_seconds", display_name="LLM Timeout Seconds", value=900, required=False),
+        HandleInput(
+            name="llm",
+            display_name="Language Model",
+            info="Required. Connect the official OpenAI-compatible Chat Model output. 10C does not use direct HTTP LLM settings in this test branch.",
+            input_types=["LanguageModel"],
+        ),
         StrInput(name="rag_embed_base_url", display_name="RAG Embedding Base URL", required=False),
         SecretStrInput(name="rag_embed_api_key", display_name="RAG Embedding API Key", required=False),
         StrInput(name="rag_embed_model", display_name="RAG Embedding Model", value="BAAI/bge-m3", required=False),
@@ -296,7 +295,7 @@ class NewType10CMigOneJobPocExecutor3(Component):
                     "job": job,
                     "map_id": map_id,
                     "attempt": 1,
-                    "llm_config": self._llm_config(job),
+                    "llm": self._required_llm(),
                     "failure_status": current_status if current_status in {"FAIL-TEST", FAIL_TEST2} else "",
                     "status_tracker": status_tracker,
                 }
@@ -1219,7 +1218,11 @@ LEFT JOIN (
             system_anthropic=str(prompt_template.get("system_anthropic") or prompt_template.get("system_openai") or ""),
             system_openai=str(prompt_template.get("system_openai") or ""),
             prompt=prompt,
-            config=dict(context.get("llm_config") or {}),
+            llm=context.get("llm"),
+        )
+        logging.getLogger("smartmigrate.workflow").info(
+            f"attempt={attempt} stage=LLM_INVOKE status=PASS source=LANGFLOW_LANGUAGE_MODEL model={used_model}",
+            extra={"workflow_log": [context.get("map_id") or 0, "DB_MIGRATION", "LLM_INVOKE", "INFO", "LANGFLOW_LANGUAGE_MODEL", "PASS", max(0, attempt - 1), used_model]},
         )
         result = self._extract_json_object(content)
         return (
@@ -2019,209 +2022,51 @@ LEFT JOIN (
     # ##############################
 
     # 설정된 provider/model 후보로 LLM을 호출하고 JSON 응답을 반환한다.
-    def _call_llm_json(self, *, system_anthropic: str, system_openai: str, prompt: str, config: dict[str, Any] | None = None) -> tuple[str, str]:
-        self._load_env_files()
-        llm_config = dict(config or {})
-        api_key = str(llm_config.get("llm_api_key") or os.getenv("LLM_API_KEY") or os.getenv("OPEN_API_KEY") or "").strip()
-        if not api_key:
-            raise ValueError("LLM API key is required for DB Migration SQL generation")
-        base_url = str(llm_config.get("llm_base_url") or os.getenv("LLM_BASE_URL") or "").strip() or None
-        model = str(llm_config.get("llm_model") or os.getenv("LLM_MODEL") or "GLM-5.1").strip()
-        max_tokens = self._positive_int(llm_config.get("llm_max_tokens") or os.getenv("LLM_MAX_TOKENS"), 4096)
-        timeout_seconds = self._positive_int(llm_config.get("llm_timeout_seconds") or os.getenv("LLM_TIMEOUT_SECONDS"), 900)
-        provider = self._resolve_llm_provider(llm_config, base_url, model)
-        candidates = self._model_candidates(model, llm_config)
-        last_error: Exception | None = None
+    def _call_llm_json(self, *, system_anthropic: str, system_openai: str, prompt: str, llm: Any) -> tuple[str, str]:
+        """Call only the Langflow-connected LanguageModel; no HTTP fallback exists."""
+        if llm is None or not hasattr(llm, "invoke"):
+            raise ValueError("10C requires a connected LanguageModel with an invoke() method")
+        from langchain_core.messages import HumanMessage, SystemMessage
 
-        for idx, candidate_model in enumerate(candidates):
-            try:
-                if provider == "anthropic":
-                    from anthropic import Anthropic
-
-                    client = Anthropic(
-                        api_key=api_key,
-                        base_url=(base_url or "https://api.anthropic.com").rstrip("/"),
-                        timeout=timeout_seconds,
-                    )
-                    response = client.messages.create(
-                        model=candidate_model,
-                        max_tokens=max_tokens,
-                        temperature=0,
-                        system=system_anthropic,
-                        messages=[{"role": "user", "content": prompt}],
-                    )
-                    text = self._extract_anthropic_text(response)
-                else:
-                    text = self._call_openai_compatible_http(
-                        api_key=api_key,
-                        base_url=base_url,
-                        model=candidate_model,
-                        system_prompt=system_openai,
-                        user_prompt=prompt,
-                        max_tokens=max_tokens,
-                        timeout_seconds=timeout_seconds,
-                    )
-                if not str(text or "").strip():
-                    raise ValueError(f"LLM returned an empty migration response. provider={provider} model={candidate_model}")
-                return text.strip(), candidate_model
-            except Exception as exc:
-                last_error = exc
-                if idx < len(candidates) - 1 and self._is_model_fallback_error(str(exc)):
-                    continue
-                raise
-
-        raise ValueError(f"LLM call failed for all model candidates: {last_error}")
-
-    # OpenAI 호환 HTTP API로 chat completion을 호출한다. 12C/15C/17C와 같은 호출 방식이다.
-    def _call_openai_compatible_http(
-        self,
-        *,
-        api_key: str,
-        base_url: str | None,
-        model: str,
-        system_prompt: str,
-        user_prompt: str,
-        max_tokens: int,
-        timeout_seconds: int,
-    ) -> str:
-        import urllib.error
-        import urllib.request
-
-        if not base_url:
-            from openai import OpenAI
-
-            response = OpenAI(api_key=api_key, timeout=timeout_seconds).chat.completions.create(
-                model=model,
-                temperature=0,
-                max_tokens=max_tokens,
-                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-            )
-            return (response.choices[0].message.content or "").strip()
-
-        root = str(base_url or "").strip().rstrip("/")
-        url = root if root.endswith("/chat/completions") else f"{root}/chat/completions"
-        body = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "temperature": 0,
-            "max_tokens": max_tokens,
-        }
-        request = urllib.request.Request(
-            url,
-            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-            method="POST",
+        response = llm.invoke(
+            [
+                SystemMessage(content=system_openai or system_anthropic),
+                HumanMessage(content=prompt),
+            ]
         )
-        try:
-            with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-                raw_text = response.read().decode("utf-8", errors="ignore")
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="ignore")
-            raise ValueError(f"LLM HTTP {exc.code}: {detail[:1000]}") from exc
+        text = self._language_model_response_text(response)
+        model_name = self._language_model_name(llm)
+        if not text:
+            raise ValueError(f"Connected LanguageModel returned empty content. model={model_name}")
+        return text, model_name
 
-        if not raw_text.strip():
-            raise ValueError(f"LLM HTTP response body was empty. url={url} model={model}")
-        payload = json.loads(raw_text)
-        content = str((((payload.get("choices") or [{}])[0].get("message") or {}).get("content") or "")).strip()
-        if not content:
-            preview = raw_text[:1000].replace("\n", "\\n")
-            raise ValueError(f"LLM returned empty message content. url={url} model={model} response_preview={preview}")
-        return content
+    def _required_llm(self) -> Any:
+        llm = getattr(self, "llm", None)
+        if llm is None:
+            raise ValueError("Connect an official OpenAI-compatible Chat Model to 10C Language Model input.")
+        return llm
 
-    # base_url/model 힌트로 사용할 LLM provider를 결정한다.
-    def _resolve_llm_provider(self, llm_config: dict[str, Any], base_url: str | None, model: str) -> str:
-        provider = str(llm_config.get("llm_provider") or os.getenv("LLM_PROVIDER") or "").strip().lower()
-        if provider:
-            if provider not in {"anthropic", "openai"}:
-                raise ValueError("LLM_PROVIDER must be either 'anthropic' or 'openai'.")
-            return provider
-        base_text = str(base_url or "").lower()
-        model_text = str(model or "").lower()
-        if "anthropic" in base_text or model_text.startswith("claude"):
-            return "anthropic"
-        return "openai"
+    def _language_model_name(self, llm: Any) -> str:
+        return str(
+            getattr(llm, "model_name", None)
+            or getattr(llm, "model", None)
+            or getattr(llm, "deployment_name", None)
+            or type(llm).__name__
+        ).strip()
 
-    # primary model과 fallback model 문자열을 순서 있는 후보 목록으로 만든다.
-    def _model_candidates(self, primary_model: str, llm_config: dict[str, Any]) -> list[str]:
-        fallback_raw = str(
-            llm_config.get("llm_fallback_models")
-            or os.getenv("LLM_FALLBACK_MODELS")
-            or "GLM-5.1,Qwen3.6-35B-A3B,Kimi-K2.5"
-        )
-        candidates = [str(primary_model or "").strip()]
-        candidates.extend(model.strip() for model in fallback_raw.split(",") if model.strip())
-        deduped: list[str] = []
-        seen: set[str] = set()
-        for candidate in candidates:
-            key = candidate.lower()
-            if candidate and key not in seen:
-                deduped.append(candidate)
-                seen.add(key)
-        return deduped
-
-    # 다음 fallback model로 넘어가도 되는 LLM 오류인지 판단한다.
-    def _is_model_fallback_error(self, message: str) -> bool:
-        text = str(message or "").lower()
-        patterns = (
-            "no deployments available",
-            "no deployment available",
-            "deployment unavailable",
-            "selected model",
-            "rate limit exceed for api_key",
-            "rate limit exceeded for api_key",
-            "rate_limit_exceed_for_api_key",
-            "rate_limit_exceeded_for_api_key",
-            "error code: 500",
-            "status code: 500",
-            "internal server error",
-            "server error",
-            "http 500",
-            "connection reset",
-            "temporarily unavailable",
-            "service unavailable",
-            "bad gateway",
-            "502",
-            "model not allow",
-            "model_not_allow",
-            "model not allowed",
-            "model_not_allowed",
-            "not allowed to access model",
-            "team not allowed",
-            "team_not_allowed",
-            "model not found",
-            "model_not_found",
-            "model does not exist",
-            "does not exist",
-            "not supported",
-            "unsupported model",
-        )
-        return any(pattern in text for pattern in patterns)
-
-    # Anthropic 응답 객체에서 텍스트 content만 추출한다.
-    def _extract_anthropic_text(self, response: Any) -> str:
-        chunks: list[str] = []
-        for item in getattr(response, "content", []) or []:
-            text = getattr(item, "text", None)
-            if text:
-                chunks.append(str(text))
-        return "".join(chunks).strip()
-
-    # 작업 디렉터리 주변의 .env 파일을 읽어 누락된 환경변수를 보강한다.
-    def _load_env_files(self) -> None:
-        for path in (Path.cwd() / ".env", Path.cwd() / "src" / ".env"):
-            if not path.exists():
-                continue
-            for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-                text = line.strip()
-                if not text or text.startswith("#") or "=" not in text:
-                    continue
-                key, value = text.split("=", 1)
-                key = key.strip()
-                if key and key not in os.environ:
-                    os.environ[key] = value.strip().strip('"').strip("'")
+    def _language_model_response_text(self, response: Any) -> str:
+        content = getattr(response, "content", response)
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict) and item.get("text") is not None:
+                    parts.append(str(item["text"]))
+            return "".join(parts).strip()
+        return str(content or "").strip()
 
     # LLM 응답에서 JSON 객체 본문만 찾아 dict로 파싱한다. 12C도 같은 패턴을 사용한다.
     def _extract_json_object(self, text: str) -> dict[str, Any]:
@@ -2399,20 +2244,6 @@ LEFT JOIN (
             "system_schema": str(item_config.get("system_schema") or "").strip(),
             "source_schema": str(getattr(self, "source_schema", "") or item_config.get("source_schema") or os.getenv("ORACLE_SCHEMA_SRC") or "").strip(),
             "target_schema": str(getattr(self, "target_schema", "") or item_config.get("target_schema") or os.getenv("ORACLE_SCHEMA_TGT") or "").strip(),
-        }
-
-    # payload와 Langflow 입력에서 LLM 호출 설정을 모은다.
-    def _llm_config(self, job: dict[str, Any]) -> dict[str, Any]:
-        """Langflow 입력을 우선하고 job payload를 fallback으로 사용해 LLM 설정을 추출한다."""
-        item_config = dict(job.get("llm_config") or {})
-        return {
-            "llm_base_url": str(getattr(self, "llm_base_url", "") or item_config.get("llm_base_url") or "").strip(),
-            "llm_api_key": self._secret_to_str(getattr(self, "llm_api_key", None)) or str(item_config.get("llm_api_key") or "").strip(),
-            "llm_provider": str(getattr(self, "llm_provider", "") or item_config.get("llm_provider") or "").strip(),
-            "llm_model": str(getattr(self, "llm_model", "") or item_config.get("llm_model") or "").strip(),
-            "llm_fallback_models": str(getattr(self, "llm_fallback_models", "") or item_config.get("llm_fallback_models") or "").strip(),
-            "llm_max_tokens": self._positive_int(getattr(self, "llm_max_tokens", None) or item_config.get("llm_max_tokens"), 4096),
-            "llm_timeout_seconds": self._positive_int(getattr(self, "llm_timeout_seconds", None) or item_config.get("llm_timeout_seconds"), 900),
         }
 
     # ##############################
