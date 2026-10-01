@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import hashlib
+import re
 
 from datetime import datetime
 from typing import Any
@@ -207,12 +209,32 @@ class NewType00ALogRuntimeStart(Component):
         logger.propagate = False
         handler = SmartMigrateDBHandler(self._db_config())
         logger.addHandler(handler)
+        upload_meta = self._upload_metadata(text)
         logger.info(
-            f"CHAT INPUT, MESSAGE : {text}",
-            extra={"workflow_log": [0, "WORKFLOW", "CHAT_INPUT", "INFO", "MESSAGE", "START", 0]},
+            "00A input received: " + upload_meta,
+            # GENERATE_SQL is deliberately used only for the upload-path diagnostic.
+            # NEXT_MIG_LOG.MESSAGE is VARCHAR2(4000), whereas this value is a CLOB.
+            extra={
+                "workflow_log": [
+                    0, "WORKFLOW", "CHAT_INPUT", "INFO", "MESSAGE", "START", 0, text,
+                ]
+            },
         )
         self.status = {"ok": handler.insert_error is None, "db_insert_error": handler.insert_error}
         return Message(text=text)
+
+    @staticmethod
+    def _upload_metadata(text: str) -> str:
+        """Return a compact, non-content diagnostic for an uploaded file message."""
+        sheets = re.findall(r"(?mi)^\s*#\s*Sheet\s*:\s*(.+?)\s*$", text)
+        chunks = re.findall(r"(?i)\[chunk\s+(\d+)\]", text)
+        filename_match = re.search(r"(?im)(?:file\s*name|filename|파일명)\s*[:=]\s*([^\r\n,]+)", text)
+        filename = filename_match.group(1).strip() if filename_match else "unknown"
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+        return (
+            f"filename={filename}; chars={len(text)}; sha256_16={digest}; "
+            f"sheet_count={len(sheets)}; sheets={sheets}; chunk_ids={chunks}"
+        )
 
     # payload와 Langflow 입력에서 Oracle 접속 및 schema 설정을 모은다.
     def _db_config(self) -> dict[str, Any]:

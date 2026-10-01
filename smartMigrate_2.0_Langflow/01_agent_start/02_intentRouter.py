@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import hashlib
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
@@ -59,6 +60,10 @@ class NewType02IntentRouter(Component):
             # Langflow group output은 각 output method를 따로 호출하므로,
             # 모든 branch가 같은 payload를 파싱할 수 있게 여기서 표준 dict로 맞춘다.
             payload = self._parse_payload(getattr(self, "payload_json", ""))
+            logging.getLogger("smartmigrate.workflow").info(
+                "02 Intent Router received: " + self._upload_metadata(payload),
+                extra={"workflow_log": [0, "WORKFLOW", "02_INTENT_ROUTER", "INFO", "UPLOAD_TRACE", "PASS", 0]},
+            )
             route = str(payload.get("route") or (payload.get("classification") or {}).get("route") or "GENERAL_CHAT").upper()
 
             # A history-aware classifier must never let an unresolved "네" or a
@@ -123,3 +128,21 @@ class NewType02IntentRouter(Component):
         if not isinstance(parsed, dict):
             raise ValueError("payload_json must be a JSON object")
         return parsed
+
+    @staticmethod
+    def _upload_metadata(payload: dict[str, Any]) -> str:
+        text = str(
+            payload.get("resolved_user_request")
+            or payload.get("user_request")
+            or payload.get("original_request")
+            or ""
+        )
+        sheets = re.findall(r"(?mi)^\s*#\s*Sheet\s*:\s*(.+?)\s*$", text)
+        chunks = re.findall(r"(?i)\[chunk\s+(\d+)\]", text)
+        filename_match = re.search(r"(?im)(?:file\s*name|filename|파일명)\s*[:=]\s*([^\r\n,]+)", text)
+        filename = filename_match.group(1).strip() if filename_match else "unknown"
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+        return (
+            f"filename={filename}; chars={len(text)}; sha256_16={digest}; "
+            f"sheet_count={len(sheets)}; sheets={sheets}; chunk_ids={chunks}"
+        )

@@ -1,5 +1,9 @@
 # 04 Management Agent Prompt
 
+## Mapping Import Preview Tool
+
+For an uploaded mapping workbook, use `04 Mapping Import SQL Preview Tool` with the complete text, including every `# Sheet : ...` and `[chunk n]` section. It is preview-only: do not call Update Command Tool, do not execute SQL, and report the returned validation errors plus master/detail MERGE previews.
+
 ## System Prompt
 
 ```text

@@ -1,5 +1,7 @@
 # 01 Request Classifier Prompt
 
+An uploaded Excel mapping workbook, mapping-definition import request, or request to preview MAP_ID/MAP_DTL MERGE SQL must be classified as `MANAGEMENT`, not `JOB_EXECUTION`.
+
 `Chat Input`의 사용자 요청을 1차 route JSON으로 분류하기 위한 프롬프트입니다.
 
 ## 연결 위치

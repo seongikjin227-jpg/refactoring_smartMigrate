@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import hashlib
 import urllib.error
 import urllib.request
 from typing import Any
@@ -110,6 +111,10 @@ class NewType04ManagementRouter(Component):
             extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "ROUTE", "START", 0]},
         )
         payload = self._parse_payload(getattr(self, "payload_json", ""))
+        logging.getLogger("smartmigrate.workflow").info(
+            "04 Management Router received: " + self._upload_metadata(payload),
+            extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "UPLOAD_TRACE", "PASS", 0]},
+        )
         decision = self._normalize_decision(self._route_with_llm(payload))
         routed = {
             **payload,
@@ -205,3 +210,22 @@ class NewType04ManagementRouter(Component):
 
     def _secret_to_str(self, value: Any) -> str:
         return str(value.get_secret_value()) if hasattr(value, "get_secret_value") else str(value or "")
+
+    @staticmethod
+    def _upload_metadata(payload: dict[str, Any]) -> str:
+        text = str(
+            payload.get("resolved_user_request")
+            or payload.get("user_request")
+            or payload.get("original_request")
+            or payload.get("input")
+            or ""
+        )
+        sheets = re.findall(r"(?mi)^\s*#\s*Sheet\s*:\s*(.+?)\s*$", text)
+        chunks = re.findall(r"(?i)\[chunk\s+(\d+)\]", text)
+        filename_match = re.search(r"(?im)(?:file\s*name|filename|파일명)\s*[:=]\s*([^\r\n,]+)", text)
+        filename = filename_match.group(1).strip() if filename_match else "unknown"
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+        return (
+            f"filename={filename}; chars={len(text)}; sha256_16={digest}; "
+            f"sheet_count={len(sheets)}; sheets={sheets}; chunk_ids={chunks}"
+        )
