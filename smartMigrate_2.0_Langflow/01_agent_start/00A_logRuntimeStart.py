@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import hashlib
+import json
 import re
 
 from datetime import datetime
@@ -10,6 +11,11 @@ from typing import Any
 from lfx.custom.custom_component.component import Component
 from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
 from lfx.schema.message import Message
+
+try:
+    from lfx.io import DataInput
+except Exception:
+    DataInput = MessageTextInput
 
 
 # =============================================================================
@@ -182,6 +188,12 @@ class NewType00ALogRuntimeStart(Component):
 
     inputs = [
         MessageTextInput(name="input_text", display_name="Input Text", required=False),
+        DataInput(
+            name="request_state",
+            display_name="Request State (DataPart)",
+            required=False,
+            info="Connect SuperAgent DataPart here. file_context may be top-level or metadata.file_context.",
+        ),
         StrInput(name="db_host", display_name="DB Host", required=True),
         IntInput(name="db_port", display_name="DB Port", value=1521, required=False),
         StrInput(name="db_service_name", display_name="DB Service Name", required=True),
@@ -193,7 +205,10 @@ class NewType00ALogRuntimeStart(Component):
 
     # Langflow output 진입점에서 입력을 검증하고 이 컴포넌트의 주요 실행 흐름을 시작한다.
     def run(self) -> Message:
-        text = str(getattr(self, "input_text", "") or "")
+        text = self._canonical_message(
+            str(getattr(self, "input_text", "") or ""),
+            getattr(self, "request_state", None),
+        )
         logger = logging.getLogger(LOGGER_NAME)
 
         # 같은 Langflow process에서 이전 요청의 handler가 남아 있으면 로그가 중복 insert될 수 있다.
@@ -223,12 +238,75 @@ class NewType00ALogRuntimeStart(Component):
         self.status = {"ok": handler.insert_error is None, "db_insert_error": handler.insert_error}
         return Message(text=text)
 
+    def _canonical_message(self, user_text: str, raw_state: Any) -> str:
+        """Carry SuperAgent TextPart plus DataPart file text in one LLM message."""
+        state = self._state_dict(raw_state)
+        files = self._file_context(state)
+        history = self._history(state)
+        if not files and not history:
+            return user_text
+
+        sections = ["[USER_TEXT]", user_text, "[/USER_TEXT]"]
+        if files:
+            sections.append("[FILE_CONTEXT]")
+            for index, file_info in enumerate(files, start=1):
+                sections.extend(
+                    [
+                        f"[FILE {index}]",
+                        f"file_id: {file_info.get('fileId') or file_info.get('file_id') or ''}",
+                        f"file_name: {file_info.get('fileName') or file_info.get('file_name') or ''}",
+                        f"mime_type: {file_info.get('mimeType') or file_info.get('mime_type') or ''}",
+                        f"size_bytes: {file_info.get('sizeBytes') or file_info.get('size_bytes') or ''}",
+                        "extracted_text:",
+                        str(file_info.get("text") or ""),
+                        f"[/FILE {index}]",
+                    ]
+                )
+            sections.append("[/FILE_CONTEXT]")
+        if history:
+            sections.extend(["[CONVERSATION_HISTORY]", self._safe_json(history), "[/CONVERSATION_HISTORY]"])
+        return "\n".join(sections)
+
+    @staticmethod
+    def _state_dict(raw: Any) -> dict[str, Any]:
+        if raw is None:
+            return {}
+        if isinstance(raw, dict):
+            return dict(raw)
+        data = getattr(raw, "data", None)
+        if isinstance(data, dict):
+            return dict(data)
+        state = getattr(raw, "state", None)
+        if isinstance(state, dict):
+            return dict(state)
+        return {}
+
+    @staticmethod
+    def _file_context(state: dict[str, Any]) -> list[dict[str, Any]]:
+        metadata = state.get("metadata") if isinstance(state.get("metadata"), dict) else {}
+        raw_files = state.get("file_context") or metadata.get("file_context") or []
+        if isinstance(raw_files, dict):
+            raw_files = [raw_files]
+        return [dict(item) for item in raw_files if isinstance(item, dict)] if isinstance(raw_files, list) else []
+
+    @staticmethod
+    def _history(state: dict[str, Any]) -> Any:
+        metadata = state.get("metadata") if isinstance(state.get("metadata"), dict) else {}
+        return state.get("conversation_history") or metadata.get("conversation_history") or []
+
+    @staticmethod
+    def _safe_json(value: Any) -> str:
+        try:
+            return json.dumps(value, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            return str(value)
+
     @staticmethod
     def _upload_metadata(text: str) -> str:
         """Return a compact, non-content diagnostic for an uploaded file message."""
         sheets = re.findall(r"(?mi)^\s*#\s*Sheet\s*:\s*(.+?)\s*$", text)
         chunks = re.findall(r"(?i)\[chunk\s+(\d+)\]", text)
-        filename_match = re.search(r"(?im)(?:file\s*name|filename|파일명)\s*[:=]\s*([^\r\n,]+)", text)
+        filename_match = re.search(r"(?im)(?:file[_\s]*name|filename|파일명)\s*[:=]\s*([^\r\n,]+)", text)
         filename = filename_match.group(1).strip() if filename_match else "unknown"
         digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
         return (

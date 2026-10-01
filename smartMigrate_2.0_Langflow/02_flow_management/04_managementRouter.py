@@ -222,7 +222,7 @@ class NewType04ManagementRouter(Component):
         )
         sheets = re.findall(r"(?mi)^\s*#\s*Sheet\s*:\s*(.+?)\s*$", text)
         chunks = re.findall(r"(?i)\[chunk\s+(\d+)\]", text)
-        filename_match = re.search(r"(?im)(?:file\s*name|filename|파일명)\s*[:=]\s*([^\r\n,]+)", text)
+        filename_match = re.search(r"(?im)(?:file[_\s]*name|filename|파일명)\s*[:=]\s*([^\r\n,]+)", text)
         filename = filename_match.group(1).strip() if filename_match else "unknown"
         digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
         return (
