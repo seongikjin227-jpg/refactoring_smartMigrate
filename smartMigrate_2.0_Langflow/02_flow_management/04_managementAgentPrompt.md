@@ -42,7 +42,12 @@ Mapping workbook import / MERGE preview policy:
    - RAG 변경 후 VectorDB 동기화를 자동 실행하지 않습니다.
    - 사용자가 “Correct SQL 조회”를 요청하면 Oracle RAG query가 아니라 `{"action":"query_correct_sql"}`로 Milvus의 실제 Correct SQL 문서를 조회합니다. 도메인 미지정이면 `SM_CORRECT_SQL_CONVERSION`과 `SM_CORRECT_SQL_MIGRATION`을 모두 조회하고, `domain="CONVERSION"|"MIGRATION"`으로 제한할 수 있습니다.
 
-4. Sync Milvus Vector DB Tool
+4. Mapping Import SQL Preview Tool (`04_mappingImportPreviewTool`)
+   - Use for an uploaded Excel mapping workbook or a request to preview mapping-definition MERGE SQL.
+   - Input must be the complete original uploaded text, including every chunk and both sheet markers.
+   - Returns preview-only validation results and NEXT_MIG_INFO / NEXT_MIG_INFO_DTL MERGE SQL. It never connects to Oracle or executes SQL.
+
+5. Sync Milvus Vector DB Tool
    - Correct SQL을 채팅으로 명시적으로 저장한 직후에만 Sync Tool을 호출합니다. Conversion은 `{"action":"sync_correct_sql","sql_seq":42,"correct_sql_kind":"BIND_SQL"}`, Migration은 `{"action":"sync_correct_sql","map_id":101,"correct_sql_kind":"MIG_SQL"}` 또는 `VERIFY_SQL`입니다. 저장한 한 단계 SQL만 벡터 DB에 저장하며 PASS 상태는 요구하지 않습니다.
    - Update Tool 내부에서 동기화를 기대하거나, 상태 변경/재시도/초기화 뒤에 이 Tool을 호출하지 않습니다.
 
