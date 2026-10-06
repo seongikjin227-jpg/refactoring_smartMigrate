@@ -148,6 +148,12 @@ class NewType00ALogRuntimeStart(Component):
         SecretStrInput(name="db_password", display_name="DB Password", required=True),
         StrInput(name="system_schema", display_name="System Schema", required=True),
         IntInput(name="max_attachment_bytes", display_name="Maximum Download Bytes", value=20_000_000, required=False),
+        StrInput(
+            name="presigned_url_allowed_hosts",
+            display_name="Allowed Presigned URL Hosts",
+            required=False,
+            info="Comma-separated internal hostnames. HTTP is allowed only for these hosts; HTTPS remains allowed.",
+        ),
     ]
     outputs = [Output(display_name="Message", name="message", method="run", types=["Message"])]
 
@@ -185,6 +191,12 @@ class NewType00ALogRuntimeStart(Component):
                 attachment_json,
                 extra={"workflow_log": [0, "WORKFLOW", "00A_ATTACHMENT_PARSE", "INFO", "PRESIGNED_URL", attachment_result.get("status", "FAIL"), 0, attachment_json]},
             )
+            if attachment_result.get("status") == "PASS":
+                parsed_payload = self._message_payload_json(enriched_message)
+                logger.info(
+                    parsed_payload,
+                    extra={"workflow_log": [0, "WORKFLOW", "00A_ATTACHMENT_DATA", "INFO", "PARSED_EXCEL", "PASS", 0, parsed_payload]},
+                )
         self.status = {
             "ok": handler.insert_error is None,
             "db_insert_error": handler.insert_error,
@@ -232,8 +244,18 @@ class NewType00ALogRuntimeStart(Component):
         import aiohttp
 
         parsed = urlparse(url)
-        if parsed.scheme != "https" or not parsed.hostname:
-            raise ValueError("Presigned URL must use HTTPS and include a hostname.")
+        host = str(parsed.hostname or "").lower()
+        if not host or parsed.scheme not in {"https", "http"}:
+            raise ValueError("Presigned URL must use HTTP or HTTPS and include a hostname.")
+        allowed_hosts = {
+            item.strip().lower()
+            for item in str(getattr(self, "presigned_url_allowed_hosts", "") or "").split(",")
+            if item.strip()
+        }
+        if parsed.scheme == "http" and host not in allowed_hosts:
+            raise ValueError(
+                "HTTP Presigned URL host is not allowed. Add the hostname to Allowed Presigned URL Hosts."
+            )
         max_bytes = int(getattr(self, "max_attachment_bytes", 20_000_000) or 20_000_000)
         timeout = aiohttp.ClientTimeout(total=60)
         async with aiohttp.ClientSession(timeout=timeout) as session:
