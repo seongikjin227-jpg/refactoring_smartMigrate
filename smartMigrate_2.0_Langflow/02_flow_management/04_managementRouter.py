@@ -40,6 +40,7 @@ MANAGEMENT_ROUTER_PROMPT = """당신은 SmartMigrate 04 관리 요청 라우터�
 - 유사 SQL 검색 결과의 FAIL-* 행을 유지한 채 RETRY_COUNT를 0으로 바꾸는 요청도 MANAGEMENT_AGENT입니다. 검색만 요청한 경우에는 상태를 변경하지 않습니다.
 - VectorDB, Milvus, 벡터DB, vector upload, vector sync 요청도 MANAGEMENT_AGENT입니다. Agent가 연결된 Sync Milvus Vector DB Tool을 직접 호출합니다.
 - RAG Guide를 추가/수정/비활성화한 직후라도 VectorDB 동기화를 자동으로 이어서 실행하지 않습니다. 사용자가 별도로 요청한 경우에만 Agent가 sync_all Tool command를 호출합니다.
+- 파일 업로드 또는 첨부 파일이 있고, 매핑 룰 등록·추가·가져오기·검증·적용을 요청하면 MANAGEMENT_AGENT입니다. 파일 메타데이터가 있으면 EXCEPTION으로 보내지 마세요. Management Agent가 File Command Tool로 입력을 로그하고 후속 처리를 판단합니다.
 
 필수 정보 누락 규칙:
 - route 자체를 판단할 수 없으면 EXCEPTION으로 보내고 exception_message에 필요한 정보를 한국어로 적으세요.
