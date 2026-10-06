@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import hashlib
 import re
 import urllib.error
 import urllib.request
@@ -67,7 +66,6 @@ class NewType04ManagementRouter(Component):
         Output(display_name="Dashboard", name="dashboard", method="dashboard_response", group_outputs=True),
         Output(display_name="Current Progress", name="current_progress", method="current_progress_response", group_outputs=True),
         Output(display_name="Management Agent", name="management_agent", method="management_agent_response", group_outputs=True),
-        Output(display_name="File Attachment Trace", name="file_attachment_trace", method="file_attachment_trace_response", group_outputs=True),
         Output(display_name="Exception Message", name="exception", method="exception_response", group_outputs=True, types=["Message"]),
     ]
 
@@ -81,9 +79,6 @@ class NewType04ManagementRouter(Component):
 
     def management_agent_response(self) -> Data:
         return self._route_output("MANAGEMENT_AGENT", "management_agent")
-
-    def file_attachment_trace_response(self) -> Data:
-        return self._route_output("FILE_ATTACHMENT_TRACE", "file_attachment_trace")
 
     # LLM이 route를 정할 수 없을 때만 사용자에게 보낼 최종 Message branch를 연다.
     def exception_response(self) -> Message:
@@ -119,9 +114,9 @@ class NewType04ManagementRouter(Component):
         attachment_file_reference = self._attachment_file_reference(payload)
         if attachment_file_reference:
             decision = {
-                "management_route": "FILE_ATTACHMENT_TRACE",
+                "management_route": "MANAGEMENT_AGENT",
                 "exception_message": "",
-                "reason": "resolved_user_request contains an uploaded-file reference",
+                "reason": "uploaded-file reference is handled by the Management Agent",
             }
         routed = {
             **payload,
@@ -182,7 +177,7 @@ class NewType04ManagementRouter(Component):
     # LLM 응답을 허용된 route 집합으로 제한해, 임의의 component name으로 이어지는 것을 차단한다.
     def _normalize_decision(self, decision: dict[str, Any]) -> dict[str, Any]:
         route = str(decision.get("management_route") or "").upper()
-        allowed = {"DASHBOARD", "CURRENT_PROGRESS", "MANAGEMENT_AGENT", "FILE_ATTACHMENT_TRACE", "EXCEPTION"}
+        allowed = {"DASHBOARD", "CURRENT_PROGRESS", "MANAGEMENT_AGENT", "EXCEPTION"}
         if route not in allowed:
             raise ValueError(f"Invalid management_route: {route}")
         return {
@@ -197,7 +192,6 @@ class NewType04ManagementRouter(Component):
             "DASHBOARD": "04_dashboard",
             "CURRENT_PROGRESS": "04_currentProgress",
             "MANAGEMENT_AGENT": "04_managementAgent",
-            "FILE_ATTACHMENT_TRACE": "04_fileAttachmentTrace",
             "EXCEPTION": "04_managementRouter",
         }.get(route, "04_managementAgent")
 

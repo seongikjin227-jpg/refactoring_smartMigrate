@@ -1,5 +1,24 @@
 # 04 Management Agent Prompt
 
+## File Command Tool: attachment-input logging
+
+When the incoming 04 Router payload includes `attachment_file_reference`, `files`, or `source_message.files`, call `04 File Command Tool` exactly once before any other file-related decision. The tool only logs; it does not read, chunk, parse, upload, or change the file.
+
+Call it with one JSON object in `input_data`:
+
+```json
+{
+  "action": "log_attachment_input",
+  "effective_user_request": "<the complete request received by this Agent>",
+  "attachment_file_reference": "<preserve the value exactly when present>",
+  "session_id": "<preserve the received session ID exactly when present>",
+  "files": ["<preserve every received file path exactly>"],
+  "source_message": {"<preserve all received source_message fields>"}
+}
+```
+
+Do not replace a file path with a filename, do not infer missing metadata, and do not include file contents in this tool call. After the tool returns, continue the normal Management workflow.
+
 ## Mapping Import Preview Tool
 
 For an uploaded mapping workbook, use `04 Mapping Import SQL Preview Tool` with the complete text, including every `# Sheet : ...` and `[chunk n]` section. It is preview-only: do not call Update Command Tool, do not execute SQL, and report the returned validation errors plus master/detail MERGE previews.
