@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime
 from typing import Any
@@ -8,12 +7,6 @@ from typing import Any
 from lfx.custom.custom_component.component import Component
 from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
 from lfx.schema.message import Message
-
-try:
-    from lfx.io import DataInput
-except Exception:
-    DataInput = MessageTextInput
-
 
 LOGGER_NAME = "smartmigrate.workflow"
 HANDLER_MARKER = "SmartMigrateHandler"
@@ -144,12 +137,6 @@ class NewType00ALogRuntimeStart(Component):
 
     inputs = [
         MessageTextInput(name="input_text", display_name="Input Text", required=False),
-        DataInput(
-            name="request_state",
-            display_name="Request State (DataPart)",
-            required=False,
-            info="Connect Chat Input/SuperAgent DataPart here; it is logged as raw JSON.",
-        ),
         StrInput(name="db_host", display_name="DB Host", required=True),
         IntInput(name="db_port", display_name="DB Port", value=1521, required=False),
         StrInput(name="db_service_name", display_name="DB Service Name", required=True),
@@ -162,12 +149,7 @@ class NewType00ALogRuntimeStart(Component):
     def run(self) -> Message:
         # Diagnostic boundary: no file extraction, chunking, or metadata merge.
         text = str(getattr(self, "input_text", "") or "")
-        raw_payload = self._safe_json(
-            {
-                "input_text": text,
-                "request_state": self._log_value(getattr(self, "request_state", None)),
-            }
-        )
+        raw_payload = text
         logger = logging.getLogger(LOGGER_NAME)
         for handler in list(logger.handlers):
             logger.removeHandler(handler)
@@ -190,44 +172,6 @@ class NewType00ALogRuntimeStart(Component):
         )
         self.status = {"ok": handler.insert_error is None, "db_insert_error": handler.insert_error}
         return Message(text=text)
-
-    @staticmethod
-    def _safe_json(value: Any) -> str:
-        try:
-            return json.dumps(value, ensure_ascii=False, default=str)
-        except (TypeError, ValueError):
-            return str(value)
-
-    @classmethod
-    def _log_value(cls, value: Any, seen: set[int] | None = None) -> Any:
-        """Convert Langflow Data/Message objects into JSON-safe diagnostic data."""
-        if value is None or isinstance(value, (str, int, float, bool)):
-            return value
-        seen = seen if seen is not None else set()
-        value_id = id(value)
-        if value_id in seen:
-            return "<circular reference>"
-        if isinstance(value, dict):
-            seen.add(value_id)
-            result = {str(key): cls._log_value(item, seen) for key, item in value.items()}
-            seen.remove(value_id)
-            return result
-        if isinstance(value, (list, tuple, set)):
-            seen.add(value_id)
-            result = [cls._log_value(item, seen) for item in value]
-            seen.remove(value_id)
-            return result
-        for method_name in ("model_dump", "dict"):
-            method = getattr(value, method_name, None)
-            if callable(method):
-                try:
-                    return cls._log_value(method(), seen)
-                except Exception:
-                    pass
-        attributes = getattr(value, "__dict__", None)
-        if isinstance(attributes, dict):
-            return cls._log_value(attributes, seen)
-        return str(value)
 
     def _db_config(self) -> dict[str, Any]:
         return {
