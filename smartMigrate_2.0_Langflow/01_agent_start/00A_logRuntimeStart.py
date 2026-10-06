@@ -187,10 +187,50 @@ class NewType00ALogRuntimeStart(Component):
             "sender_name": getattr(message, "sender_name", None),
             "session_id": getattr(message, "session_id", None),
             "context_id": getattr(message, "context_id", None),
-            "files": getattr(message, "files", None),
-            "data": {"gaia": data.get("gaia")} if isinstance(data, dict) else {"gaia": None},
+            "content_blocks": NewType00ALogRuntimeStart._json_value(
+                getattr(message, "content_blocks", None)
+            ),
+            "properties": NewType00ALogRuntimeStart._json_value(
+                getattr(message, "properties", None)
+            ),
+            "data": NewType00ALogRuntimeStart._json_value(data),
+            "files": NewType00ALogRuntimeStart._json_value(getattr(message, "files", None)),
         }
         return json.dumps(payload, ensure_ascii=False, default=str)
+
+    @classmethod
+    def _json_value(cls, value: Any, seen: set[int] | None = None) -> Any:
+        """Preserve nested Langflow/Pydantic values as inspectable JSON data."""
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+
+        seen = seen if seen is not None else set()
+        value_id = id(value)
+        if value_id in seen:
+            return "<circular reference>"
+
+        if isinstance(value, dict):
+            seen.add(value_id)
+            result = {str(key): cls._json_value(item, seen) for key, item in value.items()}
+            seen.remove(value_id)
+            return result
+        if isinstance(value, (list, tuple, set)):
+            seen.add(value_id)
+            result = [cls._json_value(item, seen) for item in value]
+            seen.remove(value_id)
+            return result
+
+        model_dump = getattr(value, "model_dump", None)
+        if callable(model_dump):
+            try:
+                return cls._json_value(model_dump(), seen)
+            except Exception:
+                pass
+
+        attributes = getattr(value, "__dict__", None)
+        if isinstance(attributes, dict):
+            return cls._json_value(attributes, seen)
+        return str(value)
 
     def _db_config(self) -> dict[str, Any]:
         return {
