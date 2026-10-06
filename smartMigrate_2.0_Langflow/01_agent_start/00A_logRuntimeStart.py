@@ -147,13 +147,6 @@ class NewType00ALogRuntimeStart(Component):
         StrInput(name="db_username", display_name="DB Username", required=True),
         SecretStrInput(name="db_password", display_name="DB Password", required=True),
         StrInput(name="system_schema", display_name="System Schema", required=True),
-        IntInput(name="max_attachment_bytes", display_name="Maximum Download Bytes", value=20_000_000, required=False),
-        StrInput(
-            name="presigned_url_allowed_hosts",
-            display_name="Allowed Presigned URL Hosts",
-            required=False,
-            info="Comma-separated internal hostnames. HTTP is allowed only for these hosts; HTTPS remains allowed.",
-        ),
     ]
     outputs = [Output(display_name="Message", name="message", method="run", types=["Message"])]
 
@@ -247,23 +240,11 @@ class NewType00ALogRuntimeStart(Component):
         host = str(parsed.hostname or "").lower()
         if not host or parsed.scheme not in {"https", "http"}:
             raise ValueError("Presigned URL must use HTTP or HTTPS and include a hostname.")
-        allowed_hosts = {
-            item.strip().lower()
-            for item in str(getattr(self, "presigned_url_allowed_hosts", "") or "").split(",")
-            if item.strip()
-        }
-        if parsed.scheme == "http" and host not in allowed_hosts:
-            raise ValueError(
-                "HTTP Presigned URL host is not allowed. Add the hostname to Allowed Presigned URL Hosts."
-            )
-        max_bytes = int(getattr(self, "max_attachment_bytes", 20_000_000) or 20_000_000)
         timeout = aiohttp.ClientTimeout(total=60)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url, allow_redirects=False) as response:
                 response.raise_for_status()
                 content = await response.read()
-        if len(content) > max_bytes:
-            raise ValueError(f"Attachment exceeds max_attachment_bytes={max_bytes}.")
         return content
 
     @staticmethod
