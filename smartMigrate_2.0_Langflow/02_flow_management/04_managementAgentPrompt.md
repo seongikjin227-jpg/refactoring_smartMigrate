@@ -33,7 +33,7 @@
 
 ### 업로드 매핑 룰 충돌 SQL Preview
 
-`uploaded_attachment.parsed_excel`에 `테이블매핑`과 `컬럼매핑` 시트가 있으면 File Command Tool 로그 호출 후 Select Command Tool을 호출합니다. DB 변경은 절대 실행하지 않습니다.
+첨부 metadata에 Presigned URL이 있으면 File Command Tool의 `parse_mapping_workbook` action을 먼저 호출합니다. URL은 Router payload의 `message_data` 또는 `source_message.data`에서 받은 원문값만 사용합니다. Tool이 반환한 parsed_excel에 `테이블매핑`과 `컬럼매핑` 시트가 있으면 Select Command Tool을 호출합니다. DB 변경은 절대 실행하지 않습니다.
 
 - `테이블매핑.순번`은 `MAP_ID`입니다.
 - `컬럼매핑`의 M 행 `순번`은 `MAP_ID`, D 행 `순번`은 `MAP_DTL`입니다.

@@ -111,24 +111,6 @@ class NewType04ManagementRouter(Component):
             extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "ROUTE", "START", 0]},
         )
         payload = self._parse_payload(getattr(self, "payload_json", ""))
-        uploaded_attachment = self._uploaded_attachment(payload)
-        if uploaded_attachment is not None:
-            attachment_json = json.dumps(uploaded_attachment, ensure_ascii=False, default=str)
-            logging.getLogger("smartmigrate.workflow").info(
-                attachment_json,
-                extra={
-                    "workflow_log": [
-                        0,
-                        "WORKFLOW",
-                        "04_PARSED_EXCEL",
-                        "INFO",
-                        "RECEIVE_PARSED_EXCEL",
-                        "PASS",
-                        0,
-                        attachment_json,
-                    ]
-                },
-            )
         decision = self._normalize_decision(self._route_with_llm(payload))
         attachment_file_reference = self._attachment_file_reference(payload)
         if attachment_file_reference:
@@ -192,20 +174,6 @@ class NewType04ManagementRouter(Component):
             or payload.get("input")
             or ""
         ).strip()
-
-    @staticmethod
-    def _uploaded_attachment(payload: dict[str, Any]) -> Any:
-        if payload.get("uploaded_attachment") is not None:
-            return payload["uploaded_attachment"]
-        for container in (payload.get("message_data"), payload.get("source_message")):
-            if not isinstance(container, dict):
-                continue
-            if container.get("uploaded_attachment") is not None:
-                return container["uploaded_attachment"]
-            data = container.get("data")
-            if isinstance(data, dict) and data.get("uploaded_attachment") is not None:
-                return data["uploaded_attachment"]
-        return None
 
     # LLM 응답을 허용된 route 집합으로 제한해, 임의의 component name으로 이어지는 것을 차단한다.
     def _normalize_decision(self, decision: dict[str, Any]) -> dict[str, Any]:

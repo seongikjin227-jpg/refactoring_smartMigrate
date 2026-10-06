@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from datetime import datetime
-from io import BytesIO
 from typing import Any
-from urllib.parse import urlparse
 
 from lfx.custom.custom_component.component import Component
 from lfx.io import IntInput, MessageInput, Output, SecretStrInput, StrInput
@@ -177,113 +174,15 @@ class NewType00ALogRuntimeStart(Component):
                 ]
             },
         )
-        enriched_message, attachment_result = self._enrich_presigned_attachment(message)
-        if attachment_result:
-            attachment_json = json.dumps(attachment_result, ensure_ascii=False, default=str)
-            logger.info(
-                attachment_json,
-                extra={"workflow_log": [0, "WORKFLOW", "00A_ATTACHMENT_PARSE", "INFO", "PRESIGNED_URL", attachment_result.get("status", "FAIL"), 0, attachment_json]},
-            )
-            if attachment_result.get("status") == "PASS":
-                parsed_payload = self._message_payload_json(enriched_message)
-                logger.info(
-                    parsed_payload,
-                    extra={"workflow_log": [0, "WORKFLOW", "00A_ATTACHMENT_DATA", "INFO", "PARSED_EXCEL", "PASS", 0, parsed_payload]},
-                )
         self.status = {
             "ok": handler.insert_error is None,
             "db_insert_error": handler.insert_error,
-            "attachment": attachment_result,
         }
         # Give the next component the exact envelope written to the runtime log.
         # Keep files/session/properties on the Message itself, so Langflow Agent
         # still performs its normal attachment parsing in addition to seeing this
         # inspectable JSON payload as Message.text.
-        enriched_payload = self._message_payload_json(enriched_message)
-        return enriched_message.model_copy(update={"text": enriched_payload})
-
-    def _enrich_presigned_attachment(self, message: Message) -> tuple[Message, dict[str, Any] | None]:
-        data = self._json_value(getattr(message, "data", None))
-        source_data = dict(data) if isinstance(data, dict) else {}
-        url = self._find_presigned_url(source_data)
-        if not url:
-            return message, None
-        try:
-            content = asyncio.run(self._download_presigned_url(url))
-            parsed = self._parse_excel(content)
-            source_data["uploaded_attachment"] = {
-                "presigned_url": url,
-                "byte_count": len(content),
-                "parsed_excel": parsed,
-            }
-            return message.model_copy(update={"data": source_data}), {
-                "status": "PASS",
-                "url_host": urlparse(url).hostname,
-                "byte_count": len(content),
-                "sheet_count": len(parsed["sheets"]),
-            }
-        except Exception as exc:
-            source_data["uploaded_attachment"] = {
-                "presigned_url": url,
-                "parse_error": str(exc),
-            }
-            return message.model_copy(update={"data": source_data}), {
-                "status": "FAIL",
-                "url_host": urlparse(url).hostname,
-                "error": str(exc),
-            }
-
-    async def _download_presigned_url(self, url: str) -> bytes:
-        import aiohttp
-
-        parsed = urlparse(url)
-        host = str(parsed.hostname or "").lower()
-        if not host or parsed.scheme not in {"https", "http"}:
-            raise ValueError("Presigned URL must use HTTP or HTTPS and include a hostname.")
-        timeout = aiohttp.ClientTimeout(total=60)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url, allow_redirects=False) as response:
-                response.raise_for_status()
-                content = await response.read()
-        return content
-
-    @staticmethod
-    def _find_presigned_url(value: Any) -> str:
-        if isinstance(value, dict):
-            for key, item in value.items():
-                normalized = str(key).replace("_", "").replace("-", "").lower()
-                if normalized in {"downloadurl", "presignedurl", "fileurl"} and isinstance(item, str):
-                    return item.strip()
-            for item in value.values():
-                found = NewType00ALogRuntimeStart._find_presigned_url(item)
-                if found:
-                    return found
-        if isinstance(value, (list, tuple)):
-            for item in value:
-                found = NewType00ALogRuntimeStart._find_presigned_url(item)
-                if found:
-                    return found
-        return ""
-
-    @staticmethod
-    def _parse_excel(content: bytes) -> dict[str, Any]:
-        import pandas as pd
-
-        try:
-            sheets = pd.read_excel(BytesIO(content), sheet_name=None, dtype=object, engine="openpyxl")
-        except ImportError as exc:
-            raise RuntimeError("xlsx parsing requires the openpyxl package on the Langflow server.") from exc
-        parsed_sheets = []
-        for name, frame in sheets.items():
-            normalized = frame.where(frame.notna(), None)
-            parsed_sheets.append(
-                {
-                    "name": str(name),
-                    "columns": [str(column) for column in normalized.columns],
-                    "rows": normalized.to_dict(orient="records"),
-                }
-            )
-        return {"format": "xlsx", "sheets": parsed_sheets}
+        return message.model_copy(update={"text": raw_payload})
 
     @staticmethod
     def _message_payload_json(message: Message) -> str:

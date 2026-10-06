@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+from io import BytesIO
 from typing import Any
+from urllib.parse import urlparse
 
 from lfx.custom.custom_component.component import Component
 from lfx.io import MessageTextInput, Output
@@ -12,63 +15,87 @@ from lfx.schema.message import Message
 
 class NewType04FileCommandTool(Component):
     display_name = "04 File Command Tool"
-    description = "Logs the Management Agent attachment input exactly as received. It does not read, chunk, or modify files."
+    description = "Logs attachment input and loads/parses an Excel workbook from a Presigned URL on demand."
     name = "NewType04FileCommandTool"
     icon = "FileSearch"
 
-    inputs = [
-        MessageTextInput(
-            name="input_data",
-            display_name="Attachment Input Data",
-            required=True,
-            tool_mode=True,
-            info=(
-                "Call with a JSON object containing action=log_attachment_input and "
-                "the full attachment/session/request data received by the Management Agent."
-            ),
-        )
-    ]
-    outputs = [
-        Output(display_name="Tool Result", name="tool_result", method="run_tool", types=["Data"]),
-    ]
+    inputs = [MessageTextInput(name="input_data", display_name="Attachment Input Data", required=True, tool_mode=True)]
+    outputs = [Output(display_name="Tool Result", name="tool_result", method="run_tool", types=["Data"])]
 
     def run_tool(self) -> Data:
         raw_input = self._raw_input(getattr(self, "input_data", ""))
-        # Record every invocation before parsing or validating it.  This makes
-        # malformed Agent tool calls visible in NEXT_MIG_LOG as well.
-        logging.getLogger("smartmigrate.workflow").info(
-            raw_input,
-            extra={
-                "workflow_log": [
-                    0,
-                    "WORKFLOW",
-                    "04_FILE_COMMAND_TOOL",
-                    "INFO",
-                    "CALL_RECEIVED",
-                    "START",
-                    0,
-                    raw_input,
-                ]
-            },
-        )
+        self._log("CALL_RECEIVED", "START", raw_input)
         payload = self._parse_payload(raw_input)
         action = str(payload.get("action") or "log_attachment_input").strip().lower()
+        if action == "log_attachment_input":
+            return self._result(action, raw_input)
+        if action not in {"parse_mapping_workbook", "parse_uploaded_excel"}:
+            raise ValueError("Supported actions: log_attachment_input, parse_mapping_workbook.")
 
-        if action != "log_attachment_input":
-            raise ValueError("Only action=log_attachment_input is supported.")
-
-        result = {
-            "ok": True,
-            "component": "04_fileCommandTool",
-            "action": action,
-            "logged_chars": len(raw_input),
-            "logged_only": True,
-            "mapping_registered": False,
-            "database_executed": False,
-            "final": True,
-        }
+        url = self._find_url(payload)
+        if not url:
+            raise ValueError("parse_mapping_workbook requires presigned_url or download_url.")
+        content = asyncio.run(self._download(url))
+        parsed = self._parse_excel(content)
+        result = self._result(action, raw_input)
+        result.update({"presigned_url": url, "byte_count": len(content), "parsed_excel": parsed})
+        self._log("PARSED_EXCEL", "PASS", json.dumps(result, ensure_ascii=False, default=str))
         self.status = result
         return Data(data=result)
+
+    def _result(self, action: str, raw_input: str) -> dict[str, Any]:
+        result = {"ok": True, "component": "04_fileCommandTool", "action": action,
+                  "logged_chars": len(raw_input), "logged_only": action == "log_attachment_input",
+                  "mapping_registered": False, "database_executed": False, "final": True}
+        self.status = result
+        return result
+
+    @staticmethod
+    async def _download(url: str) -> bytes:
+        import aiohttp
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("Presigned URL must be an HTTP or HTTPS URL.")
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
+            async with session.get(url, allow_redirects=False) as response:
+                response.raise_for_status()
+                return await response.read()
+
+    @staticmethod
+    def _parse_excel(content: bytes) -> dict[str, Any]:
+        import pandas as pd
+        try:
+            sheets = pd.read_excel(BytesIO(content), sheet_name=None, dtype=object, engine="openpyxl")
+        except ImportError as exc:
+            raise RuntimeError("xlsx parsing requires openpyxl on the Langflow server.") from exc
+        return {"format": "xlsx", "sheets": [
+            {"name": str(name), "columns": [str(column) for column in frame.columns],
+             "rows": frame.where(frame.notna(), None).to_dict(orient="records")}
+            for name, frame in sheets.items()
+        ]}
+
+    def _log(self, step: str, status: str, payload: str) -> None:
+        logging.getLogger("smartmigrate.workflow").info(
+            payload, extra={"workflow_log": [0, "WORKFLOW", "04_FILE_COMMAND_TOOL", "INFO", step, status, 0, payload]}
+        )
+
+    @staticmethod
+    def _find_url(value: Any) -> str:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                normalized = str(key).replace("_", "").replace("-", "").lower()
+                if normalized in {"downloadurl", "presignedurl", "fileurl"} and isinstance(item, str):
+                    return item.strip()
+            for item in value.values():
+                found = NewType04FileCommandTool._find_url(item)
+                if found:
+                    return found
+        if isinstance(value, list):
+            for item in value:
+                found = NewType04FileCommandTool._find_url(item)
+                if found:
+                    return found
+        return ""
 
     @staticmethod
     def _raw_input(value: Any) -> str:
@@ -76,9 +103,7 @@ class NewType04FileCommandTool(Component):
             return str(value.text or "")
         if isinstance(value, Data):
             return json.dumps(value.data or {}, ensure_ascii=False, default=str)
-        if isinstance(value, dict):
-            return json.dumps(value, ensure_ascii=False, default=str)
-        return str(value or "")
+        return json.dumps(value, ensure_ascii=False, default=str) if isinstance(value, dict) else str(value or "")
 
     @staticmethod
     def _parse_payload(raw_input: str) -> dict[str, Any]:

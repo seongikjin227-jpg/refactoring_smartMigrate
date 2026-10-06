@@ -1,174 +1,200 @@
-# 00A 파일 업로드 런타임 가이드
+# 파일 업로드 전달 구조를 Presigned URL 방식으로 설계한 이유
 
-## 전체 흐름
+## 1. 출발점: Langflow Playground에서는 files가 있었다
 
-00A는 Chat Input Message의 metadata를 JSON으로 기록하고, data 안의 Presigned URL을 찾아 엑셀을 다운로드·파싱한 뒤 02와 04까지 전달한다.
-
-~~~
-Chat Input Message
-  -> 00A.run
-  -> 원본 Message CLOB 로그
-  -> Presigned URL 다운로드
-  -> pandas Excel 파싱
-  -> Message.data.uploaded_attachment 저장
-  -> 02 최종 payload
-  -> 04 Router / Management Agent
-~~~
-
-관련 구현 파일:
-
-- 01_agent_start/00A_logRuntimeStart.py
-- 01_agent_start/02_intentRouter.py
-- 02_flow_management/04_managementRouter.py
-
-## 1. 00A 로그의 JSON 객체
-
-함수: NewType00ALogRuntimeStart._message_payload_json(message)
-
-이 함수가 Chat Input의 Message를 아래 필드로 새 JSON envelope로 만든다.
+처음 Langflow Playground에서 파일을 첨부했을 때 Chat Input Message에는 files 값이 들어왔다.
 
 ~~~
-text
-sender
-sender_name
-session_id
-context_id
-content_blocks
-properties
-data
-files
+Message.files
+  = ["{session_id}/{timestamp}_{filename}.xlsx"]
 ~~~
 
-따라서 00A 로그의 JSON은 LLM 응답이 아니라, Chat Input Message 전체를 진단용으로 직렬화한 값이다.
+이 값은 파일 본문이 아니라 Langflow 저장소의 상대 경로다. 기본 Langflow Agent는 이 경로를 사용해 내부적으로 파일을 읽고 LLM Message에 파일 내용을 추가할 수 있다.
 
-함수: _json_value(value)
-
-Pydantic 객체, dict, list를 JSON으로 저장 가능한 Python 값으로 변환한다. 순환 참조도 막는다.
-
-## 2. run 함수의 처리 순서
-
-NewType00ALogRuntimeStart.run은 다음 순서다.
-
-1. input_message가 Langflow Message인지 확인한다.
-2. _message_payload_json으로 원본 envelope JSON을 만든다.
-3. CHAT_INPUT 로그를 NEXT_MIG_LOG에 기록한다.
-4. _enrich_presigned_attachment로 Presigned URL 파일을 처리한다.
-5. 파일 처리 결과와 성공 시 전체 파싱 JSON을 CLOB에 기록한다.
-6. 파싱 결과가 포함된 Message를 02에 반환한다.
-
-반환 Message의 text는 inspect 가능한 envelope JSON이며, 실제 파싱 결과는 data에 저장된다.
-
-## 3. Presigned URL 탐색
-
-함수: _find_presigned_url(value)
-
-message.data를 재귀 탐색해서 아래 키를 찾는다.
+따라서 처음에는 다음처럼 생각했다.
 
 ~~~
-downloadURL / download_url
-presignedURL / presigned_url
-fileURL / file_url
+Chat Input.files
+  -> 00A
+  -> 01/02
+  -> 04 Agent
 ~~~
 
-URL이 없으면 파일 처리 없이 원래 Message를 다음 단계로 전달한다.
+즉 files를 그대로 전달하면 Agent가 파일을 인식할 것으로 기대했다.
 
-## 4. 다운로드
+## 2. 문제 발견: 서버 Chat Input에서는 files가 비어 있었다
 
-함수: async _download_presigned_url(url)
+사내 서버의 Chat Input과 Playground는 파일 전달 방식이 달랐다.
 
-aiohttp로 URL 응답 body를 bytes로 다운로드한다.
+- Playground: Message.files에 파일 경로가 존재
+- 사내 서버: session_id와 user metadata는 data에 존재하지만 Message.files는 빈 배열
 
-- HTTP와 HTTPS Presigned URL을 모두 허용한다.
-
-다운로드 오류는 parse_error와 CLOB 로그에 남는다.
-
-## 5. 엑셀 파싱
-
-함수: _parse_excel(content)
-
-pandas.read_excel을 sheet_name=None으로 호출해 모든 시트를 읽는다. 각 시트는 name, columns, rows 구조의 JSON으로 변환된다.
-
-결과 예시:
+00A의 원본 Message CLOB 로그로 확인한 형태는 다음과 유사했다.
 
 ~~~json
 {
-  "format": "xlsx",
-  "sheets": [
-    {
-      "name": "테이블매핑",
-      "columns": ["순번", "ASIS 테이블명", "TOBE 테이블명"],
-      "rows": [{"순번": 101, "ASIS 테이블명": "ASIS_CUSTOMER", "TOBE 테이블명": "TOBE_MEMBER"}]
-    }
-  ]
+  "text": "첨부한 엑셀의 매핑 룰을 확인해줘.",
+  "session_id": "New Session",
+  "data": {
+    "session_id": "New Session",
+    "downloadURL": "http://..."
+  },
+  "files": []
 }
 ~~~
 
-서버에는 다음 패키지가 필요하다.
+이 상태에서는 downstream 컴포넌트가 session_id만으로 파일명이나 실제 업로드 파일을 복구할 수 없다. 따라서 files 경로 방식만 의존하는 설계는 서버 환경에서 실패한다.
 
-~~~powershell
-pip install pandas openpyxl aiohttp
+## 3. 설계 변경: 파일 경로가 아니라 Presigned URL을 00A에서 처리
+
+사내 Chat Input data에는 파일 접근용 downloadURL 또는 Presigned URL이 전달되는 것을 확인했다.
+
+그래서 파일 처리 책임을 가장 첫 경계인 00A로 옮겼다.
+
+~~~
+서버 Chat Input
+  -> Message.data.downloadURL
+  -> 00A가 URL 다운로드
+  -> Excel을 JSON으로 변환
+  -> 변환 JSON을 Message.data에 다시 저장
 ~~~
 
-현재 개발 환경에는 openpyxl이 없으므로, 서버에도 없다면 xlsx 파싱은 parse_error로 기록된다.
+이 설계의 목적은 다음 세 가지다.
 
-## 6. 파싱 결과 저장 위치
+1. files가 비어 있어도 파일 내용을 확보한다.
+2. 파일 다운로드·변환 지점을 00A 하나로 고정한다.
+3. 이후 02, 04, Agent는 URL이나 파일 저장소를 다시 알 필요 없이 JSON 데이터만 사용한다.
 
-함수: _enrich_presigned_attachment(message)
+## 4. 00A가 서버 JSON에서 무엇을 확인하는가
 
-원래 Message.data에 uploaded_attachment를 추가한다.
+00A는 Chat Input Message 전체를 먼저 JSON envelope로 기록한다.
+
+대상 필드:
+
+~~~text
+text
+sender / sender_name
+session_id / context_id
+files
+data
+properties
+content_blocks
+~~~
+
+이 로그는 파일 전달 방식이 바뀌었을 때 실제 서버가 무엇을 보냈는지 확인하기 위한 관측 지점이다.
+
+그 뒤 00A는 data 내부를 재귀적으로 검사한다. 인식하는 URL 키는 다음과 같다.
+
+~~~text
+downloadURL, download_url
+presignedURL, presigned_url
+fileURL, file_url
+~~~
+
+현재는 HTTP와 HTTPS URL을 모두 다운로드 대상으로 허용한다.
+
+## 5. URL에서 엑셀 데이터까지 변환하는 과정
+
+00A의 처리 단계:
+
+~~~text
+Presigned URL
+  -> aiohttp로 파일 bytes 다운로드
+  -> BytesIO로 메모리 전달
+  -> pandas.read_excel
+  -> 모든 Sheet를 columns + rows JSON으로 변환
+  -> Message.data.uploaded_attachment에 저장
+~~~
+
+변환 후 저장 구조:
 
 ~~~json
 {
   "uploaded_attachment": {
     "presigned_url": "http://...",
     "byte_count": 12345,
-    "parsed_excel": {"format": "xlsx", "sheets": []}
+    "parsed_excel": {
+      "format": "xlsx",
+      "sheets": [
+        {
+          "name": "테이블매핑",
+          "columns": ["순번", "ASIS 테이블명", "TOBE 테이블명"],
+          "rows": []
+        }
+      ]
+    }
   }
 }
 ~~~
 
-파일 경로가 Message.files에 없어도 data의 Presigned URL만 있으면 이 경로로 파일 내용을 확보할 수 있다.
+즉 이후 단계는 파일명이나 서버 파일 경로가 아니라 parsed_excel JSON만 보면 된다.
 
-## 7. CLOB 로그 확인 위치
+## 6. 왜 01 Agent를 없애고 02에서 JSON을 조합했는가
 
-| LOG_TYPE | STEP_NAME | GENERATE_SQL CLOB 내용 |
-|---|---|---|
-| CHAT_INPUT | MESSAGE | 최초 Chat Input Message envelope |
-| 00A_ATTACHMENT_PARSE | PRESIGNED_URL | URL host, 파일 크기, 시트 수 또는 오류 |
-| 00A_ATTACHMENT_DATA | PARSED_EXCEL | 전체 시트, 컬럼, 행 JSON |
-| 02_INPUT_MESSAGE | RECEIVE_00A | 02가 받은 metadata |
-| 02_LLM_ROUTE_RESPONSE | CLASSIFY | LLM route 응답 |
-| 02_FINAL_OUTPUT | COMPILE_PAYLOAD | 02 최종 payload |
-| 04_PARSED_EXCEL | RECEIVE_PARSED_EXCEL | 04 Router가 받은 파싱 데이터 |
+처음에는 01 Agent에게 원본 metadata를 source_message에 그대로 복사하라고 지시했다.
 
-MESSAGE 컬럼은 4,000자 제한이 있으므로 전체 원본은 GENERATE_SQL CLOB을 조회한다.
+하지만 LLM은 다음 값을 빈 값으로 만들거나 누락할 수 있었다.
 
-## 8. 02와 04 전달 계약
-
-02는 LLM이 metadata를 복사하게 하지 않는다. LLM은 route만 반환하고, 02가 Message의 session_id, files, data, properties, content_blocks를 코드로 조합한다.
-
+~~~text
+session_id
+files
+data
+properties
+content_blocks
 ~~~
+
+metadata는 자연어 해석 결과가 아니라 시스템 전달값이므로 LLM에게 복사를 맡기면 안 된다.
+
+그래서 현재는 다음처럼 분리했다.
+
+~~~text
+02 LLM: route만 반환
+02 Python 코드: session_id, files, data, uploaded_attachment를 원본 Message에서 직접 조합
+~~~
+
+이렇게 하면 LLM이 route를 잘못 판단하는 문제와 metadata를 잃는 문제를 분리할 수 있다.
+
+## 7. 04까지 전달됐는지 어떻게 검증하는가
+
+파싱 데이터는 아래 경로로 전달된다.
+
+~~~text
 00A Message.data.uploaded_attachment
   -> 02 payload.uploaded_attachment
   -> 04 Router payload.uploaded_attachment
   -> 04 Management Agent
 ~~~
 
-## 9. 매핑 룰 SQL preview
+각 경계에는 CLOB 로그를 둔다.
 
-엑셀 계약:
+| 단계 | LOG_TYPE | 확인 목적 |
+|---|---|---|
+| 원본 수신 | CHAT_INPUT | 서버 Chat Input JSON 확인 |
+| URL 처리 결과 | 00A_ATTACHMENT_PARSE | URL 다운로드와 시트 수 확인 |
+| 엑셀 원본 변환 | 00A_ATTACHMENT_DATA | 전체 parsed_excel JSON 확인 |
+| 02 수신 | 02_INPUT_MESSAGE | 00A에서 02로 metadata가 유지됐는지 확인 |
+| 02 출력 | 02_FINAL_OUTPUT | 04로 보낼 최종 JSON 확인 |
+| 04 수신 | 04_PARSED_EXCEL | 04 Router까지 parsed_excel이 도착했는지 확인 |
+
+MESSAGE 컬럼은 길이 제한이 있으므로 전체 데이터는 NEXT_MIG_LOG.GENERATE_SQL CLOB에서 확인한다.
+
+## 8. 매핑 룰 처리의 다음 단계
+
+파싱된 엑셀의 계약은 다음과 같다.
 
 - 테이블매핑 시트의 순번은 MAP_ID
-- 컬럼매핑 시트 M 행 순번은 MAP_ID
-- 컬럼매핑 시트 D 행 순번은 MAP_DTL
+- 컬럼매핑 시트 M 행의 순번은 MAP_ID
+- 컬럼매핑 시트 D 행의 순번은 MAP_DTL
 
-Agent 처리 순서:
+현재 DB 변경은 하지 않는다. 04 Management Agent는 다음 순서로 처리한다.
 
-1. File Command Tool로 수신 입력을 CLOB 로그에 기록한다.
-2. Select Tool preview_mapping_rule_conflicts action으로 실제 DB와 비교한다.
-3. 충돌 행은 update_sql_preview, 신규 행은 insert_sql_preview로 받는다.
-4. SQL은 보여주기만 하고 DB에서 실행하지 않는다.
+~~~text
+1. File Command Tool: Agent가 받은 입력 전체를 CLOB 로그에 남김
+2. Select Tool: MAP_ID와 MAP_ID + MAP_DTL 충돌 조회
+3. Select Tool: 충돌 행은 UPDATE SQL preview, 신규 행은 INSERT SQL preview 생성
+4. Agent: SQL을 사용자에게 보여주되 실행하지 않음
+~~~
 
-## 10. 설명용 핵심 문장
+## 발표용 요약
 
-사내 Chat Input이 files를 비워서 보내는 경우를 대비해, 00A가 data의 Presigned URL을 직접 찾는다. 00A는 파일을 다운로드하고 엑셀 전체 시트를 JSON으로 변환해 uploaded_attachment에 저장한다. 02는 이 데이터를 코드로 보존해 04로 전달한다. 각 경계는 CLOB 로그로 추적할 수 있으며, 04는 MAP_ID와 MAP_DTL 충돌을 조회해 실행하지 않는 UPDATE/INSERT SQL preview만 생성한다.
+처음에는 Langflow Playground처럼 files 경로가 전달될 것으로 보고 파일명을 downstream으로 전달하려 했다. 그러나 사내 서버 Chat Input에서는 files가 비어 있고 data에 Presigned URL만 들어왔다. 그래서 파일 다운로드와 엑셀 파싱을 00A에서 수행하도록 변경했다. 00A는 URL을 다운로드해 엑셀 전체 시트를 JSON으로 만들고, 02는 LLM이 metadata를 복사하지 않도록 route만 판단하게 한 뒤 원본 metadata와 파싱 데이터를 코드로 보존한다. 04에서는 이 데이터가 실제 도착했는지 CLOB 로그로 검증하고, MAP_ID와 MAP_DTL 기준으로 DB 충돌을 조회해 실행하지 않는 UPDATE/INSERT SQL만 생성한다.
