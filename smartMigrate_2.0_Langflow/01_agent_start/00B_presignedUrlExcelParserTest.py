@@ -54,9 +54,16 @@ class NewType00BPresignedUrlExcelParserTest(Component):
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise ValueError("downloadUrl must be HTTP or HTTPS.")
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
-            async with session.get(url, allow_redirects=False) as response:
+            async with session.get(url, allow_redirects=True) as response:
                 response.raise_for_status()
-                return await response.read()
+                content = await response.read()
+                if not content.startswith(b"PK"):
+                    preview = content[:120].decode("utf-8", errors="replace").replace("\n", " ")
+                    raise ValueError(
+                        f"Downloaded response is not an XLSX ZIP file. "
+                        f"content_type={response.headers.get('Content-Type')!r}, preview={preview!r}"
+                    )
+                return content
 
     @staticmethod
     def _parse_excel(content: bytes) -> dict[str, Any]:
