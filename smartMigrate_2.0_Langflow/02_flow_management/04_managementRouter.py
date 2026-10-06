@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import hashlib
+import re
 import urllib.error
 import urllib.request
 from typing import Any
@@ -115,10 +115,6 @@ class NewType04ManagementRouter(Component):
             extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "ROUTE", "START", 0]},
         )
         payload = self._parse_payload(getattr(self, "payload_json", ""))
-        logging.getLogger("smartmigrate.workflow").info(
-            "04 Management Router received: " + self._upload_metadata(payload),
-            extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "UPLOAD_TRACE", "PASS", 0]},
-        )
         decision = self._normalize_decision(self._route_with_llm(payload))
         attachment_file_reference = self._attachment_file_reference(payload)
         if attachment_file_reference:
@@ -206,12 +202,68 @@ class NewType04ManagementRouter(Component):
         }.get(route, "04_managementAgent")
 
     def _attachment_file_reference(self, payload: dict[str, Any]) -> str:
+        # Preserve the upload path from Chat Input whenever it survived the
+        # upstream handoff.  This is authoritative; prose is only a fallback.
+        for container in (
+            payload,
+            payload.get("source_message"),
+            payload.get("message_data"),
+            payload.get("data"),
+        ):
+            if not isinstance(container, dict):
+                continue
+            file_reference = self._file_reference_from_value(container.get("files"))
+            if file_reference:
+                return file_reference
+
         text = self._effective_user_request(payload)
         match = re.search(
             r"(?i)(?<![\w/\\])([^\s'\"]+\.(?:csv|tsv|txt|json|md|xml|yaml|yml|xlsx|xls|pdf))(?![\w])",
             text,
         )
-        return match.group(1).strip(".,:;!?)]}") if match else ""
+        if not match:
+            return ""
+
+        # This fallback is for classifier prose such as "file(2026-...csv".
+        file_reference = match.group(1).strip(".,:;!?)]}")
+        if "(" in file_reference and "/" not in file_reference:
+            prefix, possible_name = file_reference.rsplit("(", 1)
+            if len(prefix) <= 16:
+                return possible_name
+        return file_reference
+
+    @classmethod
+    def _file_reference_from_value(cls, value: Any) -> str:
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                file_reference = cls._file_reference_from_value(item)
+                if file_reference:
+                    return file_reference
+            return ""
+        if isinstance(value, dict):
+            for key in ("path", "file_path", "file", "name", "filename"):
+                file_reference = cls._file_reference_from_value(value.get(key))
+                if file_reference:
+                    return file_reference
+            return ""
+        if not isinstance(value, str):
+            return ""
+
+        text = value.strip()
+        if not text:
+            return ""
+        try:
+            decoded = json.loads(text)
+        except (TypeError, ValueError):
+            decoded = None
+        if decoded is not None and decoded != text:
+            return cls._file_reference_from_value(decoded)
+
+        candidate = text.strip(" \t\r\n'\"[]{}")
+        return candidate if re.search(
+            r"(?i)\.(?:csv|tsv|txt|json|md|xml|yaml|yml|xlsx|xls|pdf)$",
+            candidate,
+        ) else ""
 
     # Data/dict/JSON text 형태의 상위 payload를 동일한 dict 계약으로 정규화한다.
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
@@ -232,21 +284,3 @@ class NewType04ManagementRouter(Component):
     def _secret_to_str(self, value: Any) -> str:
         return str(value.get_secret_value()) if hasattr(value, "get_secret_value") else str(value or "")
 
-    @staticmethod
-    def _upload_metadata(payload: dict[str, Any]) -> str:
-        text = str(
-            payload.get("resolved_user_request")
-            or payload.get("user_request")
-            or payload.get("original_request")
-            or payload.get("input")
-            or ""
-        )
-        sheets = re.findall(r"(?mi)^\s*#\s*Sheet\s*:\s*(.+?)\s*$", text)
-        chunks = re.findall(r"(?i)\[chunk\s+(\d+)\]", text)
-        filename_match = re.search(r"(?im)(?:file[_\s]*name|filename|파일명)\s*[:=]\s*([^\r\n,]+)", text)
-        filename = filename_match.group(1).strip() if filename_match else "unknown"
-        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-        return (
-            f"filename={filename}; chars={len(text)}; sha256_16={digest}; "
-            f"sheet_count={len(sheets)}; sheets={sheets}; chunk_ids={chunks}"
-        )

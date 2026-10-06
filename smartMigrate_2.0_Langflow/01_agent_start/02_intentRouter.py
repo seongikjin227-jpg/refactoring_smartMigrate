@@ -47,6 +47,9 @@ class NewType02IntentRouter(Component):
 
             raw_classifier_output = self._raw_classifier_output(getattr(self, "payload_json", ""))
             payload = self._parse_payload(getattr(self, "payload_json", ""))
+            payload = self._ensure_source_message_session_id(
+                payload, getattr(self, "payload_json", None)
+            )
 
             # Log the unmodified 01 output once. MESSAGE holds the first 4,000
             # characters; GENERATE_SQL retains the full JSON CLOB.
@@ -126,3 +129,31 @@ class NewType02IntentRouter(Component):
         if isinstance(raw, dict):
             return json.dumps(raw, ensure_ascii=False, default=str)
         return str(raw or "")
+
+    @staticmethod
+    def _ensure_source_message_session_id(payload: dict[str, Any], raw: Any) -> dict[str, Any]:
+        """Keep the session identifier beside files even if 01 omitted it."""
+        source_message = payload.get("source_message")
+        if not isinstance(source_message, dict):
+            source_message = {}
+            payload["source_message"] = source_message
+
+        existing_session_id = str(source_message.get("session_id") or "").strip()
+        if existing_session_id:
+            return payload
+
+        session_id = str(
+            payload.get("session_id")
+            or getattr(raw, "session_id", "")
+            or ""
+        ).strip()
+        if not session_id:
+            files = source_message.get("files") or payload.get("files") or []
+            first_file = files[0] if isinstance(files, (list, tuple)) and files else files
+            first_file = str(first_file or "").replace("\\", "/").lstrip("/")
+            if "/" in first_file:
+                session_id = first_file.split("/", 1)[0].strip()
+
+        if session_id:
+            source_message["session_id"] = session_id
+        return payload
