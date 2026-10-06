@@ -67,6 +67,7 @@ class NewType04ManagementRouter(Component):
         Output(display_name="Dashboard", name="dashboard", method="dashboard_response", group_outputs=True),
         Output(display_name="Current Progress", name="current_progress", method="current_progress_response", group_outputs=True),
         Output(display_name="Management Agent", name="management_agent", method="management_agent_response", group_outputs=True),
+        Output(display_name="File Attachment Trace", name="file_attachment_trace", method="file_attachment_trace_response", group_outputs=True),
         Output(display_name="Exception Message", name="exception", method="exception_response", group_outputs=True, types=["Message"]),
     ]
 
@@ -80,6 +81,9 @@ class NewType04ManagementRouter(Component):
 
     def management_agent_response(self) -> Data:
         return self._route_output("MANAGEMENT_AGENT", "management_agent")
+
+    def file_attachment_trace_response(self) -> Data:
+        return self._route_output("FILE_ATTACHMENT_TRACE", "file_attachment_trace")
 
     # LLM이 route를 정할 수 없을 때만 사용자에게 보낼 최종 Message branch를 연다.
     def exception_response(self) -> Message:
@@ -116,6 +120,13 @@ class NewType04ManagementRouter(Component):
             extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "UPLOAD_TRACE", "PASS", 0]},
         )
         decision = self._normalize_decision(self._route_with_llm(payload))
+        attachment_file_reference = self._attachment_file_reference(payload)
+        if attachment_file_reference:
+            decision = {
+                "management_route": "FILE_ATTACHMENT_TRACE",
+                "exception_message": "",
+                "reason": "resolved_user_request contains an uploaded-file reference",
+            }
         routed = {
             **payload,
             "component": "04_managementRouter",
@@ -123,6 +134,7 @@ class NewType04ManagementRouter(Component):
             "management_route": decision["management_route"],
             "exception_message": decision.get("exception_message", ""),
             "management_routing_reason": decision.get("reason", ""),
+            "attachment_file_reference": attachment_file_reference,
         }
         routed.setdefault("history", []).append({"step": "management_route", "message": f"management_route={routed['management_route']}"})
         self._cached_routed_payload = routed
@@ -174,7 +186,7 @@ class NewType04ManagementRouter(Component):
     # LLM 응답을 허용된 route 집합으로 제한해, 임의의 component name으로 이어지는 것을 차단한다.
     def _normalize_decision(self, decision: dict[str, Any]) -> dict[str, Any]:
         route = str(decision.get("management_route") or "").upper()
-        allowed = {"DASHBOARD", "CURRENT_PROGRESS", "MANAGEMENT_AGENT", "EXCEPTION"}
+        allowed = {"DASHBOARD", "CURRENT_PROGRESS", "MANAGEMENT_AGENT", "FILE_ATTACHMENT_TRACE", "EXCEPTION"}
         if route not in allowed:
             raise ValueError(f"Invalid management_route: {route}")
         return {
@@ -189,8 +201,17 @@ class NewType04ManagementRouter(Component):
             "DASHBOARD": "04_dashboard",
             "CURRENT_PROGRESS": "04_currentProgress",
             "MANAGEMENT_AGENT": "04_managementAgent",
+            "FILE_ATTACHMENT_TRACE": "04_fileAttachmentTrace",
             "EXCEPTION": "04_managementRouter",
         }.get(route, "04_managementAgent")
+
+    def _attachment_file_reference(self, payload: dict[str, Any]) -> str:
+        text = self._effective_user_request(payload)
+        match = re.search(
+            r"(?i)(?<![\w/\\])([^\s'\"]+\.(?:csv|tsv|txt|json|md|xml|yaml|yml|xlsx|xls|pdf))(?![\w])",
+            text,
+        )
+        return match.group(1).strip(".,:;!?)]}") if match else ""
 
     # Data/dict/JSON text 형태의 상위 payload를 동일한 dict 계약으로 정규화한다.
     def _parse_payload(self, raw: Any) -> dict[str, Any]:
