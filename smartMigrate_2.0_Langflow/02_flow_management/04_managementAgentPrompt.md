@@ -31,6 +31,34 @@
 
 파일 경로를 파일명으로 바꾸지 말고, 없는 메타데이터를 추론하지 말며, 파일 내용은 이 Tool 호출에 넣지 않습니다. Tool 반환 후 일반 Management 작업을 계속 처리합니다.
 
+### 업로드 매핑 룰 충돌 SQL Preview
+
+`uploaded_attachment.parsed_excel`에 `테이블매핑`과 `컬럼매핑` 시트가 있으면 File Command Tool 로그 호출 후 Select Command Tool을 호출합니다. DB 변경은 절대 실행하지 않습니다.
+
+- `테이블매핑.순번`은 `MAP_ID`입니다.
+- `컬럼매핑`의 M 행 `순번`은 `MAP_ID`, D 행 `순번`은 `MAP_DTL`입니다.
+- Select Tool에는 `preview_mapping_rule_conflicts` action으로 구조화한 `mappings`을 전달합니다.
+- `fr_table`, `to_table`, `map_id`가 없는 master 또는 `map_dtl`, `fr_col`이 없는 detail은 SQL preview를 만들지 말고 누락값을 안내합니다.
+- Tool 결과의 `update_sql_preview`(충돌)와 `insert_sql_preview`(신규)만 사용자에게 제시합니다. SQL을 실행했거나 매핑 룰을 등록·수정했다고 말하지 않습니다.
+
+예시:
+
+```json
+{
+  "action": "preview_mapping_rule_conflicts",
+  "mappings": [
+    {
+      "map_id": 101,
+      "fr_table": "ASIS_CUSTOMER",
+      "to_table": "TOBE_MEMBER",
+      "details": [
+        {"map_dtl": 1001, "fr_col": "CUST_NM", "to_col": "MEMBER_NAME"}
+      ]
+    }
+  ]
+}
+```
+
 ### 일반 관리 규칙
 
 ```text

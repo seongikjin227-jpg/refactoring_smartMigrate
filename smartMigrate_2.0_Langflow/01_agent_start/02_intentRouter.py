@@ -161,6 +161,11 @@ class NewType02IntentRouter(Component):
             "context_id": source_message["context_id"],
             "files": source_message["files"],
             "message_data": source_message["data"],
+            "uploaded_attachment": (
+                source_message["data"].get("uploaded_attachment")
+                if isinstance(source_message["data"], dict)
+                else None
+            ),
             "source_message": source_message,
         }
         full_payload = json.dumps(payload, ensure_ascii=False, default=str)

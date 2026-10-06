@@ -118,6 +118,8 @@ class NewType04SelectCommandTool(Component):
             return self._get_sql_job(command)
         if action == "get_sql_mapping_rules":
             return self._get_sql_mapping_rules(command)
+        if action == "preview_mapping_rule_conflicts":
+            return self._preview_mapping_rule_conflicts(command)
         if action == "get_sql_text":
             return self._get_sql_text(command)
         if action == "get_migration_text":
@@ -216,6 +218,163 @@ class NewType04SelectCommandTool(Component):
             "target": target,
             "data": {"sql_info": sql_info, "mapping_rules": self._sql_mapping_rules(sql_info)},
         }
+
+    def _preview_mapping_rule_conflicts(self, command: dict[str, Any]) -> dict[str, Any]:
+        """Read existing MAP_ID/MAP_DTL rows and generate, but never run, UPDATE SQL."""
+        mappings = command.get("mappings")
+        if not isinstance(mappings, list) or not mappings:
+            raise ValueError("mappings must be a non-empty list")
+
+        conflicts: list[dict[str, Any]] = []
+        update_sql: list[str] = []
+        insert_sql: list[str] = []
+        for index, mapping in enumerate(mappings):
+            if not isinstance(mapping, dict):
+                raise ValueError(f"mappings[{index}] must be an object")
+            map_id = self._preview_positive_int(mapping.get("map_id"), f"mappings[{index}].map_id")
+            master_rows = self._query_rows(
+                f"SELECT MAP_ID, MAP_TYPE, FR_TABLE, TO_TABLE, CONDITION, USE_YN, PRIORITY, PRIOR_MAP_ID "
+                f"FROM {self._qualify('NEXT_MIG_INFO')} WHERE MAP_ID = :map_id",
+                {"map_id": map_id},
+                table_name="NEXT_MIG_INFO",
+            )
+            master_conflict = bool(master_rows)
+            if master_conflict:
+                sql = self._master_update_preview(map_id, mapping)
+                if sql:
+                    update_sql.append(sql)
+            else:
+                sql = self._master_insert_preview(map_id, mapping)
+                if sql:
+                    insert_sql.append(sql)
+
+            detail_conflicts: list[dict[str, Any]] = []
+            details = mapping.get("details") or []
+            if not isinstance(details, list):
+                raise ValueError(f"mappings[{index}].details must be a list")
+            for detail_index, detail in enumerate(details):
+                if not isinstance(detail, dict):
+                    raise ValueError(f"mappings[{index}].details[{detail_index}] must be an object")
+                map_dtl = self._preview_positive_int(
+                    detail.get("map_dtl"), f"mappings[{index}].details[{detail_index}].map_dtl"
+                )
+                rows = self._query_rows(
+                    f"SELECT MAP_ID, MAP_DTL, FR_COL, TO_COL FROM {self._qualify('NEXT_MIG_INFO_DTL')} "
+                    "WHERE MAP_ID = :map_id AND MAP_DTL = :map_dtl",
+                    {"map_id": map_id, "map_dtl": map_dtl},
+                    table_name="NEXT_MIG_INFO_DTL",
+                )
+                if rows:
+                    detail_conflicts.append({"map_dtl": map_dtl, "existing": rows})
+                    sql = self._detail_update_preview(map_id, map_dtl, detail)
+                    if sql:
+                        update_sql.append(sql)
+                else:
+                    sql = self._detail_insert_preview(map_id, map_dtl, detail)
+                    if sql:
+                        insert_sql.append(sql)
+
+            conflicts.append(
+                {
+                    "map_id": map_id,
+                    "master_conflict": master_conflict,
+                    "existing_master": master_rows,
+                    "detail_conflicts": detail_conflicts,
+                }
+            )
+
+        return {
+            "ok": True,
+            "component": "04_selectCommandTool",
+            "action": "preview_mapping_rule_conflicts",
+            "database_executed": False,
+            "conflicts": conflicts,
+            "conflict_count": sum(
+                int(item["master_conflict"]) + len(item["detail_conflicts"]) for item in conflicts
+            ),
+            "update_sql_preview": update_sql,
+            "insert_sql_preview": insert_sql,
+        }
+
+    def _master_update_preview(self, map_id: int, mapping: dict[str, Any]) -> str:
+        fields = {
+            "map_type": "MAP_TYPE",
+            "fr_table": "FR_TABLE",
+            "to_table": "TO_TABLE",
+            "condition": "CONDITION",
+            "use_yn": "USE_YN",
+            "priority": "PRIORITY",
+            "prior_map_id": "PRIOR_MAP_ID",
+        }
+        assignments = [
+            f"{column} = {self._preview_sql_literal(mapping[key])}"
+            for key, column in fields.items()
+            if key in mapping
+        ]
+        if not assignments:
+            return ""
+        assignments.append("UPD_TS = SYSTIMESTAMP")
+        return (
+            f"UPDATE {self._qualify('NEXT_MIG_INFO')} SET {', '.join(assignments)} "
+            f"WHERE MAP_ID = {map_id};"
+        )
+
+    def _detail_update_preview(self, map_id: int, map_dtl: int, detail: dict[str, Any]) -> str:
+        fields = {"fr_col": "FR_COL", "to_col": "TO_COL"}
+        assignments = [
+            f"{column} = {self._preview_sql_literal(detail[key])}"
+            for key, column in fields.items()
+            if key in detail
+        ]
+        if not assignments:
+            return ""
+        assignments.append("UPD_TS = SYSTIMESTAMP")
+        return (
+            f"UPDATE {self._qualify('NEXT_MIG_INFO_DTL')} SET {', '.join(assignments)} "
+            f"WHERE MAP_ID = {map_id} AND MAP_DTL = {map_dtl};"
+        )
+
+    def _master_insert_preview(self, map_id: int, mapping: dict[str, Any]) -> str:
+        fields = {"map_type": "MAP_TYPE", "fr_table": "FR_TABLE", "to_table": "TO_TABLE",
+                  "condition": "CONDITION", "use_yn": "USE_YN", "priority": "PRIORITY",
+                  "prior_map_id": "PRIOR_MAP_ID"}
+        columns = ["MAP_ID"]
+        values = [str(map_id)]
+        for key, column in fields.items():
+            if key in mapping:
+                columns.append(column)
+                values.append(self._preview_sql_literal(mapping[key]))
+        return f"INSERT INTO {self._qualify('NEXT_MIG_INFO')} ({', '.join(columns)}) VALUES ({', '.join(values)});"
+
+    def _detail_insert_preview(self, map_id: int, map_dtl: int, detail: dict[str, Any]) -> str:
+        if "fr_col" not in detail:
+            return ""
+        columns = ["MAP_ID", "MAP_DTL", "FR_COL"]
+        values = [str(map_id), str(map_dtl), self._preview_sql_literal(detail["fr_col"])]
+        if "to_col" in detail:
+            columns.append("TO_COL")
+            values.append(self._preview_sql_literal(detail["to_col"]))
+        return f"INSERT INTO {self._qualify('NEXT_MIG_INFO_DTL')} ({', '.join(columns)}) VALUES ({', '.join(values)});"
+
+    @staticmethod
+    def _preview_positive_int(value: Any, name: str) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{name} must be a positive integer") from exc
+        if parsed <= 0:
+            raise ValueError(f"{name} must be a positive integer")
+        return parsed
+
+    @staticmethod
+    def _preview_sql_literal(value: Any) -> str:
+        if value is None:
+            return "NULL"
+        if isinstance(value, bool):
+            return "'Y'" if value else "'N'"
+        if isinstance(value, (int, float)):
+            return str(value)
+        return "'" + str(value).replace("'", "''") + "'"
 
     # 대용량 SQL text는 명시 요청한 컬럼만 반환한다. 일반 조회가 CLOB 전체를 무제한 전달하지 않게 한다.
     def _get_sql_text(self, command: dict[str, Any]) -> dict[str, Any]:

@@ -34,12 +34,8 @@ class NewType04FileCommandTool(Component):
 
     def run_tool(self) -> Data:
         raw_input = self._raw_input(getattr(self, "input_data", ""))
-        payload = self._parse_payload(raw_input)
-        action = str(payload.get("action") or "log_attachment_input").strip().lower()
-
-        if action != "log_attachment_input":
-            raise ValueError("Only action=log_attachment_input is supported.")
-
+        # Record every invocation before parsing or validating it.  This makes
+        # malformed Agent tool calls visible in NEXT_MIG_LOG as well.
         logging.getLogger("smartmigrate.workflow").info(
             raw_input,
             extra={
@@ -48,19 +44,27 @@ class NewType04FileCommandTool(Component):
                     "WORKFLOW",
                     "04_FILE_COMMAND_TOOL",
                     "INFO",
-                    "LOG_AGENT_INPUT",
-                    "PASS",
+                    "CALL_RECEIVED",
+                    "START",
                     0,
                     raw_input,
                 ]
             },
         )
+        payload = self._parse_payload(raw_input)
+        action = str(payload.get("action") or "log_attachment_input").strip().lower()
+
+        if action != "log_attachment_input":
+            raise ValueError("Only action=log_attachment_input is supported.")
 
         result = {
             "ok": True,
             "component": "04_fileCommandTool",
             "action": action,
             "logged_chars": len(raw_input),
+            "logged_only": True,
+            "mapping_registered": False,
+            "database_executed": False,
             "final": True,
         }
         self.status = result
