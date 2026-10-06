@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
-from lfx.io import IntInput, MessageTextInput, Output, SecretStrInput, StrInput
+from lfx.io import IntInput, MessageInput, Output, SecretStrInput, StrInput
 from lfx.schema.message import Message
 
 LOGGER_NAME = "smartmigrate.workflow"
@@ -132,11 +133,11 @@ class SmartMigrateDBHandler(logging.Handler):
 
 class NewType00ALogRuntimeStart(Component):
     display_name = "00A Log Runtime Start"
-    description = "Log the raw Chat Input payload and pass its text through unchanged."
+    description = "Log the complete Chat Input Message and pass that Message through unchanged."
     name = "NewType00ALogRuntimeStart"
 
     inputs = [
-        MessageTextInput(name="input_text", display_name="Input Text", required=False),
+        MessageInput(name="input_message", display_name="Chat Input Message", required=True),
         StrInput(name="db_host", display_name="DB Host", required=True),
         IntInput(name="db_port", display_name="DB Port", value=1521, required=False),
         StrInput(name="db_service_name", display_name="DB Service Name", required=True),
@@ -147,9 +148,12 @@ class NewType00ALogRuntimeStart(Component):
     outputs = [Output(display_name="Message", name="message", method="run", types=["Message"])]
 
     def run(self) -> Message:
-        # Diagnostic boundary: no file extraction, chunking, or metadata merge.
-        text = str(getattr(self, "input_text", "") or "")
-        raw_payload = text
+        # Diagnostic boundary: retain the original Message object.  Do not reduce
+        # it to Message.text before logging or handing it to the next component.
+        message = getattr(self, "input_message", None)
+        if not isinstance(message, Message):
+            raise TypeError("00A requires a Langflow Message from Chat Input.")
+        raw_payload = self._message_payload_json(message)
         logger = logging.getLogger(LOGGER_NAME)
         for handler in list(logger.handlers):
             logger.removeHandler(handler)
@@ -171,7 +175,22 @@ class NewType00ALogRuntimeStart(Component):
             },
         )
         self.status = {"ok": handler.insert_error is None, "db_insert_error": handler.insert_error}
-        return Message(text=text)
+        return message
+
+    @staticmethod
+    def _message_payload_json(message: Message) -> str:
+        """Record the Chat Input fields without changing the message itself."""
+        data = getattr(message, "data", None)
+        payload = {
+            "text": getattr(message, "text", None),
+            "sender": getattr(message, "sender", None),
+            "sender_name": getattr(message, "sender_name", None),
+            "session_id": getattr(message, "session_id", None),
+            "context_id": getattr(message, "context_id", None),
+            "files": getattr(message, "files", None),
+            "data": {"gaia": data.get("gaia")} if isinstance(data, dict) else {"gaia": None},
+        }
+        return json.dumps(payload, ensure_ascii=False, default=str)
 
     def _db_config(self) -> dict[str, Any]:
         return {
