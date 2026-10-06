@@ -175,7 +175,11 @@ class NewType00ALogRuntimeStart(Component):
             },
         )
         self.status = {"ok": handler.insert_error is None, "db_insert_error": handler.insert_error}
-        return message
+        # Give the next component the exact envelope written to the runtime log.
+        # Keep files/session/properties on the Message itself, so Langflow Agent
+        # still performs its normal attachment parsing in addition to seeing this
+        # inspectable JSON payload as Message.text.
+        return message.model_copy(update={"text": raw_payload})
 
     @staticmethod
     def _message_payload_json(message: Message) -> str:
