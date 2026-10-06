@@ -90,9 +90,15 @@ class SmartMigrateDBHandler(logging.Handler):
         }
 
     def _insert_row(self, row: dict[str, Any]) -> None:
+        import oracledb
+
         cursor = None
         try:
             cursor = self.connection.cursor()
+            # Explicitly bind the diagnostic payload as CLOB.  Depending on the
+            # driver mode, an implicitly bound Python string may otherwise be
+            # treated as VARCHAR or be lost when the destination is a CLOB.
+            cursor.setinputsizes(generate_sql=oracledb.DB_TYPE_CLOB)
             cursor.execute(
                 f"""
                 INSERT INTO {self._qualify("NEXT_MIG_LOG")} (
@@ -175,7 +181,7 @@ class NewType00ALogRuntimeStart(Component):
         handler = SmartMigrateDBHandler(self._db_config())
         logger.addHandler(handler)
         logger.info(
-            "00A Chat Input raw payload received. See GENERATE_SQL for the full JSON payload.",
+            raw_payload[:4000],
             extra={
                 "workflow_log": [
                     0, "WORKFLOW", "CHAT_INPUT", "INFO", "MESSAGE", "START", 0, raw_payload,
