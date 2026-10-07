@@ -1,5 +1,7 @@
 ﻿# Chapter 5. Logging, Management Agent, And Operations
 
+기준일: 2026-10-07. 현재 00A → 02 LLM Router로 시작하며 01 classifier는 없습니다. 02는 route만 분류하고 06/08이 현재 요청의 대상/domain/scope를 보완합니다. 표준 실행기는 10C Executor3와 18B Loop2입니다.
+
 ## 5.1 로깅 아키텍처
 
 `00A_logRuntimeStart.py`는 workflow 시작 시 `SmartMigrateDBHandler`를 logger에 등록한다. 이후 컴포넌트가 `logging.getLogger("smartmigrate.workflow")`로 남긴 event가 `NEXT_MIG_LOG`에 insert된다.
@@ -130,8 +132,8 @@ flowchart TD
 
 | 확인 순서 | 확인 항목 | 조회/파일 |
 |---|---|---|
-| 1 | 01 결과가 `JOB_EXECUTION`인지 | Langflow run payload, `01_requestClassifierPrompt.md` |
-| 2 | `requested_domain=FULL_WORKFLOW`, `execution_scope=all`인지 | 01 output |
+| 1 | 02 route 결과가 `JOB_EXECUTION`인지 | Langflow run payload, `02_intentRouter.py` |
+| 2 | `requested_domain=FULL_WORKFLOW`, `execution_scope=all`인지 | 08 route output |
 | 3 | 06 count가 모두 0인지 | `06_getRemainingJobs.py`, Oracle count |
 | 4 | 08 route가 `NO_RUNNABLE_JOB`인지 | `08_jobExecutionRouter.py` status |
 | 5 | 실제 DB row가 runnable 조건을 만족하는지 | `NEXT_MIG_INFO`, `NEXT_SQL_INFO` |
@@ -198,9 +200,9 @@ SELECT COUNT(*)
 
 | 변경 | 같이 수정해야 하는 파일 |
 |---|---|
-| 신규 도메인 추가 | 01 prompt, 04 router, 06 count, 08 route, A/B/C/D loop set, dashboard, Management Agent, logging rule |
+| 신규 도메인 추가 | 02 route prompt, 04 router, 06 count, 08 route, A/B/C/D loop set, dashboard, Management Agent, logging rule |
 | 실패 상태 추가 | executor, 04 dashboard/current progress, 11 final dashboard, 11B, Management Agent prompt/tool |
-| SQL CLOB 컬럼 추가 | `NEXT_SQL_INFO` DDL, `04_selectCommandTool.py`, `04_selectAgentPrompt.md`, 관련 executor |
+| SQL CLOB 컬럼 추가 | `NEXT_SQL_INFO` DDL, `04_selectCommandTool.py`, `04_managementAgentPrompt.md`, 관련 executor |
 | 로그 schema 변경 | `00A_logRuntimeStart.py`, `99.LogHelper.py`, `00_logging_rules.txt`, `04_currentProgress.py`, `04_selectCommandTool.py`, `11B` |
 | runnable 조건 변경 | `06_getRemainingJobs.py`, `10A/12A/15A/17A/18A`, `04_dashboard.py`, `11_finalDashboard.py` |
 | RAG collection 변경 | `04_saveVectorDB.py`, `10C`, `12C`, `15C`, environment/flow variables |

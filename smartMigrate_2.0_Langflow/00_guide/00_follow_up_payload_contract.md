@@ -1,61 +1,34 @@
-# Follow-up Request Payload Contract
+# 현재 요청과 후속 발화 payload 계약
 
-## 목적
-
-`네`, `진행해`, `그것`, `방금 것`처럼 현재 문장만으로는 대상이 없는 후속 발화를 01 Agent가 한 번만 해석한다. 이후 02, 04, 06, 08과 업무 실행 컴포넌트는 채팅 기록을 다시 조회하거나 추측하지 않고, 이 문서의 구조화 payload만 사용한다.
+기준일: 2026-10-07. 이전 01 history classifier는 현재 패키지에 없습니다. 현재 02는 Message를 받아 LLM으로 route만 분류하고 원본 metadata를 코드로 보존합니다.
 
 ```text
-Chat Input + same session_id
-  -> 01 Request Classifier Agent (chat history enabled)
-  -> resolved payload
-  -> 02 Intent Router
-  -> 03 / 04 / 06 / 08
+Chat Input → 00A Message → 02 input_message → 03 / 04 / 06 → 08
 ```
 
-## 01 출력 계약
+## 02가 만드는 값
 
-| 필드 | 01의 책임 | 후속 사용처 |
-|---|---|---|
-| `user_request` | 이번 turn의 원문. 예: `네` | 감사 로그, UI 표시 |
-| `resolved_user_request` | 대화 문맥까지 합친 완전한 요청문 | 03, 04, 06, 08, Management Agent 입력 |
-| `is_follow_up` | 후속 발화 여부 | 운영 추적, router LLM 보조 정보 |
-| `confirmation` | `NOT_REQUIRED`, `PENDING`, `CONFIRMED`, `REJECTED`, `UNKNOWN` | 실행 guard, 운영 추적 |
-| `clarification_required` | 이전 대상을 하나로 확정할 수 없는지 | 02의 실행 차단 |
-| `clarification_message` | 재질문 문구 | 03 또는 Chat Output |
-| `should_execute` | JOB_EXECUTION을 실제 06/08로 보낼 수 있는지 | 06/08의 실행 guard |
-| `route` | `GENERAL_CHAT`, `MANAGEMENT`, `JOB_EXECUTION` | 02 branch 선택 |
-| `execution_scope`, `requested_domain`, `target_filter` | 완전한 요청에서 추출한 업무 파라미터 | 06, 08, A 컴포넌트 |
+| 필드 | 현재 값/의미 |
+|---|---|
+| `route` | GENERAL_CHAT / MANAGEMENT / JOB_EXECUTION |
+| `user_request`, `resolved_user_request` | 현재 Message의 text. 이전 대화 복원 결과가 아님 |
+| `is_follow_up` | false |
+| `confirmation` | NOT_REQUIRED |
+| `clarification_required` | false |
+| `should_execute` | route가 JOB_EXECUTION이면 true |
+| `execution_scope`, `requested_domain` | unknown / UNKNOWN. 06/08에서 보완 |
+| `target_filter` | 빈 map_ids/sql_seqs/sql_ids/space_nms 배열. 06/08에서 현재 요청을 해석 |
+| `source_message`, `message_data`, `files` | 원본 metadata |
+| `uploaded_attachment` | 00A가 파싱한 XLSX 결과 또는 오류 |
 
-직접 실행 요청은 `confirmation=NOT_REQUIRED`, `should_execute=true`으로 유지한다. 확인을 거친 `네`는 `confirmation=CONFIRMED`, `should_execute=true`이다. 불명확한 후속 발화 또는 거절은 `should_execute=false`이다.
+`history`는 workflow 처리 이력이며 chat memory가 아닙니다. 같은 session_id를 사용해도 02가 이전 대상이나 확인 응답을 자동 복원하지 않습니다.
 
-## 후속 컴포넌트 규칙
+## 연결 및 사용자 안내
 
-| 컴포넌트 | 입력으로 사용해야 할 요청문 | chat history 필요 여부 |
-|---|---|---|
-| 03 General Chat Agent | `resolved_user_request`, 없으면 `user_request` | Agent 기본 memory 사용 가능 |
-| 04 Management Router | 내부에서 `resolved_user_request` 우선 처리 | 불필요 |
-| 04 Management Agent | `effective_user_request` | 불필요 |
-| 06 Get Remaining Jobs | `target_filter` 우선, fallback은 `resolved_user_request` | 불필요 |
-| 08 Job Execution Router | `resolved_user_request`, `target_filter`, domain/scope | 불필요 |
+1. 00A의 Message 출력을 02의 `input_message`에 연결합니다. text 문자열로 축소하거나 이전 01 JSON을 `payload_json`에 연결하지 않습니다.
+2. 02의 Data 출력 전체를 04/06에 전달합니다.
+3. 04 Agent는 `effective_user_request`를 현재 요청으로 사용합니다. 04 매핑 생성기는 `router_payload` 전체를 받아 첨부 파싱 결과도 읽습니다.
+4. 06 → 08 → A는 Data 전체를 전달하며 식별자와 실행 guard를 보존합니다.
+5. “네”, “그 후보들”, “진행해”만으로 작업 대상을 추측하지 않습니다. `MAP_ID 101 Migration 실행해줘` 또는 `SQL_ID S001, SPACE_NM PAYMENT 변환해줘`처럼 완전한 요청을 받습니다.
 
-`history`는 workflow 처리 이력용 배열이며 Langflow chat history가 아니다. 채팅 원문을 이 배열에 저장하거나 LLM 입력으로 넘기지 않는다.
-
-## Langflow 연결 점검
-
-1. `Chat Input`, 01 Agent, 최종 `Chat Output`이 같은 `session_id`를 사용한다.
-2. 01은 반드시 공식 Agent 컴포넌트로 구성하고 **Number of Chat History Messages**를 0보다 크게 설정한다.
-3. 01의 JSON output 전체를 02의 `payload_json`에 연결한다.
-4. 02의 General Chat branch에서 03의 사용자 입력은 `resolved_user_request`를 우선 연결한다. Data 템플릿을 쓴다면 `${resolved_user_request}`가 비어 있을 때만 `${user_request}`로 fallback한다.
-5. 04 Management Agent의 사용자 입력도 04 Router가 출력한 `effective_user_request`에 연결한다. 원문의 `user_request`를 직접 연결하지 않는다.
-6. JOB_EXECUTION branch는 02 -> 06 -> 08 순서로 `Data` payload 전체를 연결한다. 중간에서 `target_filter`, `confirmation`, `should_execute`를 제거하지 않는다.
-7. `clarification_required=true` 또는 `confirmation=REJECTED`이면 02가 General Chat branch로 보내므로 06/08 또는 executor에 연결되면 안 된다.
-
-## 최소 시나리오
-
-| 직전 대화 | 현재 입력 | 01 기대 결과 |
-|---|---|---|
-| `map_id=101 SQL Conversion 실행할까요?` | `네` | `JOB_EXECUTION`, `CONFIRMED`, `target_filter.map_ids=[101]`, `SQL_CONVERSION` |
-| `map_id=101 실패 원인을 조회할까요?` | `진행해` | `MANAGEMENT`, 완전한 조회 요청 |
-| 실행 후보가 둘 이상인 질문 | `네` | `clarification_required=true`, `should_execute=false` |
-| `map_id=101 실행할까요?` | `아니` | `REJECTED`, `should_execute=false` |
-| `map_id=101 실행해줘` | 직접 요청 | `NOT_REQUIRED`, `should_execute=true` |
+과거 문서의 CONFIRMED/REJECTED/clarification 계약은 일부 downstream에서 방어적으로 지원하지만, 현재 02가 이를 생성하거나 후속 발화를 판별하는 기능은 없습니다. 해당 기능을 다시 도입하려면 history resolver와 확인 상태 전달을 별도로 구현해야 합니다.

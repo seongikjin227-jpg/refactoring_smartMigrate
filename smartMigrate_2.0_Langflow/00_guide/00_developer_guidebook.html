@@ -450,7 +450,7 @@
 
       <section class="hero">
         <h2>SmartMigrate Guidebook</h2>
-        <p>[User] 기능과 요청 예시, [Developer] 현재 구조와 운영 기준을 제공합니다.</p>
+        <p>[User] 기능과 요청 예시, [Developer] 현재 구조와 운영 기준을 제공합니다. 기준일: 2026-10-07. 로컬 HTTP 서버로 열어주세요.</p>
       </section>
 
       <section class="meta-grid" aria-label="Guide metrics">
@@ -471,6 +471,9 @@
 
     const docs = [
       { audience: "User", file: "00_user_guide.md", title: "User Guide", desc: "사용 가능 기능과 요청 예시" },
+      { audience: "Developer", file: "00A_file_upload_runtime_guide.md", title: "File Upload & Mapping", desc: "00A XLSX 파싱과 매핑 SQL 적용" },
+      { audience: "Developer", file: "00_follow_up_payload_contract.md", title: "Request Payload Contract", desc: "현재 요청과 후속 발화 지원 범위" },
+      { audience: "Developer", file: "00_job_execution_payload_plan.md", title: "Job Payload", desc: "02·06·08 책임과 전달 규칙" },
       { audience: "Developer", file: "00_architecture.md", title: "Chapter 00. Architecture", desc: "전체 구조와 문서 안내" },
       { audience: "Developer", file: "00_architecture_chapter1_overview.md", title: "Chapter 01. System Overview", desc: "컴포넌트, Oracle, Milvus" },
       { audience: "Developer", file: "00_architecture_chapter2_chat_management.md", title: "Chapter 02. Chat Management", desc: "관리 기능과 VectorDB 동기화" },
@@ -523,12 +526,12 @@
       let index = 0;
       while (index < lines.length) {
         const line = lines[index];
-        const fence = line.match(/^```(\w+)?\s*$/);
+        const fence = line.match(/^(?:```|~~~)(\w+)?\s*$/);
         if (fence) {
           const lang = fence[1] || "";
           const body = [];
           index += 1;
-          while (index < lines.length && !/^```\s*$/.test(lines[index])) {
+          while (index < lines.length && !/^(?:```|~~~)\s*$/.test(lines[index])) {
             body.push(lines[index]);
             index += 1;
           }

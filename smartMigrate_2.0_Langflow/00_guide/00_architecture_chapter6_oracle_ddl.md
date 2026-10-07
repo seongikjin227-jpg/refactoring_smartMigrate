@@ -21,6 +21,7 @@ CREATE TABLE NEXT_MIG_INFO (
     MAP_TYPE        VARCHAR2(100),
     FR_TABLE        VARCHAR2(4000)  NOT NULL,
     TO_TABLE        VARCHAR2(4000)  NOT NULL,
+    TRUNC_YN        CHAR(1)         DEFAULT 'N',
     CONDITION       CLOB,
     USE_YN          CHAR(1)         DEFAULT 'Y',
     PRIORITY        NUMBER          DEFAULT 5,
@@ -29,6 +30,7 @@ CREATE TABLE NEXT_MIG_INFO (
     USER_EDITED     CHAR(1)         DEFAULT 'N',
     MIG_SQL         CLOB,
     VERIFY_SQL      CLOB,
+    VERIFY2_SQL     CLOB,
     BATCH_CNT       NUMBER          DEFAULT 0,
     RETRY_COUNT     NUMBER          DEFAULT 0,
     ELAPSED_SECONDS NUMBER,
@@ -47,6 +49,8 @@ COMMENT ON COLUMN NEXT_MIG_INFO.MAP_ID IS 'DB Migration 작업 식별자. 단건
 COMMENT ON COLUMN NEXT_MIG_INFO.MAP_TYPE IS '매핑 유형. SIMPLE, COMPLEX 등 migration rule 분류값.';
 COMMENT ON COLUMN NEXT_MIG_INFO.FR_TABLE IS 'AS-IS source table 또는 source SQL scope.';
 COMMENT ON COLUMN NEXT_MIG_INFO.TO_TABLE IS 'TO-BE target table.';
+COMMENT ON COLUMN NEXT_MIG_INFO.TRUNC_YN IS 'Migration 실행 전 target truncate 여부.';
+COMMENT ON COLUMN NEXT_MIG_INFO.VERIFY2_SQL IS 'record verification SQL.';
 COMMENT ON COLUMN NEXT_MIG_INFO.CONDITION IS 'Migration SQL 생성 시 source row 범위를 제한하는 조건.';
 COMMENT ON COLUMN NEXT_MIG_INFO.USE_YN IS '작업 사용 여부. Y인 row만 실행 대상으로 본다.';
 COMMENT ON COLUMN NEXT_MIG_INFO.PRIORITY IS '실행 우선순위. 1이 높음, 기본값은 5.';
@@ -74,17 +78,19 @@ CREATE INDEX IX_NEXT_MIG_INFO_TABLES ON NEXT_MIG_INFO (SUBSTR(FR_TABLE, 1, 200),
 ```sql
 CREATE TABLE NEXT_MIG_INFO_DTL (
     MAP_ID NUMBER          NOT NULL,
+    MAP_DTL NUMBER         NOT NULL,
     FR_COL VARCHAR2(4000)  NOT NULL,
     TO_COL VARCHAR2(4000),
     REG_TS TIMESTAMP       DEFAULT CURRENT_TIMESTAMP,
     UPD_TS TIMESTAMP       DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT PK_NEXT_MIG_INFO_DTL PRIMARY KEY (MAP_ID, FR_COL)
+    CONSTRAINT PK_NEXT_MIG_INFO_DTL PRIMARY KEY (MAP_ID, MAP_DTL)
 );
 ```
 
 ```sql
 COMMENT ON TABLE NEXT_MIG_INFO_DTL IS 'DB Migration 컬럼 매핑 detail을 저장한다.';
 COMMENT ON COLUMN NEXT_MIG_INFO_DTL.MAP_ID IS 'NEXT_MIG_INFO.MAP_ID와 연결되는 mapping master 식별자.';
+COMMENT ON COLUMN NEXT_MIG_INFO_DTL.MAP_DTL IS 'MAP_ID 내 detail mapping 식별자 및 정렬 기준.';
 COMMENT ON COLUMN NEXT_MIG_INFO_DTL.FR_COL IS 'AS-IS source column.';
 COMMENT ON COLUMN NEXT_MIG_INFO_DTL.TO_COL IS 'TO-BE target column. NULL, blank, NONE, N/A, NA, - 값은 미사용 컬럼으로 해석한다.';
 COMMENT ON COLUMN NEXT_MIG_INFO_DTL.REG_TS IS 'row 최초 등록 시각.';
@@ -94,6 +100,8 @@ COMMENT ON COLUMN NEXT_MIG_INFO_DTL.UPD_TS IS 'row 마지막 갱신 시각.';
 ```sql
 CREATE INDEX IX_NEXT_MIG_INFO_DTL_MAP ON NEXT_MIG_INFO_DTL (MAP_ID);
 ```
+
+현재 표준 10C Executor3/12C는 MAP_DTL을 읽거나 정렬 기준으로 사용합니다. 위 DDL은 이 실행기 기준입니다. 기존 환경의 detail PK가 (MAP_ID, FR_COL)이면 매핑 생성기는 실제 Oracle constraint를 조회하여 그 PK로 DML을 검증하지만, 표준 실행기에 필요한 MAP_DTL 등 컬럼은 별도로 확인해야 합니다. 이 문서 수정은 운영 DB에 ALTER/DDL을 실행하지 않습니다. master의 TRUNC_YN과 VERIFY2_SQL도 Executor3 입력 컬럼입니다.
 
 ## 6.4 NEXT_SQL_INFO
 

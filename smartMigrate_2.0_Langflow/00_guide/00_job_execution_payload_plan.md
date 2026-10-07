@@ -1,161 +1,26 @@
-# Job Execution Payload Plan
+# Job Execution Payload 전달 규칙
 
-이 문서는 사용자가 요청한 작업 실행 파라미터가 01 -> 02 -> 06 -> 08 -> A 컴포넌트로 전달되는 방식을 관리한다.
+기준일: 2026-10-07. 실행 흐름은 `00A → 02 → 06 → 08 → A/B/C/D`입니다.
 
-## 원칙
+## 책임
 
-- 사용자의 원문 요청은 항상 `user_request`로 유지한다.
-- 자연어에서 `map_id`, `sql_id`, `space_nm`을 이해하는 책임은 01 LLM이 1차로 가진다.
-- 06은 전체 작업 목록을 미리 싣지 않는다. 대시보드 수준의 작업 가능 카운트와, 명시 요청이 있을 때의 요청 대상만 조회한다.
-- 08은 작업 도메인과 실행 모드만 결정한다. 전체 실행의 실제 대상 목록은 10A/12A/15A/17A/18A가 DB에서 조회한다.
-- `NEXT_SQL_INFO`에는 `USE_YN`을 참조하지 않는다. `USE_YN='Y'` 필터는 DB Migration의 `NEXT_MIG_INFO`에만 적용한다.
+- 02: 현재 Message의 text로 JOB_EXECUTION 여부만 분류합니다. domain/scope/targets는 초기값입니다.
+- 06: `resolved_user_request` 또는 `user_request`에서 식별자를 보완하고 DB 기준 잔여 카운트, 요청 대상 상태와 실행 가능한 requested_jobs를 조회합니다.
+- 08: LLM과 구조화 payload로 도메인 및 run mode를 결정합니다. 02가 domain을 확정했다고 가정하지 않습니다.
+- A: 전체/도메인 실행에서는 실제 목록을 DB에서 읽습니다. targeted 실행에서는 selected_jobs를 Loop 입력으로 만듭니다.
+- SQL target은 SQL_SEQ 또는 SQL_ID + SPACE_NM을 사용합니다. SQL_ID만으로 대상을 확정하지 않습니다.
+- NEXT_SQL_INFO에 USE_YN 필터를 적용하지 않습니다. Migration만 NEXT_MIG_INFO.USE_YN을 사용합니다.
 
-## 공통 Payload 필드
-
-```json
-{
-  "route": "JOB_EXECUTION",
-  "user_request": "사용자 원문",
-  "resolved_user_request": "chat history를 반영한 완전한 실행 요청",
-  "is_follow_up": false,
-  "confirmation": "NOT_REQUIRED|CONFIRMED",
-  "clarification_required": false,
-  "clarification_message": "",
-  "should_execute": true,
-  "target_filter": {
-    "map_ids": [],
-    "sql_ids": [],
-    "space_nms": []
-  },
-  "execution_scope": "all|domain|targeted|unknown",
-  "requested_domain": "MIG|SQL_CONVERSION|SQL_TUNING|SQL_FORMATTING|FULL_WORKFLOW|UNKNOWN"
-}
-```
-
-`user_request`가 `네`처럼 짧은 후속 발화일 수 있으므로 06/08과 후속 실행 컴포넌트는 자연어 fallback이 필요할 때 반드시 `resolved_user_request`를 먼저 사용한다. `target_filter`, `requested_domain`, `execution_scope`는 01이 복원한 값이므로 중간 Data 연결에서 제거하거나 원문 기준으로 다시 해석하지 않는다. 전체 계약과 Langflow 연결 방법은 `00_follow_up_payload_contract.md`를 따른다.
-
-## 특정 Job 요청
-
-예: `맵 아이디 101번 진행해줘`
-
-01 LLM 출력:
+## 02 출력 초기값
 
 ```json
-{
-  "route": "JOB_EXECUTION",
-  "user_request": "맵 아이디 101번 진행해줘",
-  "execution_scope": "targeted",
-  "requested_domain": "MIG",
-  "target_filter": {
-    "map_ids": [101],
-    "sql_ids": [],
-    "space_nms": []
-  }
-}
+{"route":"JOB_EXECUTION","user_request":"MAP_ID 101 Migration 실행해줘","resolved_user_request":"MAP_ID 101 Migration 실행해줘","is_follow_up":false,"confirmation":"NOT_REQUIRED","clarification_required":false,"should_execute":true,"requested_domain":"UNKNOWN","execution_scope":"unknown","target_filter":{"map_ids":[],"sql_seqs":[],"sql_ids":[],"space_nms":[]}}
 ```
 
-02:
+06은 위 현재 문장에서 MAP_ID 101을 읽고 runnable 상태를 조회합니다. 08이 MIG/targeted로 확정하면 10A로 보냅니다. `전체 작업 실행해줘`는 08의 FULL_WORKFLOW/all_pending 결정 이후 18A → 18B Loop2로 갑니다. 단일 도메인 요청은 선행 조건을 확인하고, 전체 workflow는 MIG부터 단계별로 처리합니다.
 
-- route가 `JOB_EXECUTION`이면 payload를 그대로 06으로 전달한다.
+## 보존해야 할 값
 
-06:
+`user_request`, `resolved_user_request`, `should_execute`, `confirmation`, `target_filter`, `job_availability`, `requested_jobs`, `requested_target_status`를 중간 연결에서 제거하지 않습니다. `history`는 workflow 추적 기록이고 채팅 기록이 아닙니다. 02는 후속 발화의 대상을 복원하지 않으므로 식별자가 있는 완전한 요청을 사용합니다.
 
-- `job_availability`에 전체 잔여 카운트를 담는다.
-- `target_filter`가 있으면 해당 대상의 현재 상태를 `requested_target_status`에 담는다.
-- 해당 대상이 현재 실행 가능한 상태이면 `requested_jobs`에 담는다.
-
-08:
-
-- `requested_jobs`와 `requested_target_status`를 보고 targeted 실행 여부를 결정한다.
-- 실행 가능하면 `selected_jobs = requested_jobs`로 10A/12A/15A/17A 중 하나로 보낸다.
-
-## 완전 전체 작업 실행
-
-예: `전체 작업 실행해줘`, `남은 작업 다 돌려줘`
-
-01 LLM 출력:
-
-```json
-{
-  "route": "JOB_EXECUTION",
-  "user_request": "전체 작업 실행해줘",
-  "execution_scope": "all",
-  "requested_domain": "FULL_WORKFLOW",
-  "target_filter": {
-    "map_ids": [],
-    "sql_ids": [],
-    "space_nms": []
-  }
-}
-```
-
-06:
-
-- `job_availability` 카운트만 조회한다.
-- `requested_jobs`는 빈 배열이다.
-
-08:
-
-- `job_availability` 합계가 1 이상이면 `FULL_WORKFLOW`, `all_pending`으로 보낸다.
-- `selected_jobs`는 비워 둔다.
-
-18A:
-
-- `all_pending`이면 DB에서 실제 전체 작업 목록을 조회하고 정렬한다.
-
-## 도메인 전체 작업 실행
-
-예: `DB Mig 전체 진행해줘`, `SQL Conversion 남은 거 다 실행해줘`
-
-01 LLM 출력:
-
-```json
-{
-  "route": "JOB_EXECUTION",
-  "user_request": "DB Mig 전체 진행해줘",
-  "execution_scope": "domain",
-  "requested_domain": "MIG",
-  "target_filter": {
-    "map_ids": [],
-    "sql_ids": [],
-    "space_nms": []
-  }
-}
-```
-
-06:
-
-- `job_availability` 카운트만 조회한다.
-- `requested_jobs`는 빈 배열이다.
-
-08:
-
-- `requested_domain`에 맞는 route와 `all_pending`을 선택한다.
-- 선행 조건이 남아 있으면 `PREREQUISITE_REQUIRED`를 선택한다.
-
-10A/12A/15A/17A:
-
-- `all_pending`이면 각자 DB에서 자기 도메인의 실제 작업 목록을 조회한다.
-
-## 잔여 조건
-
-- MIG 실행 대상: `NEXT_MIG_INFO.USE_YN='Y'`, `STATUS IS NULL` 또는 `FAIL-*`, `RETRY_COUNT < 2`
-- SQL Conversion 실행 대상: `STATUS_CONVERSION IS NULL` 또는 `FAIL-*`, `RETRY_COUNT < 2`
-- SQL Tuning 실행 대상: Conversion PASS이고 `STATUS_TUNING IS NULL` 또는 `FAIL-*`, `RETRY_COUNT < 2`
-
-`SKIP`, `NA`, `RUNNING`은 실행 대상이 아니다. `NULL`은 신규 실행 대상이며, 실패 행은 Update Command Tool로 상태를 유지한 채 `RETRY_COUNT`를 0으로 변경한 뒤 새 실행 요청을 만든다.
-- SQL Formatting 잔여: `STATUS_TUNING IN ('PASS', 'PASS-TUNING')` 이고 `FORMATTED_SQL`이 비어 있음
-
-## 10C DB Migration PoC Executor 결정 사항
-
-- 운영 `src/smart_migrate/agents/db_migration` 코드는 이번 변경에서 수정하지 않는다.
-- 10C Langflow executor만 다음 기준을 적용한다.
-- 10C의 시작 단계는 `USER_EDITED`나 저장 SQL 존재 여부가 아니라 `STATUS`로 결정한다.
-- `NULL`/`FAIL-TRUNCATE`/`FAIL-INSERT`는 `MIG_SQL`과 `VERIFY_SQL`을 생성한 뒤 INSERT와 검증을 수행한다.
-- `FAIL-TEST`는 INSERT가 성공한 상태이므로 저장된 `MIG_SQL`을 실행하지 않고 `VERIFY_SQL` 생성·검증부터 재개한다.
-- Management가 Correct `MIG_SQL`을 저장하면 `STATUS='FAIL-TEST'`, Correct `VERIFY_SQL`을 저장하면 `STATUS='PASS'`로 전이한다. `USER_EDITED='Y'`는 저장 이력과 Correct SQL Vector DB 동기화 표식이다.
-- LLM이 생성한 `MIG_SQL`/`VERIFY_SQL`은 생성 성공 직후 `NEXT_MIG_INFO`에 저장한다.
-- migration SQL 실행 결과 `affected_rows=0`이어도 실행은 `PASS`로 본다.
-- 단, `affected_rows=0`인 사실은 step log message에 남긴다.
-- 10C의 migration prompt는 외부 파일 입력이나 파일 로딩이 아니라 코드 내부 최하단 상수로 관리한다.
-- 코드 내부 prompt 내용은 `src/smart_migrate/config/prompts/migration_prompt.json`을 최대한 그대로 유지한다.
+상세 연결은 `00_follow_up_payload_contract.md`, Loop 구성은 `00_full_workflow_loop_guide.md`, 실제 상태 조건은 chapter3 및 chapter4를 확인합니다.

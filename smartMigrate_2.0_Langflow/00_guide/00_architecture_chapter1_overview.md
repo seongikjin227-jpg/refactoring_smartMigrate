@@ -1,5 +1,7 @@
 ﻿# Chapter 1. System Overview
 
+기준일: 2026-10-07. 현재 00A → 02 LLM Router로 시작하며 01 classifier는 없습니다. 02는 route만 분류하고 06/08이 현재 요청의 대상/domain/scope를 보완합니다. 표준 실행기는 10C Executor3와 18B Loop2입니다.
+
 ## 1.1 목적
 
 SmartMigrate의 목표는 Oracle 기반 migration/SQL 작업을 자연어로 제어하고, 작업 결과를 DB에 누적하며, 사용자가 다시 채팅으로 상태와 원인을 조회할 수 있게 하는 것이다.
@@ -8,7 +10,7 @@ SmartMigrate의 목표는 Oracle 기반 migration/SQL 작업을 자연어로 제
 
 ```mermaid
 flowchart LR
-    CHAT[Chat Layer<br/>User Request] --> ROUTE[Routing Layer<br/>01 / 02 / 04 / 08]
+    CHAT[Chat Layer<br/>User Request] --> ROUTE[Routing Layer<br/>02 / 04 / 08]
     ROUTE --> EXEC[Execution Layer<br/>10 / 12 / 15 / 17 / 18]
     EXEC --> DATA[Data Layer<br/>Oracle + Milvus]
     DATA --> OBS[Observability Layer<br/>Dashboard + Logs + Management Agent]
@@ -18,7 +20,7 @@ flowchart LR
 | 레이어 | 핵심 파일 | 설명 |
 |---|---|---|
 | Chat Layer | Langflow Chat Input/Output | 사용자 자연어 요청과 최종 답변을 연결한다. |
-| Routing Layer | `01_requestClassifierPrompt.md`, `02_intentRouter.py`, `04_managementRouter.py`, `08_jobExecutionRouter.py` | 요청 의미를 분류하고 실행/조회/수정 route를 결정한다. |
+| Routing Layer | `02_intentRouter.py`, `04_managementRouter.py`, `08_jobExecutionRouter.py` | 요청 의미를 분류하고 실행/조회/수정 route를 결정한다. |
 | Execution Layer | `10*`, `12*`, `15*`, `17*`, `18*` | 실제 단일 job 처리, loop, retry, dashboard를 수행한다. |
 | Data Layer | Oracle tables, Milvus collections | 상태, SQL CLOB, 로그, RAG rule, correct SQL hint를 저장한다. |
 | Observability Layer | `04_dashboard.py`, `04_currentProgress.py`, `04_updateCommandTool.py`, `04_ragCommandTool.py`, `11B_failureCauseAnalyzer.py` | 운영자가 진행률과 실패 원인을 이해할 수 있게 한다. |
@@ -29,9 +31,9 @@ flowchart LR
 |---|---|---|
 | `00` | `00A_logRuntimeStart.py` | 모든 요청 시작 시 DB logging handler 등록 |
 | `04` | `04_saveVectorDB.py` | Oracle -> Milvus one-shot vector sync |
-| `01` | `01_requestClassifierPrompt.md` | 1차 intent classifier prompt |
 | `02` | `02_intentRouter.py` | `GENERAL_CHAT`, `MANAGEMENT`, `JOB_EXECUTION` branch |
 | `03` | `03_llmResponsePrompt.md` | 시스템과 무관한 일반 대화 응답 |
+| `04` | `04_mappingRuleUpdateSqlGenerate.py` | 실제 PK 조회, 매핑 DML 생성/검증, dry run 또는 transaction 적용 |
 | `04` | `04_managementRouter.py` | 관리성 요청의 세부 route 결정 |
 | `04` | `04_dashboard.py` | 전체/도메인 dashboard 조회 |
 | `04` | `04_currentProgress.py` | running 상태와 최근 로그 조회 |
@@ -123,7 +125,6 @@ flowchart TD
 sequenceDiagram
     participant User
     participant LF as Langflow
-    participant C01 as 01 Classifier
     participant R02 as 02 Intent Router
     participant M04 as 04 Management Router
     participant J06 as 06 Remaining Jobs

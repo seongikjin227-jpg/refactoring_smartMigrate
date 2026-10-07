@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
+from io import BytesIO
+from urllib.parse import urlparse
 import logging
 import threading
 from datetime import datetime
@@ -135,7 +138,7 @@ class SmartMigrateDBHandler(logging.Handler):
 
 class NewType00ALogRuntimeStart(Component):
     display_name = "00A Log Runtime Start"
-    description = "Log the complete Chat Input Message and pass that Message through unchanged."
+    description = "Log Chat Input, parse a supplied workbook URL, and preserve original Message metadata."
     name = "NewType00ALogRuntimeStart"
 
     inputs = [
@@ -223,7 +226,82 @@ class NewType00ALogRuntimeStart(Component):
         # Do not replace Message.text with the diagnostic JSON.  Downstream
         # components must receive precisely the Message that Langflow provided.
         # (The full diagnostic envelope is stored in NEXT_MIG_LOG.GENERATE_SQL.)
+        self._parse_uploaded_attachment(message, logger)
         return message
+
+    def _parse_uploaded_attachment(self, message: Message, logger: logging.Logger) -> None:
+        metadata = self._json_value(getattr(message, "data", None))
+        metadata = dict(metadata) if isinstance(metadata, dict) else {}
+        if isinstance(metadata.get("uploaded_attachment"), dict):
+            return
+        url = self._find_url(metadata)
+        if not url:
+            return
+        try:
+            content = asyncio.run(self._download(url))
+            parsed = self._parse_excel(content)
+            attachment = {"byte_count": len(content), "parsed_excel": parsed}
+            status = "PASS"
+        except Exception as exc:
+            attachment = {"error": str(exc)}
+            status = "FAIL"
+        metadata["uploaded_attachment"] = attachment
+        message.data = metadata
+        logger.info(
+            "Workbook URL parsing completed: " + status,
+            extra={"workflow_log": [0, "WORKFLOW", "00A_ATTACHMENT_PARSE", "INFO", "PARSE", status, 0,
+                                    json.dumps(attachment, ensure_ascii=False, default=str)]},
+        )
+        self.status = {**self.status, "attachment_parse_status": status}
+
+    @staticmethod
+    async def _download(url: str) -> bytes:
+        import aiohttp
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("Presigned URL must be an HTTP or HTTPS URL.")
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
+            async with session.get(url, allow_redirects=True) as response:
+                response.raise_for_status()
+                content = await response.read()
+                if not content.startswith(b"PK"):
+                    preview = content[:120].decode("utf-8", errors="replace").replace("\n", " ")
+                    raise ValueError(
+                        f"Downloaded response is not an XLSX ZIP file. "
+                        f"content_type={response.headers.get('Content-Type')!r}, preview={preview!r}"
+                    )
+                return content
+
+    @staticmethod
+    def _parse_excel(content: bytes) -> dict[str, Any]:
+        import pandas as pd
+        try:
+            sheets = pd.read_excel(BytesIO(content), sheet_name=None, dtype=object, engine="openpyxl")
+        except ImportError as exc:
+            raise RuntimeError("xlsx parsing requires openpyxl on the Langflow server.") from exc
+        return {"format": "xlsx", "sheets": [
+            {"name": str(name), "columns": [str(column) for column in frame.columns],
+             "rows": frame.where(frame.notna(), None).to_dict(orient="records")}
+            for name, frame in sheets.items()
+        ]}
+
+    @staticmethod
+    def _find_url(value: Any) -> str:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                normalized = str(key).replace("_", "").replace("-", "").lower()
+                if normalized in {"downloadurl", "presignedurl", "fileurl"} and isinstance(item, str):
+                    return item.strip()
+            for item in value.values():
+                found = NewType00ALogRuntimeStart._find_url(item)
+                if found:
+                    return found
+        if isinstance(value, list):
+            for item in value:
+                found = NewType00ALogRuntimeStart._find_url(item)
+                if found:
+                    return found
+        return ""
 
     @staticmethod
     def _message_payload_json(message: Message) -> str:

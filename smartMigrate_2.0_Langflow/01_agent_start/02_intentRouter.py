@@ -167,7 +167,9 @@ class NewType02IntentRouter(Component):
 
         raw_llm_response = self._classify(user_request, source_message["files"])
         route = self._route_from_response(raw_llm_response)
-        if self._attachment_management_request(user_request, source_message["files"]):
+        if self._attachment_management_request(user_request, source_message["files"]) or (
+            isinstance(source_message["data"], dict) and source_message["data"].get("uploaded_attachment")
+        ):
             route = "MANAGEMENT"
 
         logger.info(
@@ -208,6 +210,7 @@ class NewType02IntentRouter(Component):
             "context_id": source_message["context_id"],
             "files": source_message["files"],
             "message_data": source_message["data"],
+            "uploaded_attachment": (source_message["data"] or {}).get("uploaded_attachment") if isinstance(source_message["data"], dict) else None,
             "source_message": source_message,
         }
         full_payload = json.dumps(payload, ensure_ascii=False, default=str)

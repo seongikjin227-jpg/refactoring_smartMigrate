@@ -1,10 +1,12 @@
 # 전체 실행과 Langflow Loop 개발 가이드
 
+기준일: 2026-10-07. 현재 00A → 02 LLM Router로 시작하며 01 classifier는 없습니다. 02는 route만 분류하고 06/08이 현재 요청의 대상/domain/scope를 보완합니다. 표준 실행기는 10C Executor3와 18B Loop2입니다.
+
 이 문서는 사용자가 “전체 작업 진행해줘”라고 요청했을 때 현재 Langflow 컴포넌트가 어떤 순서로 job을 만들고, Loop의 `item`과 `done`이 어떻게 동작하는지 설명한다. 신규 개발자는 이 문서와 `00_architecture_chapter3_job_execution.md`를 함께 읽으면 된다.
 
 ## 1. 전체 실행의 진입과 queue 생성
 
-`01_requestClassifierPrompt`와 `02_intentRouter`가 요청을 `JOB_EXECUTION`으로 분류하면 `06_getRemainingJobs.py`가 실행 가능 건수와, 대상이 명확한 요청이면 해당 job 목록을 읽는다. 이어서 `08_jobExecutionRouter.py`가 전체 요청을 `FULL_WORKFLOW`, 실행 모드를 `all_pending`으로 정하고 `18A_fullWorkflowJobsToLoopTable.py`로 보낸다.
+`02_intentRouter`가 요청을 `JOB_EXECUTION`으로 분류하면 `06_getRemainingJobs.py`가 실행 가능 건수와, 대상이 명확한 요청이면 해당 job 목록을 읽는다. 이어서 `08_jobExecutionRouter.py`가 전체 요청을 `FULL_WORKFLOW`, 실행 모드를 `all_pending`으로 정하고 `18A_fullWorkflowJobsToLoopTable.py`로 보낸다.
 
 `18A`는 다음 route 순서로 하나의 DataFrame queue를 만든다. 각 row는 DB를 다시 조회하는 명령이 아니라, executor가 처리할 식별자와 실행 metadata를 담은 불변 계획(plan)이다.
 

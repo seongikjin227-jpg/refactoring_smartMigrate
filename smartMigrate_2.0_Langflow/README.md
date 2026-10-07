@@ -4,15 +4,13 @@
 
 상세 아키텍처 문서는 `00_guide` 아래에 모아두고, 이 README는 프로젝트 구조, 공통 설계 특징, 실행 순서, 운영 확인 포인트만 요약합니다.
 
+기준일: 2026-10-07. 현재 표준 흐름은 `Chat Input → 00A → 02 LLM Router`입니다. 이전 01 classifier는 사용하지 않습니다.
+
 ## 가이드 HTML 실행
 
 `00_guide/00_developer_guidebook.html`은 브라우저에서 바로 열 수 있는 정적 HTML입니다.
 
-### 방법 1. 파일 직접 열기
-
-1. 파일 탐색기에서 `smartMigrate_2.0_Langflow\00_guide` 폴더로 이동합니다.
-2. `00_developer_guidebook.html`을 더블클릭합니다.
-3. 기본 브라우저에서 개발자 가이드가 열리는지 확인합니다.
+HTML은 옆 Markdown을 fetch하고 Mermaid를 CDN에서 불러옵니다. 파일 더블클릭은 브라우저에 따라 문서 로딩이 차단되므로 아래 HTTP 서버로 실행합니다. Mermaid 렌더링에는 CDN 접속이 필요합니다.
 
 ### 방법 2. 로컬 HTTP 서버로 열기
 
@@ -46,18 +44,19 @@ smartMigrate_2.0_Langflow/
     00_developer_guidebook.html
     00_architecture*.md
     00_logging_rules.txt
+    00A_file_upload_runtime_guide.md
+    00_follow_up_payload_contract.md
+    00_full_workflow_loop_guide.md
     00_job_execution_payload_plan.md
-    00_main_logic_components.md
     99.LogHelper.py
-    todolist.md
 
   01_agent_start/
     00A_logRuntimeStart.py
-    01_requestClassifierPrompt.md
     02_intentRouter.py
     03_llmResponsePrompt.md
 
   02_flow_management/
+    04_mappingRuleUpdateSqlGenerate.py
     04_managementRouter.py
     04_dashboard.py
     04_currentProgress.py
@@ -73,8 +72,6 @@ smartMigrate_2.0_Langflow/
     10A_migJobsToLoopTable.py
     10B_migLoop.py
     10C_migOneJobPocExecutor3.py  # 표준: count + record verification
-    10C_migOneJobPocExecutor.py   # 이전 호환 구현
-    10C_migOneJobPocExecutor2.py  # 이전 record verification 구현
     10D_migIterationDashboard.py
     11_finalDashboard.py
     11B_failureCauseAnalyzer.py
@@ -94,6 +91,8 @@ smartMigrate_2.0_Langflow/
     18A_fullWorkflowJobsToLoopTable.py
     18B_fullWorkflowLoop2.py
     18D_fullWorkflowDashboard.py
+
+  archive/  # 구버전 10C/18B와 00B 단독 진단 도구; README 참조
 ```
 
 ## 폴더 역할
@@ -154,8 +153,7 @@ smartMigrate_2.0_Langflow/
 ```text
 User Chat
   -> 01_agent_start/00A Runtime Logging Start
-  -> 01_agent_start/01 Request Classifier Agent (chat history + current input -> resolved payload)
-  -> 01_agent_start/02 Intent Router
+  -> 01_agent_start/02 Intent LLM Router
   -> 01_agent_start/03 또는 02_flow_management/04 또는 03_job_execution/06/08
 ```
 
@@ -193,7 +191,7 @@ map_id, mig_kind, log_type, log_level, step_name, status, retry_count, generate_
 
 1. Langflow IDE에 필요한 Custom Component `.py` 파일을 등록합니다.
 2. 각 컴포넌트의 `inputs`에 Oracle 접속 정보, system schema, LLM endpoint/model/api key, Milvus 설정을 연결합니다.
-3. 사용자 입력은 00A와 01을 지나 02에서 `GENERAL_CHAT`, `MANAGEMENT`, `JOB_EXECUTION`으로 나뉩니다.
+3. 사용자 입력은 00A를 지나 02에서 `GENERAL_CHAT`, `MANAGEMENT`, `JOB_EXECUTION`으로 나뉩니다.
 4. 관리 요청은 `02_flow_management`의 04 계열 컴포넌트가 처리합니다.
 5. `04_saveVectorDB.py`의 `Tool Result`를 Management Agent의 Tool 입력에 연결합니다. Management Router에서 이 컴포넌트로 가는 직접 연결은 만들지 않습니다.
 6. 실행 요청은 `03_job_execution`의 06/08을 거쳐 10/12/15/17/18 계열 실행 flow로 들어갑니다.
@@ -250,6 +248,18 @@ python -m py_compile `
 | `00_guide/00_architecture_chapter5_logging_operations.md` | logging, 운영, 장애 확인 |
 | `00_guide/00_architecture_chapter6_oracle_ddl.md` | Oracle 테이블 DDL, 컬럼 코멘트, 주요 인덱스 |
 | `00_guide/00_job_execution_payload_plan.md` | 개발자용 실행 요청 payload 전달 규칙 |
-| `00_guide/00_follow_up_payload_contract.md` | 후속 발화 해석, 확인 응답, payload/연결 계약 |
-| `00_guide/00_main_logic_components.md` | 개발자용 C 컴포넌트 중심 읽기 가이드 |
+| `00_guide/00_follow_up_payload_contract.md` | 현재 payload/연결 계약과 후속 발화 지원 범위 |
+| `00_guide/00A_file_upload_runtime_guide.md` | XLSX URL 파싱, 전달 계약, 매핑 등록/미리보기 |
 | `00_guide/00_logging_rules.txt` | 개발자용 workflow logging 세부 규칙 |
+
+## 매핑 룰 변경과 파일 정리
+
+04 Router의 Mapping Rule Update 출력을 `04_mappingRuleUpdateSqlGenerate.router_payload`에 연결합니다. 00A가 URL 기반 XLSX를 파싱하고 02가 uploaded_attachment를 보존합니다. 삭제한 File Command Tool의 노드와 Agent Tool 연결은 Langflow에서도 제거합니다. Select Tool의 예전 `preview_mapping_rule_conflicts` action 대신 전용 매핑 생성기를 사용합니다.
+
+매핑 PK는 master MAP_ID이며 detail PK는 Oracle constraint에서 (MAP_ID, MAP_DTL) 또는 (MAP_ID, FR_COL)을 확인합니다. 다른 PK 형태는 실행하지 않습니다. `execute_updates=false`가 기본값이며 실제 DB 적용은 해당 옵션을 켰을 때 수행합니다. 미리보기/검증 요청은 실행 옵션과 관계없이 dry run합니다. 생성 SQL은 mapping 컬럼과 literal 값, 정확한 PK equality만 허용하고 system_schema로 한정합니다. 모든 문장이 한 행씩 변경되어야 commit합니다.
+
+구버전 10C 두 개와 18B Loop, 00B URL 진단용 컴포넌트는 archive에 보관했습니다. 외부 Flow 사용 여부는 저장소에서 확인할 수 없습니다. 현재 표준은 10C Executor3와 18B Loop2입니다. 99.LogHelper.py는 운영 실행 노드가 아닌 logging 예제입니다.
+
+가이드/코드 수정은 기존 Langflow 노드에 자동 반영되지 않습니다. 00A, 02, 04 Router, Select Tool, 매핑 생성기와 Management Agent prompt를 다시 등록하고 연결을 점검합니다.
+
+회귀 검증: 저장소 루트에서 `python -m unittest discover -s tests -p test_langflow_management_components.py -v`를 실행합니다. 외부 Oracle/LLM 없이 SQL 범위 제한, PK 판별, 첨부 전달과 transaction 동작을 검증합니다. 실제 Langflow/운영 DB 연결 검증은 별도로 수행합니다.

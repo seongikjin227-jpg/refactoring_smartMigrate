@@ -1,62 +1,31 @@
-﻿# Chapter 2. Chat And Management Routing
+# Chapter 2. Chat And Management Routing
 
-## 2.1 Chat 요청 처리 개요
+기준일: 2026-10-07.
 
-SmartMigrate의 채팅 요청은 먼저 01 분류를 통과한다. 이후 02가 세 갈래 중 하나만 활성화한다.
+## 2.1 채팅 입력 경계
 
 ```mermaid
 flowchart TD
-    IN[User Request + Chat History] --> C01[01 Request Classifier]
-    C01 --> JSON01[resolved request JSON]
-    JSON01 --> R02[02 Intent Conditional Router]
+    IN[Chat Input Message] --> A00[00A Logging and XLSX Parsing]
+    A00 --> R02[02 Intent LLM Router]
     R02 -->|GENERAL_CHAT| G03[03 LLM Response]
     R02 -->|MANAGEMENT| M04[04 Management Router]
     R02 -->|JOB_EXECUTION| J06[06 Get Remaining Jobs]
 ```
 
-| 01 결과 | 의미 | 다음 노드 |
-|---|---|---|
-| `GENERAL_CHAT` | SmartMigrate 작업과 직접 관련 없는 일반 질문 | `03_llmResponsePrompt.md` |
-| `MANAGEMENT` | 상태/로그/원인/대시보드/잔여 작업 조회/Update Command/RAG Guide 관리/VectorDB 동기화 | `04_managementRouter.py` |
-| `JOB_EXECUTION` | 실제 작업 실행, 재실행, 남은 작업 처리 | `06_getRemainingJobs.py` |
+00A는 DB logger를 등록하고 Message의 원본 metadata를 기록합니다. data에 workbook URL이 있으면 XLSX를 파싱한 uploaded_attachment를 추가합니다. 02의 `input_message`에는 이 Message 전체를 연결합니다.
 
-## 2.2 01 Request Classifier 주요 산출물
+## 2.2 현재 payload
 
-01 prompt는 LLM에게 JSON을 요구한다. 이 JSON은 02, 04, 06, 08의 공통 payload가 된다.
+02의 LLM은 route만 반환합니다. Python 코드가 user_request, resolved_user_request(현재 text와 동일), session_id, files, source_message, message_data, uploaded_attachment를 조합합니다. requested_domain=UNKNOWN, execution_scope=unknown, target_filter는 빈 배열이며 06/08에서 보완합니다. 채팅 history 기반 후속 발화 해석은 현재 구현되어 있지 않습니다.
 
-| 필드 | 예시 | 사용 위치 |
-|---|---|---|
-| `intent_route` | `JOB_EXECUTION` | `02_intentRouter.py` branch 선택 |
-| `user_request` | `전체 작업 진행해줘` | 모든 후속 route 판단의 원문 |
-| `resolved_user_request` | `map_id=101 SQL Conversion 실행해줘` | 후속 발화까지 복원한 표준 요청문; 04/06/08/Agent 입력 |
-| `confirmation` | `CONFIRMED` | `네`/`아니` 같은 확인 응답의 실행 허용 여부 |
-| `clarification_required` | `false` | true이면 02가 실행 branch를 열지 않음 |
-| `should_execute` | `true` | 06/08의 방어용 실행 guard |
-| `requested_domain` | `FULL_WORKFLOW`, `MIG`, `SQL_CONVERSION` | `06`, `08` |
-| `execution_scope` | `all`, `domain`, `targeted`, `unknown` | `08`의 run mode 판단 |
-| `target_filter.map_ids` | `[101]` | target migration 조회/실행 |
-| `target_filter.sql_ids` | `["S001"]` | target SQL 조회/실행 |
-| `target_filter.space_nms` | `["DDD"]` | target SQL 조회/실행 |
-| `should_execute` | `true` | `06`에서 실행 여부 guard |
-| `history` | `[{"step":"classify",...}]` | workflow 추적성. chat history와 다른 필드 |
+## 2.3 02 Intent LLM Router
 
-`VectorDB`, `Milvus`, `벡터DB`, `04_saveVectorDB` 동기화/업로드/반영 요청은 "실행해줘"라는 표현이 있어도 `JOB_EXECUTION`이 아니라 `MANAGEMENT`다. 실제 업무 job을 수행하는 요청이 아니라 운영성 동기화 요청이기 때문이다.
-
-## 2.3 02 Intent Conditional Router
-
-`02_intentRouter.py`는 LLM을 호출하지 않는다. 입력 payload의 `intent_route`만 보고 group output 중 하나를 열고 나머지는 `self.stop()`으로 멈춘다.
-
-```mermaid
-flowchart LR
-    P[payload_json] --> R{intent_route}
-    R -->|GENERAL_CHAT| O1[general_chat_response]
-    R -->|MANAGEMENT| O2[management_response]
-    R -->|JOB_EXECUTION| O3[job_execution_response]
-```
+02는 LLM을 호출하고 route 결과를 캐시합니다. group output 중 선택된 하나만 Data를 내보내고 나머지는 self.stop()으로 중지합니다. 첨부 매핑 요청과 파싱된 workbook은 MANAGEMENT로 전달합니다. VectorDB/Milvus 요청도 관리 요청입니다.
 
 ## 2.4 04 Management Router
 
-`04_managementRouter.py`는 관리성 요청을 네 route로 나눈다.
+`04_managementRouter.py`는 관리성 요청을 다섯 route로 나눈다.
 
 ```mermaid
 flowchart TD
@@ -67,6 +36,7 @@ flowchart TD
     QA --> TOOL_UPDATE[04 Update Command Tool]
     QA --> TOOL_RAG[04 RAG Command Tool]
     QA --> TOOL_SYNC[04 Sync Milvus Vector DB Tool]
+    M -->|MAPPING_RULE_UPDATE| MAP[04 Mapping Rule Update SQL Generate]
     M -->|EXCEPTION| EX[Exception Message]
 ```
 
@@ -75,7 +45,8 @@ flowchart TD
 | `DASHBOARD` | "대시보드 보여줘", "전체 현황" | 정해진 DB aggregate 조회 후 메시지 생성 |
 | `CURRENT_PROGRESS` | "지금 돌고 있는 작업 있어?" | running 상태와 최근 5개 로그 조회 |
 | `MANAGEMENT_AGENT` | "DB Migration 남은 작업 목록 보여줘", "map id 101 왜 실패했어?", "VectorDB 업로드해줘" | Management Agent가 Select/Update/RAG/Sync Tool을 조합해서 처리 |
-| `EXCEPTION` | 필수 target 누락 | 구체적인 한국어 에러 메시지 |
+| `MAPPING_RULE_UPDATE` | "매핑 룰 등록/수정/미리보기" | PK snapshot 기준 전용 SQL 생성기 |
+| `EXCEPTION` | route 자체 판단 불가 | 구체적인 한국어 에러 메시지 |
 
 중요한 결정: `SELECT_AGENT`, `UPDATE_COMMAND`, `RAG_GUIDE_MANAGEMENT`, `VECTOR_DB_SYNC`는 독립 route가 아니라 `04 Management Agent`의 내부 Tool 호출로 통합되었다. 채팅으로 들어오는 조회/수정/가이드/동기화 관리는 모두 Management Agent가 Tool을 순서대로 활용한다. 단, 실행 완료 후 자동 분석인 `11B_failureCauseAnalyzer.py`는 여전히 실행 workflow 후단에서 사용한다.
 
@@ -111,7 +82,7 @@ flowchart LR
 
 ## 2.7 Management Agent and Tools
 
-Management Agent는 정해진 결과가 아니라 Agent 답변이 그대로 chat output으로 넘어간다. 다만 실제 로직은 `Select Command Tool`, `Update Command Tool`, `RAG Command Tool`라는 3개의 tool을 조합해서 처리한다.
+Management Agent는 정해진 결과가 아니라 Agent 답변이 그대로 chat output으로 넘어간다. 다만 실제 로직은 `Select Command Tool`, `Update Command Tool`, `RAG Command Tool`및 `04_saveVectorDB.py`라는 4개의 tool을 조합해서 처리한다.
 
 ```mermaid
 sequenceDiagram
@@ -143,7 +114,7 @@ sequenceDiagram
 |---|---|
 | read-only/select | `04_selectCommandTool.py`는 SELECT 전용이다. |
 | update/repair | `04_updateCommandTool.py`는 상태 초기화, USER_EDITED 변경, SQL 저장 등 변경 작업만 수행한다. |
-| guide management | `04_ragCommandTool.py`는 RAG rule/guidance row 조회/추가/수정/비활성화와 VectorDB 반영을 담당한다. |
+| guide management | `04_ragCommandTool.py`는 RAG rule/guidance row 조회/추가/수정/비활성화와 검색을 담당한다. 동기화는 별도 Sync Tool이다. |
 | 로그 단일화 | SQL 로그도 `NEXT_MIG_LOG`에서 조회한다. |
 | 일반 진단은 짧게 | bulk/recent/log 진단은 SQL CLOB을 기본 제외하고, text preview는 최대 1000자다. |
 | 원문 조회는 명시적 | 사용자가 "전체 원문", "BIND_SQL 보여줘"처럼 명시하면 `get_sql_text`, `get_migration_text`, `get_log_text`를 사용한다. |
@@ -172,7 +143,7 @@ sequenceDiagram
 
 ## 2.8 Update Command
 
-`04_updateCommandTool.py`는 04 관리 흐름의 모든 UPDATE 요청을 담당한다. LLM이 컬럼명과 값을 조합하지 않고, `actions` 배열의 action 이름과 식별자만 전달한다. 실제 SQL은 Tool 내부의 고정 쿼리로만 실행된다.
+`04_updateCommandTool.py`는 04 일반 관리 흐름의 고정 action 변경 요청을 담당한다. LLM이 컬럼명과 값을 조합하지 않고, `actions` 배열의 action 이름과 식별자만 전달한다. 실제 SQL은 Tool 내부의 고정 쿼리로만 실행된다.
 
 | action 예 | 대상 | 설명 |
 |---|---|---|
@@ -275,3 +246,13 @@ GUIDANCE_TEXT=대량 테이블 조인에서는 필터 조건이 강한 테이블
 ```text
 RAG_ID 25 튜닝 가이드 비활성화해줘.
 ```
+
+## 2.11 Mapping Rule Update 전용 분기
+
+`04_managementRouter.mapping_rule_update` → `04_mappingRuleUpdateSqlGenerate.router_payload`를 Data 전체로 연결합니다. LLM과 Oracle 접속 설정, system_schema도 지정합니다. 첨부 파일 유무만으로 MANAGEMENT_AGENT로 덮어쓰지 않습니다.
+
+매핑 생성기는 Oracle constraint에서 detail PK를 확인하고 master MAP_ID와 detail PK snapshot만 읽습니다. 지원 형태는 (MAP_ID, MAP_DTL)과 (MAP_ID, FR_COL)입니다. 기본 실행기 코드에는 MAP_DTL이 필요합니다. LLM이 반환한 INSERT/UPDATE를 작은 literal DML 문법으로 검증합니다. 완전한 PK equality, mapping 컬럼만 허용하며 schema를 명시합니다. 함수/서브쿼리/OR/PK 변경/실행 결과 컬럼 변경은 차단합니다. 기존 키와 INSERT/UPDATE 종류가 다르거나 detail의 부모 master가 없으면 거절합니다.
+
+execute_updates=false가 기본값입니다. true인 경우에도 preview/validation 요청은 실행하지 않습니다. 실제 적용은 모든 문장이 정확히 한 행씩 변경되어야 commit하며 실패 시 전체 rollback합니다. PK snapshot 이후 다른 사용자가 변경한 값의 충돌까지 감지하는 optimistic lock은 구현되어 있지 않습니다.
+
+File Command Tool과 Select Tool의 예전 preview_mapping_rule_conflicts 경로는 제거했습니다. 파일 파싱은 00A, SQL 생성/검증/적용은 이 분기로 통합합니다. 상세 입력은 `00A_file_upload_runtime_guide.md`를 참고합니다.

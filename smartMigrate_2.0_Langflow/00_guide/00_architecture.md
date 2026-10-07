@@ -8,7 +8,7 @@
 | `00_user_guide.md` | 사용자가 이용 가능한 기능, 질문 예시, 기능별 결과 | 일반 사용자, 운영자, 검수자 |
 | `00_architecture.md` | 개발자용 전체 구조, 핵심 흐름, 문서 목차 | 개발자, 운영 설계자 |
 | `00_architecture_chapter1_overview.md` | 시스템 목적, 컴포넌트 맵, 데이터 저장소, 외부 의존성 | 신규 개발자, 운영자 |
-| `00_architecture_chapter2_chat_management.md` | 사용자 채팅 분류, 02/04 라우팅, Dashboard/Progress/Management Agent + 3 tools | 프론트/플로우 운영자 |
+| `00_architecture_chapter2_chat_management.md` | 사용자 채팅 분류, 02/04 라우팅, Dashboard/Progress/Management Agent + 4 tools 및 전용 매핑 분기 | 프론트/플로우 운영자 |
 | `00_architecture_chapter3_job_execution.md` | "전체 작업 진행해줘" 포함 실행 라우팅, 잔여 작업 산정, Loop 구성 | 백엔드/플로우 개발자 |
 | `00_full_workflow_loop_guide.md` | 전체 실행의 queue 생성, Loop `item`/`done`, executor 복귀 조건과 phase gate | 신규 플로우 개발자 |
 | `00_architecture_chapter4_domain_executors.md` | 10C/12C/15C/17C 단일 작업 실행 로직, 상태 전이, RAG/LLM 처리 | 실행 엔진 개발자 |
@@ -24,8 +24,7 @@ SmartMigrate는 사용자의 자연어 요청을 `GENERAL_CHAT`, `MANAGEMENT`, `
 ```mermaid
 flowchart TD
     U[User Chat Input] --> A00[00A Log Runtime Start]
-    A00 --> C01[01 Request Classifier Prompt + LLM]
-    C01 --> R02[02 Intent Conditional Router]
+    A00 --> R02[02 Intent LLM Router]
 
     R02 -->|GENERAL_CHAT| G03[03 LLM Response Prompt]
     G03 --> OUT1[Chat Output]
@@ -37,6 +36,9 @@ flowchart TD
     QA_AGENT --> TOOL_SELECT[04 Select Command Tool]
     QA_AGENT --> TOOL_UPDATE[04 Update Command Tool]
     QA_AGENT --> TOOL_RAG[04 RAG Command Tool]
+    QA_AGENT --> TOOL_SYNC[04 Sync Milvus Vector DB Tool]
+    M04 -->|MAPPING_RULE_UPDATE| MAP04[04 Mapping Rule Update SQL Generate]
+    MAP04 --> OUT2
     M04 -->|EXCEPTION| E04[Exception Message]
     D04 --> OUT2[Chat Output]
     P04 --> OUT2
@@ -78,11 +80,10 @@ flowchart TD
 
 | 영역 | 담당 파일 | 핵심 책임 |
 |---|---|---|
-| 런타임 로깅 초기화 | `00A_logRuntimeStart.py` | `smartmigrate.workflow` logger에 DB handler 등록, 요청 pass-through |
+| 런타임 로깅 초기화 | `00A_logRuntimeStart.py` | `smartmigrate.workflow` logger에 DB handler 등록, 원본 Message 보존, URL XLSX 파싱 |
 | RAG/Correct SQL Vector Sync | `04_saveVectorDB.py` | Oracle 원천 데이터를 Milvus 컬렉션으로 one-shot sync |
-| 1차 의도 분류 | `01_requestClassifierPrompt.md` | 채팅을 일반 대화, 관리성 조회, 실행 요청으로 분류 |
-| 1차 라우팅 | `02_intentRouter.py` | 01 결과의 `intent_route`에 따라 branch 선택 |
-| 관리성 라우팅 | `04_managementRouter.py` | Dashboard, Current Progress, Management Agent, VectorDB 분기 |
+| 1차 라우팅 | `02_intentRouter.py` | Message를 LLM으로 분류하고 route에 따라 branch 선택; metadata 코드 보존 |
+| 관리성 라우팅 | `04_managementRouter.py` | Dashboard, Current Progress, Management Agent, Mapping Rule Update, Exception 분기 |
 | 잔여 작업 조회 | `06_getRemainingJobs.py` | 실행 가능 job count와 특정 target 상태 조회 |
 | 실행 라우팅 | `08_jobExecutionRouter.py` | MIG/SQL/FULL_WORKFLOW 실행 route와 run mode 결정 |
 | 도메인별 Loop | `10B`, `12B`, `15B`, `17B`, `18B` | 한 row씩 실행하고 loop 완료 신호 emit |
@@ -92,7 +93,7 @@ flowchart TD
 
 ## 핵심 요청 유형 요약
 
-| 사용자 요청 예시 | 01 분류 | 04/08 세부 route | 결과 |
+| 사용자 요청 예시 | 02 분류 | 04/08 세부 route | 결과 |
 |---|---|---|---|
 | "안녕", "이 시스템 뭐야?" | `GENERAL_CHAT` | 03 | LLM 일반 답변 |
 | "대시보드 보여줘" | `MANAGEMENT` | 04 `DASHBOARD` | 정해진 dashboard 메시지 |
@@ -111,7 +112,7 @@ flowchart TD
 | 로그는 `NEXT_MIG_LOG`만 사용 | SQL 계열 로그도 `NEXT_SQL_LOG`가 아니라 `NEXT_MIG_LOG`에 저장한다. |
 | `11B`는 실행 후 분석 | 사용자가 채팅으로 fail 분석을 요청할 때 직접 가는 route가 아니라, job execution 완료 뒤 final dashboard 흐름에서 사용한다. |
 | read-only 조회는 Select Command Tool | `04_selectCommandTool.py`는 SELECT 전용이다. |
-| 변경 작업은 Update Command Tool | `04_updateCommandTool.py`는 고정 action별 SQL만 transaction 단위로 UPDATE한다. |
+| 일반 관리 변경은 Update Command Tool | `04_updateCommandTool.py`는 고정 action별 SQL만 transaction 단위로 UPDATE한다. |
 | CLOB 전체 출력은 명시 요청에서만 | 일반 진단/최근 로그는 1000자 preview, 특정 SQL 원문 요청은 full text action 사용. |
 | 전체 workflow는 선행 조건으로 막지 않음 | `FULL_WORKFLOW`는 MIG부터 Formatting까지 순서대로 처리하므로 prerequisite branch로 보내지 않는다. |
 
@@ -122,3 +123,5 @@ flowchart TD
 3. 운영 장애 대응자는 `00_user_guide.md -> chapter5 -> chapter2(Management Agent) -> chapter4(도메인 executor)` 순서가 빠르다.
 4. DBA/백엔드 개발자는 schema 확인이 필요할 때 `chapter6`을 먼저 확인한다.
 5. Oracle/Milvus 구조는 `chapter6`을, 전체 실행 Loop 구현은 `00_full_workflow_loop_guide.md`를 참고한다.
+
+매핑 룰 등록/변경은 전용 `04_mappingRuleUpdateSqlGenerate.py`가 처리합니다. 초기값은 dry run이고, detail PK는 실제 DB constraint의 (MAP_ID, MAP_DTL) 또는 (MAP_ID, FR_COL)을 사용합니다. 채팅 history 기반 후속 발화 복원은 현재 02에 구현되어 있지 않습니다.
