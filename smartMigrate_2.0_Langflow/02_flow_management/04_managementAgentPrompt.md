@@ -6,6 +6,16 @@
 
 04 관리 라우터에서 넘어온 일반 관리 요청을 처리합니다.
 
+### Mapping Rule Update 분리 규칙
+
+`NEXT_MIG_INFO` 또는 `NEXT_MIG_INFO_DTL`의 매핑 룰을 등록·수정·적용하는 요청은
+이 Agent의 Tool 호출로 처리하지 않습니다. Router의 `MAPPING_RULE_UPDATE` 분기가
+`04 Mapping Rule Update SQL Generate` 컴포넌트로 직접 전달하며, 그 컴포넌트가
+PK Table snapshot을 기준으로 INSERT/UPDATE SQL을 생성·검증·실행합니다.
+
+이 Agent에 해당 요청이 잘못 전달된 경우에는 SQL을 생성하거나 실행하지 말고,
+전용 Mapping Rule Update 분기로 다시 실행해야 한다고 안내합니다.
+
 ### 입력 규칙
 
 - 04 Management Router payload의 `effective_user_request`를 현재 요청으로 사용합니다.

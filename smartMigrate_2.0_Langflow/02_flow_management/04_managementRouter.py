@@ -50,6 +50,18 @@ JSON schema:
 {"management_route":"DASHBOARD|CURRENT_PROGRESS|MANAGEMENT_AGENT|EXCEPTION","exception_message":"","reason":""}"""
 
 
+MAPPING_RULE_UPDATE_ROUTE_HINT = """
+Additional route:
+- MAPPING_RULE_UPDATE: The request asks to add, change, correct, import, or
+  apply mapping rules in NEXT_MIG_INFO / NEXT_MIG_INFO_DTL. Choose this route
+  when the supplied text contains mapping rules, including a natural-language
+  request plus table/column mapping definitions. Do not choose MANAGEMENT_AGENT
+  for this case.
+
+The JSON schema is:
+{"management_route":"DASHBOARD|CURRENT_PROGRESS|MANAGEMENT_AGENT|MAPPING_RULE_UPDATE|EXCEPTION","exception_message":"","reason":""}
+"""
+
 EXCEPTION_MESSAGE = "Management 요청을 처리할 수 없습니다. 어떤 관리 작업인지 다시 알려주세요."
 
 
@@ -67,6 +79,7 @@ class NewType04ManagementRouter(Component):
         Output(display_name="Dashboard", name="dashboard", method="dashboard_response", group_outputs=True),
         Output(display_name="Current Progress", name="current_progress", method="current_progress_response", group_outputs=True),
         Output(display_name="Management Agent", name="management_agent", method="management_agent_response", group_outputs=True),
+        Output(display_name="Mapping Rule Update", name="mapping_rule_update", method="mapping_rule_update_response", group_outputs=True),
         Output(display_name="Exception Message", name="exception", method="exception_response", group_outputs=True, types=["Message"]),
     ]
 
@@ -80,6 +93,9 @@ class NewType04ManagementRouter(Component):
 
     def management_agent_response(self) -> Data:
         return self._route_output("MANAGEMENT_AGENT", "management_agent")
+
+    def mapping_rule_update_response(self) -> Data:
+        return self._route_output("MAPPING_RULE_UPDATE", "mapping_rule_update")
 
     # LLM이 route를 정할 수 없을 때만 사용자에게 보낼 최종 Message branch를 연다.
     def exception_response(self) -> Message:
@@ -139,7 +155,7 @@ class NewType04ManagementRouter(Component):
         llm = self._required_llm()
         response = llm.invoke(
             [
-                SystemMessage(content=MANAGEMENT_ROUTER_PROMPT),
+                SystemMessage(content=MANAGEMENT_ROUTER_PROMPT + MAPPING_RULE_UPDATE_ROUTE_HINT),
                 HumanMessage(content=json.dumps({
                     "user_request": self._effective_user_request(payload),
                     "original_user_request": payload.get("user_request") or "",
@@ -178,7 +194,7 @@ class NewType04ManagementRouter(Component):
     # LLM 응답을 허용된 route 집합으로 제한해, 임의의 component name으로 이어지는 것을 차단한다.
     def _normalize_decision(self, decision: dict[str, Any]) -> dict[str, Any]:
         route = str(decision.get("management_route") or "").upper()
-        allowed = {"DASHBOARD", "CURRENT_PROGRESS", "MANAGEMENT_AGENT", "EXCEPTION"}
+        allowed = {"DASHBOARD", "CURRENT_PROGRESS", "MANAGEMENT_AGENT", "MAPPING_RULE_UPDATE", "EXCEPTION"}
         if route not in allowed:
             raise ValueError(f"Invalid management_route: {route}")
         return {
@@ -193,6 +209,7 @@ class NewType04ManagementRouter(Component):
             "DASHBOARD": "04_dashboard",
             "CURRENT_PROGRESS": "04_currentProgress",
             "MANAGEMENT_AGENT": "04_managementAgent",
+            "MAPPING_RULE_UPDATE": "04_mappingRuleUpdateSqlGenerate",
             "EXCEPTION": "04_managementRouter",
         }.get(route, "04_managementAgent")
 

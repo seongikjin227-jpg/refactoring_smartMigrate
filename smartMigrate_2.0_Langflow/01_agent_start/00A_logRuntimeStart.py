@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from datetime import datetime
 from typing import Any
 
@@ -11,6 +12,7 @@ from lfx.schema.message import Message
 
 LOGGER_NAME = "smartmigrate.workflow"
 HANDLER_MARKER = "SmartMigrateHandler"
+LOGGER_SETUP_LOCK = threading.RLock()
 
 
 def create_db_connection(db_config: dict[str, Any]):
@@ -137,7 +139,9 @@ class NewType00ALogRuntimeStart(Component):
     name = "NewType00ALogRuntimeStart"
 
     inputs = [
-        MessageInput(name="input_message", display_name="Chat Input Message", required=True),
+        # Optional so 00A can record an explicit EMPTY CHAT_INPUT diagnostic
+        # when an upstream caller triggers the flow without a Message.
+        MessageInput(name="input_message", display_name="Chat Input Message", required=False),
         StrInput(name="db_host", display_name="DB Host", required=True),
         IntInput(name="db_port", display_name="DB Port", value=1521, required=False),
         StrInput(name="db_service_name", display_name="DB Service Name", required=True),
@@ -148,36 +152,74 @@ class NewType00ALogRuntimeStart(Component):
     outputs = [Output(display_name="Message", name="message", method="run", types=["Message"])]
 
     def run(self) -> Message:
-        # Diagnostic boundary: retain the original Message object.  Do not reduce
-        # it to Message.text before logging or handing it to the next component.
         message = getattr(self, "input_message", None)
-        if not isinstance(message, Message):
-            raise TypeError("00A requires a Langflow Message from Chat Input.")
-        raw_payload = self._message_payload_json(message)
         logger = logging.getLogger(LOGGER_NAME)
-        for handler in list(logger.handlers):
-            logger.removeHandler(handler)
-            try:
-                handler.close()
-            except Exception:
-                pass
+        # The logger is process-global.  Serialise only its setup plus the
+        # mandatory first record so a concurrent Super-Agent request cannot
+        # remove this handler before CHAT_INPUT reaches NEXT_MIG_LOG.
+        with LOGGER_SETUP_LOCK:
+            for existing_handler in list(logger.handlers):
+                if getattr(existing_handler, "handler_marker", None) != HANDLER_MARKER:
+                    continue
+                logger.removeHandler(existing_handler)
+                try:
+                    existing_handler.close()
+                except Exception:
+                    pass
 
-        logger.setLevel(logging.DEBUG)
-        logger.propagate = False
-        handler = SmartMigrateDBHandler(self._db_config())
-        logger.addHandler(handler)
-        logger.info(
-            raw_payload[:4000],
-            extra={
-                "workflow_log": [
-                    0, "WORKFLOW", "CHAT_INPUT", "INFO", "MESSAGE", "START", 0, raw_payload,
-                ]
-            },
-        )
+            logger.setLevel(logging.DEBUG)
+            logger.propagate = False
+            handler = SmartMigrateDBHandler(self._db_config())
+            logger.addHandler(handler)
+
+            # A missing Chat Input must be visible in NEXT_MIG_LOG instead of
+            # failing before the first workflow log is written.
+            if not isinstance(message, Message):
+                raw_payload = json.dumps(
+                    {
+                        "input_present": message is not None,
+                        "received_type": type(message).__name__,
+                        "received_value": self._json_value(message),
+                        "reason": "00A executed without a Langflow Chat Input Message.",
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                )
+                logger.warning(
+                    raw_payload[:4000],
+                    extra={
+                        "workflow_log": [
+                            0, "WORKFLOW", "CHAT_INPUT", "WARNING", "MESSAGE", "EMPTY", 0, raw_payload,
+                        ]
+                    },
+                )
+                self.status = {
+                    "ok": handler.insert_error is None,
+                    "input_present": message is not None,
+                    "input_type": type(message).__name__,
+                    "db_insert_error": handler.insert_error,
+                }
+                # Logging is diagnostic-only.  Keep the workflow alive so 02
+                # can leave its own empty-input diagnostic as well.
+                return Message(text="")
+
+            # Diagnostic boundary: retain the original Message object.  Do not
+            # reduce it to Message.text before logging or handing it onward.
+            raw_payload = self._message_payload_json(message)
+            logger.info(
+                raw_payload[:4000],
+                extra={
+                    "workflow_log": [
+                        0, "WORKFLOW", "CHAT_INPUT", "INFO", "MESSAGE", "START", 0, raw_payload,
+                    ]
+                },
+            )
         self.status = {
             "ok": handler.insert_error is None,
             "db_insert_error": handler.insert_error,
         }
+        # Logging is observational, not a workflow gate.  Keep the database
+        # error in component status but always pass a valid Message onward.
         # Do not replace Message.text with the diagnostic JSON.  Downstream
         # components must receive precisely the Message that Langflow provided.
         # (The full diagnostic envelope is stored in NEXT_MIG_LOG.GENERATE_SQL.)

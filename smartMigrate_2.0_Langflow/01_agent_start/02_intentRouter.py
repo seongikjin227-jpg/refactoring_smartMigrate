@@ -26,6 +26,9 @@ An attached mapping/Excel/CSV file with a request to register, import, validate,
 or apply mapping rules is MANAGEMENT, never GENERAL_CHAT.
 """
 
+LOGGER_NAME = "smartmigrate.workflow"
+HANDLER_MARKER = "SmartMigrateHandler"
+
 
 class NewType02IntentRouter(Component):
     display_name = "02 Intent LLM Router"
@@ -86,9 +89,44 @@ class NewType02IntentRouter(Component):
         if cached is not None:
             return cached
 
+        logger = logging.getLogger(LOGGER_NAME)
+        handler_available = any(
+            getattr(handler, "handler_marker", None) == HANDLER_MARKER
+            for handler in logger.handlers
+        )
+        # Observability must not block routing.  When 00A was bypassed this
+        # warning has no DB handler to persist to, but execution continues and
+        # the normal component status/output remains available to the caller.
+        if not handler_available:
+            logger.warning("02 started without the SmartMigrate DB log handler; 00A was not executed or did not complete.")
+
         message = getattr(self, "input_message", None)
         if not isinstance(message, Message):
-            raise TypeError("02 requires the Message output from 00A Log Runtime Start.")
+            error = "02 input_message is missing or is not a Langflow Message."
+            logger.error(
+                error,
+                extra={
+                    "workflow_log": [
+                        0, "WORKFLOW", "02_INPUT_MESSAGE", "ERROR", "RECEIVE_00A", "FAIL", 0,
+                        json.dumps({"received_type": type(message).__name__, "received_value": str(message)[:1000]}, ensure_ascii=False),
+                    ]
+                },
+            )
+            self.status = {"ok": False, "component": "02_intentRouter", "stage": "INPUT_CHECK", "error": error}
+            raise TypeError(error)
+
+        # Record arrival before extracting/parsing any field.  Therefore an
+        # unexpected Message shape still leaves a diagnostic input record.
+        raw_message_snapshot = json.dumps(self._json_value(message), ensure_ascii=False, default=str)
+        logger.info(
+            raw_message_snapshot,
+            extra={
+                "workflow_log": [
+                    0, "WORKFLOW", "02_INPUT_ENVELOPE", "INFO", "RECEIVE_00A", "START", 0,
+                    raw_message_snapshot,
+                ]
+            },
+        )
 
         envelope = self._input_envelope(message)
         source_message = self._source_message(message, envelope)
@@ -96,7 +134,16 @@ class NewType02IntentRouter(Component):
         if not user_request:
             user_request = str(getattr(message, "text", "") or "").strip()
 
-        logger = logging.getLogger("smartmigrate.workflow")
+        if not user_request:
+            logger.warning(
+                "02 received a Message with empty text.",
+                extra={
+                    "workflow_log": [
+                        0, "WORKFLOW", "02_INPUT_MESSAGE", "WARNING", "VALIDATE_TEXT", "EMPTY", 0,
+                        json.dumps(source_message, ensure_ascii=False, default=str),
+                    ]
+                },
+            )
         logger.info(
             "02 Intent LLM Router started",
             extra={"workflow_log": [0, "WORKFLOW", "02_INTENT_ROUTER", "INFO", "ROUTE", "START", 0]},
