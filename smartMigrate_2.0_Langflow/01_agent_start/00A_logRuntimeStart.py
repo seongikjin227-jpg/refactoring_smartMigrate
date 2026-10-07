@@ -178,17 +178,25 @@ class NewType00ALogRuntimeStart(Component):
             "ok": handler.insert_error is None,
             "db_insert_error": handler.insert_error,
         }
-        # Give the next component the exact envelope written to the runtime log.
-        # Keep files/session/properties on the Message itself, so Langflow Agent
-        # still performs its normal attachment parsing in addition to seeing this
-        # inspectable JSON payload as Message.text.
-        return message.model_copy(update={"text": raw_payload})
+        # Do not replace Message.text with the diagnostic JSON.  Downstream
+        # components must receive precisely the Message that Langflow provided.
+        # (The full diagnostic envelope is stored in NEXT_MIG_LOG.GENERATE_SQL.)
+        return message
 
     @staticmethod
     def _message_payload_json(message: Message) -> str:
-        """Record the Chat Input fields without changing the message itself."""
+        """Record every field currently available on Langflow's Message object.
+
+        This component is downstream of Langflow's request adapter.  Therefore
+        this dump is the complete *Langflow Message*, not necessarily the raw
+        A2A JSON-RPC request received by that adapter.
+        """
         data = getattr(message, "data", None)
         payload = {
+            # model_dump is deliberately retained in addition to the stable,
+            # easy-to-query fields below.  It exposes newly added Message
+            # fields and any A2A metadata that the adapter preserved.
+            "langflow_message": NewType00ALogRuntimeStart._json_value(message),
             "text": getattr(message, "text", None),
             "sender": getattr(message, "sender", None),
             "sender_name": getattr(message, "sender_name", None),
