@@ -77,6 +77,17 @@ class NewType02IntentRouter(Component):
             routed.setdefault("history", []).append(
                 {"step": "intent_router", "message": f"route={route}"}
             )
+            if expected_route == "MANAGEMENT":
+                outgoing_payload = json.dumps(routed, ensure_ascii=False, default=str)
+                logging.getLogger(LOGGER_NAME).info(
+                    "02 final JSON payload to 04",
+                    extra={
+                        "workflow_log": [
+                            0, "WORKFLOW", "02_TO_04_PAYLOAD", "INFO", "SEND_04", "PASS", 0,
+                            outgoing_payload,
+                        ]
+                    },
+                )
             self.status = routed
             return Data(data=routed)
         except Exception as exc:
@@ -238,18 +249,34 @@ class NewType02IntentRouter(Component):
         llm = getattr(self, "llm", None)
         if llm is None or not hasattr(llm, "invoke"):
             raise ValueError("Connect a Language Model to 02 Intent LLM Router.")
-        response = llm.invoke(
+        messages = [
+            SystemMessage(content=ROUTE_CLASSIFIER_PROMPT),
+            HumanMessage(
+                content=json.dumps(
+                    {"user_request": user_request, "files": files},
+                    ensure_ascii=False,
+                    default=str,
+                )
+            ),
+        ]
+        prompt_snapshot = json.dumps(
             [
-                SystemMessage(content=ROUTE_CLASSIFIER_PROMPT),
-                HumanMessage(
-                    content=json.dumps(
-                        {"user_request": user_request, "files": files},
-                        ensure_ascii=False,
-                        default=str,
-                    )
-                ),
-            ]
+                {"role": "system", "content": messages[0].content},
+                {"role": "user", "content": messages[1].content},
+            ],
+            ensure_ascii=False,
+            default=str,
         )
+        logging.getLogger(LOGGER_NAME).info(
+            "02 LLM route prompt",
+            extra={
+                "workflow_log": [
+                    0, "WORKFLOW", "02_LLM_ROUTE_PROMPT", "INFO", "CLASSIFY", "START", 0,
+                    prompt_snapshot,
+                ]
+            },
+        )
+        response = llm.invoke(messages)
         content = getattr(response, "content", response)
         if isinstance(content, list):
             return "".join(

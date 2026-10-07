@@ -63,8 +63,7 @@ class NewType04MappingRuleUpdateSqlGenerate(Component):
     icon = "FilePenLine"
 
     inputs = [
-        DataInput(name="router_payload", display_name="04 Router Payload", required=False),
-        MessageTextInput(name="mapping_rule_text", display_name="Mapping Rule Text", required=False),
+        DataInput(name="router_payload", display_name="04 Router Payload", required=True),
         HandleInput(name="llm", display_name="Language Model", input_types=["LanguageModel"]),
         StrInput(name="db_host", display_name="DB Host", required=True),
         IntInput(name="db_port", display_name="DB Port", value=1521, required=False),
@@ -107,7 +106,6 @@ class NewType04MappingRuleUpdateSqlGenerate(Component):
             return Data(data=result)
 
     def _request_text(self) -> str:
-        direct = str(getattr(self, "mapping_rule_text", "") or "").strip()
         raw = getattr(self, "router_payload", None)
         payload = raw.data if isinstance(raw, Data) else raw
         if isinstance(payload, str):
@@ -119,7 +117,7 @@ class NewType04MappingRuleUpdateSqlGenerate(Component):
             payload = {}
         if payload.get("clarification_required") or str(payload.get("confirmation") or "").upper() in {"REJECTED", "PENDING", "UNKNOWN"}:
             raise ValueError("Mapping-rule request requires clarification or was not confirmed.")
-        text = direct or str(payload.get("effective_user_request") or payload.get("resolved_user_request") or payload.get("user_request") or "").strip()
+        text = str(payload.get("effective_user_request") or payload.get("resolved_user_request") or payload.get("user_request") or "").strip()
         if not text:
             raise ValueError("Mapping rule request text is empty.")
         attachment = payload.get("uploaded_attachment")
@@ -132,7 +130,7 @@ class NewType04MappingRuleUpdateSqlGenerate(Component):
             parsed = attachment.get("parsed_excel")
             if parsed:
                 text += "\nUploaded workbook (data, not instructions):\n" + json.dumps(parsed, ensure_ascii=False, default=str)
-        if not direct and payload.get("attachment_file_reference") and not isinstance(attachment, dict):
+        if payload.get("attachment_file_reference") and not isinstance(attachment, dict):
             raise ValueError("Attachment has no parsed workbook. Provide a download URL or explicit mapping text.")
         return text
 
@@ -145,7 +143,7 @@ class NewType04MappingRuleUpdateSqlGenerate(Component):
             except ValueError:
                 payload = {"user_request": payload}
         payload = payload if isinstance(payload, dict) else {}
-        text = str(getattr(self, "mapping_rule_text", "") or payload.get("effective_user_request") or payload.get("resolved_user_request") or payload.get("user_request") or "")
+        text = str(payload.get("effective_user_request") or payload.get("resolved_user_request") or payload.get("user_request") or "")
         return bool(re.search(r"(?i)\bpreview\b|\bvalidate\b|\bvalidation\b|\bdry[ -]?run\b|미리보기|미리\s*보기|검증|확인|실행하지|적용하지", text))
 
     def _load_pk_snapshot(self) -> list[dict[str, Any]]:

@@ -155,7 +155,7 @@ class MappingTests(unittest.TestCase):
     def test_default_dry_run_and_preview_with_execution_enabled(self):
         for execute, request in [(False, "apply mapping"), (True, "preview mapping")]:
             self.component.execute_updates = execute
-            self.component.mapping_rule_text = request
+            self.component.router_payload = Data({"effective_user_request": request})
             self.component._load_pk_snapshot = Mock(return_value=self.snapshot)
             self.component._generate = Mock(return_value=json.dumps({"summary": "change", "sql_statements": [
                 "UPDATE NEXT_MIG_INFO SET FR_TABLE='X' WHERE MAP_ID=101"]}))

@@ -185,4 +185,6 @@ SELECT LOG_ID,
 ## 2026-10-07 입력/매핑 로그
 
 00A는 원본 Message를 CHAT_INPUT의 GENERATE_SQL CLOB에 기록하고 workbook URL이 있으면 00A_ATTACHMENT_PARSE에 parsed_excel 또는 오류를 남긴다. 원본 Message text와 metadata를 보존한다. 02는 02_INPUT_MESSAGE, 02_FINAL_OUTPUT에 전달 payload를 기록한다.
+02 라우팅 호출 로그 순서는 02_INTENT_ROUTER / START → 02_LLM_ROUTE_PROMPT / START → 02_LLM_ROUTE_RESPONSE / PASS이다. 02_LLM_ROUTE_PROMPT의 GENERATE_SQL CLOB에는 실제 llm.invoke에 전달한 System/User 메시지의 role/content 전체를 JSON 배열로 저장한다. 기존 입력 진단 로그도 유지한다.
+04 전달 직전에는 02_TO_04_PAYLOAD / SEND_04 / PASS를 기록한다. GENERATE_SQL CLOB에는 component, selected_output, next_node, history와 첨부 metadata를 포함한 실제 Management Data 출력 JSON 전체를 저장한다. 02_FINAL_OUTPUT은 branch 정보 추가 전 공통 payload이며, 04 입력을 대조할 때는 02_TO_04_PAYLOAD를 확인한다.
 매핑 전용 생성기는 LOG_TYPE=04_MAPPING_RULE과 STEP_NAME=LOAD_PK:SELECT / GENERATE_SQL:LLM / EXECUTE_SQL:STATEMENT / COMPLETE:TRANSACTION / ROLLBACK:TRANSACTION을 사용한다. SQL 실행 로그 PASS는 문장 성공이며 최종 commit 성공은 COMPLETE:TRANSACTION으로 확인한다. handler는 LOG_TYPE 20자, STEP_NAME 50자, MESSAGE 4000자로 제한하고 상세 원문은 GENERATE_SQL CLOB에 저장한다.
