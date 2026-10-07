@@ -45,6 +45,8 @@ Rules:
    use the dedicated Update Command Tool for those requests.
 7. Insert new master rows before their details. Generate at most one statement
    per PK. Generate mapping DML; execution is controlled by the component setting.
+8. New NEXT_MIG_INFO rows default to USE_YN='Y', PRIORITY=5 unless explicitly
+   specified by the user. Keep MAP_TYPE based on the supplied conversion rule.
 """
 
 
@@ -77,6 +79,8 @@ class NewType04MappingRuleUpdateSqlGenerate(Component):
         self._rollback_completed = False
         self._failed_statement_index = None
         self._sql_validated = False
+        self._statement_plan = []
+        self._master_tables = {}
         try:
             request = self._request_text()
             snapshot = self._load_mapping_key_snapshot()
@@ -84,6 +88,7 @@ class NewType04MappingRuleUpdateSqlGenerate(Component):
                 "user_request": request, "snapshot": snapshot,
             })
             raw_response = self._generate(request, snapshot)
+            self._log("GENERATE_SQL", "RESPONSE", "PASS", "LLM mapping SQL response received.", raw_response)
             generated = self._parse_generated(raw_response)
             statements = self._validate_statements(generated["sql_statements"], snapshot)
             generated["sql_statements"] = statements
@@ -123,10 +128,10 @@ class NewType04MappingRuleUpdateSqlGenerate(Component):
         connection = self._connect(oracledb)
         cursor = None
         sql = f"""
-SELECT 'MASTER' AS ROW_KIND, M.MAP_ID, CAST(NULL AS NUMBER) AS MAP_DTL
+SELECT 'MASTER' AS ROW_KIND, M.MAP_ID, CAST(NULL AS NUMBER) AS MAP_DTL, M.FR_TABLE, M.TO_TABLE
   FROM {schema}.NEXT_MIG_INFO M
 UNION ALL
-SELECT 'DETAIL' AS ROW_KIND, D.MAP_ID, D.MAP_DTL
+SELECT 'DETAIL' AS ROW_KIND, D.MAP_ID, D.MAP_DTL, CAST(NULL AS VARCHAR2(4000)) AS FR_TABLE, CAST(NULL AS VARCHAR2(4000)) AS TO_TABLE
   FROM {schema}.NEXT_MIG_INFO_DTL D
 ORDER BY MAP_ID, MAP_DTL NULLS FIRST
 """.strip()
@@ -135,7 +140,10 @@ ORDER BY MAP_ID, MAP_DTL NULLS FIRST
             cursor = connection.cursor()
             cursor.execute(sql)
             names = [str(column[0]).lower() for column in cursor.description]
-            snapshot = [dict(zip(names, row)) for row in cursor.fetchall()]
+            rows = [dict(zip(names, row)) for row in cursor.fetchall()]
+            self._master_tables = {int(row["map_id"]): {"FR_TABLE": row.get("fr_table"), "TO_TABLE": row.get("to_table")}
+                                   for row in rows if row["row_kind"] == "MASTER"}
+            snapshot = [{key: row[key] for key in ("row_kind", "map_id", "map_dtl")} for row in rows]
             self._log("LOAD_PK", "SELECT", "PASS", f"Loaded {len(snapshot)} mapping identifier row(s).", snapshot)
         except Exception as exc:
             self._log("LOAD_PK", "SELECT", "FAIL", f"Mapping identifier SELECT failed: {exc}", {"error": str(exc)}, level="error")
@@ -238,6 +246,7 @@ ORDER BY MAP_ID, MAP_DTL NULLS FIRST
             kind = str(row["row_kind"]).upper()
             existing.add(("NEXT_MIG_INFO" if kind == "MASTER" else "NEXT_MIG_INFO_DTL", row["map_id"], row.get(detail_key.lower()) if kind == "DETAIL" else None))
         accepted = []
+        self._statement_plan = []
         seen = set()
         for raw in statements:
             tokens = self._sql_tokens(raw.strip())
@@ -345,6 +354,18 @@ ORDER BY MAP_ID, MAP_DTL NULLS FIRST
             if tokens[target_start + 1:target_start + 2] == ["."]:
                 target_end += 2
             sql = prefix + schema + "." + table + " " + " ".join(tokens[target_end:])
+            if operation == "INSERT" and table == "NEXT_MIG_INFO":
+                # Enforce defaults in code even when the LLM omits them.
+                for column, default in (("USE_YN", "Y"), ("PRIORITY", 5)):
+                    if column not in values:
+                        columns.append(column)
+                        values[column] = default
+                literals = ["NULL" if values[column] is None else
+                            "'" + values[column].replace("'", "''") + "'" if isinstance(values[column], str)
+                            else str(values[column]) for column in columns]
+                sql = f"INSERT INTO {schema}.{table} ({', '.join(columns)}) VALUES ({', '.join(literals)})"
+            self._statement_plan.append({"index": len(accepted) + 1, "map_id": int(map_id),
+                                         "table": table, "operation": operation, "values": values})
             accepted.append(sql)
         return accepted
 
@@ -406,42 +427,79 @@ ORDER BY MAP_ID, MAP_DTL NULLS FIRST
     def _result(self, ok: bool, answer: str, generated: dict[str, Any], executions: list[dict[str, Any]], *, error: str | None = None) -> Message:
         committed = ok and bool(executions)
         dry_run = ok and not executions
-        result = {"ok": ok, "component": self.name, "summary": generated["summary"],
-                  "sql_statements": generated["sql_statements"], "executions": executions,
+        result = {"ok": ok, "component": self.name,
+                  "executions": [{"index": item["index"], "rowcount": item["rowcount"]} for item in executions],
                   "database_executed": committed, "dry_run": dry_run,
                   "rolled_back": self._rollback_completed, "error": error,
                   "detail_key_column": "MAP_DTL", "final": True}
         if committed:
-            lines = [f"매핑 룰 적용 완료: {len(executions)}개 SQL을 실행하고 commit했습니다."]
+            status_text = "등록 완료"
         elif dry_run:
-            lines = ["매핑 룰 SQL 생성 완료: 실행 옵션이 꺼져 있어 매핑 DML은 실행하지 않았습니다."]
+            status_text = "SQL 생성 완료 · 미실행"
         elif self._rollback_completed:
-            lines = ["매핑 룰 적용 실패: 이번 transaction의 변경을 모두 rollback했습니다."]
+            status_text = "등록 실패 · 전체 반영 취소"
         elif executions or self._failed_statement_index is not None:
-            lines = ["매핑 룰 적용 실패: transaction 결과를 확인하지 못했습니다."]
+            status_text = "등록 실패 · 반영 결과 확인 필요"
         else:
-            lines = [answer]
-        if generated["summary"]:
-            lines += ["", "요약: " + generated["summary"]]
+            status_text = "등록 대상 없음" if not error else "등록 실패"
+        lines = ["# SmartMigrate 매핑 룰 등록", "", status_text]
+        groups = {}
+        completed = {item["index"] for item in executions}
+        for item in self._statement_plan:
+            map_id = item["map_id"]
+            group = groups.setdefault(map_id, {"map_id": map_id, **self._master_tables.get(map_id, {}),
+                "columns": 0, "INSERT": 0, "UPDATE": 0, "success": 0, "failure": 0, "rollback": 0, "pending": 0})
+            if item["table"] == "NEXT_MIG_INFO":
+                for column in ("FR_TABLE", "TO_TABLE"):
+                    if column in item["values"]:
+                        group[column] = item["values"][column]
+            else:
+                group["columns"] += 1
+            group[item["operation"]] += 1
+            index = item["index"]
+            if committed and index in completed:
+                group["success"] += 1
+            elif index == self._failed_statement_index:
+                group["failure"] += 1
+            elif self._rollback_completed and index in completed:
+                group["rollback"] += 1
+            else:
+                group["pending"] += 1
+        totals = {key: sum(row[key] for row in groups.values())
+                  for key in ("columns", "INSERT", "UPDATE", "success", "failure", "rollback", "pending")}
+        result["mapping_targets"] = list(groups.values())
+        result["counts"] = totals
+        if groups:
+            unreflected = totals["rollback"] + totals["pending"]
+            lines += ["", "## 등록 현황", "",
+                      "| 테이블 대상 | 컬럼 매핑 | INSERT | UPDATE | 성공 | 실패 | 미반영 |",
+                      "|---:|---:|---:|---:|---:|---:|---:|",
+                      "| " + " | ".join(f"{value:,}" for value in (
+                          len(groups), totals["columns"], totals["INSERT"], totals["UPDATE"],
+                          totals["success"], totals["failure"], unreflected)) + " |",
+                      "", "## 매핑 대상", "",
+                      "| MAP_ID | FR_TABLE | TO_TABLE | 컬럼 매핑 | 결과 |",
+                      "|---:|---|---|---:|---|"]
+            for row in sorted(groups.values(), key=lambda row: row["map_id"]):
+                if row["failure"] or row["rollback"]:
+                    outcome = "반영 취소" if self._rollback_completed else "실패"
+                elif row["pending"]:
+                    outcome = "미실행" if dry_run else "미반영"
+                else:
+                    outcome = "성공"
+                cells = [row["map_id"], row.get("FR_TABLE") or "—", row.get("TO_TABLE") or "—",
+                         f"{row['columns']:,}", outcome]
+                lines.append("| " + " | ".join(str(value).replace("|", "&#124;").replace("\n", " ").replace("\r", " ") for value in cells) + " |")
+            lines += ["", "이번 요청 기준 집계이며, 성공은 DB 반영 완료 건수입니다."]
+        else:
+            lines += ["", "등록할 매핑 대상이 없습니다."]
+        if not self._sql_validated and self._statement_plan:
+            lines += ["", "입력 검증이 완료되지 않아 확인된 대상만 표시했습니다."]
         if error:
             lines += ["", "오류: " + error]
-        lines += ["", "생성 SQL 및 실행 결과"]
-        if not generated["sql_statements"]:
-            lines.append("생성된 SQL이 없습니다.")
-        completed = {item["index"]: item for item in executions}
-        for index, sql in enumerate(generated["sql_statements"], start=1):
-            if index in completed:
-                outcome = f"rowcount={completed[index]['rowcount']} / " + ("commit 완료" if committed else "rollback 완료" if self._rollback_completed else "transaction 결과 미확인")
-            elif index == self._failed_statement_index:
-                outcome = "실행 실패 / " + ("rollback 완료" if self._rollback_completed else "transaction 결과 미확인")
-            elif dry_run:
-                outcome = "미실행 (execute_updates=false)"
-            else:
-                outcome = "미실행"
-            if not self._sql_validated:
-                outcome += " / SQL 검증 미완료"
-            lines += ["", f"{index}. {outcome}", "```sql", sql, "```"]
         text = "\n".join(lines)
+        self._log("RESULT", "SUMMARY", "PASS" if ok else "FAIL", "Mapping registration summary.",
+                  {"mapping_targets": result["mapping_targets"], "counts": totals, "error": error})
         result["answer_text"] = text
         self.status = result
         return Message(text=text)

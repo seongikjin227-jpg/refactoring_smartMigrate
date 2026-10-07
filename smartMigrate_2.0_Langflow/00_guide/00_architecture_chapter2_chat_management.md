@@ -249,7 +249,7 @@ RAG_ID 25 튜닝 가이드 비활성화해줘.
 
 ## 2.11 Mapping Rule Update 전용 분기
 
-`04_managementRouter.mapping_rule_update`의 Message → `04_mappingRuleUpdateSqlGenerate.user_request`로 연결합니다. 원본 user_request만 전달하며 생성기의 Result Message는 Chat Output에 직접 연결합니다. 모든 생성 SQL과 실행 결과를 표시합니다. LLM과 Oracle 접속 설정, system_schema도 지정합니다. 첨부 파일 유무만으로 MANAGEMENT_AGENT로 덮어쓰지 않습니다.
+`04_managementRouter.mapping_rule_update`의 Message → `04_mappingRuleUpdateSqlGenerate.user_request`로 연결합니다. 원본 user_request만 전달하며 생성기의 Result Message는 Chat Output에 직접 연결합니다. 등록 대상 표와 실행 집계를 표시하며 SQL 원문은 로그에만 남깁니다. LLM과 Oracle 접속 설정, system_schema도 지정합니다. 첨부 파일 유무만으로 MANAGEMENT_AGENT로 덮어쓰지 않습니다.
 
 매핑 생성기는 master MAP_ID와 detail (MAP_ID, MAP_DTL) 식별자 snapshot만 SELECT합니다. PK/인덱스 metadata 조회는 하지 않습니다. LLM이 반환한 INSERT/UPDATE를 작은 literal DML 문법으로 검증합니다. 완전한 PK equality, mapping 컬럼만 허용하며 schema를 명시합니다. 함수/서브쿼리/OR/PK 변경/실행 결과 컬럼 변경은 차단합니다. 기존 키와 INSERT/UPDATE 종류가 다르거나 detail의 부모 master가 없으면 거절합니다.
 

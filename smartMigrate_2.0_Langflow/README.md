@@ -256,7 +256,7 @@ python -m py_compile `
 
 ## 매핑 룰 변경과 파일 정리
 
-04 Router의 Mapping Rule Update Message 출력을 `04_mappingRuleUpdateSqlGenerate.user_request`에 연결합니다. 원본 user_request에 매핑 정보 전체를 넣습니다. 생성기의 Result Message는 Chat Output에 직접 연결하며 생성 SQL과 문장별 실행 결과를 모두 표시합니다. 매핑 생성기는 첨부 metadata를 별도로 읽지 않습니다. 삭제한 File Command Tool의 노드와 Agent Tool 연결은 Langflow에서도 제거합니다. Select Tool의 예전 `preview_mapping_rule_conflicts` action 대신 전용 매핑 생성기를 사용합니다.
+04 Router의 Mapping Rule Update Message 출력을 `04_mappingRuleUpdateSqlGenerate.user_request`에 연결합니다. 원본 user_request에 매핑 정보 전체를 넣습니다. 생성기의 Result Message는 Chat Output에 직접 연결하며 MAP_ID별 테이블/컬럼 매핑 대상과 INSERT/UPDATE, 성공/실패/미반영 최종 통계를 표로 표시합니다. SQL 원문은 로그에만 남깁니다. 매핑 생성기는 첨부 metadata를 별도로 읽지 않습니다. 삭제한 File Command Tool의 노드와 Agent Tool 연결은 Langflow에서도 제거합니다. Select Tool의 예전 `preview_mapping_rule_conflicts` action 대신 전용 매핑 생성기를 사용합니다.
 
 매핑 식별자는 master MAP_ID, detail (MAP_ID, MAP_DTL)로 고정합니다. 기존 식별자만 SELECT하며 PK/인덱스 metadata는 조회하지 않습니다. `execute_updates=false`가 기본값이며 실제 DB 적용은 해당 옵션을 켰을 때 수행합니다. 실행 여부는 execute_updates 옵션 하나로 결정합니다. 생성 SQL은 mapping 컬럼과 literal 값, 정확한 PK equality만 허용하고 system_schema로 한정합니다. 모든 문장이 한 행씩 변경되어야 commit합니다.
 

@@ -25,7 +25,7 @@ Chat Input
   → Chat Output
 ```
 
-04 Router가 `management_route=MAPPING_RULE_UPDATE`를 선택해야 이 분기로 들어갑니다. Management Agent나 Select/Update Command Tool을 경유하지 않습니다. `Mapping Rule Update` 출력은 원본 user_request를 text에 담은 Message입니다. 생성기의 `Result`도 Message이므로 Chat Output에 직접 연결합니다. 생성 SQL 전체와 문장별 실행 결과가 text에 표시됩니다.
+04 Router가 `management_route=MAPPING_RULE_UPDATE`를 선택해야 이 분기로 들어갑니다. Management Agent나 Select/Update Command Tool을 경유하지 않습니다. `Mapping Rule Update` 출력은 원본 user_request를 text에 담은 Message입니다. 생성기의 `Result`도 Message이므로 Chat Output에 직접 연결합니다. MAP_ID별 등록 대상과 INSERT/UPDATE, 성공/실패/되돌림/미실행 집계를 표로 표시합니다. SQL 원문은 로그에만 저장합니다.
 
 | 입력 | 역할 |
 |---|---|
@@ -64,13 +64,13 @@ flowchart TD
 ```
 
 1. `_request_text()`가 user_request 문자열 또는 Message.text만 읽습니다.
-2. `_load_mapping_key_snapshot()`이 master의 MAP_ID와 detail의 (MAP_ID, MAP_DTL)을 SELECT합니다. 제약조건과 인덱스 metadata는 조회하지 않습니다. 조회한 식별자가 있으면 UPDATE, 없으면 INSERT를 생성하도록 LLM에 전달합니다.
-3. master MAP_ID와 detail PK만 SELECT합니다. 기존 FR_TABLE/TO_TABLE/TO_COL 등 매핑 값은 snapshot에 넣지 않습니다. 길이 한도를 넘으면 snapshot을 잘라 LLM에 보내지 않고 종료합니다.
+2. `_load_mapping_key_snapshot()`이 master의 MAP_ID와 FR_TABLE/TO_TABLE, detail의 (MAP_ID, MAP_DTL)을 SELECT합니다. 테이블명은 출력 표를 위한 내부 정보이며 LLM snapshot에는 식별자만 전달합니다. 제약조건과 인덱스 metadata는 조회하지 않습니다. 조회한 식별자가 있으면 UPDATE, 없으면 INSERT를 생성하도록 LLM에 전달합니다.
+3. master MAP_ID와 detail PK만 SELECT합니다. 기존 FR_TABLE/TO_TABLE은 내부 출력용으로 보관하고 LLM snapshot에는 넣지 않습니다. TO_COL 등 기존 컬럼 매핑 값도 LLM snapshot에 넣지 않습니다. 길이 한도를 넘으면 snapshot을 잘라 LLM에 보내지 않고 종료합니다.
 4. `INPUT:RECEIVE`를 기록하고 `_generate()`가 LLM을 호출합니다. System 메시지는 SQL_GENERATION_PROMPT에 설정 schema를 추가합니다. detail 식별자는 (MAP_ID, MAP_DTL)로 고정합니다. Human 메시지의 JSON은 `user_request`와 `current_mapping_rule_table` 두 항목만 포함합니다. GENERATE_SQL:PROMPT / START 로그로 조합된 프롬프트 전체를 남깁니다.
 5. `_parse_generated()`가 `summary`와 문자열 배열 `sql_statements`를 읽고 문장 수 한도를 검사합니다.
-6. `_validate_statements()`가 모든 문장을 검증하고 schema를 명시한 SQL로 정규화합니다. 기존 PK는 UPDATE, 신규 PK는 INSERT여야 합니다. 새 master를 INSERT한다면 해당 detail보다 먼저 있어야 합니다. 같은 PK에 여러 문장을 생성하면 거절합니다.
+6. `_validate_statements()`가 모든 문장을 검증하고 schema를 명시한 SQL로 정규화합니다. 신규 NEXT_MIG_INFO INSERT에서 USE_YN/PRIORITY가 생략되면 코드가 USE_YN=Y, PRIORITY=5를 추가합니다. 명시된 값은 보존하며 MAP_TYPE의 변환 규칙 해석은 변경하지 않습니다. 기존 PK는 UPDATE, 신규 PK는 INSERT여야 합니다. 새 master를 INSERT한다면 해당 detail보다 먼저 있어야 합니다. 같은 PK에 여러 문장을 생성하면 거절합니다.
 7. 검증을 통과한 뒤에만 `GENERATE_SQL:LLM / PASS`를 기록합니다. 빈 배열도 이 로그를 기록한 뒤 `ok=false`로 반환합니다.
-8. dry run이면 SQL만 반환합니다. 실행 모드면 별도 업무 DB 연결에서 문장별로 실행하고, 각 `cursor.rowcount`가 정확히 1인지 확인한 뒤 마지막에 한 번 commit합니다.
+8. 실행 옵션이 false이면 대상 표와 미실행 집계를 반환합니다. 실행 모드면 별도 업무 DB 연결에서 문장별로 실행하고, 각 `cursor.rowcount`가 정확히 1인지 확인한 뒤 마지막에 한 번 commit합니다.
 
 허용 컬럼은 master의 `MAP_ID, MAP_TYPE, FR_TABLE, TO_TABLE, CONDITION, USE_YN, PRIORITY, PRIOR_MAP_ID, TRUNC_YN`, detail의 `MAP_ID, MAP_DTL, FR_COL, TO_COL`입니다. UPDATE로 PK를 바꿀 수 없습니다. 값은 문자열·숫자·NULL literal만 허용하며 함수·서브쿼리·OR 조건·다른 테이블/schema·상태 및 실행 결과 컬럼 변경은 차단합니다. 사용자 요청의 의미와 값이 정확하게 반영됐는지는 dry run SQL을 검토해 확인합니다.
 
@@ -102,11 +102,13 @@ DB 로그가 남으려면 00A가 `smartmigrate.workflow` logger에 DB handler를
 | 2 | `LOAD_PK:SELECT` | PASS | PK snapshot 배열 | 조회 완료. 길이 한도 검사는 이 로그 이후 |
 | 3 | `INPUT:RECEIVE` | START | `{user_request, snapshot}` | 요청·snapshot 준비 완료, LLM 직전 |
 | 3A | `GENERATE_SQL:PROMPT` | START | System/User role/content 배열 | LLM 호출 직전 |
+| 3B | `GENERATE_SQL:RESPONSE` | PASS | 원본 LLM 응답 JSON 문자열 | 응답 수신 직후, 검증 전 |
 | 4 | `GENERATE_SQL:LLM` | PASS | `{raw_llm_response, sql_statements}` | 응답 파싱과 모든 SQL 검증 완료 |
 | 5A | `EXECUTE_SQL:DRY_RUN` | PASS | 검증·정규화된 SQL 배열 | dry run 종료 |
 | 5B | `EXECUTE_SQL:STATEMENT` | START | 현재 실행할 SQL 문자열 | 각 문장 실행 직전 |
 | 6B | `EXECUTE_SQL:STATEMENT` | PASS | `{index, sql, rowcount}` | 해당 문장이 정확히 한 행 변경 |
 | 7B | `COMPLETE:TRANSACTION` | PASS | 전체 executions 배열 | 모든 문장 성공 후 commit 완료 |
+| 마지막 | `RESULT:SUMMARY` | PASS 또는 FAIL | `{mapping_targets, counts, error}` | Chat Output 요약 생성 |
 | 실패 | `LOAD_PK:SELECT` | FAIL | `{error}` | snapshot SELECT 중 오류 |
 | 실패 | `EXECUTE_SQL:STATEMENT` | FAIL | `{index, sql, error}` | DML 오류·행 수 불일치 뒤 rollback 호출 완료 |
 | 실패 | `ROLLBACK:TRANSACTION` | PASS | `{executed_before_failure, failed_index, failed_sql}` | rollback 완료 기록 |
@@ -114,101 +116,47 @@ DB 로그가 남으려면 00A가 `smartmigrate.workflow` logger에 DB handler를
 
 이 생성기의 첫 정상 로그는 별도 “04 started”가 아니라 `LOAD_PK:SELECT / START`입니다. `INPUT:RECEIVE`는 PK 조회 뒤에 기록됩니다. 접속 자체가 실패하면 최종 `FAILED:ERROR`만 남을 수 있습니다.
 
-현재 04 생성기는 GENERATE_SQL:PROMPT / START CLOB에 실제 LLM에 전달한 System/User 메시지 전체를 저장합니다. INPUT:RECEIVE에는 user_request와 snapshot, GENERATE_SQL:LLM에는 검증 통과 후의 원본 LLM 응답과 SQL이 있습니다. LLM 응답 파싱·SQL 검증이 실패하면 GENERATE_SQL:LLM / PASS는 없지만 호출 전 프롬프트는 확인할 수 있습니다. 02_LLM_ROUTE_PROMPT는 별도 02 라우팅 프롬프트입니다.
+현재 04 생성기는 GENERATE_SQL:PROMPT / START CLOB에 실제 LLM에 전달한 System/User 메시지 전체를 저장합니다. INPUT:RECEIVE에는 user_request와 snapshot, GENERATE_SQL:LLM에는 검증 통과 후의 원본 LLM 응답과 SQL이 있습니다. LLM 응답 파싱·SQL 검증이 실패하면 GENERATE_SQL:LLM / PASS는 없지만 프롬프트와 GENERATE_SQL:RESPONSE의 원본 응답을 확인할 수 있습니다. 02_LLM_ROUTE_PROMPT는 별도 02 라우팅 프롬프트입니다.
 
-## 6. 실행 성공·미실행·실패 예시
+## 6. Chat Output 최종 통계
 
-다음은 `system_schema=SM`, 기존 master MAP_ID=101, detail PK=(MAP_ID, MAP_DTL), detail (101, 2)는 아직 없다고 가정한 예입니다. 요청: `MAP_ID 101의 TO_TABLE을 MEMBER로 수정하고 MAP_DTL 2에 FR_COL=CUST_NM, TO_COL=MEMBER_NAME 매핑을 추가해줘.`
+04_dashboard.py와 같은 제목·섹션·Markdown 표 형식으로 출력합니다. 문장별 SQL/영향 행 수/되돌림 내역은 출력하지 않습니다. 화면에는 등록 현황과 매핑 대상 두 표만 표시하며, SQL 원문은 로그에만 저장합니다.
 
-예상 생성 SQL은 다음과 같습니다. 실제 SQL 문장과 summary는 LLM에 따라 달라질 수 있습니다.
+### 출력 예시: 신규 master 1건과 detail 2건 성공
 
-```sql
-UPDATE SM.NEXT_MIG_INFO SET TO_TABLE = 'MEMBER' WHERE MAP_ID = 101;
-INSERT INTO SM.NEXT_MIG_INFO_DTL (MAP_ID, MAP_DTL, FR_COL, TO_COL)
-VALUES (101, 2, 'CUST_NM', 'MEMBER_NAME');
-```
+# SmartMigrate 매핑 룰 등록
 
-### 실제 적용: execute_updates=true
+등록 완료
 
-```text
-02_INTENT_ROUTER       ROUTE                   START
-02_LLM_ROUTE_PROMPT    CLASSIFY                START
-02_LLM_ROUTE_RESPONSE  CLASSIFY                PASS
-02_TO_04_PAYLOAD       SEND_04                 PASS
-04_MGMT_ROUTER        ROUTE                   START
-04_MAPPING_RULE       LOAD_PK:SELECT          START
-04_MAPPING_RULE       LOAD_PK:SELECT          PASS
-04_MAPPING_RULE       INPUT:RECEIVE           START
-04_MAPPING_RULE       GENERATE_SQL:PROMPT     START
-04_MAPPING_RULE       GENERATE_SQL:LLM        PASS
-04_MAPPING_RULE       EXECUTE_SQL:STATEMENT   START  # 1/2
-04_MAPPING_RULE       EXECUTE_SQL:STATEMENT   PASS   # rowcount=1
-04_MAPPING_RULE       EXECUTE_SQL:STATEMENT   START  # 2/2
-04_MAPPING_RULE       EXECUTE_SQL:STATEMENT   PASS   # rowcount=1
-04_MAPPING_RULE       COMPLETE:TRANSACTION    PASS   # commit 완료
-```
+## 등록 현황
 
-위 표시는 핵심 로그만 추린 순서입니다. CHAT_INPUT, 첨부 파싱, 02_INPUT_MESSAGE, 02_FINAL_OUTPUT 등 입력 진단 로그도 사이에 기록됩니다.
+| 테이블 대상 | 컬럼 매핑 | INSERT | UPDATE | 성공 | 실패 | 미반영 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 2 | 3 | 0 | 3 | 0 | 0 |
 
-컴포넌트 status에 보관하는 구조화 결과의 주요 필드 (Chat Output에는 아래의 Message가 출력됩니다):
+## 매핑 대상
 
-```json
-{
-  "ok": true,
-  "component": "NewType04MappingRuleUpdateSqlGenerate",
-  "database_executed": true,
-  "dry_run": false,
-  "detail_key_column": "MAP_DTL",
-  "executions": [
-    {"index": 1, "sql": "UPDATE SM.NEXT_MIG_INFO SET TO_TABLE = 'MEMBER' WHERE MAP_ID = 101", "rowcount": 1},
-    {"index": 2, "sql": "INSERT INTO SM.NEXT_MIG_INFO_DTL ( MAP_ID , MAP_DTL , FR_COL , TO_COL ) VALUES ( 101 , 2 , 'CUST_NM' , 'MEMBER_NAME' )", "rowcount": 1}
-  ],
-  "answer_text": "매핑 룰 적용 완료 메시지 + 생성 SQL 전체 + 문장별 실행 결과",
-  "final": true
-}
-```
+| MAP_ID | FR_TABLE | TO_TABLE | 컬럼 매핑 | 결과 |
+|---:|---|---|---:|---|
+| 101 | CUSTOMER | MEMBER | 2 | 성공 |
 
-구조화 status에는 위 필드 외에 summary, sql_statements, rolled_back, error도 포함됩니다. Chat Output 예상 Message:
+이번 요청 기준 집계이며, 성공은 DB 반영 완료 건수입니다.
 
-```text
-매핑 룰 적용 완료: 2개 SQL을 실행하고 commit했습니다.
+### 집계 기준
 
-요약: master 수정 및 detail 추가
+- 테이블 대상: 이번 요청의 고유 MAP_ID 수.
+- 컬럼 매핑: 이번 요청에 포함된 detail INSERT/UPDATE 수. DB 전체 detail 수가 아닙니다.
+- INSERT/UPDATE: master와 detail을 합친 처리 대상 수.
+- 성공: commit 완료된 건수. SQL 생성 또는 실행 옵션 false는 성공으로 세지 않습니다.
+- 실패: 실행 오류가 발생한 문장 수.
+- 미반영: 실행하지 않은 대상과 transaction rollback으로 취소된 대상의 합계.
+- FR_TABLE/TO_TABLE: 요청의 신규/변경 값을 우선 사용하고, 빠진 값은 SELECT한 기존 master 값으로 채웁니다. 확인 불가능한 값은 —입니다.
 
-생성 SQL 및 실행 결과
+execute_updates=false이면 상단에 SQL 생성 완료 · 미실행으로 표시하고 모든 대상은 미반영으로 집계합니다. 중간 실패로 rollback하면 등록 실패 · 전체 반영 취소로 표시하며 성공은 0입니다. 오류가 있을 때만 아래에 원인을 표시합니다. 검증 미완료 표에는 확인된 대상만 포함될 수 있습니다.
 
-1. rowcount=1 / commit 완료
-[해당 SQL 원문 전체가 sql 코드 블록으로 표시됨]
+신규 NEXT_MIG_INFO INSERT는 USE_YN='Y', PRIORITY=5를 기본값으로 코드에서 보완합니다. 명시적으로 지정된 값은 보존하고 MAP_TYPE 변환 규칙 해석은 유지합니다.
 
-2. rowcount=1 / commit 완료
-[해당 SQL 원문 전체가 sql 코드 블록으로 표시됨]
-```
-
-실행 옵션이 false이면 각 SQL을 미실행 (execute_updates=false)로 표시합니다. SQL 검증 실패에서도 파싱된 생성 SQL이 있으면 원문 전체와 SQL 검증 미완료 상태를 표시합니다. 실행 중 실패 시 이전 성공 문장은 rollback 완료, 실패 문장은 실행 실패, 이후 문장은 미실행으로 구분합니다.
-
-### 미실행: execute_updates=false
-
-공통 `GENERATE_SQL:LLM / PASS`까지 동일하며 마지막에 `EXECUTE_SQL:DRY_RUN / PASS`만 추가됩니다. `EXECUTE_SQL:STATEMENT`와 `COMPLETE:TRANSACTION`은 없습니다. 구조화 status는 `ok=true`, `database_executed=false`, `dry_run=true`, `executions=[]`, answer_text에는 실행 옵션이 꺼져 있다는 안내와 모든 생성 SQL, 문장별 미실행 표시가 포함됩니다.
-
-### 두 번째 문장 실패
-
-```text
-GENERATE_SQL:LLM        PASS
-EXECUTE_SQL:STATEMENT   START  # 1/2
-EXECUTE_SQL:STATEMENT   PASS   # 아직 commit 전
-EXECUTE_SQL:STATEMENT   START  # 2/2
-EXECUTE_SQL:STATEMENT   FAIL   # DB 오류 또는 rowcount != 1
-ROLLBACK:TRANSACTION    PASS   # 1번의 변경도 되돌림
-FAILED:ERROR           FAIL
-```
-
-`ROLLBACK / PASS`는 rollback 성공을 뜻합니다. 매핑 적용 성공이 아닙니다. 최종 출력은 실패 이유와 모든 생성 SQL·문장별 실행 결과를 담은 Message입니다. 구조화 status에도 ok=false, error, sql_statements, executions, rolled_back 등을 보존합니다. executions에 있던 성공 문장도 이번 transaction이 rollback되면 적용 완료로 표시하지 않습니다.
-
-### SQL 생성·검증 단계에서 종료
-
-- 빈 SQL 배열: `GENERATE_SQL:LLM / PASS` 후 바로 `ok=false`, `No executable SQL was generated.`를 반환합니다. 예외가 아니므로 `FAILED:ERROR`는 없고 실행·dry run 로그도 없습니다.
-- JSON/SQL 검증 실패: `INPUT:RECEIVE / START`, `GENERATE_SQL:PROMPT / START` 이후 `FAILED:ERROR / FAIL`로 종료합니다. DML을 실행하지 않았으므로 rollback 로그가 없습니다.
-- commit 오류: `_execute()`가 rollback을 시도합니다. 현재 오류 index는 성공 문장 수+1로 계산하므로 마지막 SQL 다음 번호가 표시되거나 failed_sql이 null일 수 있습니다. MESSAGE를 확인합니다. rollback 자체가 실패하면 `ROLLBACK:TRANSACTION / PASS`가 없을 수 있으므로 DB 상태를 별도로 확인합니다.
+구조화 status와 RESULT:SUMMARY 로그에는 mapping_targets/counts를 보관합니다. 상세 rollback/pending 집계는 내부 결과와 로그에 유지합니다. 실제 SQL은 GENERATE_SQL:RESPONSE, GENERATE_SQL:LLM, EXECUTE_SQL:STATEMENT CLOB에서 확인합니다.
 
 ## 7. DB 로그 조회와 적용 여부 판정
 
@@ -236,10 +184,11 @@ SELECT LOG_ID, CREATED_AT, LOG_TYPE, STEP_NAME, STATUS, LOG_LEVEL, MESSAGE,
 master는 MAP_ID, detail은 (MAP_ID, MAP_DTL)로 고정합니다. _load_mapping_key_snapshot은 아래 SELECT 한 번으로 기존 목록을 읽습니다. PRIMARY KEY constraint나 UNIQUE 인덱스의 이름/등록 여부를 검사하지 않으므로 이전 Unsupported or inaccessible detail PK 오류는 발생하지 않습니다. 두 테이블 SELECT 권한과 해당 컬럼은 필요합니다. snapshot은 기존 매핑 값이 아니라 INSERT/UPDATE 판단용 식별자 목록입니다.
 
 ```sql
-SELECT 'MASTER' AS ROW_KIND, M.MAP_ID, CAST(NULL AS NUMBER) AS MAP_DTL
+SELECT 'MASTER' AS ROW_KIND, M.MAP_ID, CAST(NULL AS NUMBER) AS MAP_DTL, M.FR_TABLE, M.TO_TABLE
   FROM SM.NEXT_MIG_INFO M
 UNION ALL
-SELECT 'DETAIL' AS ROW_KIND, D.MAP_ID, D.MAP_DTL
+SELECT 'DETAIL' AS ROW_KIND, D.MAP_ID, D.MAP_DTL,
+       CAST(NULL AS VARCHAR2(4000)) AS FR_TABLE, CAST(NULL AS VARCHAR2(4000)) AS TO_TABLE
   FROM SM.NEXT_MIG_INFO_DTL D
 ORDER BY MAP_ID, MAP_DTL NULLS FIRST;
 ```

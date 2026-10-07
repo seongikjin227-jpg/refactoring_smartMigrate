@@ -157,6 +157,6 @@ LLM 연결은 executor마다 endpoint/API key를 입력하는 방식이 아니�
 
 매핑 정보 전체를 요청문에 넣습니다. 예: `MAP_ID 101의 TO_TABLE을 MEMBER로 수정해줘.` 원본 테이블명/컬럼명, MAP_ID와 부모 관계를 명시해야 합니다. detail은 MAP_ID + MAP_DTL로 식별합니다. 매핑 생성기는 첨부 metadata를 별도로 읽지 않습니다.
 
-기본 설정은 SQL 생성만 수행합니다. DB에 실제 적용하려면 운영자가 Mapping Rule Update 컴포넌트의 Execute Generated SQL 옵션을 켜야 합니다. 실행 여부는 해당 옵션 하나로 결정하며 요청문 키워드로 바뀌지 않습니다. 출력에서 SQL과 실행 결과를 확인합니다.
+기본 설정은 SQL 생성만 수행합니다. DB에 실제 적용하려면 운영자가 Mapping Rule Update 컴포넌트의 Execute Generated SQL 옵션을 켜야 합니다. 실행 여부는 해당 옵션 하나로 결정하며 요청문 키워드로 바뀌지 않습니다. 출력에서 등록 대상 표와 성공/실패 집계를 확인합니다. 신규 master는 USE_YN=Y, PRIORITY=5가 기본입니다. SQL 원문은 로그에서 확인합니다.
 
 현재 Router는 이전 대화에서 작업 대상을 복원하지 않습니다. “네”, “그거 실행해” 대신 MAP_ID 또는 SQL_ID + SPACE_NM을 포함한 요청을 사용합니다. 파일 경로만 전달되고 URL이 없으면 자동 파싱할 수 없으므로 다운로드 URL 또는 매핑 본문을 제공합니다.

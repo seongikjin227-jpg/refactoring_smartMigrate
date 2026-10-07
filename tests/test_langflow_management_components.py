@@ -118,11 +118,12 @@ class MappingTests(unittest.TestCase):
     def test_mapping_snapshot_selects_only_existing_identifiers(self):
         connection = Mock()
         cursor = connection.cursor.return_value
-        cursor.fetchall.return_value = [("MASTER", 101, None), ("DETAIL", 101, 1)]
-        cursor.description = [("ROW_KIND",), ("MAP_ID",), ("MAP_DTL",)]
+        cursor.fetchall.return_value = [("MASTER", 101, None, "SRC", "DST"), ("DETAIL", 101, 1, None, None)]
+        cursor.description = [("ROW_KIND",), ("MAP_ID",), ("MAP_DTL",), ("FR_TABLE",), ("TO_TABLE",)]
         self.component._connect = Mock(return_value=connection)
         with patch.dict(sys.modules, {"oracledb": types.SimpleNamespace()}):
             self.assertEqual(self.component._load_mapping_key_snapshot(), self.snapshot)
+        self.assertEqual(self.component._master_tables[101], {"FR_TABLE": "SRC", "TO_TABLE": "DST"})
         cursor.execute.assert_called_once()
         query = cursor.execute.call_args.args[0]
         self.assertIn("D.MAP_DTL", query)
@@ -171,14 +172,17 @@ class MappingTests(unittest.TestCase):
             self.assertTrue(result["ok"])
             self.assertEqual(result["dry_run"], not execute)
             self.assertEqual(result["database_executed"], execute)
-            self.assertIn(result["sql_statements"][0], message.text)
-            self.assertIn("SM.NEXT_MIG_INFO", result["sql_statements"][0])
+            self.assertNotIn("UPDATE SM.", message.text)
+            self.assertIn("| MAP_ID | FR_TABLE | TO_TABLE |", message.text)
+            generated_log = next(call for call in self.component._log.call_args_list if call.args[:2] == ("GENERATE_SQL", "LLM"))
+            sql_statements = generated_log.args[4]["sql_statements"]
+            self.assertIn("SM.NEXT_MIG_INFO", sql_statements[0])
             if execute:
-                self.component._execute.assert_called_once_with(result["sql_statements"])
+                self.component._execute.assert_called_once_with(sql_statements)
             else:
                 self.component._execute.assert_not_called()
 
-    def test_chat_output_contains_sql_and_transaction_failure(self):
+    def test_chat_output_summarizes_transaction_failure_without_sql(self):
         self.component.user_request = "apply mapping"
         self.component.execute_updates = True
         self.component._load_mapping_key_snapshot = Mock(return_value=self.snapshot)
@@ -195,11 +199,13 @@ class MappingTests(unittest.TestCase):
         self.assertFalse(self.component.status["ok"])
         self.assertTrue(self.component.status["rolled_back"])
         self.assertIn("second SQL failed", message.text)
-        for sql in self.component.status["sql_statements"]:
-            self.assertIn(sql, message.text)
+        for sql in sqls:
+            self.assertNotIn(sql, message.text)
         self.assertEqual(len(self.component.status["executions"]), 1)
+        self.assertEqual(self.component.status["counts"], {"columns": 1, "INSERT": 0, "UPDATE": 2,
+                         "success": 0, "failure": 1, "rollback": 1, "pending": 0})
 
-    def test_chat_output_contains_commit_and_rowcount(self):
+    def test_chat_output_summarizes_committed_changes(self):
         self.component.user_request = "apply mapping"
         self.component.execute_updates = True
         self.component._load_mapping_key_snapshot = Mock(return_value=self.snapshot)
@@ -211,8 +217,41 @@ class MappingTests(unittest.TestCase):
         with patch.dict(sys.modules, {"oracledb": types.SimpleNamespace()}):
             message = self.component.run()
         self.assertTrue(self.component.status["database_executed"])
-        self.assertIn("commit", message.text)
-        self.assertIn("rowcount=1", message.text)
+        self.assertEqual(self.component.status["counts"]["success"], 1)
+        self.assertEqual(self.component.status["counts"]["UPDATE"], 1)
+        self.assertNotIn("rowcount=", message.text)
+        self.assertNotIn("UPDATE SM.", message.text)
+
+    def test_master_insert_defaults_are_added_and_explicit_values_preserved(self):
+        first = self.component._validate_statements([
+            "INSERT INTO NEXT_MIG_INFO (MAP_ID,MAP_TYPE,FR_TABLE,TO_TABLE) VALUES (102,'RULE','X','Y')"], self.snapshot)[0]
+        self.assertIn("USE_YN, PRIORITY", first)
+        self.assertIn("'Y', 5", first)
+        self.assertIn("'RULE'", first)
+        explicit = self.component._validate_statements([
+            "INSERT INTO NEXT_MIG_INFO (MAP_ID,FR_TABLE,TO_TABLE,USE_YN,PRIORITY) VALUES (102,'X','Y','N',2)"], self.snapshot)[0]
+        self.assertIn("'N', 2", explicit)
+        self.assertEqual(explicit.count("USE_YN"), 1)
+
+    def test_target_table_groups_master_and_detail_counts(self):
+        self.component._rollback_completed = False
+        self.component._failed_statement_index = None
+        self.component._sql_validated = True
+        self.component._master_tables = {101: {"FR_TABLE": "OLD_SRC", "TO_TABLE": "OLD_DST"}}
+        sql = self.component._validate_statements([
+            "UPDATE NEXT_MIG_INFO_DTL SET TO_COL='NEW_ID' WHERE MAP_ID=101 AND MAP_DTL=1",
+            "INSERT INTO NEXT_MIG_INFO (MAP_ID,FR_TABLE,TO_TABLE) VALUES (102,'NEW_SRC','NEW_DST')",
+            "INSERT INTO NEXT_MIG_INFO_DTL (MAP_ID,MAP_DTL,FR_COL,TO_COL) VALUES (102,1,'ID','NEW_ID')"], self.snapshot)
+        executions = [{"index": index, "sql": statement, "rowcount": 1} for index, statement in enumerate(sql, 1)]
+        message = self.component._result(True, "committed", {"summary": "", "sql_statements": sql}, executions)
+        self.assertIn("OLD_SRC", message.text)
+        self.assertIn("NEW_DST", message.text)
+        self.assertIn("| 테이블 대상 | 컬럼 매핑 | INSERT | UPDATE | 성공 | 실패 | 미반영 |", message.text)
+        self.assertIn("| 2 | 2 | 2 | 1 | 3 | 0 | 0 |", message.text)
+        self.assertEqual(self.component.status["counts"]["INSERT"], 2)
+        self.assertEqual(self.component.status["counts"]["UPDATE"], 1)
+        self.assertEqual(self.component.status["counts"]["success"], 3)
+        self.assertNotIn("```sql", message.text)
 
     def test_rowcount_and_sql_failure_rollback_whole_transaction(self):
         for rowcount, failure in [(0, None), (2, None), (1, RuntimeError("db error"))]:
