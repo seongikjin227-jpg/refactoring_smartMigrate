@@ -124,4 +124,4 @@ flowchart TD
 4. DBA/백엔드 개발자는 schema 확인이 필요할 때 `chapter6`을 먼저 확인한다.
 5. Oracle/Milvus 구조는 `chapter6`을, 전체 실행 Loop 구현은 `00_full_workflow_loop_guide.md`를 참고한다.
 
-매핑 룰 등록/변경은 전용 `04_mappingRuleUpdateSqlGenerate.py`가 처리합니다. 초기값은 dry run이고, detail PK는 실제 DB constraint의 (MAP_ID, MAP_DTL) 또는 (MAP_ID, FR_COL)을 사용합니다. 채팅 history 기반 후속 발화 복원은 현재 02에 구현되어 있지 않습니다.
+매핑 룰 등록/변경은 전용 `04_mappingRuleUpdateSqlGenerate.py`가 처리합니다. 초기값은 dry run이고, detail 식별자는 (MAP_ID, MAP_DTL)로 고정해 SELECT합니다. 채팅 history 기반 후속 발화 복원은 현재 02에 구현되어 있지 않습니다.

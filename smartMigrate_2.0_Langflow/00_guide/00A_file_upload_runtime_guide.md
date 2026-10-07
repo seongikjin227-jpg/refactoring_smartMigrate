@@ -32,11 +32,11 @@
 ## 매핑 PK와 실행
 
 - master PK: `NEXT_MIG_INFO.MAP_ID`.
-- detail PK: Oracle constraint에서 `(MAP_ID, MAP_DTL)` 또는 `(MAP_ID, FR_COL)`을 조회합니다. 다른 PK나 접근 불가능한 constraint는 오류로 종료합니다.
-- 표준 실행기에는 MAP_DTL 컬럼이 필요합니다. 구형 FR_COL PK를 사용하는 환경에서는 실행기와의 호환도 별도로 확인합니다. 시트 순번/M/D 표시의 부모 관계와 MAP_DTL 의미가 명확하지 않으면 추측하지 않습니다. 부모 MAP_ID와 source column을 명시합니다.
+- detail 식별자: `(MAP_ID, MAP_DTL)`로 고정합니다. master/detail 식별자만 SELECT하며 PK/인덱스 metadata를 확인하지 않습니다.
+- 시트 순번/M/D 표시의 부모 관계와 MAP_DTL 의미가 명확하지 않으면 추측하지 않습니다. 부모 MAP_ID와 source column을 명시합니다.
 - 생성기는 PK snapshot을 읽고 기존 키는 UPDATE, 신규 키는 INSERT로 처리합니다. 데이터 누락·모호함은 추측하지 않습니다.
 - `execute_updates=false`가 기본값이며 SQL preview만 반환합니다. DB 적용하려면 컴포넌트의 `Execute Generated SQL`을 켭니다. 채팅의 “적용”이라는 표현만으로 설정이 바뀌지는 않습니다.
-- 검증·미리보기 요청은 실행 설정이 켜져 있어도 DB를 변경하지 않습니다.
+- 실행 여부는 execute_updates 옵션으로만 결정합니다. 요청문 키워드로 실행을 중지하지 않습니다.
 - 실행은 모든 문장을 하나의 transaction으로 묶습니다. 한 문장이라도 실패하거나 영향 행 수가 1이 아니면 전부 rollback합니다.
 
 ## 로그 점검

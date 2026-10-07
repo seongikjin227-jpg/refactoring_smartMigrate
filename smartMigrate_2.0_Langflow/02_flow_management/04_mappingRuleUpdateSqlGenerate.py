@@ -23,13 +23,13 @@ Rules:
    NEXT_MIG_INFO_DTL. Do not generate DELETE, MERGE, DDL, PL/SQL, COMMIT,
    ROLLBACK, SELECT, or statements for other tables.
 2. An UPDATE must have WHERE MAP_ID = ...; an update to NEXT_MIG_INFO_DTL must
-   also identify the supplied detail_key_column in its WHERE clause.
-   Use the actual database PK: (MAP_ID, MAP_DTL) or (MAP_ID, FR_COL).
+   also identify MAP_DTL in its WHERE clause.
+   Master key is MAP_ID; detail key is (MAP_ID, MAP_DTL).
 3. Never modify execution/status/result columns such as STATUS, MIG_SQL,
    VERIFY_SQL, RETRY_COUNT, or USER_EDITED. USE_YN is a mapping field and
    may be changed only when requested.
 4. For NEXT_MIG_INFO, an existing MAP_ID requires UPDATE and a missing MAP_ID
-   requires INSERT. For NEXT_MIG_INFO_DTL, an existing (MAP_ID, detail_key_column)
+   requires INSERT. For NEXT_MIG_INFO_DTL, an existing (MAP_ID, MAP_DTL)
    requires UPDATE and a missing pair requires INSERT.
 5. Never invent MAP_ID, tables, columns, or values absent from the
    request. If the request is ambiguous, return an empty sql_statements array
@@ -40,11 +40,11 @@ Rules:
    single quotes by doubling them. Qualify every table with system_schema.
    Master mapping columns: MAP_ID, MAP_TYPE, FR_TABLE, TO_TABLE, CONDITION,
    USE_YN, PRIORITY, PRIOR_MAP_ID, TRUNC_YN. Detail columns: MAP_ID, FR_COL,
-   TO_COL, plus MAP_DTL only when it is the actual detail_key_column.
+   TO_COL, MAP_DTL.
    Execution/status/result columns are never allowed on this mapping branch;
    use the dedicated Update Command Tool for those requests.
 7. Insert new master rows before their details. Generate at most one statement
-   per PK. A preview/validation request must not be described as committed.
+   per PK. Generate mapping DML; execution is controlled by the component setting.
 """
 
 
@@ -79,7 +79,7 @@ class NewType04MappingRuleUpdateSqlGenerate(Component):
         self._sql_validated = False
         try:
             request = self._request_text()
-            snapshot = self._load_pk_snapshot()
+            snapshot = self._load_mapping_key_snapshot()
             self._log("INPUT", "RECEIVE", "START", "Mapping-rule request and Table snapshot received", {
                 "user_request": request, "snapshot": snapshot,
             })
@@ -93,8 +93,8 @@ class NewType04MappingRuleUpdateSqlGenerate(Component):
             })
             if not statements:
                 return self._result(False, "No executable SQL was generated.", generated, [])
-            if not bool(getattr(self, "execute_updates", False)) or self._preview_requested():
-                self._log("EXECUTE_SQL", "DRY_RUN", "PASS", "Generated SQL was not executed (dry run or preview request).", statements)
+            if not bool(getattr(self, "execute_updates", False)):
+                self._log("EXECUTE_SQL", "DRY_RUN", "PASS", "Generated SQL was not executed (execute_updates=false).", statements)
                 return self._result(True, "Dry run completed; generated SQL was not executed.", generated, [])
             executions = self._execute(statements)
             self._log("COMPLETE", "TRANSACTION", "PASS", f"Committed {len(executions)} mapping-rule SQL statement(s).", executions)
@@ -111,54 +111,34 @@ class NewType04MappingRuleUpdateSqlGenerate(Component):
             raise ValueError("user_request is empty. Connect the 04 Router Mapping Rule Update output.")
         return text
 
-    def _preview_requested(self) -> bool:
-        return bool(re.search(r"(?i)\bpreview\b|\bvalidate\b|\bvalidation\b|\bdry[ -]?run\b|미리보기|미리\s*보기|검증|확인|실행하지|적용하지", self._request_text()))
+    def _load_mapping_key_snapshot(self) -> list[dict[str, Any]]:
+        """SELECT existing mapping identifiers to decide INSERT versus UPDATE.
 
-    def _load_pk_snapshot(self) -> list[dict[str, Any]]:
-        """Read only the two mapping-rule primary-key shapes from Oracle.
-
-        This intentionally does not load FR_TABLE/TO_COL or any existing mapping
-        values: the snapshot decides INSERT vs UPDATE only.
+        Master key: MAP_ID. Detail key: (MAP_ID, MAP_DTL).
+        No constraint/index metadata or file access is needed.
         """
         schema = self._schema()
         import oracledb
 
         connection = self._connect(oracledb)
         cursor = None
-        try:
-            cursor = connection.cursor()
-            cursor.execute("""
-SELECT CC.COLUMN_NAME
-  FROM ALL_CONSTRAINTS C
-  JOIN ALL_CONS_COLUMNS CC ON CC.OWNER = C.OWNER AND CC.CONSTRAINT_NAME = C.CONSTRAINT_NAME
- WHERE C.OWNER = :owner AND C.TABLE_NAME = 'NEXT_MIG_INFO_DTL'
-   AND C.CONSTRAINT_TYPE = 'P'
- ORDER BY CC.POSITION
-""", {"owner": schema})
-            key_columns = {str(row[0]).upper() for row in cursor.fetchall()}
-            if key_columns == {"MAP_ID", "MAP_DTL"}:
-                self._detail_key_column = "MAP_DTL"
-            elif key_columns == {"MAP_ID", "FR_COL"}:
-                self._detail_key_column = "FR_COL"
-            else:
-                raise ValueError(f"Unsupported or inaccessible detail PK: {sorted(key_columns)}")
-            detail_key = self._detail_key_column
-            cast_type = "NUMBER" if detail_key == "MAP_DTL" else "VARCHAR2(4000)"
-            sql = f"""
-SELECT 'MASTER' AS ROW_KIND, M.MAP_ID, CAST(NULL AS {cast_type}) AS {detail_key}
+        sql = f"""
+SELECT 'MASTER' AS ROW_KIND, M.MAP_ID, CAST(NULL AS NUMBER) AS MAP_DTL
   FROM {schema}.NEXT_MIG_INFO M
 UNION ALL
-SELECT 'DETAIL' AS ROW_KIND, D.MAP_ID, D.{detail_key}
+SELECT 'DETAIL' AS ROW_KIND, D.MAP_ID, D.MAP_DTL
   FROM {schema}.NEXT_MIG_INFO_DTL D
-ORDER BY MAP_ID, {detail_key} NULLS FIRST
+ORDER BY MAP_ID, MAP_DTL NULLS FIRST
 """.strip()
-            self._log("LOAD_PK", "SELECT", "START", "Loading mapping-rule primary keys.", sql)
+        self._log("LOAD_PK", "SELECT", "START", "Loading existing mapping identifiers.", sql)
+        try:
+            cursor = connection.cursor()
             cursor.execute(sql)
             names = [str(column[0]).lower() for column in cursor.description]
             snapshot = [dict(zip(names, row)) for row in cursor.fetchall()]
-            self._log("LOAD_PK", "SELECT", "PASS", f"Loaded {len(snapshot)} mapping-rule primary-key row(s).", snapshot)
+            self._log("LOAD_PK", "SELECT", "PASS", f"Loaded {len(snapshot)} mapping identifier row(s).", snapshot)
         except Exception as exc:
-            self._log("LOAD_PK", "SELECT", "FAIL", f"Primary-key snapshot query failed: {exc}", {"error": str(exc)}, level="error")
+            self._log("LOAD_PK", "SELECT", "FAIL", f"Mapping identifier SELECT failed: {exc}", {"error": str(exc)}, level="error")
             raise
         finally:
             try:
@@ -183,7 +163,7 @@ ORDER BY MAP_ID, {detail_key} NULLS FIRST
             raise ValueError("Connect a Language Model to 04 Mapping Rule Update SQL Generate.")
         system_prompt = SQL_GENERATION_PROMPT + (
             f"\nConfigured system_schema: {self._schema()}"
-            f"\nActual detail_key_column: {getattr(self, '_detail_key_column', 'FR_COL')}"
+
         )
         messages = [
             SystemMessage(content=system_prompt),
@@ -250,11 +230,9 @@ ORDER BY MAP_ID, {detail_key} NULLS FIRST
         schema = self._schema()
         allowed = {
             "NEXT_MIG_INFO": {"MAP_ID", "MAP_TYPE", "FR_TABLE", "TO_TABLE", "CONDITION", "USE_YN", "PRIORITY", "PRIOR_MAP_ID", "TRUNC_YN"},
-            "NEXT_MIG_INFO_DTL": {"MAP_ID", "FR_COL", "TO_COL"},
+            "NEXT_MIG_INFO_DTL": {"MAP_ID", "MAP_DTL", "FR_COL", "TO_COL"},
         }
-        detail_key = getattr(self, "_detail_key_column", "FR_COL")
-        if detail_key == "MAP_DTL":
-            allowed["NEXT_MIG_INFO_DTL"].add("MAP_DTL")
+        detail_key = "MAP_DTL"
         existing = set()
         for row in snapshot or []:
             kind = str(row["row_kind"]).upper()
@@ -347,8 +325,6 @@ ORDER BY MAP_ID, {detail_key} NULLS FIRST
             if not isinstance(map_id, Decimal) or map_id != map_id.to_integral_value():
                 raise ValueError("MAP_ID must be an integer literal.")
             detail_value = predicates.get(detail_key)
-            if "FR_COL" in keys and (not isinstance(detail_value, str) or not detail_value.strip()):
-                raise ValueError("FR_COL PK must be a nonempty string literal.")
             if "MAP_DTL" in keys and (not isinstance(detail_value, Decimal) or detail_value != detail_value.to_integral_value()):
                 raise ValueError("MAP_DTL must be an integer literal.")
             key = (table, map_id, detail_value)
@@ -434,11 +410,11 @@ ORDER BY MAP_ID, {detail_key} NULLS FIRST
                   "sql_statements": generated["sql_statements"], "executions": executions,
                   "database_executed": committed, "dry_run": dry_run,
                   "rolled_back": self._rollback_completed, "error": error,
-                  "detail_key_column": getattr(self, "_detail_key_column", None), "final": True}
+                  "detail_key_column": "MAP_DTL", "final": True}
         if committed:
             lines = [f"매핑 룰 적용 완료: {len(executions)}개 SQL을 실행하고 commit했습니다."]
         elif dry_run:
-            lines = ["매핑 룰 SQL 미리보기: 매핑 DML은 실행하지 않았습니다."]
+            lines = ["매핑 룰 SQL 생성 완료: 실행 옵션이 꺼져 있어 매핑 DML은 실행하지 않았습니다."]
         elif self._rollback_completed:
             lines = ["매핑 룰 적용 실패: 이번 transaction의 변경을 모두 rollback했습니다."]
         elif executions or self._failed_statement_index is not None:
@@ -459,7 +435,7 @@ ORDER BY MAP_ID, {detail_key} NULLS FIRST
             elif index == self._failed_statement_index:
                 outcome = "실행 실패 / " + ("rollback 완료" if self._rollback_completed else "transaction 결과 미확인")
             elif dry_run:
-                outcome = "미실행 (미리보기)"
+                outcome = "미실행 (execute_updates=false)"
             else:
                 outcome = "미실행"
             if not self._sql_validated:

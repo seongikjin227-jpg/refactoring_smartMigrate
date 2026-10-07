@@ -251,8 +251,8 @@ RAG_ID 25 튜닝 가이드 비활성화해줘.
 
 `04_managementRouter.mapping_rule_update`의 Message → `04_mappingRuleUpdateSqlGenerate.user_request`로 연결합니다. 원본 user_request만 전달하며 생성기의 Result Message는 Chat Output에 직접 연결합니다. 모든 생성 SQL과 실행 결과를 표시합니다. LLM과 Oracle 접속 설정, system_schema도 지정합니다. 첨부 파일 유무만으로 MANAGEMENT_AGENT로 덮어쓰지 않습니다.
 
-매핑 생성기는 Oracle constraint에서 detail PK를 확인하고 master MAP_ID와 detail PK snapshot만 읽습니다. 지원 형태는 (MAP_ID, MAP_DTL)과 (MAP_ID, FR_COL)입니다. 기본 실행기 코드에는 MAP_DTL이 필요합니다. LLM이 반환한 INSERT/UPDATE를 작은 literal DML 문법으로 검증합니다. 완전한 PK equality, mapping 컬럼만 허용하며 schema를 명시합니다. 함수/서브쿼리/OR/PK 변경/실행 결과 컬럼 변경은 차단합니다. 기존 키와 INSERT/UPDATE 종류가 다르거나 detail의 부모 master가 없으면 거절합니다.
+매핑 생성기는 master MAP_ID와 detail (MAP_ID, MAP_DTL) 식별자 snapshot만 SELECT합니다. PK/인덱스 metadata 조회는 하지 않습니다. LLM이 반환한 INSERT/UPDATE를 작은 literal DML 문법으로 검증합니다. 완전한 PK equality, mapping 컬럼만 허용하며 schema를 명시합니다. 함수/서브쿼리/OR/PK 변경/실행 결과 컬럼 변경은 차단합니다. 기존 키와 INSERT/UPDATE 종류가 다르거나 detail의 부모 master가 없으면 거절합니다.
 
-execute_updates=false가 기본값입니다. true인 경우에도 preview/validation 요청은 실행하지 않습니다. 실제 적용은 모든 문장이 정확히 한 행씩 변경되어야 commit하며 실패 시 전체 rollback합니다. PK snapshot 이후 다른 사용자가 변경한 값의 충돌까지 감지하는 optimistic lock은 구현되어 있지 않습니다.
+execute_updates=false가 기본값입니다. 요청문 키워드로 실행 옵션을 변경하지 않습니다. 실제 적용은 모든 문장이 정확히 한 행씩 변경되어야 commit하며 실패 시 전체 rollback합니다. PK snapshot 이후 다른 사용자가 변경한 값의 충돌까지 감지하는 optimistic lock은 구현되어 있지 않습니다.
 
 File Command Tool과 Select Tool의 예전 preview_mapping_rule_conflicts 경로는 제거했습니다. 파일 파싱은 00A, SQL 생성/검증/적용은 이 분기로 통합합니다. 상세 입력은 `00A_file_upload_runtime_guide.md`를 참고합니다.

@@ -258,7 +258,7 @@ python -m py_compile `
 
 04 Router의 Mapping Rule Update Message 출력을 `04_mappingRuleUpdateSqlGenerate.user_request`에 연결합니다. 원본 user_request에 매핑 정보 전체를 넣습니다. 생성기의 Result Message는 Chat Output에 직접 연결하며 생성 SQL과 문장별 실행 결과를 모두 표시합니다. 매핑 생성기는 첨부 metadata를 별도로 읽지 않습니다. 삭제한 File Command Tool의 노드와 Agent Tool 연결은 Langflow에서도 제거합니다. Select Tool의 예전 `preview_mapping_rule_conflicts` action 대신 전용 매핑 생성기를 사용합니다.
 
-매핑 PK는 master MAP_ID이며 detail PK는 Oracle constraint에서 (MAP_ID, MAP_DTL) 또는 (MAP_ID, FR_COL)을 확인합니다. 다른 PK 형태는 실행하지 않습니다. `execute_updates=false`가 기본값이며 실제 DB 적용은 해당 옵션을 켰을 때 수행합니다. 미리보기/검증 요청은 실행 옵션과 관계없이 dry run합니다. 생성 SQL은 mapping 컬럼과 literal 값, 정확한 PK equality만 허용하고 system_schema로 한정합니다. 모든 문장이 한 행씩 변경되어야 commit합니다.
+매핑 식별자는 master MAP_ID, detail (MAP_ID, MAP_DTL)로 고정합니다. 기존 식별자만 SELECT하며 PK/인덱스 metadata는 조회하지 않습니다. `execute_updates=false`가 기본값이며 실제 DB 적용은 해당 옵션을 켰을 때 수행합니다. 실행 여부는 execute_updates 옵션 하나로 결정합니다. 생성 SQL은 mapping 컬럼과 literal 값, 정확한 PK equality만 허용하고 system_schema로 한정합니다. 모든 문장이 한 행씩 변경되어야 commit합니다.
 
 구버전 10C 두 개와 18B Loop, 00B URL 진단용 컴포넌트는 archive에 보관했습니다. 외부 Flow 사용 여부는 저장소에서 확인할 수 없습니다. 현재 표준은 10C Executor3와 18B Loop2입니다. 99.LogHelper.py는 운영 실행 노드가 아닌 logging 예제입니다.
 

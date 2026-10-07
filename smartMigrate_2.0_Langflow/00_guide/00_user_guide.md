@@ -153,10 +153,10 @@ LLM 연결은 executor마다 endpoint/API key를 입력하는 방식이 아니�
 
 상세 상태 전이, LLM 연결 구조, DB 컬럼과 logging 규칙은 개발자용 [아키텍처 가이드](00_architecture.md)를 참고한다.
 
-## 매핑 룰 파일과 미리보기
+## 매핑 룰 SQL 생성과 실행
 
-XLSX 첨부는 다운로드 URL을 전달하는 환경에서 지원합니다. 예: `첨부한 매핑의 INSERT/UPDATE SQL을 미리보기로 보여줘.` 원본 테이블명/컬럼명, MAP_ID와 부모 관계를 명시해야 합니다. detail은 실제 DB PK에 따라 MAP_ID + MAP_DTL 또는 MAP_ID + FR_COL로 식별합니다.
+매핑 정보 전체를 요청문에 넣습니다. 예: `MAP_ID 101의 TO_TABLE을 MEMBER로 수정해줘.` 원본 테이블명/컬럼명, MAP_ID와 부모 관계를 명시해야 합니다. detail은 MAP_ID + MAP_DTL로 식별합니다. 매핑 생성기는 첨부 metadata를 별도로 읽지 않습니다.
 
-기본 설정은 미리보기입니다. DB에 실제 적용하려면 운영자가 Mapping Rule Update 컴포넌트의 Execute Generated SQL 옵션을 켜야 합니다. 미리보기·검증 요청은 DB를 변경하지 않습니다. 반환 결과가 dry run인지 committed인지 확인합니다.
+기본 설정은 SQL 생성만 수행합니다. DB에 실제 적용하려면 운영자가 Mapping Rule Update 컴포넌트의 Execute Generated SQL 옵션을 켜야 합니다. 실행 여부는 해당 옵션 하나로 결정하며 요청문 키워드로 바뀌지 않습니다. 출력에서 SQL과 실행 결과를 확인합니다.
 
 현재 Router는 이전 대화에서 작업 대상을 복원하지 않습니다. “네”, “그거 실행해” 대신 MAP_ID 또는 SQL_ID + SPACE_NM을 포함한 요청을 사용합니다. 파일 경로만 전달되고 URL이 없으면 자동 파싱할 수 없으므로 다운로드 URL 또는 매핑 본문을 제공합니다.

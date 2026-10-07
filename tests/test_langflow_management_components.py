@@ -57,17 +57,17 @@ class MappingTests(unittest.TestCase):
         self.component = Mapping()
         self.component.system_schema = "SM"
         self.component._log = Mock()
-        self.snapshot = [{"row_kind": "MASTER", "map_id": 101, "fr_col": None},
-                         {"row_kind": "DETAIL", "map_id": 101, "fr_col": "ID"}]
+        self.snapshot = [{"row_kind": "MASTER", "map_id": 101, "map_dtl": None},
+                         {"row_kind": "DETAIL", "map_id": 101, "map_dtl": 1}]
 
     def test_literal_dml_and_schema_qualification(self):
         sql = self.component._validate_statements([
             "update NEXT_MIG_INFO set CONDITION='x; -- WHERE y, O''Brien' where MAP_ID=101;",
-            "UPDATE SM.NEXT_MIG_INFO_DTL SET TO_COL=NULL WHERE FR_COL='ID' AND MAP_ID=101",
+            "UPDATE SM.NEXT_MIG_INFO_DTL SET TO_COL=NULL WHERE MAP_DTL=1 AND MAP_ID=101",
         ], self.snapshot)
         self.assertTrue(sql[0].startswith("UPDATE SM.NEXT_MIG_INFO "))
         self.assertIn("'x; -- WHERE y, O''Brien'", sql[0])
-        self.assertIn("FR_COL = 'ID'", sql[1])
+        self.assertIn("MAP_DTL = 1", sql[1])
 
     def test_rejects_broad_or_non_mapping_dml(self):
         cases = [
@@ -78,7 +78,7 @@ class MappingTests(unittest.TestCase):
             "UPDATE NEXT_MIG_INFO SET MAP_ID=2 WHERE MAP_ID=101",
             "UPDATE OTHER.NEXT_MIG_INFO SET FR_TABLE='X' WHERE MAP_ID=101",
             "UPDATE NEXT_MIG_INFO_DTL SET TO_COL='X' WHERE MAP_ID=101",
-            "UPDATE NEXT_MIG_INFO_DTL SET TO_COL='X' WHERE MAP_ID=101 AND MAP_DTL=1",
+            "UPDATE NEXT_MIG_INFO_DTL SET TO_COL='X' WHERE MAP_ID=101 AND MAP_DTL>0",
             "UPDATE NEXT_MIG_INFO SET FR_TABLE=(SELECT SECRET FROM OTHER) WHERE MAP_ID=101",
             "UPDATE NEXT_MIG_INFO SET FR_TABLE=some_function() WHERE MAP_ID=101",
             "UPDATE NEXT_MIG_INFO SET FR_TABLE='X' WHERE MAP_ID=101; DELETE FROM NEXT_MIG_INFO",
@@ -101,13 +101,12 @@ class MappingTests(unittest.TestCase):
 
     def test_new_master_before_detail(self):
         master = "INSERT INTO NEXT_MIG_INFO (MAP_ID,FR_TABLE,TO_TABLE) VALUES (102,'X','Y')"
-        detail = "INSERT INTO NEXT_MIG_INFO_DTL (MAP_ID,FR_COL,TO_COL) VALUES (102,'ID','NEW_ID')"
+        detail = "INSERT INTO NEXT_MIG_INFO_DTL (MAP_ID,MAP_DTL,FR_COL,TO_COL) VALUES (102,1,'ID','NEW_ID')"
         self.assertEqual(len(self.component._validate_statements([master, detail], self.snapshot)), 2)
         with self.assertRaises(ValueError):
             self.component._validate_statements([detail, master], self.snapshot)
 
     def test_map_dtl_database_pk(self):
-        self.component._detail_key_column = "MAP_DTL"
         snapshot = [{"row_kind": "MASTER", "map_id": 101, "map_dtl": None},
                     {"row_kind": "DETAIL", "map_id": 101, "map_dtl": 1}]
         sql = "UPDATE NEXT_MIG_INFO_DTL SET FR_COL='ID', TO_COL='NEW_ID' WHERE MAP_ID=101 AND MAP_DTL=1"
@@ -116,26 +115,19 @@ class MappingTests(unittest.TestCase):
             self.component._validate_statements([
                 "UPDATE NEXT_MIG_INFO_DTL SET TO_COL='NEW_ID' WHERE MAP_ID=101 AND FR_COL='ID'"], snapshot)
 
-    def test_database_pk_discovery(self):
-        for key in ["MAP_DTL", "FR_COL"]:
-            connection = Mock()
-            cursor = connection.cursor.return_value
-            cursor.fetchall.side_effect = [[("MAP_ID",), (key,)], [("MASTER", 101, None)]]
-            cursor.description = [("ROW_KIND",), ("MAP_ID",), (key,)]
-            self.component._connect = Mock(return_value=connection)
-            with patch.dict(sys.modules, {"oracledb": types.SimpleNamespace()}):
-                self.assertEqual(len(self.component._load_pk_snapshot()), 1)
-            self.assertEqual(self.component._detail_key_column, key)
-            self.assertIn("D." + key, cursor.execute.call_args[0][0])
-            connection.close.assert_called_once()
-
-    def test_unknown_database_pk_fails_before_generation(self):
+    def test_mapping_snapshot_selects_only_existing_identifiers(self):
         connection = Mock()
-        connection.cursor.return_value.fetchall.return_value = [("OTHER_KEY",)]
+        cursor = connection.cursor.return_value
+        cursor.fetchall.return_value = [("MASTER", 101, None), ("DETAIL", 101, 1)]
+        cursor.description = [("ROW_KIND",), ("MAP_ID",), ("MAP_DTL",)]
         self.component._connect = Mock(return_value=connection)
         with patch.dict(sys.modules, {"oracledb": types.SimpleNamespace()}):
-            with self.assertRaises(ValueError):
-                self.component._load_pk_snapshot()
+            self.assertEqual(self.component._load_mapping_key_snapshot(), self.snapshot)
+        cursor.execute.assert_called_once()
+        query = cursor.execute.call_args.args[0]
+        self.assertIn("D.MAP_DTL", query)
+        self.assertNotIn("ALL_CONSTRAINTS", query)
+        self.assertNotIn("ALL_INDEXES", query)
         connection.close.assert_called_once()
 
     def test_user_request_is_passed_without_metadata(self):
@@ -165,29 +157,33 @@ class MappingTests(unittest.TestCase):
             "user_request": "complete mapping information", "current_mapping_rule_table": self.snapshot})
         self.assertIn("Configured system_schema: SM", sent[0].content)
 
-    def test_default_dry_run_and_preview_with_execution_enabled(self):
-        for execute, request in [(False, "apply mapping"), (True, "preview mapping")]:
+    def test_execution_is_controlled_only_by_setting(self):
+        for execute, request in [(False, "apply mapping"), (True, "preview validate 확인 후 적용 mapping")]:
             self.component.execute_updates = execute
             self.component.user_request = request
-            self.component._load_pk_snapshot = Mock(return_value=self.snapshot)
+            self.component._load_mapping_key_snapshot = Mock(return_value=self.snapshot)
             self.component._generate = Mock(return_value=json.dumps({"summary": "change", "sql_statements": [
                 "UPDATE NEXT_MIG_INFO SET FR_TABLE='X' WHERE MAP_ID=101"]}))
-            self.component._execute = Mock()
+            self.component._execute = Mock(return_value=[{"index": 1, "sql": "generated SQL", "rowcount": 1}])
             message = self.component.run()
             result = self.component.status
             self.assertIsInstance(message, Message)
             self.assertTrue(result["ok"])
-            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["dry_run"], not execute)
+            self.assertEqual(result["database_executed"], execute)
             self.assertIn(result["sql_statements"][0], message.text)
             self.assertIn("SM.NEXT_MIG_INFO", result["sql_statements"][0])
-            self.component._execute.assert_not_called()
+            if execute:
+                self.component._execute.assert_called_once_with(result["sql_statements"])
+            else:
+                self.component._execute.assert_not_called()
 
     def test_chat_output_contains_sql_and_transaction_failure(self):
         self.component.user_request = "apply mapping"
         self.component.execute_updates = True
-        self.component._load_pk_snapshot = Mock(return_value=self.snapshot)
+        self.component._load_mapping_key_snapshot = Mock(return_value=self.snapshot)
         sqls = ["UPDATE NEXT_MIG_INFO SET TO_TABLE='Y' WHERE MAP_ID=101",
-                "UPDATE NEXT_MIG_INFO_DTL SET TO_COL='Z' WHERE MAP_ID=101 AND FR_COL='ID'"]
+                "UPDATE NEXT_MIG_INFO_DTL SET TO_COL='Z' WHERE MAP_ID=101 AND MAP_DTL=1"]
         self.component._generate = Mock(return_value=json.dumps({"summary": "change", "sql_statements": sqls}))
         connection = Mock()
         cursor = connection.cursor.return_value
@@ -206,7 +202,7 @@ class MappingTests(unittest.TestCase):
     def test_chat_output_contains_commit_and_rowcount(self):
         self.component.user_request = "apply mapping"
         self.component.execute_updates = True
-        self.component._load_pk_snapshot = Mock(return_value=self.snapshot)
+        self.component._load_mapping_key_snapshot = Mock(return_value=self.snapshot)
         self.component._generate = Mock(return_value=json.dumps({"summary": "change", "sql_statements": [
             "UPDATE NEXT_MIG_INFO SET TO_TABLE='Y' WHERE MAP_ID=101"]}))
         connection = Mock()

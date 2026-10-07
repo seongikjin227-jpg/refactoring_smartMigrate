@@ -101,7 +101,7 @@ COMMENT ON COLUMN NEXT_MIG_INFO_DTL.UPD_TS IS 'row 마지막 갱신 시각.';
 CREATE INDEX IX_NEXT_MIG_INFO_DTL_MAP ON NEXT_MIG_INFO_DTL (MAP_ID);
 ```
 
-현재 표준 10C Executor3/12C는 MAP_DTL을 읽거나 정렬 기준으로 사용합니다. 위 DDL은 이 실행기 기준입니다. 기존 환경의 detail PK가 (MAP_ID, FR_COL)이면 매핑 생성기는 실제 Oracle constraint를 조회하여 그 PK로 DML을 검증하지만, 표준 실행기에 필요한 MAP_DTL 등 컬럼은 별도로 확인해야 합니다. 이 문서 수정은 운영 DB에 ALTER/DDL을 실행하지 않습니다. master의 TRUNC_YN과 VERIFY2_SQL도 Executor3 입력 컬럼입니다.
+현재 표준 10C Executor3/12C는 MAP_DTL을 읽거나 정렬 기준으로 사용합니다. 위 DDL은 이 실행기 기준입니다. 매핑 생성기와 표준 실행기는 MAP_DTL 컬럼을 사용합니다. 매핑 생성기는 기존 식별자만 SELECT하며 PK/인덱스 metadata는 조회하지 않습니다. 이 문서 수정은 운영 DB에 ALTER/DDL을 실행하지 않습니다. master의 TRUNC_YN과 VERIFY2_SQL도 Executor3 입력 컬럼입니다.
 
 ## 6.4 NEXT_SQL_INFO
 
