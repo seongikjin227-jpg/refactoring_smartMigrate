@@ -27,7 +27,7 @@ Chat Input → 00A Message → 02 input_message → 03 / 04 / 06 → 08
 
 1. 00A의 Message 출력을 02의 `input_message`에 연결합니다. text 문자열로 축소하거나 이전 01 JSON을 `payload_json`에 연결하지 않습니다.
 2. 02의 Data 출력 전체를 04/06에 전달합니다.
-3. 04 Agent는 `effective_user_request`를 현재 요청으로 사용합니다. 04 매핑 생성기는 `router_payload` 전체를 받아 첨부 파싱 결과도 읽습니다.
+3. 04 Agent는 `effective_user_request`를 현재 요청으로 사용합니다. 04 매핑 생성기는 Router의 Mapping Rule Update Message를 `user_request`로 받고 원본 user_request만 사용합니다. 매핑 내용 전체가 요청문에 있어야 합니다.
 4. 06 → 08 → A는 Data 전체를 전달하며 식별자와 실행 guard를 보존합니다.
 5. “네”, “그 후보들”, “진행해”만으로 작업 대상을 추측하지 않습니다. `MAP_ID 101 Migration 실행해줘` 또는 `SQL_ID S001, SPACE_NM PAYMENT 변환해줘`처럼 완전한 요청을 받습니다.
 

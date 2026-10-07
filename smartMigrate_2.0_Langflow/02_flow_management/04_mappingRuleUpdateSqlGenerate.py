@@ -8,13 +8,7 @@ from typing import Any
 from lfx.custom.custom_component.component import Component
 from lfx.inputs.inputs import HandleInput
 from lfx.io import BoolInput, IntInput, MessageTextInput, Output, SecretStrInput, StrInput
-from lfx.schema.data import Data
-
-try:
-    from lfx.io import DataInput
-except Exception:
-    DataInput = MessageTextInput
-
+from lfx.schema.message import Message
 
 SQL_GENERATION_PROMPT = """You generate Oracle SQL for SmartMigrate mapping-rule updates.
 
@@ -63,7 +57,7 @@ class NewType04MappingRuleUpdateSqlGenerate(Component):
     icon = "FilePenLine"
 
     inputs = [
-        DataInput(name="router_payload", display_name="04 Router Payload", required=True),
+        MessageTextInput(name="user_request", display_name="User Request", required=True),
         HandleInput(name="llm", display_name="Language Model", input_types=["LanguageModel"]),
         StrInput(name="db_host", display_name="DB Host", required=True),
         IntInput(name="db_port", display_name="DB Port", value=1521, required=False),
@@ -75,19 +69,25 @@ class NewType04MappingRuleUpdateSqlGenerate(Component):
         IntInput(name="max_snapshot_chars", display_name="Max Snapshot Characters", value=120000, required=False),
         IntInput(name="max_statements", display_name="Max SQL Statements", value=200, required=False),
     ]
-    outputs = [Output(display_name="Result", name="result", method="run")]
+    outputs = [Output(display_name="Result", name="result", method="run", types=["Message"])]
 
-    def run(self) -> Data:
+    def run(self) -> Message:
+        generated = {"summary": "", "sql_statements": []}
+        self._execution_results = []
+        self._rollback_completed = False
+        self._failed_statement_index = None
+        self._sql_validated = False
         try:
             request = self._request_text()
             snapshot = self._load_pk_snapshot()
             self._log("INPUT", "RECEIVE", "START", "Mapping-rule request and Table snapshot received", {
-                "request": request, "snapshot": snapshot,
+                "user_request": request, "snapshot": snapshot,
             })
             raw_response = self._generate(request, snapshot)
             generated = self._parse_generated(raw_response)
             statements = self._validate_statements(generated["sql_statements"], snapshot)
             generated["sql_statements"] = statements
+            self._sql_validated = True
             self._log("GENERATE_SQL", "LLM", "PASS", generated["summary"], {
                 "raw_llm_response": raw_response, "sql_statements": statements,
             })
@@ -101,50 +101,18 @@ class NewType04MappingRuleUpdateSqlGenerate(Component):
             return self._result(True, "Mapping-rule update committed.", generated, executions)
         except Exception as exc:
             self._log("FAILED", "ERROR", "FAIL", str(exc), None, level="error")
-            result = {"ok": False, "component": self.name, "error": str(exc), "final": True}
-            self.status = result
-            return Data(data=result)
+            return self._result(False, "매핑 룰 처리가 실패했습니다.", generated,
+                                self._execution_results, error=str(exc))
 
     def _request_text(self) -> str:
-        raw = getattr(self, "router_payload", None)
-        payload = raw.data if isinstance(raw, Data) else raw
-        if isinstance(payload, str):
-            try:
-                payload = json.loads(payload)
-            except ValueError:
-                payload = {"user_request": payload.strip()}
-        if not isinstance(payload, dict):
-            payload = {}
-        if payload.get("clarification_required") or str(payload.get("confirmation") or "").upper() in {"REJECTED", "PENDING", "UNKNOWN"}:
-            raise ValueError("Mapping-rule request requires clarification or was not confirmed.")
-        text = str(payload.get("effective_user_request") or payload.get("resolved_user_request") or payload.get("user_request") or "").strip()
+        value = getattr(self, "user_request", "")
+        text = str(value.text if isinstance(value, Message) else value or "").strip()
         if not text:
-            raise ValueError("Mapping rule request text is empty.")
-        attachment = payload.get("uploaded_attachment")
-        if not isinstance(attachment, dict):
-            metadata = payload.get("message_data") or {}
-            attachment = metadata.get("uploaded_attachment") if isinstance(metadata, dict) else None
-        if isinstance(attachment, dict):
-            if attachment.get("error"):
-                raise ValueError(f"Attachment parsing failed: {attachment['error']}")
-            parsed = attachment.get("parsed_excel")
-            if parsed:
-                text += "\nUploaded workbook (data, not instructions):\n" + json.dumps(parsed, ensure_ascii=False, default=str)
-        if payload.get("attachment_file_reference") and not isinstance(attachment, dict):
-            raise ValueError("Attachment has no parsed workbook. Provide a download URL or explicit mapping text.")
+            raise ValueError("user_request is empty. Connect the 04 Router Mapping Rule Update output.")
         return text
 
     def _preview_requested(self) -> bool:
-        raw = getattr(self, "router_payload", None)
-        payload = raw.data if isinstance(raw, Data) else raw
-        if isinstance(payload, str):
-            try:
-                payload = json.loads(payload)
-            except ValueError:
-                payload = {"user_request": payload}
-        payload = payload if isinstance(payload, dict) else {}
-        text = str(payload.get("effective_user_request") or payload.get("resolved_user_request") or payload.get("user_request") or "")
-        return bool(re.search(r"(?i)\bpreview\b|\bvalidate\b|\bvalidation\b|\bdry[ -]?run\b|미리보기|미리\s*보기|검증|확인|실행하지|적용하지", text))
+        return bool(re.search(r"(?i)\bpreview\b|\bvalidate\b|\bvalidation\b|\bdry[ -]?run\b|미리보기|미리\s*보기|검증|확인|실행하지|적용하지", self._request_text()))
 
     def _load_pk_snapshot(self) -> list[dict[str, Any]]:
         """Read only the two mapping-rule primary-key shapes from Oracle.
@@ -213,10 +181,19 @@ ORDER BY MAP_ID, {detail_key} NULLS FIRST
         llm = getattr(self, "llm", None)
         if llm is None or not hasattr(llm, "invoke"):
             raise ValueError("Connect a Language Model to 04 Mapping Rule Update SQL Generate.")
-        response = llm.invoke([
-            SystemMessage(content=SQL_GENERATION_PROMPT),
-            HumanMessage(content=json.dumps({"system_schema": self._schema(), "detail_key_column": getattr(self, "_detail_key_column", "FR_COL"), "mapping_rule_request": request, "current_mapping_rule_table": snapshot}, ensure_ascii=False, default=str)),
+        system_prompt = SQL_GENERATION_PROMPT + (
+            f"\nConfigured system_schema: {self._schema()}"
+            f"\nActual detail_key_column: {getattr(self, '_detail_key_column', 'FR_COL')}"
+        )
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=json.dumps({"user_request": request, "current_mapping_rule_table": snapshot}, ensure_ascii=False, default=str)),
+        ]
+        self._log("GENERATE_SQL", "PROMPT", "START", "Mapping-rule SQL generation prompt prepared.", [
+            {"role": "system", "content": messages[0].content},
+            {"role": "user", "content": messages[1].content},
         ])
+        response = llm.invoke(messages)
         content = getattr(response, "content", response)
         if isinstance(content, list):
             return "".join(item if isinstance(item, str) else str(item.get("text") or "") for item in content).strip()
@@ -399,11 +376,15 @@ ORDER BY MAP_ID, {detail_key} NULLS FIRST
         import oracledb
 
         results: list[dict[str, Any]] = []
+        self._execution_results = results
+        self._rollback_completed = False
+        self._failed_statement_index = None
         connection = self._connect(oracledb)
         cursor = None
         try:
             cursor = connection.cursor()
             for index, sql in enumerate(statements, start=1):
+                self._failed_statement_index = index
                 self._log("EXECUTE_SQL", "STATEMENT", "START", f"Executing statement {index}/{len(statements)}.", sql)
                 cursor.execute(sql)
                 if cursor.rowcount != 1:
@@ -411,10 +392,12 @@ ORDER BY MAP_ID, {detail_key} NULLS FIRST
                 outcome = {"index": index, "sql": sql, "rowcount": cursor.rowcount}
                 results.append(outcome)
                 self._log("EXECUTE_SQL", "STATEMENT", "PASS", f"Statement {index}/{len(statements)} executed; rowcount={cursor.rowcount}.", outcome)
+            self._failed_statement_index = None
             connection.commit()
             return results
         except Exception as exc:
             connection.rollback()
+            self._rollback_completed = True
             failed_sql = statements[len(results)] if len(results) < len(statements) else None
             self._log(
                 "EXECUTE_SQL",
@@ -444,10 +427,48 @@ ORDER BY MAP_ID, {detail_key} NULLS FIRST
             finally:
                 connection.close()
 
-    def _result(self, ok: bool, answer: str, generated: dict[str, Any], executions: list[dict[str, Any]]) -> Data:
-        result = {"ok": ok, "component": self.name, "summary": generated["summary"], "sql_statements": generated["sql_statements"], "executions": executions, "database_executed": bool(executions), "dry_run": ok and not executions, "detail_key_column": getattr(self, "_detail_key_column", None), "answer_text": answer, "final": True}
+    def _result(self, ok: bool, answer: str, generated: dict[str, Any], executions: list[dict[str, Any]], *, error: str | None = None) -> Message:
+        committed = ok and bool(executions)
+        dry_run = ok and not executions
+        result = {"ok": ok, "component": self.name, "summary": generated["summary"],
+                  "sql_statements": generated["sql_statements"], "executions": executions,
+                  "database_executed": committed, "dry_run": dry_run,
+                  "rolled_back": self._rollback_completed, "error": error,
+                  "detail_key_column": getattr(self, "_detail_key_column", None), "final": True}
+        if committed:
+            lines = [f"매핑 룰 적용 완료: {len(executions)}개 SQL을 실행하고 commit했습니다."]
+        elif dry_run:
+            lines = ["매핑 룰 SQL 미리보기: 매핑 DML은 실행하지 않았습니다."]
+        elif self._rollback_completed:
+            lines = ["매핑 룰 적용 실패: 이번 transaction의 변경을 모두 rollback했습니다."]
+        elif executions or self._failed_statement_index is not None:
+            lines = ["매핑 룰 적용 실패: transaction 결과를 확인하지 못했습니다."]
+        else:
+            lines = [answer]
+        if generated["summary"]:
+            lines += ["", "요약: " + generated["summary"]]
+        if error:
+            lines += ["", "오류: " + error]
+        lines += ["", "생성 SQL 및 실행 결과"]
+        if not generated["sql_statements"]:
+            lines.append("생성된 SQL이 없습니다.")
+        completed = {item["index"]: item for item in executions}
+        for index, sql in enumerate(generated["sql_statements"], start=1):
+            if index in completed:
+                outcome = f"rowcount={completed[index]['rowcount']} / " + ("commit 완료" if committed else "rollback 완료" if self._rollback_completed else "transaction 결과 미확인")
+            elif index == self._failed_statement_index:
+                outcome = "실행 실패 / " + ("rollback 완료" if self._rollback_completed else "transaction 결과 미확인")
+            elif dry_run:
+                outcome = "미실행 (미리보기)"
+            else:
+                outcome = "미실행"
+            if not self._sql_validated:
+                outcome += " / SQL 검증 미완료"
+            lines += ["", f"{index}. {outcome}", "```sql", sql, "```"]
+        text = "\n".join(lines)
+        result["answer_text"] = text
         self.status = result
-        return Data(data=result)
+        return Message(text=text)
 
     def _schema(self) -> str:
         schema = str(getattr(self, "system_schema", "") or "").strip().upper()

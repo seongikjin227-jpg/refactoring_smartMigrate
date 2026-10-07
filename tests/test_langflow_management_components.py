@@ -39,7 +39,8 @@ def load_component(relative_path, class_name):
     node.body = [n for n in node.body if not (
         isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id in {"inputs", "outputs"} for t in n.targets)
     )]
-    module = ast.Module(body=[node], type_ignores=[])
+    constants = [n for n in tree.body if isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant)]
+    module = ast.Module(body=constants + [node], type_ignores=[])
     namespace = {"Component": object, "Data": Data, "Message": Message, "Any": Any,
                  "json": json, "re": re, "logging": logging, "asyncio": asyncio}
     exec(compile(ast.fix_missing_locations(module), str(path), "exec"), namespace)
@@ -137,34 +138,85 @@ class MappingTests(unittest.TestCase):
                 self.component._load_pk_snapshot()
         connection.close.assert_called_once()
 
-    def test_parsed_workbook_reaches_request(self):
-        self.component.router_payload = Data({"user_request": "import mapping", "uploaded_attachment": {
-            "parsed_excel": {"sheets": [{"name": "master", "rows": [{"MAP_ID": 101}]}]}}})
-        self.assertIn('"MAP_ID": 101', self.component._request_text())
-        self.component.router_payload.data["uploaded_attachment"] = {"error": "not xlsx"}
+    def test_user_request_is_passed_without_metadata(self):
+        self.component.user_request = Message(text="MAP_ID 101 mapping information")
+        self.assertEqual(self.component._request_text(), "MAP_ID 101 mapping information")
+        self.component.user_request = "original mapping request"
+        self.assertEqual(self.component._request_text(), "original mapping request")
+
+    def test_empty_user_request_is_rejected(self):
+        self.component.user_request = Message(text="")
         with self.assertRaises(ValueError):
             self.component._request_text()
 
-    def test_missing_file_content_and_rejected_confirmation(self):
-        for payload in [{"user_request": "import mapping", "attachment_file_reference": "a.xlsx"},
-                        {"user_request": "import mapping", "confirmation": "REJECTED"}]:
-            self.component.router_payload = Data(payload)
-            with self.assertRaises(ValueError):
-                self.component._request_text()
+    def test_llm_gets_user_request_and_snapshot_only(self):
+        class LLMMessage:
+            def __init__(self, content):
+                self.content = content
+        messages = types.ModuleType("langchain_core.messages")
+        messages.HumanMessage = messages.SystemMessage = LLMMessage
+        llm = Mock()
+        llm.invoke.return_value = types.SimpleNamespace(content='{"summary":"ok","sql_statements":[]}')
+        self.component.llm = llm
+        with patch.dict(sys.modules, {"langchain_core.messages": messages}):
+            self.component._generate("complete mapping information", self.snapshot)
+        sent = llm.invoke.call_args[0][0]
+        self.assertEqual(json.loads(sent[1].content), {
+            "user_request": "complete mapping information", "current_mapping_rule_table": self.snapshot})
+        self.assertIn("Configured system_schema: SM", sent[0].content)
 
     def test_default_dry_run_and_preview_with_execution_enabled(self):
         for execute, request in [(False, "apply mapping"), (True, "preview mapping")]:
             self.component.execute_updates = execute
-            self.component.router_payload = Data({"effective_user_request": request})
+            self.component.user_request = request
             self.component._load_pk_snapshot = Mock(return_value=self.snapshot)
             self.component._generate = Mock(return_value=json.dumps({"summary": "change", "sql_statements": [
                 "UPDATE NEXT_MIG_INFO SET FR_TABLE='X' WHERE MAP_ID=101"]}))
             self.component._execute = Mock()
-            result = self.component.run().data
+            message = self.component.run()
+            result = self.component.status
+            self.assertIsInstance(message, Message)
             self.assertTrue(result["ok"])
-            self.assertIn("Dry run", result["answer_text"])
+            self.assertTrue(result["dry_run"])
+            self.assertIn(result["sql_statements"][0], message.text)
             self.assertIn("SM.NEXT_MIG_INFO", result["sql_statements"][0])
             self.component._execute.assert_not_called()
+
+    def test_chat_output_contains_sql_and_transaction_failure(self):
+        self.component.user_request = "apply mapping"
+        self.component.execute_updates = True
+        self.component._load_pk_snapshot = Mock(return_value=self.snapshot)
+        sqls = ["UPDATE NEXT_MIG_INFO SET TO_TABLE='Y' WHERE MAP_ID=101",
+                "UPDATE NEXT_MIG_INFO_DTL SET TO_COL='Z' WHERE MAP_ID=101 AND FR_COL='ID'"]
+        self.component._generate = Mock(return_value=json.dumps({"summary": "change", "sql_statements": sqls}))
+        connection = Mock()
+        cursor = connection.cursor.return_value
+        cursor.rowcount = 1
+        cursor.execute.side_effect = [None, RuntimeError("second SQL failed")]
+        self.component._connect = Mock(return_value=connection)
+        with patch.dict(sys.modules, {"oracledb": types.SimpleNamespace()}):
+            message = self.component.run()
+        self.assertFalse(self.component.status["ok"])
+        self.assertTrue(self.component.status["rolled_back"])
+        self.assertIn("second SQL failed", message.text)
+        for sql in self.component.status["sql_statements"]:
+            self.assertIn(sql, message.text)
+        self.assertEqual(len(self.component.status["executions"]), 1)
+
+    def test_chat_output_contains_commit_and_rowcount(self):
+        self.component.user_request = "apply mapping"
+        self.component.execute_updates = True
+        self.component._load_pk_snapshot = Mock(return_value=self.snapshot)
+        self.component._generate = Mock(return_value=json.dumps({"summary": "change", "sql_statements": [
+            "UPDATE NEXT_MIG_INFO SET TO_TABLE='Y' WHERE MAP_ID=101"]}))
+        connection = Mock()
+        connection.cursor.return_value.rowcount = 1
+        self.component._connect = Mock(return_value=connection)
+        with patch.dict(sys.modules, {"oracledb": types.SimpleNamespace()}):
+            message = self.component.run()
+        self.assertTrue(self.component.status["database_executed"])
+        self.assertIn("commit", message.text)
+        self.assertIn("rowcount=1", message.text)
 
     def test_rowcount_and_sql_failure_rollback_whole_transaction(self):
         for rowcount, failure in [(0, None), (2, None), (1, RuntimeError("db error"))]:
@@ -200,6 +252,19 @@ class AttachmentTests(unittest.TestCase):
         result = router._get_routed_payload()
         self.assertEqual(result["management_route"], "MAPPING_RULE_UPDATE")
         self.assertEqual(result["attachment_file_reference"], "session/a.xlsx")
+
+    def test_mapping_router_outputs_exact_original_user_request(self):
+        router = Router()
+        router._get_routed_payload = Mock(return_value={"management_route": "MAPPING_RULE_UPDATE",
+            "user_request": "original mapping data", "resolved_user_request": "other request",
+            "uploaded_attachment": {"ignored": True}})
+        result = router.mapping_rule_update_response()
+        self.assertIsInstance(result, Message)
+        self.assertEqual(result.text, "original mapping data")
+        router.stop = Mock()
+        router._get_routed_payload.return_value = {"management_route": "DASHBOARD"}
+        self.assertEqual(router.mapping_rule_update_response().text, "")
+        router.stop.assert_called_once_with("mapping_rule_update")
 
     def test_runtime_preserves_message_and_adds_workbook(self):
         runtime = Runtime()

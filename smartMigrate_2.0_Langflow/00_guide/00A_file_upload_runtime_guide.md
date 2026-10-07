@@ -2,6 +2,8 @@
 
 기준일: 2026-10-07. 실제 연결은 `Chat Input → 00A → 02 → 04 Router → Mapping Rule Update SQL Generate`입니다.
 
+파싱 이후 SQL 생성·검증·실행 흐름과 분기별 예상 로그는 [매핑 룰 Flow·로그 가이드](00_mapping_rule_update_flow_log_guide.md)를 참고합니다.
+
 ## 입력과 파싱
 
 00A는 원본 Langflow Message를 `CHAT_INPUT` 로그의 `GENERATE_SQL` CLOB에 기록하고 DB logger를 등록합니다. `Message.data`에서 `downloadURL`, `download_url`, `presignedURL`, `presigned_url`, `fileURL`, `file_url`을 재귀 검색합니다. HTTP/HTTPS URL이 있으면 aiohttp로 다운로드하고 XLSX의 모든 시트를 pandas/openpyxl로 파싱합니다. 원문 text, session_id, files 등은 보존하고 data에 결과를 추가합니다.
@@ -11,7 +13,7 @@
 ```
 
 - 패키지: `aiohttp`, `pandas`, `openpyxl`을 Langflow 서버에 설치합니다.
-- 파싱 실패는 `uploaded_attachment.error`와 `00A_ATTACHMENT_PARSE / FAIL` 로그로 전달합니다. 매핑 생성기는 이를 발견하면 SQL을 생성·실행하지 않습니다.
+- 파싱 실패는 `uploaded_attachment.error`와 `00A_ATTACHMENT_PARSE / FAIL` 로그로 전달합니다. 오류는 00A와 02/04 metadata에서 확인합니다. 매핑 생성기는 이 metadata를 읽지 않으며 user_request만 사용합니다.
 - URL이 없고 `files` 상대 경로만 있으면 자동 파일 읽기를 하지 않습니다. 다운로드 URL 또는 명시적 매핑 본문을 제공합니다.
 - XLSX만 지원합니다. CSV, PDF, 구형 XLS는 파일 경로 감지 대상일 수 있으나 이 파서의 지원 형식이 아닙니다.
 - `archive/00B_presignedUrlExcelParserTest.py`는 단독 진단용입니다.
@@ -22,10 +24,10 @@
 00A Message.data.uploaded_attachment
   → 02 payload.uploaded_attachment 및 message_data/source_message.data
   → 04 Router Data payload 전체
-  → 04_mappingRuleUpdateSqlGenerate.router_payload
+  → 04 Router까지 metadata 보존 (매핑 생성기에는 metadata 전달하지 않음)
 ```
 
-02의 LLM은 route만 결정합니다. 원본 metadata와 parsed_excel은 Python 코드로 보존합니다. 04 Router의 `Mapping Rule Update` 출력을 전용 생성기의 `router_payload`에 연결합니다. Agent의 File Command Tool은 제거합니다.
+02의 LLM은 route만 결정합니다. 원본 metadata와 parsed_excel은 Python 코드로 보존합니다. 04 Router의 `Mapping Rule Update` Message 출력을 전용 생성기의 `user_request`에 연결합니다. 이 분기는 원본 user_request만 전달하므로 매핑 정보 전체를 해당 요청문에 포함해야 합니다. parsed_excel/URL/files는 생성기의 LLM 입력에 추가하지 않습니다. Agent의 File Command Tool은 제거합니다.
 
 ## 매핑 PK와 실행
 

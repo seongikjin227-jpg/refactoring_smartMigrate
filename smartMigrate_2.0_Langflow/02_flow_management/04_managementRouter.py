@@ -40,7 +40,7 @@ MANAGEMENT_ROUTER_PROMPT = """당신은 SmartMigrate 04 관리 요청 라우터�
 - 유사 SQL 검색 결과의 FAIL-* 행을 유지한 채 RETRY_COUNT를 0으로 바꾸는 요청도 MANAGEMENT_AGENT입니다. 검색만 요청한 경우에는 상태를 변경하지 않습니다.
 - VectorDB, Milvus, 벡터DB, vector upload, vector sync 요청도 MANAGEMENT_AGENT입니다. Agent가 연결된 Sync Milvus Vector DB Tool을 직접 호출합니다.
 - RAG Guide를 추가/수정/비활성화한 직후라도 VectorDB 동기화를 자동으로 이어서 실행하지 않습니다. 사용자가 별도로 요청한 경우에만 Agent가 sync_all Tool command를 호출합니다.
-- 매핑 룰 등록·수정·가져오기·검증·적용 요청은 MAPPING_RULE_UPDATE입니다. 첨부 메타데이터와 파싱된 엑셀은 전용 컴포넌트로 전달합니다. 일반 파일 관련 조회는 MANAGEMENT_AGENT입니다.
+- 매핑 룰 등록·수정·가져오기·검증·적용 요청은 MAPPING_RULE_UPDATE입니다. 매핑 내용 전체가 들어 있는 원본 user_request를 전용 컴포넌트로 전달합니다. 일반 파일 관련 조회는 MANAGEMENT_AGENT입니다.
 
 필수 정보 누락 규칙:
 - route 자체를 판단할 수 없으면 EXCEPTION으로 보내고 exception_message에 필요한 정보를 한국어로 적으세요.
@@ -79,7 +79,7 @@ class NewType04ManagementRouter(Component):
         Output(display_name="Dashboard", name="dashboard", method="dashboard_response", group_outputs=True),
         Output(display_name="Current Progress", name="current_progress", method="current_progress_response", group_outputs=True),
         Output(display_name="Management Agent", name="management_agent", method="management_agent_response", group_outputs=True),
-        Output(display_name="Mapping Rule Update", name="mapping_rule_update", method="mapping_rule_update_response", group_outputs=True),
+        Output(display_name="Mapping Rule Update", name="mapping_rule_update", method="mapping_rule_update_response", group_outputs=True, types=["Message"]),
         Output(display_name="Exception Message", name="exception", method="exception_response", group_outputs=True, types=["Message"]),
     ]
 
@@ -94,8 +94,15 @@ class NewType04ManagementRouter(Component):
     def management_agent_response(self) -> Data:
         return self._route_output("MANAGEMENT_AGENT", "management_agent")
 
-    def mapping_rule_update_response(self) -> Data:
-        return self._route_output("MAPPING_RULE_UPDATE", "mapping_rule_update")
+    def mapping_rule_update_response(self) -> Message:
+        routed = self._get_routed_payload()
+        if routed.get("management_route") != "MAPPING_RULE_UPDATE":
+            self.stop("mapping_rule_update")
+            return Message(text="")
+        user_request = str(routed.get("user_request") or "")
+        self.status = {"management_route": "MAPPING_RULE_UPDATE", "user_request": user_request,
+                       "selected_output": "mapping_rule_update", "next_node": "04_mappingRuleUpdateSqlGenerate"}
+        return Message(text=user_request)
 
     # LLM이 route를 정할 수 없을 때만 사용자에게 보낼 최종 Message branch를 연다.
     def exception_response(self) -> Message:

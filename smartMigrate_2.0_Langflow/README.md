@@ -235,6 +235,8 @@ python -m py_compile `
 
 ## 관련 문서
 
+매핑 SQL 생성·실행 조건과 성공/미리보기/실패 로그는 [매핑 룰 Flow·로그 가이드](00_guide/00_mapping_rule_update_flow_log_guide.md)를 참고합니다.
+
 사용자용 첫 안내와 개발자용 상세 설계는 아래 문서에서 관리합니다.
 
 | 문서 | 내용 |
@@ -254,7 +256,7 @@ python -m py_compile `
 
 ## 매핑 룰 변경과 파일 정리
 
-04 Router의 Mapping Rule Update 출력을 `04_mappingRuleUpdateSqlGenerate.router_payload`에 연결합니다. 00A가 URL 기반 XLSX를 파싱하고 02가 uploaded_attachment를 보존합니다. 삭제한 File Command Tool의 노드와 Agent Tool 연결은 Langflow에서도 제거합니다. Select Tool의 예전 `preview_mapping_rule_conflicts` action 대신 전용 매핑 생성기를 사용합니다.
+04 Router의 Mapping Rule Update Message 출력을 `04_mappingRuleUpdateSqlGenerate.user_request`에 연결합니다. 원본 user_request에 매핑 정보 전체를 넣습니다. 생성기의 Result Message는 Chat Output에 직접 연결하며 생성 SQL과 문장별 실행 결과를 모두 표시합니다. 매핑 생성기는 첨부 metadata를 별도로 읽지 않습니다. 삭제한 File Command Tool의 노드와 Agent Tool 연결은 Langflow에서도 제거합니다. Select Tool의 예전 `preview_mapping_rule_conflicts` action 대신 전용 매핑 생성기를 사용합니다.
 
 매핑 PK는 master MAP_ID이며 detail PK는 Oracle constraint에서 (MAP_ID, MAP_DTL) 또는 (MAP_ID, FR_COL)을 확인합니다. 다른 PK 형태는 실행하지 않습니다. `execute_updates=false`가 기본값이며 실제 DB 적용은 해당 옵션을 켰을 때 수행합니다. 미리보기/검증 요청은 실행 옵션과 관계없이 dry run합니다. 생성 SQL은 mapping 컬럼과 literal 값, 정확한 PK equality만 허용하고 system_schema로 한정합니다. 모든 문장이 한 행씩 변경되어야 commit합니다.
 
