@@ -118,18 +118,28 @@ class MappingTests(unittest.TestCase):
     def test_mapping_snapshot_selects_only_existing_identifiers(self):
         connection = Mock()
         cursor = connection.cursor.return_value
-        cursor.fetchall.return_value = [("MASTER", 101, None, "SRC", "DST"), ("DETAIL", 101, 1, None, None)]
-        cursor.description = [("ROW_KIND",), ("MAP_ID",), ("MAP_DTL",), ("FR_TABLE",), ("TO_TABLE",)]
+        cursor.fetchall.return_value = [("MASTER", "101", None), ("DETAIL", "101", "1")]
         self.component._connect = Mock(return_value=connection)
         with patch.dict(sys.modules, {"oracledb": types.SimpleNamespace()}):
             self.assertEqual(self.component._load_mapping_key_snapshot(), self.snapshot)
-        self.assertEqual(self.component._master_tables[101], {"FR_TABLE": "SRC", "TO_TABLE": "DST"})
         cursor.execute.assert_called_once()
         query = cursor.execute.call_args.args[0]
-        self.assertIn("D.MAP_DTL", query)
+        self.assertIn("UNION ALL", query)
+        self.assertIn("CAST(NULL AS NUMBER)", query)
+        for column in ("FR_TABLE", "TO_TABLE", "FR_COL", "TO_COL"):
+            self.assertNotIn(column, query)
+        self.assertNotIn("JOIN", query)
         self.assertNotIn("ALL_CONSTRAINTS", query)
         self.assertNotIn("ALL_INDEXES", query)
         connection.close.assert_called_once()
+
+    def test_mapping_identifiers_do_not_truncate_or_accept_invalid_values(self):
+        from decimal import Decimal
+        for value in [101, "101", " 101 ", Decimal("101.0")]:
+            self.assertEqual(self.component._mapping_identifier(value, "MAP_ID"), 101)
+        for value in [None, "ABC", "", 1.5, "NaN", "Infinity"]:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.component._mapping_identifier(value, "MAP_ID")
 
     def test_user_request_is_passed_without_metadata(self):
         self.component.user_request = Message(text="MAP_ID 101 mapping information")
@@ -173,7 +183,7 @@ class MappingTests(unittest.TestCase):
             self.assertEqual(result["dry_run"], not execute)
             self.assertEqual(result["database_executed"], execute)
             self.assertNotIn("UPDATE SM.", message.text)
-            self.assertIn("| MAP_ID | FR_TABLE | TO_TABLE |", message.text)
+            self.assertIn("| MAP_ID | 컬럼 매핑 | UPDATE | INSERT |", message.text)
             generated_log = next(call for call in self.component._log.call_args_list if call.args[:2] == ("GENERATE_SQL", "LLM"))
             sql_statements = generated_log.args[4]["sql_statements"]
             self.assertIn("SM.NEXT_MIG_INFO", sql_statements[0])
@@ -237,17 +247,17 @@ class MappingTests(unittest.TestCase):
         self.component._rollback_completed = False
         self.component._failed_statement_index = None
         self.component._sql_validated = True
-        self.component._master_tables = {101: {"FR_TABLE": "OLD_SRC", "TO_TABLE": "OLD_DST"}}
         sql = self.component._validate_statements([
             "UPDATE NEXT_MIG_INFO_DTL SET TO_COL='NEW_ID' WHERE MAP_ID=101 AND MAP_DTL=1",
             "INSERT INTO NEXT_MIG_INFO (MAP_ID,FR_TABLE,TO_TABLE) VALUES (102,'NEW_SRC','NEW_DST')",
             "INSERT INTO NEXT_MIG_INFO_DTL (MAP_ID,MAP_DTL,FR_COL,TO_COL) VALUES (102,1,'ID','NEW_ID')"], self.snapshot)
         executions = [{"index": index, "sql": statement, "rowcount": 1} for index, statement in enumerate(sql, 1)]
         message = self.component._result(True, "committed", {"summary": "", "sql_statements": sql}, executions)
-        self.assertIn("OLD_SRC", message.text)
-        self.assertIn("NEW_DST", message.text)
+        self.assertIn("| 101 | 1건 | 1건 | 0건 |", message.text)
+        self.assertIn("| 102 | 1건 | 0건 | 2건 |", message.text)
+        self.assertNotIn("NEW_DST", message.text)
         self.assertIn("| 테이블 대상 | 컬럼 매핑 | INSERT | UPDATE | 성공 | 실패 | 미반영 |", message.text)
-        self.assertIn("| 2 | 2 | 2 | 1 | 3 | 0 | 0 |", message.text)
+        self.assertIn("| 2건 | 2건 | 2건 | 1건 | 3건 | 0건 | 0건 |", message.text)
         self.assertEqual(self.component.status["counts"]["INSERT"], 2)
         self.assertEqual(self.component.status["counts"]["UPDATE"], 1)
         self.assertEqual(self.component.status["counts"]["success"], 3)

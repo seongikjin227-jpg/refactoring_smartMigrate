@@ -80,7 +80,6 @@ class NewType04MappingRuleUpdateSqlGenerate(Component):
         self._failed_statement_index = None
         self._sql_validated = False
         self._statement_plan = []
-        self._master_tables = {}
         try:
             request = self._request_text()
             snapshot = self._load_mapping_key_snapshot()
@@ -127,23 +126,23 @@ class NewType04MappingRuleUpdateSqlGenerate(Component):
 
         connection = self._connect(oracledb)
         cursor = None
-        sql = f"""
-SELECT 'MASTER' AS ROW_KIND, M.MAP_ID, CAST(NULL AS NUMBER) AS MAP_DTL, M.FR_TABLE, M.TO_TABLE
-  FROM {schema}.NEXT_MIG_INFO M
-UNION ALL
-SELECT 'DETAIL' AS ROW_KIND, D.MAP_ID, D.MAP_DTL, CAST(NULL AS VARCHAR2(4000)) AS FR_TABLE, CAST(NULL AS VARCHAR2(4000)) AS TO_TABLE
-  FROM {schema}.NEXT_MIG_INFO_DTL D
-ORDER BY MAP_ID, MAP_DTL NULLS FIRST
-""".strip()
-        self._log("LOAD_PK", "SELECT", "START", "Loading existing mapping identifiers.", sql)
+        sql = f"""SELECT 'MASTER' AS ROW_KIND, MAP_ID, CAST(NULL AS NUMBER) AS MAP_DTL
+      FROM {schema}.NEXT_MIG_INFO
+    UNION ALL
+    SELECT 'DETAIL' AS ROW_KIND, MAP_ID, MAP_DTL
+      FROM {schema}.NEXT_MIG_INFO_DTL
+ ORDER BY MAP_ID, MAP_DTL NULLS FIRST"""
+        self._log("LOAD_PK", "SELECT", "START", "Loading existing mapping identifiers.",
+                  sql)
         try:
             cursor = connection.cursor()
             cursor.execute(sql)
-            names = [str(column[0]).lower() for column in cursor.description]
-            rows = [dict(zip(names, row)) for row in cursor.fetchall()]
-            self._master_tables = {int(row["map_id"]): {"FR_TABLE": row.get("fr_table"), "TO_TABLE": row.get("to_table")}
-                                   for row in rows if row["row_kind"] == "MASTER"}
-            snapshot = [{key: row[key] for key in ("row_kind", "map_id", "map_dtl")} for row in rows]
+            rows = cursor.fetchall()
+            snapshot = []
+            for row_kind, map_id, map_dtl in rows:
+                map_id = self._mapping_identifier(map_id, "MAP_ID")
+                snapshot.append({"row_kind": row_kind, "map_id": map_id,
+                                 "map_dtl": None if row_kind == "MASTER" else self._mapping_identifier(map_dtl, "MAP_DTL")})
             self._log("LOAD_PK", "SELECT", "PASS", f"Loaded {len(snapshot)} mapping identifier row(s).", snapshot)
         except Exception as exc:
             self._log("LOAD_PK", "SELECT", "FAIL", f"Mapping identifier SELECT failed: {exc}", {"error": str(exc)}, level="error")
@@ -162,6 +161,18 @@ ORDER BY MAP_ID, MAP_DTL NULLS FIRST
                 "Filter the SELECT scope or raise the limit so the LLM does not receive a partial snapshot."
             )
         return snapshot
+
+    @staticmethod
+    def _mapping_identifier(value: Any, column: str) -> int:
+        from decimal import Decimal, InvalidOperation
+
+        try:
+            number = Decimal(str(value).strip())
+        except InvalidOperation as exc:
+            raise ValueError(f"{column} must contain integer identifiers; received {value!r}.") from exc
+        if not number.is_finite() or number != number.to_integral_value():
+            raise ValueError(f"{column} must contain integer identifiers; received {value!r}.")
+        return int(number)
 
     def _generate(self, request: str, snapshot: Any) -> str:
         from langchain_core.messages import HumanMessage, SystemMessage
@@ -447,13 +458,9 @@ ORDER BY MAP_ID, MAP_DTL NULLS FIRST
         completed = {item["index"] for item in executions}
         for item in self._statement_plan:
             map_id = item["map_id"]
-            group = groups.setdefault(map_id, {"map_id": map_id, **self._master_tables.get(map_id, {}),
+            group = groups.setdefault(map_id, {"map_id": map_id,
                 "columns": 0, "INSERT": 0, "UPDATE": 0, "success": 0, "failure": 0, "rollback": 0, "pending": 0})
-            if item["table"] == "NEXT_MIG_INFO":
-                for column in ("FR_TABLE", "TO_TABLE"):
-                    if column in item["values"]:
-                        group[column] = item["values"][column]
-            else:
+            if item["table"] == "NEXT_MIG_INFO_DTL":
                 group["columns"] += 1
             group[item["operation"]] += 1
             index = item["index"]
@@ -474,22 +481,15 @@ ORDER BY MAP_ID, MAP_DTL NULLS FIRST
             lines += ["", "## 등록 현황", "",
                       "| 테이블 대상 | 컬럼 매핑 | INSERT | UPDATE | 성공 | 실패 | 미반영 |",
                       "|---:|---:|---:|---:|---:|---:|---:|",
-                      "| " + " | ".join(f"{value:,}" for value in (
+                      "| " + " | ".join(f"{value:,}건" for value in (
                           len(groups), totals["columns"], totals["INSERT"], totals["UPDATE"],
                           totals["success"], totals["failure"], unreflected)) + " |",
                       "", "## 매핑 대상", "",
-                      "| MAP_ID | FR_TABLE | TO_TABLE | 컬럼 매핑 | 결과 |",
-                      "|---:|---|---|---:|---|"]
+                      "| MAP_ID | 컬럼 매핑 | UPDATE | INSERT |",
+                      "|---:|---:|---:|---:|"]
             for row in sorted(groups.values(), key=lambda row: row["map_id"]):
-                if row["failure"] or row["rollback"]:
-                    outcome = "반영 취소" if self._rollback_completed else "실패"
-                elif row["pending"]:
-                    outcome = "미실행" if dry_run else "미반영"
-                else:
-                    outcome = "성공"
-                cells = [row["map_id"], row.get("FR_TABLE") or "—", row.get("TO_TABLE") or "—",
-                         f"{row['columns']:,}", outcome]
-                lines.append("| " + " | ".join(str(value).replace("|", "&#124;").replace("\n", " ").replace("\r", " ") for value in cells) + " |")
+                cells = [str(row["map_id"]), f"{row['columns']:,}건", f"{row['UPDATE']:,}건", f"{row['INSERT']:,}건"]
+                lines.append("| " + " | ".join(cells) + " |")
             lines += ["", "이번 요청 기준 집계이며, 성공은 DB 반영 완료 건수입니다."]
         else:
             lines += ["", "등록할 매핑 대상이 없습니다."]

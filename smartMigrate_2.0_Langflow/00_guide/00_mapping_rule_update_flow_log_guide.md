@@ -64,8 +64,8 @@ flowchart TD
 ```
 
 1. `_request_text()`가 user_request 문자열 또는 Message.text만 읽습니다.
-2. `_load_mapping_key_snapshot()`이 master의 MAP_ID와 FR_TABLE/TO_TABLE, detail의 (MAP_ID, MAP_DTL)을 SELECT합니다. 테이블명은 출력 표를 위한 내부 정보이며 LLM snapshot에는 식별자만 전달합니다. 제약조건과 인덱스 metadata는 조회하지 않습니다. 조회한 식별자가 있으면 UPDATE, 없으면 INSERT를 생성하도록 LLM에 전달합니다.
-3. master MAP_ID와 detail PK만 SELECT합니다. 기존 FR_TABLE/TO_TABLE은 내부 출력용으로 보관하고 LLM snapshot에는 넣지 않습니다. TO_COL 등 기존 컬럼 매핑 값도 LLM snapshot에 넣지 않습니다. 길이 한도를 넘으면 snapshot을 잘라 LLM에 보내지 않고 종료합니다.
+2. `_load_mapping_key_snapshot()`이 master의 MAP_ID와 detail의 (MAP_ID, MAP_DTL)만 한 번의 SELECT로 조회합니다. LLM snapshot에는 식별자만 전달합니다. 제약조건과 인덱스 metadata는 조회하지 않습니다. 조회한 식별자가 있으면 UPDATE, 없으면 INSERT를 생성하도록 LLM에 전달합니다.
+3. master MAP_ID와 detail PK만 SELECT합니다. FR_TABLE/TO_TABLE은 조회하지 않습니다. TO_COL 등 기존 컬럼 매핑 값도 LLM snapshot에 넣지 않습니다. 길이 한도를 넘으면 snapshot을 잘라 LLM에 보내지 않고 종료합니다.
 4. `INPUT:RECEIVE`를 기록하고 `_generate()`가 LLM을 호출합니다. System 메시지는 SQL_GENERATION_PROMPT에 설정 schema를 추가합니다. detail 식별자는 (MAP_ID, MAP_DTL)로 고정합니다. Human 메시지의 JSON은 `user_request`와 `current_mapping_rule_table` 두 항목만 포함합니다. GENERATE_SQL:PROMPT / START 로그로 조합된 프롬프트 전체를 남깁니다.
 5. `_parse_generated()`가 `summary`와 문자열 배열 `sql_statements`를 읽고 문장 수 한도를 검사합니다.
 6. `_validate_statements()`가 모든 문장을 검증하고 schema를 명시한 SQL로 정규화합니다. 신규 NEXT_MIG_INFO INSERT에서 USE_YN/PRIORITY가 생략되면 코드가 USE_YN=Y, PRIORITY=5를 추가합니다. 명시된 값은 보존하며 MAP_TYPE의 변환 규칙 해석은 변경하지 않습니다. 기존 PK는 UPDATE, 신규 PK는 INSERT여야 합니다. 새 master를 INSERT한다면 해당 detail보다 먼저 있어야 합니다. 같은 PK에 여러 문장을 생성하면 거절합니다.
@@ -98,7 +98,7 @@ DB 로그가 남으려면 00A가 `smartmigrate.workflow` logger에 DB handler를
 
 | 순서 | STEP_NAME | STATUS | CLOB 내용 | 발생 시점 |
 |---|---|---|---|---|
-| 1 | `LOAD_PK:SELECT` | START | PK snapshot SELECT SQL | snapshot SELECT 직전 |
+| 1 | `LOAD_PK:SELECT` | START | 식별자 UNION ALL 조회 SQL | snapshot SELECT 직전 |
 | 2 | `LOAD_PK:SELECT` | PASS | PK snapshot 배열 | 조회 완료. 길이 한도 검사는 이 로그 이후 |
 | 3 | `INPUT:RECEIVE` | START | `{user_request, snapshot}` | 요청·snapshot 준비 완료, LLM 직전 |
 | 3A | `GENERATE_SQL:PROMPT` | START | System/User role/content 배열 | LLM 호출 직전 |
@@ -132,13 +132,13 @@ DB 로그가 남으려면 00A가 `smartmigrate.workflow` logger에 DB handler를
 
 | 테이블 대상 | 컬럼 매핑 | INSERT | UPDATE | 성공 | 실패 | 미반영 |
 |---:|---:|---:|---:|---:|---:|---:|
-| 1 | 2 | 3 | 0 | 3 | 0 | 0 |
+| 1건 | 2건 | 3건 | 0건 | 3건 | 0건 | 0건 |
 
 ## 매핑 대상
 
-| MAP_ID | FR_TABLE | TO_TABLE | 컬럼 매핑 | 결과 |
-|---:|---|---|---:|---|
-| 101 | CUSTOMER | MEMBER | 2 | 성공 |
+| MAP_ID | 컬럼 매핑 | UPDATE | INSERT |
+|---:|---:|---:|---:|
+| 101 | 2건 | 0건 | 3건 |
 
 이번 요청 기준 집계이며, 성공은 DB 반영 완료 건수입니다.
 
@@ -150,7 +150,7 @@ DB 로그가 남으려면 00A가 `smartmigrate.workflow` logger에 DB handler를
 - 성공: commit 완료된 건수. SQL 생성 또는 실행 옵션 false는 성공으로 세지 않습니다.
 - 실패: 실행 오류가 발생한 문장 수.
 - 미반영: 실행하지 않은 대상과 transaction rollback으로 취소된 대상의 합계.
-- FR_TABLE/TO_TABLE: 요청의 신규/변경 값을 우선 사용하고, 빠진 값은 SELECT한 기존 master 값으로 채웁니다. 확인 불가능한 값은 —입니다.
+- 매핑 대상 표: MAP_ID별 컬럼 매핑·UPDATE·INSERT 수만 표시합니다. 테이블명과 개별 실행 결과는 표시하지 않으며 전체 성공·실패는 등록 현황에서 확인합니다.
 
 execute_updates=false이면 상단에 SQL 생성 완료 · 미실행으로 표시하고 모든 대상은 미반영으로 집계합니다. 중간 실패로 rollback하면 등록 실패 · 전체 반영 취소로 표시하며 성공은 0입니다. 오류가 있을 때만 아래에 원인을 표시합니다. 검증 미완료 표에는 확인된 대상만 포함될 수 있습니다.
 
@@ -181,16 +181,15 @@ SELECT LOG_ID, CREATED_AT, LOG_TYPE, STEP_NAME, STATUS, LOG_LEVEL, MESSAGE,
 
 ## 8. 식별자 조회 방식
 
-master는 MAP_ID, detail은 (MAP_ID, MAP_DTL)로 고정합니다. _load_mapping_key_snapshot은 아래 SELECT 한 번으로 기존 목록을 읽습니다. PRIMARY KEY constraint나 UNIQUE 인덱스의 이름/등록 여부를 검사하지 않으므로 이전 Unsupported or inaccessible detail PK 오류는 발생하지 않습니다. 두 테이블 SELECT 권한과 해당 컬럼은 필요합니다. snapshot은 기존 매핑 값이 아니라 INSERT/UPDATE 판단용 식별자 목록입니다.
+master는 MAP_ID, detail은 (MAP_ID, MAP_DTL)로 고정합니다. `_load_mapping_key_snapshot`은 한 번의 SELECT로 조회합니다. UNION ALL에는 ROW_KIND와 NUMBER 타입의 MAP_ID/MAP_DTL만 포함합니다. FR_TABLE(CLOB)/TO_TABLE 및 컬럼 매핑 값은 조회하지 않아 이전 타입 불일치를 피합니다. PRIMARY KEY constraint나 UNIQUE 인덱스의 이름/등록 여부를 검사하지 않으므로 이전 Unsupported or inaccessible detail PK 오류는 발생하지 않습니다. 두 테이블 SELECT 권한과 해당 컬럼은 필요합니다. snapshot은 기존 매핑 값이 아니라 INSERT/UPDATE 판단용 식별자 목록입니다.
 
 ```sql
-SELECT 'MASTER' AS ROW_KIND, M.MAP_ID, CAST(NULL AS NUMBER) AS MAP_DTL, M.FR_TABLE, M.TO_TABLE
-  FROM SM.NEXT_MIG_INFO M
+SELECT 'MASTER' AS ROW_KIND, MAP_ID, CAST(NULL AS NUMBER) AS MAP_DTL
+  FROM SM.NEXT_MIG_INFO
 UNION ALL
-SELECT 'DETAIL' AS ROW_KIND, D.MAP_ID, D.MAP_DTL,
-       CAST(NULL AS VARCHAR2(4000)) AS FR_TABLE, CAST(NULL AS VARCHAR2(4000)) AS TO_TABLE
-  FROM SM.NEXT_MIG_INFO_DTL D
+SELECT 'DETAIL' AS ROW_KIND, MAP_ID, MAP_DTL
+  FROM SM.NEXT_MIG_INFO_DTL
 ORDER BY MAP_ID, MAP_DTL NULLS FIRST;
 ```
 
-SM은 실제 system_schema로 바꿉니다. 파일 읽기/다운로드는 수행하지 않습니다. DB에 저장된 식별자가 중복되지 않도록 유지하는 일은 DB의 기존 UNIQUE 인덱스/제약조건 역할이며, 컴포넌트는 이를 생성·변경하지 않습니다.
+SM은 실제 system_schema로 바꿉니다. 숫자나 숫자 문자열로 조회된 MAP_ID/MAP_DTL은 정수로 정규화합니다. 소수·빈 값·숫자가 아닌 식별자는 명확한 오류로 종료하며 임의로 잘라 사용하지 않습니다. 파일 읽기/다운로드는 수행하지 않습니다. DB에 저장된 식별자가 중복되지 않도록 유지하는 일은 DB의 기존 UNIQUE 인덱스/제약조건 역할이며, 컴포넌트는 이를 생성·변경하지 않습니다.
