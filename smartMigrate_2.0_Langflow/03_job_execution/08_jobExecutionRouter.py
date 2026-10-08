@@ -78,7 +78,6 @@ class NewType08JobExecutionRouter(Component):
                 self.stop(output_name)
                 return Data(data={})
             routed = {**routed, "selected_output": output_name, "next_node": self._next_node(expected_route)}
-            self._log_detail("08_TO_NEXT_PAYLOAD", "SEND_NEXT", "PASS", f"08 payload sent to {routed['next_node']}", routed)
             self.status = routed
             return Data(data=routed)
         except Exception as exc:

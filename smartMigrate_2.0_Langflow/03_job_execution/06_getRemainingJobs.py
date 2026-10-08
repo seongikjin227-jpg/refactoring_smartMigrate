@@ -68,11 +68,6 @@ class NewType06GetRemainingJobs(Component):
                     target_statuses = self._load_target_statuses(conn, targets)
                     if self._has_exact_target(targets):
                         requested_jobs = self._load_target_jobs(conn, targets)
-                    self._log_detail("06_QUERY_RESULT", "LOAD_JOBS", "PASS", "06 completed remaining/target queries", {
-                        "query_target_filter": targets, "counts": counts,
-                        "requested_jobs": requested_jobs, "requested_target_status": target_statuses,
-                        "target_query_executed": self._has_exact_target(targets),
-                    })
 
                 summary = {
                     "total": sum(counts.values()),
@@ -91,6 +86,8 @@ class NewType06GetRemainingJobs(Component):
                         "remaining_summary": summary,
                         "pending_summary": summary,
                         "target_filter": targets,
+                        "query_target_filter": targets,
+                        "target_query_executed": self._has_exact_target(targets),
                         "job_detail_mode": "requested_jobs" if self._has_exact_target(targets) else "counts_only",
                         "next_node": "08_jobExecutionRouter",
                     }
@@ -299,7 +296,6 @@ class NewType06GetRemainingJobs(Component):
 
     # cursor 결과를 후속 payload에서 쓰기 쉬운 dict row 목록으로 변환한다.
     def _query_jobs(self, cur: Any, sql: str, params: list[Any], route: str, columns: list[str]) -> list[dict[str, Any]]:
-        self._log_detail("06_DB_QUERY", f"TARGET_JOBS:{route}", "START", f"06 querying runnable targets: {route}", {"sql": sql, "params": params})
         cur.execute(sql, params)
         jobs: list[dict[str, Any]] = []
         for row in cur.fetchall():
@@ -311,7 +307,6 @@ class NewType06GetRemainingJobs(Component):
 
     # cursor 결과를 후속 payload에서 쓰기 쉬운 dict row 목록으로 변환한다.
     def _query_statuses(self, cur: Any, sql: str, params: list[Any], columns: list[str]) -> list[dict[str, Any]]:
-        self._log_detail("06_DB_QUERY", "TARGET_STATUS", "START", "06 querying target status", {"sql": sql, "params": params})
         cur.execute(sql, params)
         rows: list[dict[str, Any]] = []
         for row in cur.fetchall():
@@ -320,7 +315,6 @@ class NewType06GetRemainingJobs(Component):
 
     # 전달된 SQL/조건으로 단일 COUNT 값을 조회한다.
     def _scalar_count(self, cur: Any, sql: str) -> int:
-        self._log_detail("06_DB_QUERY", "COUNT_JOBS", "START", "06 querying runnable count", {"sql": sql})
         cur.execute(sql)
         row = cur.fetchone()
         return int(row[0] or 0) if row else 0

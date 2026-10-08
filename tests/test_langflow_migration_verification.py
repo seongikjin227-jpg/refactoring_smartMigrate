@@ -2,6 +2,8 @@
 import ast
 from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
+import json
+import logging
 from pathlib import Path
 import re
 import unittest
@@ -19,7 +21,8 @@ def load_methods():
     node.body = [n for n in node.body if isinstance(n, ast.FunctionDef)]
     future = ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0)
     namespace = {"re": re, "Decimal": Decimal, "InvalidOperation": InvalidOperation,
-                 "contextmanager": contextmanager}
+                 "contextmanager": contextmanager, "json": json, "logging": logging,
+                 "MIGRATION_PROMPT_TEMPLATE": PROMPTS}
     module = ast.Module(body=[future, node], type_ignores=[])
     exec(compile(ast.fix_missing_locations(module), str(PATH), "exec"), namespace)
     return namespace[node.name]
@@ -109,6 +112,36 @@ class VerificationTests(unittest.TestCase):
         source, target = self.component._extract_count_verify_datasets(sql)
         self.assertIn("WHERE EXISTS", source)
         self.assertEqual(self.component._count_verify_target_columns(target), ["ID"])
+
+    def test_actual_llm_prompt_and_log_include_required_decode_in_every_mode(self):
+        component = self.component
+        component._source_table_prompt_value = Mock(return_value="ASIS.ACTUAL_SOURCE")
+        component._qualify_to_table = Mock(return_value="TOBE.ACTUAL_TARGET")
+        component._mapping_info = Mock(return_value="MEM_ID -> ID")
+        component._ddl_info_block = Mock(return_value="DDL metadata")
+        component._call_llm_json = Mock(return_value=(json.dumps({
+            "migration_sql": "INSERT INTO TOBE.ACTUAL_TARGET SELECT * FROM ASIS.ACTUAL_SOURCE",
+            "verification_sql": "SELECT DECODE(0,0,'Y','N') SUCCESS_YN, 0 DIFF_TOT FROM DUAL",
+        }), "fake-model"))
+        for first_run in (True, False):
+            for mode in ("regular", "verify_only", "verify_retry"):
+                with self.subTest(first_run=first_run, mode=mode):
+                    component._is_first_target_run = Mock(return_value=first_run)
+                    context = {"to_table": "ACTUAL_TARGET", "map_id": 59,
+                               "correct_sql_hints": "SELECT 0 DIFF_TOT FROM DUAL"}
+                    if mode == "verify_retry":
+                        context.update(failure_status="FAIL-TEST", last_error="missing SUCCESS_YN",
+                                       last_sql="SELECT 0 DIFF_TOT FROM DUAL")
+                    with self.assertLogs("smartmigrate.workflow", level="INFO") as captured:
+                        component._generate_migration_sqls(context, verify_only=mode != "regular")
+                    sent = component._call_llm_json.call_args.kwargs
+                    self.assertEqual(captured.records[-1].workflow_log[7], sent["prompt"])
+                    self.assertIn("FROM ASIS.TABLE1 S", sent["prompt"])
+                    self.assertIn("WHERE EXISTS (", sent["prompt"])
+                    self.assertIn("[Final verification output check]", sent["prompt"])
+                    self.assertIn("AS SUCCESS_YN", sent["system_openai"])
+                    self.assertIn("AS SUCCESS_YN", sent["system_anthropic"])
+                    self.assertIn("ASIS.ACTUAL_SOURCE", sent["prompt"])
 
 
 if __name__ == "__main__":

@@ -152,7 +152,7 @@ class JobExecutionTests(unittest.TestCase):
         self.assertEqual(result["requested_target_status"]["migration"][0]["retry_count"], 0)
         self.assertEqual(self.logged("02_TO_06_PAYLOAD")[0], self.logged("06_INPUT_PAYLOAD")[0])
         self.assertEqual(self.logged("06_FINAL_OUTPUT")[0], self.logged("08_INPUT_PAYLOAD")[0])
-        self.assertEqual(self.logged("08_TO_NEXT_PAYLOAD")[0], output)
+        self.assertEqual(self.logged("08_FINAL_OUTPUT")[0]["selected_jobs"], output["selected_jobs"])
 
     def test_full_execution_needs_no_identifier_or_target_query(self):
         payload = self.interpret(self.intent("all", "FULL_WORKFLOW", {}))

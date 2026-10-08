@@ -23,8 +23,8 @@ except Exception:
 
 
 MIGRATION_PROMPT_TEMPLATE: dict[str, str] = {
-    "system_anthropic": "Oracle 19c 문법으로 SQL을 생성하십시오. migration_sql과 verification_sql key를 가진 유효한 JSON object 하나만 반환하고 SQL 값 끝에는 세미콜론을 붙이지 마십시오.",
-    "system_openai": "Oracle 19c 문법으로 SQL을 생성하십시오. migration_sql과 verification_sql key를 가진 유효한 JSON object 하나만 반환하고 SQL 값 끝에는 세미콜론을 붙이지 마십시오.",
+    "system_anthropic": "Oracle 19c 문법으로 SQL을 생성하십시오. migration_sql과 verification_sql key를 가진 유효한 JSON object 하나만 반환하고 SQL 값 끝에는 세미콜론을 붙이지 마십시오. verification_sql의 첫 출력 컬럼은 반드시 DECODE(모든 COUNT 차이의 ABS 합계, 0, 'Y', 'N') AS SUCCESS_YN이어야 하며, 그 뒤에 부호 있는 DIFF_TOT와 DIFF_C1...을 출력하십시오. SUCCESS_YN 없는 SQL은 허용되지 않습니다.",
+    "system_openai": "Oracle 19c 문법으로 SQL을 생성하십시오. migration_sql과 verification_sql key를 가진 유효한 JSON object 하나만 반환하고 SQL 값 끝에는 세미콜론을 붙이지 마십시오. verification_sql의 첫 출력 컬럼은 반드시 DECODE(모든 COUNT 차이의 ABS 합계, 0, 'Y', 'N') AS SUCCESS_YN이어야 하며, 그 뒤에 부호 있는 DIFF_TOT와 DIFF_C1...을 출력하십시오. SUCCESS_YN 없는 SQL은 허용되지 않습니다.",
     "main_prompt": """
 당신은 Oracle 데이터 마이그레이션 SQL 전문가입니다.
 제공된 mapping rule과 DDL 정보만 사용하여 Oracle 19c migration SQL과 verification SQL을 생성하거나 수정하십시오.
@@ -77,8 +77,33 @@ MIGRATION_PROMPT_TEMPLATE: dict[str, str] = {
 
 {verification_instruction}
 
+[Verification SQL 구체 예시 - regular mode]
+아래는 MEM_ID → ID 매핑과 예시에 표시된 원본 조건이 실제 mapping rule에 주어진 경우의 형태입니다.
+테이블·컬럼·조건을 복사하지 말고 제공된 metadata와 실제 migration_sql 범위로 대체하십시오.
+append mode에서는 아래 전체 target 집계를 사용하지 말고 앞서 지정한 target EXISTS 범위 제한을 적용하십시오.
+SELECT DECODE(ABS(S.TOT - T.TOT) + ABS(S.C1 - T.C1), 0, 'Y', 'N') AS SUCCESS_YN,
+       (S.TOT - T.TOT) AS DIFF_TOT,
+       (S.C1 - T.C1) AS DIFF_C1
+FROM (
+    SELECT COUNT(*) TOT, COUNT(S.MEM_ID) C1
+    FROM ASIS.TABLE1 S
+    WHERE EXISTS (
+        SELECT 1
+        FROM ASIS.TABLE2 V
+        JOIN ASIS.TABLE1 U ON U.ID = V.ID AND U.DEL_YN = 'Y'
+    )
+) S,
+(
+    SELECT COUNT(*) TOT, COUNT(T.ID) C1
+    FROM TOBE.TABLE3 T
+) T
+위 예시의 EXISTS는 바깥 S와 상관되지 않은 조건입니다. 실제 mapping rule의 의도를 그대로 유지하십시오.
+행별 상관 필터가 실제로 제공된 경우에만 그 연결 조건을 사용하고 임의의 키를 추가하지 마십시오.
+비교할 컬럼이 늘어나면 COUNT(...) C2...와 DIFF_C2...를 추가하고 DECODE의 ABS 합계에도 모두 포함하십시오.
+
 [Output constraint]
 - migration_sql 또는 verification_sql 끝에 세미콜론(;)을 붙이지 마십시오.
+- verification_sql의 첫 출력은 반드시 DECODE(...) AS SUCCESS_YN이어야 합니다. DIFF_*만 출력하지 마십시오.
 
 [JSON shape]
 {{
@@ -101,7 +126,7 @@ MIGRATION_PROMPT_TEMPLATE: dict[str, str] = {
 - DIFF_*는 ABS 없이 source count - target count로 출력하여 차이의 방향을 보존하십시오.
 - C1, C2...는 같은 매핑의 source/target COUNT를 짝지으십시오. 제외할 컬럼만 있으면 TOT만 비교하십시오.
 - Source 집계의 필터·JOIN·EXISTS 범위는 실제 migration_sql과 같아야 합니다. EXISTS의 상관 여부와 연결 키를 임의로 추가하거나 변경하지 마십시오.
-- 권장 형태:
+- 필수 출력 형태 (테이블·컬럼·조건은 실제 metadata에 맞춰 변경):
   SELECT DECODE(ABS(S.TOT - T.TOT) + ABS(S.C1 - T.C1) + ABS(S.C2 - T.C2), 0, 'Y', 'N') AS SUCCESS_YN,
          (S.TOT - T.TOT) AS DIFF_TOT,
          (S.C1 - T.C1) AS DIFF_C1,
@@ -137,7 +162,7 @@ MIGRATION_PROMPT_TEMPLATE: dict[str, str] = {
 - DIFF_*는 ABS 없이 source count - target count로 출력하여 차이의 방향을 보존하십시오.
 - C1, C2...는 같은 매핑의 source/target COUNT를 짝지으십시오. 제외할 컬럼만 있으면 TOT만 비교하십시오.
 - Source 집계의 필터·JOIN·EXISTS 범위는 실제 migration_sql과 같아야 합니다. EXISTS의 상관 여부와 연결 키를 임의로 추가하거나 변경하지 마십시오.
-- 권장 형태:
+- 필수 출력 형태 (테이블·컬럼·조건은 실제 metadata에 맞춰 변경):
   SELECT DECODE(ABS(S.TOT - T.TOT) + ABS(S.C1 - T.C1) + ABS(S.C2 - T.C2), 0, 'Y', 'N') AS SUCCESS_YN,
          (S.TOT - T.TOT) AS DIFF_TOT,
          (S.C1 - T.C1) AS DIFF_C1,
@@ -1240,6 +1265,13 @@ LEFT JOIN (
                 prompt += prompt_template["dup_key_suffix"].format(to_table=to_table, from_table=from_table)
         if is_append:
             prompt += prompt_template["append_mode_suffix"].format(to_table=to_table)
+        prompt += (
+            "\n\n[Final verification output check]\n"
+            "- JSON 반환 전 verification_sql의 바깥 SELECT 첫 컬럼이 DECODE(...) AS SUCCESS_YN인지 확인하십시오.\n"
+            "- DECODE의 ABS 합계에 TOT와 모든 비교 C1...의 차이가 포함되어야 합니다. 합계 0은 'Y', 그 외는 'N'입니다.\n"
+            "- 뒤따르는 DIFF_TOT와 DIFF_C1...은 ABS 없이 S 값 - T 값이어야 합니다.\n"
+            "- Correct SQL 예시나 재시도 SQL에 SUCCESS_YN이 없어도 그대로 따르지 말고 필수 컬럼을 포함해 반환하십시오.\n"
+        )
         attempt = int(context.get("db_attempts") or context.get("attempt") or 1)
         mode = "VERIFY_RETRY" if is_verify_retry else ("VERIFY_ONLY" if verify_only else ("APPEND" if is_append else "REGULAR"))
         logging.getLogger("smartmigrate.workflow").info(
