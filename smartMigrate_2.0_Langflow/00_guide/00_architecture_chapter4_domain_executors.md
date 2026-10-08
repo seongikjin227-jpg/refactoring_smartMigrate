@@ -48,6 +48,8 @@ flowchart LR
 
 `Executor3`는 `MIG_SQL` 실행 뒤 먼저 count 검증을 수행한다. count가 PASS인 경우에만 `INSERT INTO ... (target columns) SELECT ...`의 SELECT 부분을 가상 TOBE 데이터셋으로 만들어, source(AS-IS) PK 기준의 결정적 표본(기본 3건)을 실제 TOBE row와 비교한다. 비교 SQL은 source dataset을 기준으로 `LEFT JOIN`하므로 TOBE에만 새로 존재하는 행은 비교하지 않는다. 이는 Migration이 신규 데이터를 생성하지 않는다는 전제에 따른 것이다. 바깥 SELECT는 행별 concat 값을 반환하지 않고 `MATCH_CNT`, `MISMATCH_CNT` 한 행만 반환하며 `MISMATCH_CNT=0`일 때 PASS다. row concat은 target DDL에서 `NULLABLE='N'`인 컬럼에 `NVL` null sentinel을 붙이지 않고, nullable 컬럼에만 `NVL(..., '<NULL>')`을 적용한다. Verify SQL은 등록일시·등록자·변경일시·변경자 성격의 기본 감사 컬럼을 DDL 기준으로 식별해 `COUNT(column)` 비교에서 제외한다. record verify 로그도 같은 두 집계값만 출력한다. CLOB은 앞 4,000자, BLOB은 앞 4,000 byte까지만 비교·로그한다.
 
+Count Verify SQL은 단일 SELECT/단일 집계 row로 `SUCCESS_YN`, `DIFF_TOT`, 선택한 매핑별 `DIFF_C1...`만 반환한다. `SUCCESS_YN`은 전체 행 수와 모든 비NULL count 차이의 절댓값 합계가 0이면 `Y`, 아니면 `N`이다. `DIFF_*`는 source-target의 부호 있는 차이로 반환한다. Executor3는 컬럼명으로 판별하여 `SUCCESS_YN=Y`이고 모든 `DIFF_*`가 숫자 0일 때만 통과한다. 결과 없음/복수 row, 필수 컬럼 누락, 중복/미지원 컬럼, NULL/비숫자 diff는 실패다. 기존 DIFF-only SQL은 지원하지 않으므로 저장된 VERIFY_SQL도 새 형식으로 재생성해야 한다. regular/append 프롬프트는 같은 출력 계약을 사용하며 append에서는 이번 이관 범위로 target을 필터링한다.
+
 count 불일치는 `FAIL-TEST`, 레코드 불일치 또는 레코드 검증 불가(MIG_SQL 구조 미지원 등)는 `FAIL-TEST2`다. 대상 PK가 있으면 그것을 row key로 사용한다. PK가 없는 target은 `Record Verify Key Columns` 입력값을 우선 사용하고, 없으면 MIG_SQL의 non-LOB INSERT 대상 컬럼 전체를 복합 key로 사용한다. 이 fallback에서 target row가 복수이면 검증 실패다. `FAIL-TEST2` 재실행은 INSERT·count verify·LLM generate를 반복하지 않고 `VERIFY_RECORDS`만 다시 수행한다.
 
 ### 입력

@@ -60,6 +60,7 @@ MIGRATION_PROMPT_TEMPLATE: dict[str, str] = {
 
 [Correct SQL examples]
 아래 예시는 참고용으로만 사용하십시오. migration_sql에는 검색된 MIG_SQL 패턴을, verification_sql에는 검색된 VERIFY_SQL 패턴을 참고할 수 있습니다.
+검색된 예시가 이전 DIFF-only 형식이어도 verification_sql은 반드시 아래 SUCCESS_YN + DIFF_* 형식으로 생성하십시오.
 {correct_sql_hints}
 
 [Migration SQL requirements]
@@ -95,10 +96,16 @@ MIGRATION_PROMPT_TEMPLATE: dict[str, str] = {
 - 제공된 DDL로 data type을 판단하십시오.
 - CLOB, NCLOB, BLOB, LONG, LONG RAW 같은 LOB/LONG 컬럼은 모든 verification column-count 비교에서 제외하십시오.
 - LOB/LONG 컬럼은 COUNT(column), DISTINCT, GROUP BY, ORDER BY, MINUS, JOIN key, equality predicate, value comparison에 사용하지 마십시오.
+- 단일 집계 결과 row를 반환하고 SUCCESS_YN, DIFF_TOT, 매핑별 DIFF_C1... 컬럼만 출력하십시오.
+- SUCCESS_YN은 전체 행 수와 모든 컬럼 COUNT 차이의 ABS 합계가 0이면 'Y', 아니면 'N'입니다. 서로 다른 차이가 상쇄되지 않게 하십시오.
+- DIFF_*는 ABS 없이 source count - target count로 출력하여 차이의 방향을 보존하십시오.
+- C1, C2...는 같은 매핑의 source/target COUNT를 짝지으십시오. 제외할 컬럼만 있으면 TOT만 비교하십시오.
+- Source 집계의 필터·JOIN·EXISTS 범위는 실제 migration_sql과 같아야 합니다. EXISTS의 상관 여부와 연결 키를 임의로 추가하거나 변경하지 마십시오.
 - 권장 형태:
-  SELECT ABS(S.TOT - T.TOT) AS DIFF_TOT,
-         ABS(S.C1 - T.C1) AS DIFF_C1,
-         ABS(S.C2 - T.C2) AS DIFF_C2
+  SELECT DECODE(ABS(S.TOT - T.TOT) + ABS(S.C1 - T.C1) + ABS(S.C2 - T.C2), 0, 'Y', 'N') AS SUCCESS_YN,
+         (S.TOT - T.TOT) AS DIFF_TOT,
+         (S.C1 - T.C1) AS DIFF_C1,
+         (S.C2 - T.C2) AS DIFF_C2
   FROM (SELECT COUNT(*) TOT,
                COUNT(source_non_lob_col1) C1,
                COUNT(source_non_lob_col2) C2
@@ -115,7 +122,8 @@ MIGRATION_PROMPT_TEMPLATE: dict[str, str] = {
             [AND CONDITION]
         )) T
 - EXISTS key는 mapping rules와 DDL에서 선택하십시오. primary/unique key 또는 안정적인 non-LOB source discriminator를 우선하십시오.
-- 단일 결과 row의 모든 DIFF_* 컬럼이 0일 때만 verification이 통과합니다.""",
+- 단일 결과 row의 SUCCESS_YN='Y'이고 모든 DIFF_* 컬럼이 0일 때만 verification이 통과합니다.
+- EXISTS 문법과 집계 inline view의 괄호를 정확히 닫으십시오. COUNT(*)와 COUNT(column)을 사용하십시오.""",
     "verification_regular": """
 [Verification SQL requirements]
 - Exclude the four standard audit fields (registered/created timestamp, registered/created by, modified/updated timestamp, modified/updated by) from every COUNT(column) comparison. Infer their physical names from the supplied DDL.
@@ -124,10 +132,16 @@ MIGRATION_PROMPT_TEMPLATE: dict[str, str] = {
 - 제공된 DDL로 data type을 판단하십시오.
 - CLOB, NCLOB, BLOB, LONG, LONG RAW 같은 LOB/LONG 컬럼은 모든 verification column-count 비교에서 제외하십시오.
 - LOB/LONG 컬럼은 COUNT(column), DISTINCT, GROUP BY, ORDER BY, MINUS, JOIN key, equality predicate, value comparison에 사용하지 마십시오.
+- 단일 집계 결과 row를 반환하고 SUCCESS_YN, DIFF_TOT, 매핑별 DIFF_C1... 컬럼만 출력하십시오.
+- SUCCESS_YN은 전체 행 수와 모든 컬럼 COUNT 차이의 ABS 합계가 0이면 'Y', 아니면 'N'입니다. 서로 다른 차이가 상쇄되지 않게 하십시오.
+- DIFF_*는 ABS 없이 source count - target count로 출력하여 차이의 방향을 보존하십시오.
+- C1, C2...는 같은 매핑의 source/target COUNT를 짝지으십시오. 제외할 컬럼만 있으면 TOT만 비교하십시오.
+- Source 집계의 필터·JOIN·EXISTS 범위는 실제 migration_sql과 같아야 합니다. EXISTS의 상관 여부와 연결 키를 임의로 추가하거나 변경하지 마십시오.
 - 권장 형태:
-  SELECT ABS(S.TOT - T.TOT) AS DIFF_TOT,
-         ABS(S.C1 - T.C1) AS DIFF_C1,
-         ABS(S.C2 - T.C2) AS DIFF_C2
+  SELECT DECODE(ABS(S.TOT - T.TOT) + ABS(S.C1 - T.C1) + ABS(S.C2 - T.C2), 0, 'Y', 'N') AS SUCCESS_YN,
+         (S.TOT - T.TOT) AS DIFF_TOT,
+         (S.C1 - T.C1) AS DIFF_C1,
+         (S.C2 - T.C2) AS DIFF_C2
   FROM (SELECT COUNT(*) TOT,
                COUNT(source_non_lob_col1) C1,
                COUNT(source_non_lob_col2) C2
@@ -137,7 +151,8 @@ MIGRATION_PROMPT_TEMPLATE: dict[str, str] = {
                COUNT(target_non_lob_col1) C1,
                COUNT(target_non_lob_col2) C2
         FROM {to_table}) T
-- 단일 결과 row의 모든 DIFF_* 컬럼이 0일 때만 verification이 통과합니다.""",
+- 단일 결과 row의 SUCCESS_YN='Y'이고 모든 DIFF_* 컬럼이 0일 때만 verification이 통과합니다.
+- EXISTS 문법과 집계 inline view의 괄호를 정확히 닫으십시오. COUNT(*)와 COUNT(column)을 사용하십시오.""",
     "error_suffix": """
 
 [Previous execution failure]
@@ -549,7 +564,7 @@ class NewType10CMigOneJobPocExecutor3(Component):
 
     # VERIFY_SQL을 실행해 migration 결과가 기대 조건을 만족하는지 판단한다.
     def _node_verify(self, context: dict[str, Any]) -> dict[str, Any]:
-        """verification SQL을 실행하고 모든 반환 값이 0인지 검증한다."""
+        """SUCCESS_YN='Y'와 모든 DIFF_* 값이 0인지 검증한다."""
         db_config = dict(context.get("db_config") or {})
         try:
             ok, message, rows = self._execute_verification(db_config, str(context.get("current_v_sql") or context.get("verification_sql") or ""))
@@ -1948,28 +1963,45 @@ LEFT JOIN (
             conn.commit()
         return total_rowcount
 
-    # VERIFY_SQL 결과를 실행하고 첫 컬럼 값 기준으로 성공 여부와 상세 row를 반환한다.
+    # VERIFY_SQL 결과의 컬럼명으로 SUCCESS_YN과 DIFF_*를 검증한다.
     def _execute_verification(self, db_config: dict[str, Any], sql_script: str) -> tuple[bool, str, list[list[Any]]]:
         statements = self._split_sql_script(sql_script)
         if not statements:
             return False, "No verification SQL provided", []
+        if len(statements) != 1:
+            return False, "Verification SQL must contain a single aggregate SELECT", []
+        clean = self._clean_sql_statement(statements[0])
+        if not clean:
+            return False, "No verification SQL provided", []
         rows: list[Any] = []
+        columns: list[str] = []
         with self._connect(db_config) as conn:
             cur = conn.cursor()
-            for statement in statements:
-                clean = self._clean_sql_statement(statement)
-                if not clean:
-                    continue
-                cur.execute(clean)
-                if cur.description:
-                    rows = cur.fetchall()
+            cur.execute(clean)
+            if cur.description:
+                columns = [str(column[0]).strip().upper() for column in cur.description]
+                rows = cur.fetchall()
         json_rows = [[self._json_safe_value(value) for value in row] for row in rows]
         if not rows:
             return False, "Verification SQL returned no rows", json_rows
-        for row in rows:
-            for value in row:
-                if not self._is_zero(value):
-                    return False, f"Mismatch found: {self._json_safe_value(row)}", json_rows
+        if len(rows) != 1:
+            return False, "Verification SQL must return exactly one aggregate row", json_rows
+        if len(set(columns)) != len(columns):
+            return False, f"Duplicate verification result columns: {columns}", json_rows
+        if "SUCCESS_YN" not in columns or "DIFF_TOT" not in columns:
+            return False, f"Verification SQL requires SUCCESS_YN and DIFF_TOT; received {columns}", json_rows
+        if any(name != "SUCCESS_YN" and not name.startswith("DIFF_") for name in columns):
+            return False, f"Verification SQL only supports SUCCESS_YN and DIFF_* columns; received {columns}", json_rows
+        row = rows[0]
+        if len(row) != len(columns):
+            return False, "Verification result column/value count mismatch", json_rows
+        values = dict(zip(columns, row))
+        success = str(self._lob_to_str(values["SUCCESS_YN"])).strip().upper()
+        if success != "Y":
+            return False, f"Verification SUCCESS_YN must be Y; received {self._json_safe_value(values['SUCCESS_YN'])}", json_rows
+        for name, value in values.items():
+            if name.startswith("DIFF_") and not self._is_zero(value):
+                return False, f"Verification mismatch: {name}={self._json_safe_value(value)}", json_rows
         return True, "All Verification Passed", json_rows
 
     # 세미콜론과 PL/SQL 블록 경계를 고려해 SQL script를 실행 단위로 나눈다.
