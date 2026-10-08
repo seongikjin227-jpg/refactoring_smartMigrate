@@ -59,6 +59,14 @@ You are the only natural-language target interpreter. Extract targets before any
 - "마이그레이션 59번 다시 실행해줘" is EXECUTE / JOB_EXECUTION / MIG / targeted.
 - "마이그레이션 59번 현재 상태를 다시 확인해주세요" is STATUS_QUERY / MANAGEMENT / MIG / targeted.
   Mentioning an earlier execution or retry request does not itself request execution now.
+- "Mig 실행 결과", "Migration 결과", or "마이그레이션 실행 결과" is STATUS_QUERY / MANAGEMENT / MIG / domain,
+  with empty target arrays and clarification_required=false. It asks for recent results, not execution.
+- "SQL Conversion 실행 결과" is STATUS_QUERY / MANAGEMENT / SQL_CONVERSION / domain;
+  apply the same rule to Tuning and Formatting. A recent domain result query needs no job identifier.
+- "최근 실행 결과" or "방금 작업 결과" without a domain is STATUS_QUERY / MANAGEMENT / UNKNOWN / unknown,
+  with empty arrays and clarification_required=false. Query recent results across domains without inferring chat history.
+- The word "실행" inside "실행 결과" does not request starting work. A result/status/log query
+  must not become JOB_EXECUTION unless the current request explicitly asks to start work as well.
 - SQL targets require sql_seq, or both sql_id and space_nm. Preserve string identifier case.
 - "전체 작업 실행", "남은 작업 다 실행", or generic "작업 실행" without any target/domain
   is EXECUTE / JOB_EXECUTION / FULL_WORKFLOW / all, with empty target arrays.
@@ -78,6 +86,25 @@ You are the only natural-language target interpreter. Extract targets before any
 
 LOGGER_NAME = "smartmigrate.workflow"
 HANDLER_MARKER = "SmartMigrateHandler"
+
+INTENT_REQUEST_GUIDE = """요청하신 내용을 조회·관리·실행 중 어느 기능으로 처리할지 확인하지 못했습니다.
+현재 이 단계에서는 작업 조회·변경·실행 단계로 정상 전달되지 않았습니다. 이전 요청의 완료 여부가 궁금하다면 상태와 로그를 먼저 확인해 주세요.
+
+다시 요청하실 때는 원하는 기능, 대상, 처리 범위를 함께 적어 주세요.
+- Migration: MAP_ID 또는 '마이그레이션 59번'처럼 도메인과 번호를 알려주세요.
+- SQL: Conversion·Tuning·Formatting 중 도메인과 SQL_SEQ를 알려주세요. SQL_SEQ를 모르면 SQL_ID와 SPACE_NM을 함께 적어 주세요.
+- 파일/매핑: 파일 업로드 기능의 경우 현재 보안 문제로 인해 기능 제한이 있을 수 있습니다. 다음 템플릿을 복사하여 파일을 다시 첨부하고 요청해 주세요!
+  "Super Agent의 파일 처리 기능을 활용하여 첨부파일의 내용을 조회해줘. Code Interpreter Tool은 사용하지 말고 해당 내용을 빠짐 없이 Smart Migrate 에이전트를 호출하여 전달하고 매핑룰을 등록해줘"
+- 전체 작업: 전체 workflow인지 특정 도메인 전체인지 명시해 주세요.
+
+아래 번호와 이름을 실제 정보로 바꿔 요청하실 수 있습니다.
+1. "마이그레이션 59번의 현재 상태와 최근 로그를 보여줘."
+2. "SQL Conversion 순번 42를 재실행해줘."
+3. "전체 워크플로우의 남은 작업을 실행해줘."
+4. "MAP_ID 101의 FR_TABLE은 CUSTOMER, TO_TABLE은 MEMBER로 매핑 등록 SQL을 만들어줘."
+
+같은 문제가 반복되면 운영자에게 요청 시각과 해당 요청문을 전달해 LLM 연결 및 라우팅 로그를 확인해 주세요.
+지금 원하시는 일은 상태 조회, 파일/매핑 관리, 실제 실행 중 무엇인가요?"""
 
 
 class NewType02IntentRouter(Component):
@@ -152,7 +179,11 @@ class NewType02IntentRouter(Component):
                 extra={"workflow_log": [0, "WORKFLOW", "02_INTENT_ROUTER", "ERROR", "ROUTE", "ERROR", 0,
                                         json.dumps({"error": str(exc), "traceback": traceback.format_exc()}, ensure_ascii=False)]},
             )
-            result = {"ok": False, "component": "02_intentRouter", "error": str(exc)}
+            result = {"ok": False, "component": "02_intentRouter", "error": str(exc),
+                      "user_request": str(getattr(getattr(self, "input_message", None), "text", "") or ""),
+                      "answer_text": INTENT_REQUEST_GUIDE, "exception_message": INTENT_REQUEST_GUIDE,
+                      "should_execute": False, "clarification_required": True,
+                      "clarification_message": INTENT_REQUEST_GUIDE, "next_node": "chat_output", "final": True}
             self.status = result
             return Data(data=result)
 
@@ -390,6 +421,13 @@ class NewType02IntentRouter(Component):
             clarification, reason = True, problem
         if clarification and not reason:
             reason = "대상과 상태 확인 또는 실행 의도를 명확히 알려주세요."
+        if clarification:
+            reason += (
+                "\n\n요청 범위를 추측해 실행하지 않습니다. 도메인, 대상 식별자, 상태 확인 또는 실행 의도를 함께 적어 주세요."
+                "\n예: '마이그레이션 59번의 상태와 최근 로그를 보여줘', '마이그레이션 59번을 다시 실행해줘', "
+                "'SQL Conversion 순번 42를 실행해줘'."
+                "\nSQL_SEQ를 모르면 SQL_ID와 SPACE_NM을 함께 알려주세요. 전체 실행이면 '전체 워크플로우의 남은 작업을 실행해줘'라고 명시해 주세요."
+            )
         return {"route": route, "request_action": action, "requested_domain": domain,
                 "execution_scope": scope, "target_filter": targets,
                 "clarification_required": clarification, "clarification_message": reason}

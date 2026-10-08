@@ -27,7 +27,7 @@
   → 04 Router까지 metadata 보존 (매핑 생성기에는 metadata 전달하지 않음)
 ```
 
-02의 LLM은 route만 결정합니다. 원본 metadata와 parsed_excel은 Python 코드로 보존합니다. 04 Router의 `Mapping Rule Update` Message 출력을 전용 생성기의 `user_request`에 연결합니다. 이 분기는 원본 user_request만 전달하므로 매핑 정보 전체를 해당 요청문에 포함해야 합니다. parsed_excel/URL/files는 생성기의 LLM 입력에 추가하지 않습니다. Agent의 File Command Tool은 제거합니다.
+02의 LLM은 route와 의도·도메인·범위·대상을 해석합니다. 원본 metadata와 parsed_excel은 Python 코드로 보존합니다. 04 Router의 `Mapping Rule Update` Message 출력을 전용 생성기의 `user_request`에 연결합니다. 이 분기는 원본 user_request만 전달하므로 매핑 정보 전체를 해당 요청문에 포함해야 합니다. parsed_excel/URL/files는 생성기의 LLM 입력에 추가하지 않습니다. Agent의 File Command Tool은 제거합니다. 사용자에게 필요한 입력과 재요청 방법은 [응답·예외 가이드](00_response_and_exception_guide.md)를 참고합니다.
 
 ## 매핑 PK와 실행
 

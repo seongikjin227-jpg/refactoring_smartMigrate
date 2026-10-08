@@ -39,6 +39,7 @@ class NewType06GetRemainingJobs(Component):
     # Langflow output 진입점에서 입력을 검증하고 이 컴포넌트의 주요 실행 흐름을 시작한다.
     def get_remaining_jobs(self) -> Data:
         logging.getLogger("smartmigrate.workflow").info("before get_remaining_jobs", extra={"workflow_log": [0, "WORKFLOW", "06_GET_JOBS", "INFO", "GET_REMAINING_JOBS", "START", 0]})
+        payload: dict[str, Any] = {}
         try:
             try:
                 payload = self._parse_payload(getattr(self, "payload_json", ""))
@@ -107,7 +108,18 @@ class NewType06GetRemainingJobs(Component):
                 logging.getLogger("smartmigrate.workflow").info("after get_remaining_jobs", extra={"workflow_log": [0, "WORKFLOW", "06_GET_JOBS", "INFO", "GET_REMAINING_JOBS", "END", 0]})
                 return __log_result
             except Exception as exc:
-                result = {"ok": False, "component": "06_getRemainingJobs", "error": str(exc)}
+                answer = (
+                    "실행 대상의 현재 상태와 실행 가능 여부를 확인하는 중 문제가 발생했습니다. 조회 결과를 확인하지 못했으므로 작업이 없다고 판단할 수 없습니다."
+                    "\n\nMigration은 MAP_ID, SQL 작업은 도메인과 SQL_SEQ 또는 SQL_ID + SPACE_NM을 함께 알려주세요. "
+                    "전체 실행이라면 전체 workflow인지 도메인 전체인지 명시해 주세요."
+                    "\n예: '마이그레이션 59번의 상태, USE_YN, RETRY_COUNT와 최근 로그를 보여줘', "
+                    "'SQL Conversion 순번 42의 상태와 최근 로그를 보여줘'."
+                    "\n\n대상 정보가 맞는데 문제가 반복되면 운영자에게 DB 연결·조회 권한·라우터 전달값을 확인해 달라고 요청해 주세요. "
+                    "연결이 복구된 뒤 현재 상태를 먼저 확인하고 실행 여부를 결정해 주세요."
+                )
+                result = {**payload, "ok": False, "component": "06_getRemainingJobs", "error": str(exc),
+                          "answer_text": answer, "exception_message": answer, "should_execute": False,
+                          "next_node": "chat_output", "final": True}
                 self._log_detail("06_GET_JOBS", "GET_REMAINING_JOBS", "ERROR", f"06 failed: {exc}", {
                     "error": str(exc), "traceback": traceback.format_exc(),
                 })

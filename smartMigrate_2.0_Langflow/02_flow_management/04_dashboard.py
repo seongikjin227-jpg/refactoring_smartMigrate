@@ -63,10 +63,16 @@ class NewType04Dashboard(Component):
                 logging.getLogger("smartmigrate.workflow").info("after run", extra={"workflow_log": [0, "WORKFLOW", "04_DASHBOARD", "INFO", "RUN", "END", 0]})
                 return __log_result
             except Exception as exc:
-                answer = f"[Dashboard 조회 결과]\nDashboard 조회 중 오류가 발생했습니다.\n오류: {exc}"
+                answer = (
+                    "현재 대시보드 집계 결과를 확인하지 못했습니다. 조회 오류이므로 성공·실패·잔여 작업이 0건이라는 의미는 아닙니다."
+                    "\n\n잠시 후 '전체 작업의 성공·실패·잔여 건수를 대시보드로 보여줘'라고 다시 조회해 주세요. "
+                    "특정 도메인만 확인하려면 'DB Migration의 작업 현황을 보여줘'처럼 범위를 적어 주세요."
+                    "\n문제가 반복되면 운영자에게 요청 시각을 전달해 DB 연결, 조회 권한과 대시보드 로그를 확인해 달라고 요청해 주세요."
+                    "\n이 응답만으로 실행 결과를 판단하거나 작업을 다시 실행하지 말고, 먼저 현재 상태를 확인해 주세요."
+                )
                 self.status = {"ok": False, "component": "04_dashboard", "error": str(exc), "answer_text": answer}
                 __log_result = Message(text=answer)
-                logging.getLogger("smartmigrate.workflow").error("error run", extra={"workflow_log": [0, "WORKFLOW", "04_DASHBOARD", "ERROR", "RUN", "ERROR", 0]})
+                logging.getLogger("smartmigrate.workflow").error(f"error run: {exc}", extra={"workflow_log": [0, "WORKFLOW", "04_DASHBOARD", "ERROR", "RUN", "ERROR", 0]})
                 return __log_result
             logging.getLogger("smartmigrate.workflow").info("after run", extra={"workflow_log": [0, "WORKFLOW", "04_DASHBOARD", "INFO", "RUN", "END", 0]})
         except Exception as exc:

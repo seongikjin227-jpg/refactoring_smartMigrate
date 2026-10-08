@@ -2,6 +2,8 @@
 
 이 문서는 운영자와 SQL 검토자가 채팅/Management 화면에서 작업을 조회하고, Correct SQL을 저장하고, 재실행을 준비하는 방법을 설명한다. 사용자는 Langflow payload JSON이나 LLM endpoint를 직접 입력할 필요가 없다.
 
+기능 설명과 사용자 요청 템플릿은 [03 일반 응답 프롬프트](../01_agent_start/03_llmResponsePrompt.md), 정보 누락·오류 상황의 복구 안내는 [응답·예외 가이드](00_response_and_exception_guide.md)를 참고한다.
+
 ## 1. 핵심 원칙
 
 - 재개 위치는 `USER_EDITED`나 SQL CLOB 존재 여부가 아닌 **DB status**가 결정한다. `USER_EDITED='Y'`는 사람이 수정했음을 보여 주는 표시값이다.
@@ -16,12 +18,25 @@ SQL 작업은 `SQL_SEQ`로 찾는 것이 가장 정확하다. 이를 모르면 `
 
 | 원하는 일 | 자연어 요청 예시 |
 |---|---|
+| 최근 Migration 결과 | `Mig 실행 결과` 또는 `최근 마이그레이션 10건의 상태와 검증 결과, 실패 원인과 로그를 보여줘.` |
+| 최근 Conversion 결과 | `SQL Conversion 실행 결과와 실패한 작업의 SQL_SEQ, 오류를 정리해줘.` |
+| 최근 전체 결과 | `최근 실행 결과를 도메인별로 보여줘.` |
 | Migration 상태/로그 | `MAP_ID 101의 Migration 상태와 최근 로그를 보여줘.` |
 | Migration SQL | `MAP_ID 101의 MIG_SQL과 VERIFY_SQL을 보여줘.` |
 | Conversion SQL | `SQL_SEQ 42의 Conversion 상태와 TO_SQL을 보여줘.` |
 | SQL_SEQ를 모르는 작업 | `SQL_ID S001, SPACE_NM PAYMENT의 상태를 보여줘.` |
 | 남은 작업 | `Conversion, Tuning, Formatting의 남은 작업을 보여줘.` |
 | 실패 원인 | `최근 SQL Conversion 실패 원인을 요약해줘.` |
+
+최근 결과 조회는 작업 번호 없이 요청할 수 있으며 작업 실행이나 상태 변경을 수행하지 않는다. 최근 갱신 작업의 목록·갱신 시각·상태와 실제 로그를 확인한다. 전체 상태 집계는 최근 실행의 처리 건수와 다르다. 특정 실행 결과가 필요하면 실행 시각이나 대상 번호를 추가한다. 검증 수치와 오류는 실제 조회로 확인된 내용만 제공한다.
+
+### 파일 업로드 요청 템플릿
+
+파일 업로드 기능의 경우 현재 보안 문제로 인해 기능 제한이 있을 수 있습니다. 다음 템플릿을 복사하여 파일을 다시 첨부하고 요청해 주세요!
+
+> Super Agent의 파일 처리 기능을 활용하여 첨부파일의 내용을 조회해줘. Code Interpreter Tool은 사용하지 말고 해당 내용을 빠짐 없이 Smart Migrate 에이전트를 호출하여 전달하고 매핑룰을 등록해줘
+
+처리 결과에서는 매핑 SQL 생성 여부와 실제 DB 반영 여부를 확인한다.
 
 | 도메인 | 자동 실행 후보 조건 |
 |---|---|

@@ -71,10 +71,17 @@ class NewType11BFailureCauseAnalyzer(Component):
                 logging.getLogger("smartmigrate.workflow").info("after build_analysis", extra={"workflow_log": [0, "WORKFLOW", "11B_FAIL_CAUSE", "INFO", "BUILD_ANALYSIS", "END", 0]})
                 return __log_result
             except Exception as exc:
-                answer = f"## Fail 원인 분석\n\nFail 원인 분석 생성에 실패했습니다.\n\nError: {exc}"
+                answer = (
+                    "실패 원인 분석을 생성하지 못했습니다. 분석 결과가 없다는 뜻이며, 원래 작업의 오류가 해결됐다는 의미는 아닙니다."
+                    "\n\nMigration은 MAP_ID, SQL 작업은 SQL_SEQ 또는 SQL_ID + SPACE_NM과 도메인을 함께 알려주세요. "
+                    "먼저 '마이그레이션 59번의 현재 상태와 최근 실패 로그를 보여줘' 또는 "
+                    "'SQL Conversion 순번 42의 상태와 최근 오류를 보여줘'처럼 실제 식별자로 원본 로그를 확인해 주세요."
+                    "\n로그를 확인한 뒤 같은 대상으로 실패 원인 분석을 다시 요청할 수 있습니다. "
+                    "문제가 반복되면 운영자에게 요청 시각과 대상 식별자를 전달해 로그 조회·LLM 연결을 확인해 달라고 요청해 주세요."
+                )
                 self.status = {"ok": False, "component": "11B_failureCauseAnalyzer", "error": str(exc), "answer_text": answer}
                 __log_result = Message(text=answer)
-                logging.getLogger("smartmigrate.workflow").error("error build_analysis", extra={"workflow_log": [0, "WORKFLOW", "11B_FAIL_CAUSE", "ERROR", "BUILD_ANALYSIS", "ERROR", 0]})
+                logging.getLogger("smartmigrate.workflow").error(f"error build_analysis: {exc}", extra={"workflow_log": [0, "WORKFLOW", "11B_FAIL_CAUSE", "ERROR", "BUILD_ANALYSIS", "ERROR", 0]})
                 return __log_result
             logging.getLogger("smartmigrate.workflow").info("after build_analysis", extra={"workflow_log": [0, "WORKFLOW", "11B_FAIL_CAUSE", "INFO", "BUILD_ANALYSIS", "END", 0]})
         except Exception as exc:

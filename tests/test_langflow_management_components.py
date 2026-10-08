@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import sys
 import types
+import traceback
 from typing import Any
 import unittest
 from unittest.mock import Mock, patch
@@ -42,7 +43,7 @@ def load_component(relative_path, class_name):
     constants = [n for n in tree.body if isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant)]
     module = ast.Module(body=constants + [node], type_ignores=[])
     namespace = {"Component": object, "Data": Data, "Message": Message, "Any": Any,
-                 "json": json, "re": re, "logging": logging, "asyncio": asyncio}
+                 "json": json, "re": re, "logging": logging, "asyncio": asyncio, "traceback": traceback}
     exec(compile(ast.fix_missing_locations(module), str(path), "exec"), namespace)
     return namespace[class_name]
 

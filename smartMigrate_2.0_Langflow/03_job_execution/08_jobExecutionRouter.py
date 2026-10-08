@@ -82,7 +82,11 @@ class NewType08JobExecutionRouter(Component):
             return Data(data=routed)
         except Exception as exc:
             self._log_exception("ROUTE_OUTPUT", exc)
-            result = {"ok": False, "component": "08_jobExecutionRouter", "error": str(exc)}
+            message = self._build_error_message()
+            result = {"ok": False, "component": "08_jobExecutionRouter", "error": str(exc),
+                      "answer_text": message, "exception_message": message,
+                      "should_execute": False, "run_all_pending": False, "selected_jobs": [],
+                      "next_node": "chat_output", "final": True}
             self.status = result
             return Data(data=result)
 
@@ -100,8 +104,11 @@ class NewType08JobExecutionRouter(Component):
             return Message(text=message)
         except Exception as exc:
             self._log_exception("MESSAGE_OUTPUT", exc)
-            message = f"component=08_jobExecutionRouter\n작업 실행 라우팅 중 오류가 발생했습니다.\n오류: {exc}"
-            self.status = {"ok": False, "component": "08_jobExecutionRouter", "error": str(exc), "answer_text": message}
+            message = self._build_error_message()
+            self.status = {"ok": False, "component": "08_jobExecutionRouter", "error": str(exc),
+                           "answer_text": message, "exception_message": message,
+                           "should_execute": False, "run_all_pending": False, "selected_jobs": [],
+                           "next_node": "chat_output", "final": True}
             return Message(text=message)
 
     # payload나 graph 설정에서 필요한 값을 꺼내 표준 형태로 반환한다.
@@ -303,9 +310,90 @@ class NewType08JobExecutionRouter(Component):
         target_label = self._target_label(routed.get("target_filter") or {}) or "요청하신 작업"
         if route == "PREREQUISITE_REQUIRED":
             message = reason or f"{target_label}은 선행 작업이 남아 있어 지금 실행할 수 없습니다."
+            guidance = (
+                "요청한 단계를 실행하기 전에 선행 작업의 상태를 확인해 주세요."
+                "\n1. 'DB Migration과 SQL Conversion의 남은 작업과 실패 상태를 보여줘'라고 조회합니다."
+                "\n2. 선행 실패 원인을 확인하고 필요한 조치를 완료합니다."
+                "\n3. 완료 후 원래 요청한 도메인과 대상을 포함해 다시 실행을 요청합니다."
+                "\n전체 순서대로 처리하려는 의도라면 '전체 워크플로우의 남은 작업을 실행해줘'라고 별도로 요청할 수 있습니다."
+                "\n현재 요청을 전체 실행으로 자동 확대하지 않습니다."
+            )
+        elif routed.get("clarification_required") or not routed.get("should_execute", True):
+            message = reason or "대상과 실행 의도를 확인해야 합니다."
+            guidance = (
+                "상태 확인과 실제 실행은 서로 다른 요청입니다. 원하는 도메인과 대상, 조회인지 실행인지를 함께 적어 주세요."
+                "\nMigration은 MAP_ID, SQL 작업은 SQL_SEQ 또는 SQL_ID + SPACE_NM으로 지정합니다."
+                "\n번호만 있으면 어느 도메인의 작업인지 확인해야 하며, 이전 대화의 대상을 추측하지 않습니다."
+                "\n전체 workflow 또는 도메인 전체 실행을 원하면 그 범위도 명시해 주세요."
+            )
         else:
             message = reason or f"{target_label}은 현재 실행 가능한 작업이 아닙니다."
-        return "\n".join([message, f"요청: {user_request}"] if user_request else [message])
+            guidance = (
+                "먼저 요청한 식별자의 현재 상태와 최근 로그를 확인해 주세요. 자동 실행 후보 조건은 다음과 같습니다."
+                "\n- Migration: USE_YN=Y, STATUS가 NULL 또는 FAIL-*, RETRY_COUNT<2. PRIOR_MAP_ID가 있으면 선행 작업도 확인합니다."
+                "\n- Conversion: STATUS_CONVERSION이 NULL 또는 FAIL-*, RETRY_COUNT<2."
+                "\n- Tuning: Conversion 완료, STATUS_TUNING이 NULL 또는 FAIL-*, RETRY_COUNT<2."
+                "\n- Formatting: Tuning 완료, FORMATTED_SQL이 비어 있음."
+                "\nRETRY_COUNT=0만으로 실행 가능한 것은 아닙니다. DB에 대상이 조회되지 않았다면 번호·SQL_ID·SPACE_NM이 맞는지 먼저 확인해 주세요."
+                "\n재시도 준비나 SQL 저장은 실제 실행과 별개입니다. 상태를 확인해 필요한 준비를 마친 후 다시 실행을 요청해 주세요."
+            )
+        statuses = routed.get("requested_target_status") or {}
+        status_lines = []
+        for row in statuses.get("migration") or []:
+            status_lines.append(f"- MAP_ID {row.get('map_id')}: STATUS={row.get('status') or 'NULL'}, USE_YN={row.get('use_yn')}, RETRY_COUNT={row.get('retry_count')}, PRIOR_MAP_ID={row.get('prior_map_id')}")
+        for row in statuses.get("sql") or []:
+            status_lines.append(f"- SQL_SEQ {row.get('sql_seq')}, SQL_ID={row.get('sql_id')}, SPACE_NM={row.get('space_nm')}: Conversion={row.get('status_conversion') or 'NULL'}, Tuning={row.get('status_tuning') or 'NULL'}, RETRY_COUNT={row.get('retry_count')}")
+        parts = [message]
+        if user_request:
+            parts.append(f"입력하신 요청: {user_request}")
+        if status_lines:
+            parts.append("이번 조회에서 확인된 상태:\n" + "\n".join(status_lines))
+        parts.extend([guidance, self._request_examples(routed)])
+        return "\n\n".join(parts)
+
+    def _request_examples(self, payload: dict[str, Any]) -> str:
+        targets = payload.get("target_filter")
+        targets = targets if isinstance(targets, dict) else {}
+        map_ids = targets.get("map_ids") or []
+        sql_seqs = targets.get("sql_seqs") or []
+        sql_ids, spaces = targets.get("sql_ids") or [], targets.get("space_nms") or []
+        domain = str(payload.get("requested_domain") or "").upper()
+        domain_label = {"SQL_CONVERSION": "SQL Conversion", "SQL_TUNING": "SQL Tuning", "SQL_FORMATTING": "SQL Formatting"}.get(domain, "SQL 작업")
+        if map_ids:
+            target = f"MAP_ID {map_ids[0]}"
+            examples = [f"{target}의 Migration 상태, USE_YN, RETRY_COUNT와 최근 로그를 보여줘.",
+                        f"{target}의 Migration을 다시 실행해줘."]
+        elif sql_seqs or (sql_ids and spaces):
+            target = f"SQL_SEQ {sql_seqs[0]}" if sql_seqs else f"SQL_ID {sql_ids[0]}, SPACE_NM {spaces[0]}"
+            examples = [f"{target}의 {domain_label} 상태와 최근 실패 로그를 보여줘.",
+                        f"{target}의 {domain_label}을 다시 실행해줘."]
+        else:
+            return (
+                "다음 요청 예시입니다. 번호는 실제 대상 번호로 바꿔 주세요."
+                "\n1. '마이그레이션 59번의 상태와 최근 로그를 보여줘.'"
+                "\n2. 'SQL Conversion 순번 42의 상태와 최근 로그를 보여줘.'"
+                "\n3. 'DB Migration의 실행 가능한 작업을 전체 실행해줘.'"
+                "\n먼저 상태 확인을 원하시나요, 특정 대상 또는 전체 범위의 실행을 원하시나요?"
+            )
+        return ("다음 요청 예시입니다. 실행은 현재 상태를 확인한 뒤 요청해 주세요.\n"
+                + "\n".join(f"{index}. '{example}'" for index, example in enumerate(examples, 1)))
+
+    def _build_error_message(self) -> str:
+        try:
+            payload = self._parse_payload(getattr(self, "payload_json", ""))
+        except Exception:
+            payload = {}
+        return (
+            "작업 실행을 준비하는 중 문제가 발생해 실행 대상과 다음 단계를 확정하지 못했습니다. "
+            "이번 요청은 실행 단계로 정상 전달되지 않았으며, 이전 작업의 완료 여부는 현재 상태와 로그로 확인해야 합니다."
+            "\n\n이 오류를 '실행 가능한 작업이 없음'으로 해석하지 마세요. "
+            "대상 정보 누락, 조회 실패 또는 전달값 문제인지 운영 로그에서 확인해야 합니다."
+            "\n1. Migration은 MAP_ID, SQL은 도메인과 SQL_SEQ 또는 SQL_ID + SPACE_NM이 요청에 포함됐는지 확인해 주세요."
+            "\n2. 현재 상태와 최근 로그를 먼저 조회해 주세요."
+            "\n3. 같은 문제가 반복되면 운영자에게 요청 시각과 요청문을 전달해 DB 연결·조회 권한·라우터 전달값을 확인해 주세요."
+            "\n4. 문제가 해결되고 현재 상태를 확인한 뒤 실행을 다시 요청해 주세요."
+            "\n\n" + self._request_examples(payload)
+        )
 
     # 사용자가 지정한 target 범위를 status 메시지에 넣을 짧은 label로 만든다.
     def _target_label(self, targets: dict[str, Any]) -> str:

@@ -83,9 +83,16 @@ class NewType04CurrentProgress(Component):
                 logging.getLogger("smartmigrate.workflow").info("after run", extra={"workflow_log": [0, "WORKFLOW", "04_CURRENT_PROGRESS", "INFO", "RUN", "END", 0]})
                 return result
             except Exception as exc:
-                answer = f"[Current Progress]\nProgress lookup failed.\nError: {exc}"
+                answer = (
+                    "실행 중인 작업의 현재 진행 상태를 조회하지 못했습니다. 작업이 멈췄거나 완료됐다는 뜻은 아니며 현재 상태가 확인되지 않은 상황입니다."
+                    "\n\n잠시 후 '지금 실행 중인 작업과 진행 상태를 보여줘'라고 다시 조회해 주세요. "
+                    "특정 작업은 '마이그레이션 59번의 상태와 최근 로그를 보여줘' 또는 "
+                    "'SQL Conversion 순번 42의 상태와 최근 로그를 보여줘'처럼 실제 식별자를 넣어 확인할 수 있습니다."
+                    "\n조회 오류만 보고 중복 실행하지 말고 상태와 로그를 먼저 확인해 주세요. "
+                    "문제가 반복되면 운영자에게 요청 시각과 대상 식별자를 전달해 DB 연결·권한·진행 조회 로그를 확인해 달라고 요청해 주세요."
+                )
                 self.status = {"ok": False, "component": "04_currentProgress", "error": str(exc), "answer_text": answer}
-                logging.getLogger("smartmigrate.workflow").error("error run", extra={"workflow_log": [0, "WORKFLOW", "04_CURRENT_PROGRESS", "ERROR", "RUN", "ERROR", 0]})
+                logging.getLogger("smartmigrate.workflow").error(f"error run: {exc}", extra={"workflow_log": [0, "WORKFLOW", "04_CURRENT_PROGRESS", "ERROR", "RUN", "ERROR", 0]})
                 return Message(text=answer)
         except Exception as exc:
             logging.getLogger("smartmigrate.workflow").error(f"error run: {exc}", extra={"workflow_log": [0, "WORKFLOW", "04_CURRENT_PROGRESS", "ERROR", "RUN", "ERROR", 0]})

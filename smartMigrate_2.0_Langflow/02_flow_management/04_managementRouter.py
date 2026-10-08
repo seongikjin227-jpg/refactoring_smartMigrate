@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import traceback
 import urllib.error
 import urllib.request
 from typing import Any
@@ -33,6 +34,7 @@ MANAGEMENT_ROUTER_PROMPT = """당신은 SmartMigrate 04 관리 요청 라우터�
 - "지금 돌고 있어?", "현재 실행 중?", "running 있어?"처럼 현재 실행 여부만 묻는 요청은 CURRENT_PROGRESS입니다.
 - "남은 작업", "잔여 작업", "작업 리스트", "대상 목록"은 MANAGEMENT_AGENT입니다.
 - 특정 map_id/sql_id/space_nm의 상태, 결과, 로그, 실패 원인 조회는 MANAGEMENT_AGENT입니다.
+- "Mig 실행 결과", "SQL Conversion 실행 결과", "최근 실행 결과", "방금 작업 결과"처럼 최근 작업 결과를 묻는 요청도 MANAGEMENT_AGENT입니다. 식별자가 없어도 해당 도메인 또는 전체 도메인의 최근 작업·로그 조회가 가능하므로 EXCEPTION으로 보내지 않습니다. 현재 실행 여부만 묻는 CURRENT_PROGRESS 및 전체 건수만 묻는 DASHBOARD와 구분합니다.
 - DB row 변경 요청은 MANAGEMENT_AGENT입니다.
 - USER_EDITED, USE_YN, priority, 상태 초기화, SQL 저장, SQL 비우기 요청은 MANAGEMENT_AGENT입니다.
 - RAG Guide 조회/추가/수정/비활성화 요청은 MANAGEMENT_AGENT입니다.
@@ -45,6 +47,8 @@ MANAGEMENT_ROUTER_PROMPT = """당신은 SmartMigrate 04 관리 요청 라우터�
 필수 정보 누락 규칙:
 - route 자체를 판단할 수 없으면 EXCEPTION으로 보내고 exception_message에 필요한 정보를 한국어로 적으세요.
 - MANAGEMENT_AGENT가 세부 파라미터 누락을 직접 물어볼 수 있으므로, route가 명확하면 EXCEPTION으로 보내지 마세요.
+- EXCEPTION의 exception_message에는 한 줄 거절 대신 어떤 목적이나 식별자가 불명확한지,
+  필요한 정보와 완전한 재요청 예시를 한국어로 안내하세요. 조회·변경·실행을 완료했다고 말하지 마세요.
 
 JSON schema:
 {"management_route":"DASHBOARD|CURRENT_PROGRESS|MANAGEMENT_AGENT|EXCEPTION","exception_message":"","reason":""}"""
@@ -62,7 +66,27 @@ The JSON schema is:
 {"management_route":"DASHBOARD|CURRENT_PROGRESS|MANAGEMENT_AGENT|MAPPING_RULE_UPDATE|EXCEPTION","exception_message":"","reason":""}
 """
 
-EXCEPTION_MESSAGE = "Management 요청을 처리할 수 없습니다. 어떤 관리 작업인지 다시 알려주세요."
+EXCEPTION_MESSAGE = """관리 요청을 이어가려면 원하는 작업과 대상을 조금 더 구체적으로 알려주세요.
+Management에서는 전체 현황·현재 진행 조회, 특정 작업의 상태·SQL·로그 조회, 재시도 준비·우선순위 변경, Correct SQL 저장, 매핑 등록·수정, RAG Guide와 VectorDB 관리를 할 수 있습니다.
+
+요청에 포함할 정보:
+- Migration 조회/변경: MAP_ID, 확인하거나 바꿀 항목, 변경 요청이면 새 값.
+- SQL 조회/변경: SQL_SEQ 또는 SQL_ID + SPACE_NM, Conversion·Tuning·Formatting 중 도메인.
+- Correct SQL: 대상 식별자, 저장할 SQL 종류와 검토한 SQL 전문. BIND_SQL은 BIND_SET도 필요합니다.
+- 파일/매핑: 파일 업로드 기능의 경우 현재 보안 문제로 인해 기능 제한이 있을 수 있습니다. 다음 템플릿을 복사하여 파일을 다시 첨부하고 요청해 주세요!
+  "Super Agent의 파일 처리 기능을 활용하여 첨부파일의 내용을 조회해줘. Code Interpreter Tool은 사용하지 말고 해당 내용을 빠짐 없이 Smart Migrate 에이전트를 호출하여 전달하고 매핑룰을 등록해줘"
+- RAG: 규칙/사례 내용, 수정 시 RAG_ID. VectorDB 동기화는 별도의 요청으로 명시합니다.
+
+아래 예시의 번호와 이름을 실제 정보로 바꿔 보내주세요.
+1. "마이그레이션 59번의 상태, RETRY_COUNT와 최근 실패 로그를 보여줘."
+2. "SQL_ID S001, SPACE_NM PAYMENT의 Conversion 상태와 TO_SQL을 보여줘."
+3. "MAP_ID 59의 PRIORITY를 5로 바꿔줘."
+4. "SQL_SEQ 42의 Correct TO_SQL을 저장해줘. SQL: [검토한 SQL 전문]"
+5. "MAP_ID 101, FR_TABLE CUSTOMER, TO_TABLE MEMBER로 매핑 등록 SQL을 만들어줘."
+6. "RAG Guide와 Correct SQL을 VectorDB에 동기화해줘."
+
+조회·변경·실제 실행은 서로 다른 요청입니다. RETRY_COUNT 초기화나 SQL 저장 뒤 바로 실행됐다고 가정하지 말고 결과를 확인한 다음 실행을 요청해 주세요.
+원하시는 관리 기능과 작업 식별자를 알려주시면 그 범위로 요청을 이어갈 수 있습니다."""
 
 
 class NewType04ManagementRouter(Component):
@@ -110,7 +134,8 @@ class NewType04ManagementRouter(Component):
         if routed.get("management_route") != "EXCEPTION":
             self.stop("exception")
             return Message(text="")
-        answer = str(routed.get("exception_message") or EXCEPTION_MESSAGE)
+        reason = str(routed.get("exception_message") or "").strip()
+        answer = reason if routed.get("exception_guidance_complete") else "\n\n".join(part for part in (reason, EXCEPTION_MESSAGE) if part)
         self.status = {**routed, "selected_output": "exception", "answer_text": answer, "final": True}
         return Message(text=answer)
 
@@ -129,11 +154,47 @@ class NewType04ManagementRouter(Component):
         cached = getattr(self, "_cached_routed_payload", None)
         if cached is not None:
             return cached
+        try:
+            return self._compute_routed_payload()
+        except Exception as exc:
+            logging.getLogger("smartmigrate.workflow").error(
+                f"04 management routing failed: {exc}",
+                extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "ERROR", "ROUTE", "ERROR", 0,
+                                        json.dumps({"error": str(exc), "traceback": traceback.format_exc()}, ensure_ascii=False)]},
+            )
+            answer = (
+                "관리 요청을 해석하거나 다음 단계로 전달하는 중 문제가 발생했습니다. 현재 조회·변경 결과를 확인하지 못했습니다."
+                "\n잠시 후 같은 요청을 다시 보내 주세요. 문제가 반복되면 운영자에게 요청 시각과 요청문을 전달해 LLM 연결·응답과 전달 데이터를 확인해 주세요."
+                "\n이전에 변경을 요청했다면 먼저 해당 작업의 현재 상태와 로그를 확인한 뒤 다시 변경할지 결정해 주세요.\n\n"
+                + EXCEPTION_MESSAGE
+            )
+            try:
+                original_payload = self._parse_payload(getattr(self, "payload_json", ""))
+            except Exception:
+                original_payload = {}
+            result = {**original_payload, "ok": False, "component": "04_managementRouter", "management_route": "EXCEPTION",
+                      "error": str(exc), "exception_message": answer, "exception_guidance_complete": True,
+                      "should_execute": False, "next_node": "chat_output", "final": True}
+            self._cached_routed_payload = result
+            return result
+
+    def _compute_routed_payload(self) -> dict[str, Any]:
+        cached = getattr(self, "_cached_routed_payload", None)
+        if cached is not None:
+            return cached
         logging.getLogger("smartmigrate.workflow").info(
             "04 Management Router started",
             extra={"workflow_log": [0, "WORKFLOW", "04_MGMT_ROUTER", "INFO", "ROUTE", "START", 0]},
         )
         payload = self._parse_payload(getattr(self, "payload_json", ""))
+        if payload.get("ok") is False:
+            raise ValueError(payload.get("error") or "Upstream request interpretation failed")
+        if payload.get("clarification_required"):
+            result = {**payload, "component": "04_managementRouter", "management_route": "EXCEPTION",
+                      "exception_message": payload.get("clarification_message") or "대상과 요청 의도를 확인해 주세요.",
+                      "should_execute": False, "next_node": "chat_output"}
+            self._cached_routed_payload = result
+            return result
         decision = self._normalize_decision(self._route_with_llm(payload))
         attachment_file_reference = self._attachment_file_reference(payload)
         if attachment_file_reference and decision["management_route"] == "EXCEPTION":

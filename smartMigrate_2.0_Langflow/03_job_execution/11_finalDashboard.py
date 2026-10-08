@@ -63,10 +63,17 @@ class NewType11FinalDashboard(Component):
                 logging.getLogger("smartmigrate.workflow").info("after build_result", extra={"workflow_log": [0, "WORKFLOW", "11_FINAL_DASH", "INFO", "BUILD_RESULT", "END", 0]})
                 return __log_result
             except Exception as exc:
-                answer = f"## Final Dashboard\n\nDashboard refresh failed after loop completion.\n\nError: {exc}"
+                answer = (
+                    "작업 결과의 최종 집계를 표시하지 못했습니다. 화면 집계 오류만으로 모든 작업이 실패했거나 반영되지 않았다고 판단할 수 없습니다."
+                    "\n\n먼저 '전체 작업의 성공·실패·잔여 건수를 대시보드로 보여줘'라고 현재 DB 상태를 다시 확인해 주세요. "
+                    "특정 작업은 MAP_ID 또는 SQL_SEQ를 넣어 상태와 최근 로그를 조회해 주세요."
+                    "\n예: '마이그레이션 59번의 상태와 최근 로그를 보여줘', 'SQL Conversion 순번 42의 상태를 보여줘'."
+                    "\n실제 처리 상태를 확인한 뒤 필요한 대상만 재실행해 주세요. "
+                    "집계 오류가 반복되면 운영자에게 요청 시각과 작업 식별자를 전달해 DB 연결·집계 로그를 확인해 달라고 요청해 주세요."
+                )
                 self.status = {"ok": False, "component": "11_finalDashboard", "error": str(exc), "answer_text": answer}
                 __log_result = Message(text=answer)
-                logging.getLogger("smartmigrate.workflow").error("error build_result", extra={"workflow_log": [0, "WORKFLOW", "11_FINAL_DASH", "ERROR", "BUILD_RESULT", "ERROR", 0]})
+                logging.getLogger("smartmigrate.workflow").error(f"error build_result: {exc}", extra={"workflow_log": [0, "WORKFLOW", "11_FINAL_DASH", "ERROR", "BUILD_RESULT", "ERROR", 0]})
                 return __log_result
             logging.getLogger("smartmigrate.workflow").info("after build_result", extra={"workflow_log": [0, "WORKFLOW", "11_FINAL_DASH", "INFO", "BUILD_RESULT", "END", 0]})
         except Exception as exc:
