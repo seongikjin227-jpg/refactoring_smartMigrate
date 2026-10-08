@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import json
 import re
+import traceback
 from contextlib import contextmanager
 from typing import Any
 
@@ -41,8 +42,10 @@ class NewType06GetRemainingJobs(Component):
         try:
             try:
                 payload = self._parse_payload(getattr(self, "payload_json", ""))
-                if not payload.get("should_execute", True):
+                self._log_detail("06_INPUT_PAYLOAD", "RECEIVE", "PASS", "06 received payload", payload)
+                if not payload.get("should_execute", True) or payload.get("clarification_required", False):
                     payload.update({"component": "06_getRemainingJobs", "next_node": "chat_output", "final": True})
+                    self._log_detail("06_FINAL_OUTPUT", "SKIP", "PASS", "06 skipped: execution intent is not confirmed", payload)
                     __log_result = Data(data=payload)
                     logging.getLogger("smartmigrate.workflow").info("after get_remaining_jobs", extra={"workflow_log": [0, "WORKFLOW", "06_GET_JOBS", "INFO", "GET_REMAINING_JOBS", "END", 0]})
                     return __log_result
@@ -50,8 +53,14 @@ class NewType06GetRemainingJobs(Component):
                 if not self._has_db_config():
                     raise ValueError("DB connection settings are required for 06 Get Remaining Jobs")
 
-                # 자연어 target 추출은 01 LLM이 담당한다. 여기의 regex 추출은 예전 payload 호환용이다.
-                targets = self._extract_targets(payload)
+                # 02 LLM이 확정한 식별자를 검증한다. 원문을 다시 해석하지 않는다.
+                targets = self._validated_targets(payload)
+                self._log_detail("06_TARGET_FILTER", "VALIDATE_TARGETS", "PASS", "06 validated 02 targets", {
+                    "effective_user_request": self._effective_user_request(payload),
+                    "input_target_filter": payload.get("target_filter"),
+                    "validated_target_filter": targets,
+                    "has_exact_target": self._has_exact_target(targets),
+                })
                 self._validate_sql_target_identity(targets)
                 with self._connect() as conn:
                     counts = self._load_counts(conn)
@@ -59,6 +68,11 @@ class NewType06GetRemainingJobs(Component):
                     target_statuses = self._load_target_statuses(conn, targets)
                     if self._has_exact_target(targets):
                         requested_jobs = self._load_target_jobs(conn, targets)
+                    self._log_detail("06_QUERY_RESULT", "LOAD_JOBS", "PASS", "06 completed remaining/target queries", {
+                        "query_target_filter": targets, "counts": counts,
+                        "requested_jobs": requested_jobs, "requested_target_status": target_statuses,
+                        "target_query_executed": self._has_exact_target(targets),
+                    })
 
                 summary = {
                     "total": sum(counts.values()),
@@ -76,7 +90,7 @@ class NewType06GetRemainingJobs(Component):
                         "requested_target_status": target_statuses,
                         "remaining_summary": summary,
                         "pending_summary": summary,
-                        "target_filter": payload.get("target_filter") or targets,
+                        "target_filter": targets,
                         "job_detail_mode": "requested_jobs" if self._has_exact_target(targets) else "counts_only",
                         "next_node": "08_jobExecutionRouter",
                     }
@@ -91,19 +105,31 @@ class NewType06GetRemainingJobs(Component):
                     }
                 )
                 self.status = payload
+                self._log_detail("06_FINAL_OUTPUT", "SEND_08", "PASS", "06 payload sent to 08", payload)
                 __log_result = Data(data=payload)
                 logging.getLogger("smartmigrate.workflow").info("after get_remaining_jobs", extra={"workflow_log": [0, "WORKFLOW", "06_GET_JOBS", "INFO", "GET_REMAINING_JOBS", "END", 0]})
                 return __log_result
             except Exception as exc:
                 result = {"ok": False, "component": "06_getRemainingJobs", "error": str(exc)}
+                self._log_detail("06_GET_JOBS", "GET_REMAINING_JOBS", "ERROR", f"06 failed: {exc}", {
+                    "error": str(exc), "traceback": traceback.format_exc(),
+                })
                 self.status = result
                 __log_result = Data(data=result)
-                logging.getLogger("smartmigrate.workflow").error("error get_remaining_jobs", extra={"workflow_log": [0, "WORKFLOW", "06_GET_JOBS", "ERROR", "GET_REMAINING_JOBS", "ERROR", 0]})
                 return __log_result
             logging.getLogger("smartmigrate.workflow").info("after get_remaining_jobs", extra={"workflow_log": [0, "WORKFLOW", "06_GET_JOBS", "INFO", "GET_REMAINING_JOBS", "END", 0]})
         except Exception as exc:
             logging.getLogger("smartmigrate.workflow").error(f"error get_remaining_jobs: {exc}", extra={"workflow_log": [0, "WORKFLOW", "06_GET_JOBS", "ERROR", "GET_REMAINING_JOBS", "ERROR", 0]})
             raise
+
+    def _log_detail(self, log_type: str, step: str, status: str, message: str, detail: Any) -> None:
+        level = "ERROR" if status == "ERROR" else "INFO"
+        logging.getLogger("smartmigrate.workflow").log(
+            logging.ERROR if level == "ERROR" else logging.INFO,
+            message,
+            extra={"workflow_log": [0, "WORKFLOW", log_type, level, step, status, 0,
+                                    json.dumps(detail, ensure_ascii=False, default=str)]},
+        )
 
     # DB 또는 payload에서 이 단계에 필요한 입력 데이터를 로드한다.
     def _load_counts(self, conn: Any) -> dict[str, int]:
@@ -239,13 +265,13 @@ class NewType06GetRemainingJobs(Component):
             statuses["migration"] = self._query_statuses(
                 cur,
                 f"""
-                SELECT MAP_ID, STATUS, USER_EDITED, PRIOR_MAP_ID, USE_YN, PRIORITY
+                SELECT MAP_ID, STATUS, USER_EDITED, PRIOR_MAP_ID, USE_YN, PRIORITY, RETRY_COUNT
                   FROM {mig_table}
                  WHERE MAP_ID IN ({placeholders})
                  ORDER BY PRIORITY ASC NULLS LAST, MAP_ID ASC
                 """,
                 map_ids,
-                ["map_id", "status", "user_edited", "prior_map_id", "use_yn", "priority"],
+                ["map_id", "status", "user_edited", "prior_map_id", "use_yn", "priority", "retry_count"],
             )
 
         sql_where, sql_params = self._sql_target_where(targets)
@@ -258,18 +284,22 @@ class NewType06GetRemainingJobs(Component):
                        STATUS_CONVERSION,
                        STATUS_TUNING,
                        USER_EDITED,
-                       PRIORITY
+                       PRIORITY,
+                       SQL_SEQ,
+                       RETRY_COUNT,
+                       NVL(DBMS_LOB.GETLENGTH(FORMATTED_SQL), 0) AS FORMATTED_SQL_LENGTH
                   FROM {sql_table}
                  WHERE {sql_where}
                  ORDER BY PRIORITY ASC NULLS LAST, SPACE_NM ASC NULLS LAST, SQL_ID ASC NULLS LAST
                 """,
                 sql_params,
-                ["space_nm", "sql_id", "status_conversion", "status_tuning", "user_edited", "priority"],
+                ["space_nm", "sql_id", "status_conversion", "status_tuning", "user_edited", "priority", "sql_seq", "retry_count", "formatted_sql_length"],
             )
         return statuses
 
     # cursor 결과를 후속 payload에서 쓰기 쉬운 dict row 목록으로 변환한다.
     def _query_jobs(self, cur: Any, sql: str, params: list[Any], route: str, columns: list[str]) -> list[dict[str, Any]]:
+        self._log_detail("06_DB_QUERY", f"TARGET_JOBS:{route}", "START", f"06 querying runnable targets: {route}", {"sql": sql, "params": params})
         cur.execute(sql, params)
         jobs: list[dict[str, Any]] = []
         for row in cur.fetchall():
@@ -281,6 +311,7 @@ class NewType06GetRemainingJobs(Component):
 
     # cursor 결과를 후속 payload에서 쓰기 쉬운 dict row 목록으로 변환한다.
     def _query_statuses(self, cur: Any, sql: str, params: list[Any], columns: list[str]) -> list[dict[str, Any]]:
+        self._log_detail("06_DB_QUERY", "TARGET_STATUS", "START", "06 querying target status", {"sql": sql, "params": params})
         cur.execute(sql, params)
         rows: list[dict[str, Any]] = []
         for row in cur.fetchall():
@@ -289,6 +320,7 @@ class NewType06GetRemainingJobs(Component):
 
     # 전달된 SQL/조건으로 단일 COUNT 값을 조회한다.
     def _scalar_count(self, cur: Any, sql: str) -> int:
+        self._log_detail("06_DB_QUERY", "COUNT_JOBS", "START", "06 querying runnable count", {"sql": sql})
         cur.execute(sql)
         row = cur.fetchone()
         return int(row[0] or 0) if row else 0
@@ -305,19 +337,60 @@ class NewType06GetRemainingJobs(Component):
             "sql_formatting_jobs": [],
         }
 
-    # 문자열이나 payload에서 후속 로직에 필요한 값을 추출한다.
-    def _extract_targets(self, payload: dict[str, Any]) -> dict[str, list[Any]]:
-        existing = payload.get("target_filter") if isinstance(payload.get("target_filter"), dict) else {}
-        text = self._effective_user_request(payload)
-        return {
-            "map_ids": self._merge_lists(self._normalize_int_list(existing.get("map_ids")), self._extract_map_ids(text)),
-            "sql_seqs": self._merge_lists(self._normalize_int_list(existing.get("sql_seqs")), self._normalize_int_list(self._extract_text_values(text, r"sql[_\s-]*seq|sqlseq"))),
-            "sql_ids": self._merge_lists(self._normalize_str_list(existing.get("sql_ids")), self._extract_text_values(text, r"sql[_\s-]*id|sqlid")),
-            "space_nms": self._merge_lists(self._normalize_str_list(existing.get("space_nms")), self._extract_text_values(text, r"space[_\s-]*nm|spacenm|space")),
-        }
+
+    def _validated_targets(self, payload: dict[str, Any]) -> dict[str, list[Any]]:
+        targets = self._normalize_target_filter(payload.get("target_filter", {}))
+        scope = str(payload.get("execution_scope") or "unknown").lower()
+        domain = str(payload.get("requested_domain") or "UNKNOWN").upper()
+        has_mig = bool(targets["map_ids"])
+        has_sql = any(targets[key] for key in ("sql_seqs", "sql_ids", "space_nms"))
+        if scope not in {"all", "domain", "targeted"}:
+            raise ValueError("02 must provide execution_scope; request interpretation is required before DB lookup")
+        if domain not in {"MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING", "FULL_WORKFLOW"}:
+            raise ValueError("02 must provide requested_domain before DB lookup")
+        if (scope == "all") != (domain == "FULL_WORKFLOW"):
+            raise ValueError("FULL_WORKFLOW requires all scope; use domain/targeted for individual domains")
+        if has_mig and has_sql:
+            raise ValueError("Migration and SQL targets must be requested separately")
+        if (has_mig or has_sql) and scope != "targeted":
+            raise ValueError("Nonempty target_filter requires targeted scope")
+        if scope == "targeted" and not (has_mig or has_sql):
+            raise ValueError("Targeted request has no identifier from 02; it cannot run all pending jobs")
+        if has_mig and domain != "MIG":
+            raise ValueError("map_ids require MIG domain")
+        if has_sql and domain not in {"SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"}:
+            raise ValueError("SQL identifiers require a SQL domain")
+        if len(targets["sql_ids"]) > 1 and len(targets["space_nms"]) > 1:
+            raise ValueError("Multiple SQL_ID/SPACE_NM pairs require explicit SQL_SEQ identifiers")
+        self._validate_sql_target_identity(targets)
+        return targets
+
+    @staticmethod
+    def _normalize_target_filter(raw: Any) -> dict[str, list[Any]]:
+        if not isinstance(raw, dict):
+            raise ValueError("target_filter must be an object.")
+        targets: dict[str, list[Any]] = {}
+        for key in ("map_ids", "sql_seqs", "sql_ids", "space_nms"):
+            values = raw.get(key, [])
+            if not isinstance(values, list):
+                raise ValueError(f"target_filter.{key} must be an array.")
+            normalized = []
+            for value in values:
+                if key in {"map_ids", "sql_seqs"}:
+                    if isinstance(value, bool) or not re.fullmatch(r"[0-9]+", str(value)) or int(value) <= 0:
+                        raise ValueError(f"target_filter.{key} must contain positive integers.")
+                    value = int(value)
+                elif not isinstance(value, str) or not value.strip():
+                    raise ValueError(f"target_filter.{key} must contain nonempty strings.")
+                else:
+                    value = value.strip()
+                if value not in normalized:
+                    normalized.append(value)
+            targets[key] = normalized
+        return targets
 
     def _effective_user_request(self, payload: dict[str, Any]) -> str:
-        """Prefer 01's history-resolved request for legacy regex fallback."""
+        """Return the original request preserved by 02 for diagnostics only."""
         return str(
             payload.get("resolved_user_request")
             or payload.get("user_request")
@@ -365,53 +438,6 @@ class NewType06GetRemainingJobs(Component):
             clauses.append(f"TO_CHAR(SPACE_NM) IN ({', '.join(placeholders)})")
         return " AND ".join(clauses), params
 
-    # 문자열이나 payload에서 후속 로직에 필요한 값을 추출한다.
-    def _extract_map_ids(self, text: str) -> list[int]:
-        values: list[int] = []
-        patterns = [
-            r"(?:map[_\s-]*id|mapid|map|맵\s*아이디|맵아이디)\s*[=:]?\s*([0-9,\s]+)",
-            r"([0-9]+)\s*번?\s*(?:map[_\s-]*id|mapid|map|맵\s*아이디|맵아이디|맵)",
-        ]
-        for pattern in patterns:
-            for match in re.finditer(pattern, text, flags=re.I):
-                for item in re.findall(r"\d+", match.group(1)):
-                    values.append(int(item))
-        return list(dict.fromkeys(values))
-
-    # 문자열이나 payload에서 후속 로직에 필요한 값을 추출한다.
-    def _extract_text_values(self, text: str, label_pattern: str) -> list[str]:
-        values: list[str] = []
-        for match in re.finditer(rf"(?:{label_pattern})\s*[=:]?\s*([A-Za-z0-9_.:-]+(?:\s*,\s*[A-Za-z0-9_.:-]+)*)", text, flags=re.I):
-            values.extend([item.strip() for item in match.group(1).split(",") if item.strip()])
-        return list(dict.fromkeys(values))
-
-    # 비교와 검색이 안정적으로 동작하도록 입력 값을 정규화한다.
-    def _normalize_int_list(self, value: Any) -> list[int]:
-        values = value if isinstance(value, list) else ([] if value is None else [value])
-        out: list[int] = []
-        for item in values:
-            converted = self._to_int(item)
-            if converted is not None and converted not in out:
-                out.append(converted)
-        return out
-
-    # 비교와 검색이 안정적으로 동작하도록 입력 값을 정규화한다.
-    def _normalize_str_list(self, value: Any) -> list[str]:
-        values = value if isinstance(value, list) else ([] if value is None else [value])
-        out: list[str] = []
-        for item in values:
-            text = str(item or "").strip()
-            if text and text not in out:
-                out.append(text)
-        return out
-
-    # 여러 출처의 값이나 목록을 중복 없이 하나로 합친다.
-    def _merge_lists(self, first: list[Any], second: list[Any]) -> list[Any]:
-        out: list[Any] = []
-        for item in [*first, *second]:
-            if item not in out:
-                out.append(item)
-        return out
 
     @contextmanager
     # Oracle 연결을 열고 호출 구간이 끝나면 닫는 context manager다.

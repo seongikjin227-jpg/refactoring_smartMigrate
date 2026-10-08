@@ -17,7 +17,7 @@ flowchart TD
 
 ## 2.2 현재 payload
 
-02의 LLM은 route만 반환합니다. Python 코드가 user_request, resolved_user_request(현재 text와 동일), session_id, files, source_message, message_data, uploaded_attachment를 조합합니다. requested_domain=UNKNOWN, execution_scope=unknown, target_filter는 빈 배열이며 06/08에서 보완합니다. 채팅 history 기반 후속 발화 해석은 현재 구현되어 있지 않습니다.
+02의 LLM은 route, request_action, requested_domain, execution_scope, target_filter와 clarification 여부를 반환합니다. Python이 필드·식별자를 검증하고 user_request, resolved_user_request(현재 text와 동일), session_id, files, source_message, message_data, uploaded_attachment를 보존합니다. 상태 조회는 MANAGEMENT, 확정된 실행은 JOB_EXECUTION으로 전달하며 06/08은 원문 대상을 재해석하지 않습니다. 채팅 history 기반 후속 발화 해석은 현재 구현되어 있지 않습니다.
 
 ## 2.3 02 Intent LLM Router
 

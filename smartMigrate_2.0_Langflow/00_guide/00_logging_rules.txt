@@ -188,3 +188,15 @@ SELECT LOG_ID,
 02 라우팅 호출 로그 순서는 02_INTENT_ROUTER / START → 02_LLM_ROUTE_PROMPT / START → 02_LLM_ROUTE_RESPONSE / PASS이다. 02_LLM_ROUTE_PROMPT의 GENERATE_SQL CLOB에는 실제 llm.invoke에 전달한 System/User 메시지의 role/content 전체를 JSON 배열로 저장한다. 기존 입력 진단 로그도 유지한다.
 04 전달 직전에는 02_TO_04_PAYLOAD / SEND_04 / PASS를 기록한다. GENERATE_SQL CLOB에는 component, selected_output, next_node, history와 첨부 metadata를 포함한 실제 Management Data 출력 JSON 전체를 저장한다. 02_FINAL_OUTPUT은 branch 정보 추가 전 공통 payload이며, 04 입력을 대조할 때는 02_TO_04_PAYLOAD를 확인한다.
 매핑 전용 생성기는 LOG_TYPE=04_MAPPING_RULE과 STEP_NAME=LOAD_PK:SELECT / GENERATE_SQL:LLM / EXECUTE_SQL:STATEMENT / COMPLETE:TRANSACTION / ROLLBACK:TRANSACTION을 사용한다. SQL 실행 로그 PASS는 문장 성공이며 최종 commit 성공은 COMPLETE:TRANSACTION으로 확인한다. handler는 LOG_TYPE 20자, STEP_NAME 50자, MESSAGE 4000자로 제한하고 상세 원문은 GENERATE_SQL CLOB에 저장한다.
+
+## 2026-10-08 작업 조회/라우팅 로그
+
+06 로그 순서: 06_INPUT_PAYLOAD → 06_TARGET_FILTER → 06_DB_QUERY → 06_QUERY_RESULT → 06_FINAL_OUTPUT.
+06_TARGET_FILTER에는 02 입력 필터와 검증한 필터, 원문, exact target 유무를 기록한다. 06은 원문에서 식별자를 추출하지 않는다. 06_DB_QUERY에는 실제 SELECT와 bind 값을 기록하며, 06_QUERY_RESULT에는 전체 카운트, requested_jobs, requested_target_status(상태·USE_YN·RETRY_COUNT 등), 대상 조회 실행 여부를 기록한다. 06_FINAL_OUTPUT은 실제 08 전달 payload다. should_execute=false 또는 clarification_required=true인 경우 조회 없이 SKIP 출력 로그를 남긴다.
+
+02_LLM_ROUTE_PROMPT는 실제 의도·대상 추출 LLM의 System/User 메시지, 02_LLM_ROUTE_RESPONSE는 파싱 전 응답이다. 02_TO_06_PAYLOAD는 branch 정보가 포함된 실제 06 전달 JSON이며 06_INPUT_PAYLOAD와 대조한다.
+
+08 로그 순서: 08_INPUT_PAYLOAD → 08_ROUTE_INPUT → 08_FINAL_OUTPUT → 08_TO_NEXT_PAYLOAD 또는 08_MESSAGE_OUTPUT.
+08_INPUT_PAYLOAD는 06 수신 payload다. 08_ROUTE_INPUT은 02가 정한 domain/scope/target_filter, 06의 counts/requested_job_identifiers/requested_target_status를 기록한다. 08_FINAL_OUTPUT은 최종 route, 선택 작업, routing_reason을 포함한다. 08_TO_NEXT_PAYLOAD는 selected_output/next_node가 포함된 실제 다음 노드 전달값이며 08_MESSAGE_OUTPUT은 사용자 응답이다. 08은 LLM을 호출하지 않으므로 08 LLM 프롬프트 로그는 없다. 캐시된 group output 재호출에서는 판단 로그를 반복하지 않는다.
+
+위 로그의 상세 JSON은 GENERATE_SQL CLOB에서 확인한다. MAP_ID=0, MIG_KIND=WORKFLOW이며, 02/06/08 오류는 ERROR 상태 로그의 MESSAGE에 오류 요약, GENERATE_SQL에 error와 traceback을 기록한다. DB 조회 오류, 대상 미조회, 조회 결과 0건과 정상 NO_RUNNABLE_JOB 응답을 구분한다.

@@ -1,6 +1,6 @@
 # Chapter 3. Job Execution Routing
 
-기준일: 2026-10-07. 현재 00A → 02 LLM Router로 시작하며 01 classifier는 없습니다. 02는 route만 분류하고 06/08이 현재 요청의 대상/domain/scope를 보완합니다. 표준 실행기는 10C Executor3와 18B Loop2입니다.
+기준일: 2026-10-08. 현재 00A → 02 LLM Router로 시작하며 01 classifier는 없습니다. 02 LLM이 현재 요청의 대상/domain/scope와 상태 조회·실행 의도를 해석합니다. 06은 검증 후 DB 조회, 08은 코드로 라우팅하며 대상을 재해석하지 않습니다. 표준 실행기는 10C Executor3와 18B Loop2입니다.
 
 ## 3.1 실행 요청 전체 흐름
 
@@ -25,9 +25,9 @@ flowchart TD
 | 필드 | 생성 위치 | 의미 |
 |---|---|---|
 | `user_request` | 02 | 사용자 원문 |
-| `requested_domain` | 08 | 사용자가 요청한 도메인. `FULL_WORKFLOW`, `MIG`, `SQL_CONVERSION`, `SQL_TUNING`, `SQL_FORMATTING`, `UNKNOWN` |
-| `execution_scope` | 08 | `all`, `domain`, `targeted`, `unknown` |
-| `target_filter` | 06/08 | `map_ids`, `sql_ids`, `space_nms` |
+| `requested_domain` | 02 LLM | 사용자가 요청한 도메인. `FULL_WORKFLOW`, `MIG`, `SQL_CONVERSION`, `SQL_TUNING`, `SQL_FORMATTING`, `UNKNOWN` |
+| `execution_scope` | 02 LLM | `all`, `domain`, `targeted`, `unknown` |
+| `target_filter` | 02 LLM | `map_ids`, `sql_seqs`, `sql_ids`, `space_nms` |
 | `job_availability` | 06 | 전체 runnable count |
 | `requested_jobs` | 06 | targeted 요청일 때 실제 실행 가능한 job 목록 |
 | `requested_target_status` | 06 | targeted 요청일 때 현재 상태 조회 결과 |
@@ -78,13 +78,14 @@ flowchart TD
 
 ## 3.4 08 Job Target Router
 
-`08_jobExecutionRouter.py`는 LLM 판단과 deterministic guardrail을 함께 사용한다.
+`08_jobExecutionRouter.py`는 02 해석과 06 DB 결과로 deterministic routing한다. LLM을 다시 호출하지 않는다. 기존 graph 연결용 llm 입력은 optional이며 사용하지 않는다.
 
 | 판단 항목 | 설명 |
 |---|---|
 | `job_route` | `MIG`, `SQL_CONVERSION`, `SQL_TUNING`, `SQL_FORMATTING`, `FULL_WORKFLOW`, `PREREQUISITE_REQUIRED`, `NO_RUNNABLE_JOB` |
 | `run_mode` | 전체/도메인 요청은 `all_pending`, 특정 target 요청은 `targeted` |
-| target merge | 02 payload, 08 LLM 결과, legacy regex fallback target을 merge |
+| target 보존 | 02가 생성하고 06이 검증한 필터를 그대로 사용. 추가 추출/merge 없음 |
+| 조회 오류 guard | 06 ok=false 또는 targeted 대상 미조회는 ERROR. 실행 불가 0건과 구분 |
 | no runnable guard | route count가 0이면 `NO_RUNNABLE_JOB` |
 | prerequisite guard | standalone SQL Conversion/Tuning 요청은 선행 잔여 작업이 있으면 막는다. |
 | full workflow 예외 | `FULL_WORKFLOW`는 선행 작업이 남아도 막지 않고 순서대로 처리한다. |
@@ -159,9 +160,9 @@ sequenceDiagram
 | 순서 | 컴포넌트 | 입력 | 핵심 처리 | 출력 |
 |---|---|---|---|---|
 | 1 | `00A_logRuntimeStart.py` | `input_message`, DB config | `smartmigrate.workflow` logger에 `SmartMigrateDBHandler` 등록 | 원문 message |
-| 2 | `02_intentRouter.py` | 00A Message + LLM | route 분류, metadata 보존, 선택 branch만 활성화 | Data payload; `route=JOB_EXECUTION` (domain/scope는 08에서 확정) |
+| 2 | `02_intentRouter.py` | 00A Message + LLM | route/action/domain/scope/targets 해석, metadata 보존 | Data payload; `route=JOB_EXECUTION`, `requested_domain=FULL_WORKFLOW`, `execution_scope=all` |
 | 4 | `06_getRemainingJobs.py` | payload + DB config | 네 도메인의 runnable count 조회 | `job_availability`, `remaining_summary` |
-| 5 | `08_jobExecutionRouter.py` | enriched payload + LLM config | route를 `FULL_WORKFLOW`, run mode를 `all_pending`으로 확정 | `next_node=18A_fullWorkflowJobsToLoopTable` |
+| 5 | `08_jobExecutionRouter.py` | enriched payload | 02 의도와 06 DB 결과로 `FULL_WORKFLOW/all_pending` 라우팅 | `next_node=18A_fullWorkflowJobsToLoopTable` |
 | 6 | `18A_fullWorkflowJobsToLoopTable.py` | payload + DB config | DB에서 전체 자동 실행 대상 row 조회, route order로 DataFrame 생성 | Full Workflow jobs DataFrame |
 | 7 | `18B_fullWorkflowLoop2.py` | DataFrame | 최초 snapshot의 첫 item을 실행하고, 이후 전체 실행에서만 DB refresh·중복 제외 후 한 row씩 item output | `job_item` |
 | 8 | `10C/12C/15C/17C` | `job_item` | 각 도메인 단일 작업 실행, DB update, log insert | `job_result` |

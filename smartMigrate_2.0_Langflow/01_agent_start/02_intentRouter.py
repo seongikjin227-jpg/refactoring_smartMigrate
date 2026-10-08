@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import traceback
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
@@ -14,7 +15,15 @@ from lfx.schema.message import Message
 
 ROUTE_CLASSIFIER_PROMPT = """You are the SmartMigrate request route classifier.
 Return exactly one JSON object and no other text:
-{"route":"GENERAL_CHAT|MANAGEMENT|JOB_EXECUTION"}
+{
+  "route": "GENERAL_CHAT|MANAGEMENT|JOB_EXECUTION",
+  "request_action": "STATUS_QUERY|EXECUTE|OTHER",
+  "requested_domain": "MIG|SQL_CONVERSION|SQL_TUNING|SQL_FORMATTING|FULL_WORKFLOW|UNKNOWN",
+  "execution_scope": "all|domain|targeted|unknown",
+  "target_filter": {"map_ids": [], "sql_seqs": [], "sql_ids": [], "space_nms": []},
+  "clarification_required": false,
+  "clarification_message": ""
+}
 
 Route definitions:
 - GENERAL_CHAT: conceptual questions or conversation not requesting SmartMigrate work.
@@ -24,6 +33,27 @@ Route definitions:
 
 An attached mapping/Excel/CSV file with a request to register, import, validate, preview,
 or apply mapping rules is MANAGEMENT, never GENERAL_CHAT.
+
+You are the only natural-language target interpreter. Extract targets before any DB query.
+- "마이그레이션 59번", "59번 맵", "MAP_ID 59" identify MIG and map_ids=[59].
+- "마이그레이션 59번 다시 실행해줘" is EXECUTE / JOB_EXECUTION / MIG / targeted.
+- "마이그레이션 59번 현재 상태를 다시 확인해주세요" is STATUS_QUERY / MANAGEMENT / MIG / targeted.
+  Mentioning an earlier execution or retry request does not itself request execution now.
+- SQL targets require sql_seq, or both sql_id and space_nm. Preserve string identifier case.
+- "전체 작업 실행", "남은 작업 다 실행", or generic "작업 실행" without any target/domain
+  is EXECUTE / JOB_EXECUTION / FULL_WORKFLOW / all, with empty target arrays.
+- "마이그레이션 전체 실행" is EXECUTE / JOB_EXECUTION / MIG / domain, with empty arrays.
+- "SQL 튜닝 전체 실행" is EXECUTE / JOB_EXECUTION / SQL_TUNING / domain.
+- A specific-target request is targeted even if its identifier cannot be resolved.
+  Never widen it to all/domain; set clarification_required=true and ask for the missing target.
+- Do not invent identifiers or infer previous chat targets: only the current request is provided.
+- If current intent is ambiguous between checking status and executing, set clarification_required=true.
+- Use positive integers for map_ids/sql_seqs and nonempty strings for sql_ids/space_nms.
+- Do not combine migration and SQL identifiers. For specific SQL execution, choose exactly one SQL domain.
+- For multiple SQL_ID/SPACE_NM pairs, ask for SQL_SEQ identifiers rather than flattening pairs into arrays.
+- FULL_WORKFLOW is for all execution, never targeted execution. Unknown domain/scope for execution
+  requires clarification; it is not permission to execute all remaining work.
+- For GENERAL_CHAT use OTHER / UNKNOWN / unknown with empty arrays.
 """
 
 LOGGER_NAME = "smartmigrate.workflow"
@@ -88,9 +118,20 @@ class NewType02IntentRouter(Component):
                         ]
                     },
                 )
+            if expected_route == "JOB_EXECUTION":
+                logging.getLogger(LOGGER_NAME).info(
+                    "02 final JSON payload to 06",
+                    extra={"workflow_log": [0, "WORKFLOW", "02_TO_06_PAYLOAD", "INFO", "SEND_06", "PASS", 0,
+                                            json.dumps(routed, ensure_ascii=False, default=str)]},
+                )
             self.status = routed
             return Data(data=routed)
         except Exception as exc:
+            logging.getLogger(LOGGER_NAME).error(
+                f"02 intent routing failed: {exc}",
+                extra={"workflow_log": [0, "WORKFLOW", "02_INTENT_ROUTER", "ERROR", "ROUTE", "ERROR", 0,
+                                        json.dumps({"error": str(exc), "traceback": traceback.format_exc()}, ensure_ascii=False)]},
+            )
             result = {"ok": False, "component": "02_intentRouter", "error": str(exc)}
             self.status = result
             return Data(data=result)
@@ -177,27 +218,17 @@ class NewType02IntentRouter(Component):
         )
 
         raw_llm_response = self._classify(user_request, source_message["files"])
-        route = self._route_from_response(raw_llm_response)
+        logger.info(
+            "02 raw LLM intent/target response",
+            extra={"workflow_log": [0, "WORKFLOW", "02_LLM_ROUTE_RESPONSE", "INFO", "CLASSIFY", "PASS", 0,
+                                    raw_llm_response]},
+        )
+        intent = self._intent_from_response(raw_llm_response)
+        route = intent["route"]
         if self._attachment_management_request(user_request, source_message["files"]) or (
             isinstance(source_message["data"], dict) and source_message["data"].get("uploaded_attachment")
         ):
             route = "MANAGEMENT"
-
-        logger.info(
-            raw_llm_response,
-            extra={
-                "workflow_log": [
-                    0,
-                    "WORKFLOW",
-                    "02_LLM_ROUTE_RESPONSE",
-                    "INFO",
-                    "CLASSIFY",
-                    "PASS",
-                    0,
-                    raw_llm_response,
-                ]
-            },
-        )
 
         payload = {
             "route": route,
@@ -205,17 +236,13 @@ class NewType02IntentRouter(Component):
             "resolved_user_request": user_request,
             "is_follow_up": False,
             "confirmation": "NOT_REQUIRED",
-            "clarification_required": False,
-            "clarification_message": "",
-            "should_execute": route == "JOB_EXECUTION",
-            "execution_scope": "unknown",
-            "requested_domain": "UNKNOWN",
-            "target_filter": {
-                "map_ids": [],
-                "sql_seqs": [],
-                "sql_ids": [],
-                "space_nms": [],
-            },
+            "request_action": intent["request_action"],
+            "clarification_required": intent["clarification_required"],
+            "clarification_message": intent["clarification_message"],
+            "should_execute": route == "JOB_EXECUTION" and intent["request_action"] == "EXECUTE" and not intent["clarification_required"],
+            "execution_scope": intent["execution_scope"],
+            "requested_domain": intent["requested_domain"],
+            "target_filter": intent["target_filter"],
             # Top-level copies make the attachment contract explicit for 04.
             "session_id": source_message["session_id"],
             "context_id": source_message["context_id"],
@@ -293,6 +320,83 @@ class NewType02IntentRouter(Component):
         if route not in {"GENERAL_CHAT", "MANAGEMENT", "JOB_EXECUTION"}:
             raise ValueError("02 LLM response must contain a valid route.")
         return route
+
+    def _intent_from_response(self, raw_response: str) -> dict[str, Any]:
+        match = re.search(r"\{.*\}", raw_response, flags=re.S)
+        decoded = json.loads(match.group(0) if match else raw_response)
+        if not isinstance(decoded, dict):
+            raise ValueError("02 LLM intent response must be an object.")
+        route = self._route_from_response(raw_response)
+        action = str(decoded.get("request_action") or "OTHER").upper()
+        domain = str(decoded.get("requested_domain") or "UNKNOWN").upper()
+        scope = str(decoded.get("execution_scope") or "unknown").lower()
+        if action not in {"STATUS_QUERY", "EXECUTE", "OTHER"}:
+            raise ValueError(f"Invalid request_action: {action}")
+        if domain not in {"MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING", "FULL_WORKFLOW", "UNKNOWN"}:
+            raise ValueError(f"Invalid requested_domain: {domain}")
+        if scope not in {"all", "domain", "targeted", "unknown"}:
+            raise ValueError(f"Invalid execution_scope: {scope}")
+        targets = self._normalize_target_filter(decoded.get("target_filter", {}))
+        clarification = decoded.get("clarification_required", False)
+        if not isinstance(clarification, bool):
+            raise ValueError("clarification_required must be a boolean.")
+        reason = str(decoded.get("clarification_message") or "").strip()
+        has_mig = bool(targets["map_ids"])
+        has_sql = any(targets[key] for key in ("sql_seqs", "sql_ids", "space_nms"))
+        has_target = has_mig or has_sql
+        if action == "STATUS_QUERY":
+            route = "MANAGEMENT"
+        problem = ""
+        if has_mig and has_sql:
+            problem = "Migration과 SQL 작업을 나누어 요청해 주세요."
+        elif has_target and scope != "targeted":
+            problem = "특정 대상 실행인지 전체 실행인지 확인해 주세요."
+        elif scope == "targeted" and not has_target:
+            problem = "작업 대상 MAP_ID 또는 SQL_SEQ를 알려주세요."
+        elif has_sql and not targets["sql_seqs"] and not (targets["sql_ids"] and targets["space_nms"]):
+            problem = "SQL_SEQ 또는 SQL_ID와 SPACE_NM을 함께 알려주세요."
+        elif len(targets["sql_ids"]) > 1 and len(targets["space_nms"]) > 1:
+            problem = "여러 SQL 대상은 각각의 SQL_SEQ로 지정해 주세요."
+        elif route == "JOB_EXECUTION":
+            if action != "EXECUTE":
+                problem = "상태 확인인지 실제 실행인지 명확히 요청해 주세요."
+            elif scope == "unknown" or domain == "UNKNOWN":
+                problem = "실행할 도메인과 전체 또는 특정 대상 범위를 알려주세요."
+            elif (scope == "all") != (domain == "FULL_WORKFLOW"):
+                problem = "전체 워크플로우인지 특정 도메인 실행인지 확인해 주세요."
+            elif (has_mig and domain != "MIG") or (has_sql and domain not in {"SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"}):
+                problem = "작업 도메인과 대상 식별자가 일치하지 않습니다."
+        if problem:
+            clarification, reason = True, problem
+        if clarification and not reason:
+            reason = "대상과 상태 확인 또는 실행 의도를 명확히 알려주세요."
+        return {"route": route, "request_action": action, "requested_domain": domain,
+                "execution_scope": scope, "target_filter": targets,
+                "clarification_required": clarification, "clarification_message": reason}
+
+    @staticmethod
+    def _normalize_target_filter(raw: Any) -> dict[str, list[Any]]:
+        if not isinstance(raw, dict):
+            raise ValueError("target_filter must be an object.")
+        targets: dict[str, list[Any]] = {}
+        for key in ("map_ids", "sql_seqs", "sql_ids", "space_nms"):
+            values = raw.get(key, [])
+            if not isinstance(values, list):
+                raise ValueError(f"target_filter.{key} must be an array.")
+            normalized = []
+            for value in values:
+                if key in {"map_ids", "sql_seqs"}:
+                    if isinstance(value, bool) or not re.fullmatch(r"[0-9]+", str(value)) or int(value) <= 0:
+                        raise ValueError(f"target_filter.{key} must contain positive integers.")
+                    value = int(value)
+                elif not isinstance(value, str) or not value.strip():
+                    raise ValueError(f"target_filter.{key} must contain nonempty strings.")
+                else:
+                    value = value.strip()
+                if value not in normalized:
+                    normalized.append(value)
+            targets[key] = normalized
+        return targets
 
     @staticmethod
     def _attachment_management_request(user_request: str, files: list[Any]) -> bool:
