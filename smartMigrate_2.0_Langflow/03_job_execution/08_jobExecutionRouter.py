@@ -177,6 +177,8 @@ class NewType08JobExecutionRouter(Component):
             "run_all_pending": decision["run_all_pending"], "target_filter": decision["target_filter"],
             "selected_jobs": decision["selected_jobs"], "routing_reason": decision["reason"],
             "routing_source": "02_intent_and_06_db",
+            "next_node": self._next_node(decision["job_route"]),
+            "should_execute": decision["job_route"] in {"MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING", "FULL_WORKFLOW"},
         }
         routed.setdefault("history", []).append({
             "step": "job_target_route",
@@ -240,12 +242,13 @@ class NewType08JobExecutionRouter(Component):
 
     # 선행 단계가 부족해 현재 route를 실행할 수 없는 이유 문장을 만든다.
     def _prerequisite_reason(self, route: str, run_mode: str, counts: dict[str, int]) -> str:
-        if run_mode != "all_pending" or route in {"MIG", "FULL_WORKFLOW", "PREREQUISITE_REQUIRED", "NO_RUNNABLE_JOB"}:
+        if route in {"MIG", "FULL_WORKFLOW", "PREREQUISITE_REQUIRED", "NO_RUNNABLE_JOB"}:
             return ""
         blockers: list[str] = []
-        if route in {"SQL_CONVERSION", "SQL_TUNING"} and counts.get("MIG", 0) > 0:
-            blockers.append(f"DB Migration 잔여 {counts.get('MIG', 0)}건")
-        if route == "SQL_TUNING" and counts.get("SQL_CONVERSION", 0) > 0:
+        migration_incomplete = counts.get("MIG_INCOMPLETE", counts.get("MIG", 0))
+        if route in {"SQL_CONVERSION", "SQL_TUNING"} and migration_incomplete > 0:
+            blockers.append(f"DB Migration 미완료 {migration_incomplete}건 (사용 대상 중 STATUS가 PASS가 아닌 작업)")
+        if run_mode == "all_pending" and route == "SQL_TUNING" and counts.get("SQL_CONVERSION", 0) > 0:
             blockers.append(f"SQL Conversion 잔여 {counts.get('SQL_CONVERSION', 0)}건")
         return "선행 작업이 남아 있어 요청한 단계를 실행할 수 없습니다: " + ", ".join(blockers) if blockers else ""
 
@@ -261,11 +264,12 @@ class NewType08JobExecutionRouter(Component):
         summary = payload.get("job_availability") or payload.get("remaining_summary") or payload.get("pending_summary") or {}
         counts = {
             "MIG": self._to_int(summary.get("migration_total")) or 0,
+            "MIG_INCOMPLETE": self._to_int(summary.get("migration_incomplete_total", summary.get("migration_total"))) or 0,
             "SQL_CONVERSION": self._to_int(summary.get("sql_conversion_total")) or 0,
             "SQL_TUNING": self._to_int(summary.get("sql_tuning_total")) or 0,
             "SQL_FORMATTING": self._to_int(summary.get("sql_formatting_total")) or 0,
         }
-        counts["total"] = self._to_int(summary.get("total")) or sum(counts.values())
+        counts["total"] = self._to_int(summary.get("total")) or sum(counts[key] for key in ("MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"))
         return counts
 
     # 실행할 작업이 없을 때 router가 반환할 표준 decision payload를 만든다.

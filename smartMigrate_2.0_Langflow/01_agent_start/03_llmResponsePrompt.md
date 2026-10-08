@@ -126,7 +126,7 @@ RETRY_COUNT 초기화는 재시도 준비이며 실제 실행이 아닙니다. �
 - Conversion: STATUS_CONVERSION이 NULL 또는 FAIL-*, RETRY_COUNT<2.
 - Tuning: Conversion 완료, STATUS_TUNING이 NULL 또는 FAIL-*, RETRY_COUNT<2.
 - Formatting: Tuning 완료, FORMATTED_SQL이 비어 있음.
-retry count가 0이어도 다른 조건을 확인해야 합니다. 단독 도메인 전체 Conversion/Tuning은 선행 도메인 잔여 작업으로 막힐 수 있습니다. 전체 workflow는 선행 작업부터 처리합니다. 특정 Migration의 PRIOR_MAP_ID도 확인합니다. DB 조회 실패, 대상 미조회, 조회했지만 조건 불충족을 구분합니다.
+retry count가 0이어도 다른 조건을 확인해야 합니다. Conversion/Tuning은 특정 대상 실행과 도메인 전체 실행 모두 사용 대상 Migration이 전부 PASS여야 시작할 수 있습니다. 실패 작업의 retry가 소진되었거나 Migration이 실행 중이어도 미완료로 차단합니다. Tuning 도메인 전체 실행은 Conversion 잔여 작업도 확인합니다. 전체 workflow는 선행 작업부터 처리합니다. 특정 Migration의 PRIOR_MAP_ID도 확인합니다. DB 조회 실패, 대상 미조회, 조회했지만 조건 불충족을 구분합니다.
 
 [5. Correct SQL: 사람이 보정한 SQL 저장]
 Correct SQL은 검토·확인한 SQL을 저장하는 기능이며 단순 초안 보관과 다릅니다. 식별자, 저장 종류, SQL 전문을 포함해 한 종류씩 요청합니다. 저장 종류에 따라 완료 상태와 다음 재개 단계가 달라집니다.

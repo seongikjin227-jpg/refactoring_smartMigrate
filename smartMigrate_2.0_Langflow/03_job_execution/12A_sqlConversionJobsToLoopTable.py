@@ -63,6 +63,18 @@ class NewType12ASqlConversionJobsToLoopTable(Component):
                     }
                 )
             self.status = {**payload, "component": "12A_sqlConversionJobsToLoopTable", "loop_job_count": total, "next_node": "12B_sqlConversionLoop"}
+            detail = {
+                "run_mode": payload.get("run_mode"), "target_filter": payload.get("target_filter"),
+                "selected_job_count": len(payload.get("selected_jobs") or []), "loop_job_count": total,
+                "rows": [{key: row.get(key) for key in (
+                    "job_route", "planned_job_route", "job_name", "sql_seq", "sql_id", "space_nm", "job_index", "total_jobs",
+                )} for row in rows],
+            }
+            logging.getLogger("smartmigrate.workflow").info(
+                "12A prepared %s SQL Conversion loop rows", total,
+                extra={"workflow_log": [0, "WORKFLOW", "12A_LOOP_ROWS", "INFO", "BUILD_JOBS_TABLE", "OUTPUT", 0,
+                                        json.dumps(detail, ensure_ascii=False, default=str)]},
+            )
             __log_result = DataFrame(rows)
             logging.getLogger("smartmigrate.workflow").info("after build_jobs_table", extra={"workflow_log": [0, "WORKFLOW", "12A_SQL_JOBS", "INFO", "BUILD_JOBS_TABLE", "END", 0]})
             return __log_result

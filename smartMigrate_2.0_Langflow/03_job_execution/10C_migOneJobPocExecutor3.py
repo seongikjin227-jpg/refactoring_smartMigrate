@@ -271,20 +271,6 @@ class NewType10CMigOneJobPocExecutor3(Component):
             # Holds the failure stage appropriate for an unexpected system
             # error.  Graph nodes update this as business stages complete.
             status_tracker = {"failure_status": current_status if current_status.startswith("FAIL") else "FAIL-INSERT"}
-            if current_status == "PASS":
-                elapsed = int(time.perf_counter() - started)
-                message = f"MAP_ID={map_id} is already PASS; migration execution skipped."
-                attempts = [{"attempt": 0, "stage": "CHECK_CURRENT_STATUS", "status": "PASS", "reason": message}]
-                logger.info(
-                    message,
-                    extra={"workflow_log": [map_id, "DB_MIGRATION", "JOB_SKIP", "INFO", "CHECK_CURRENT_STATUS", "PASS", 0, message]},
-                )
-                result = self._result(job, ok=True, status="PASS", elapsed=elapsed, attempts=attempts)
-                result.update({"already_pass": True, "db_status_updated": False, "message": message})
-                self.status = result
-                __log_result = Data(data=result)
-                logger.info("after run_job", extra={"workflow_log": [0, "WORKFLOW", "10C_MIG_EXEC", "INFO", "RUN_JOB", "END", 0]})
-                return __log_result
             attempts: list[dict[str, Any]] = []
             graph_result: dict[str, Any] = {}
             final_status = "FAIL-INSERT"

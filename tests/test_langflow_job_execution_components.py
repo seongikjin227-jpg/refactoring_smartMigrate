@@ -161,12 +161,43 @@ class JobExecutionTests(unittest.TestCase):
         self.assertTrue(output["run_all_pending"])
         self.assertEqual(output["job_route"], "FULL_WORKFLOW")
         self.assertEqual(output["selected_jobs"], [])
-        self.assertEqual(len(cursor.calls), 4)
+        self.assertEqual(len(cursor.calls), 5)
 
     def test_domain_execution_stays_in_requested_domain(self):
         payload = self.interpret(self.intent("domain", "MIG", {}))
         result, _, _ = self.query(payload)
         self.assertEqual(self.router(result)._get_routed_payload()["job_route"], "MIG")
+
+    def test_targeted_conversion_is_blocked_before_12a_when_migration_incomplete(self):
+        payload = self.interpret(self.intent(domain="SQL_CONVERSION", targets={"sql_seqs": [6]}))
+        result, _, _ = self.query(payload, Cursor(mig_count=1))
+        component = self.router(result)
+        output = component._get_routed_payload()
+        self.assertEqual(output["job_route"], "PREREQUISITE_REQUIRED")
+        self.assertEqual(output["selected_jobs"], [])
+        self.assertEqual(output["next_node"], "chat_output")
+        self.assertFalse(output["run_all_pending"])
+        self.assertIn("Migration", output["routing_reason"])
+        self.assertFalse(output["should_execute"])
+        self.assertEqual(component.sql_conversion_response().data, {})
+        component.stop.assert_called_with("sql_conversion_job")
+
+    def test_exhausted_migration_retry_still_blocks_sql_and_does_not_inflate_job_total(self):
+        payload = self.interpret(self.intent(domain="SQL_CONVERSION", targets={"sql_seqs": [6]}))
+        cursor = Cursor(mig_count=0)
+        original_execute = cursor.execute
+
+        def execute(sql, params=None):
+            original_execute(sql, params)
+            if "COUNT(*)" in sql and "NEXT_MIG_INFO" in sql and "RETRY_COUNT" not in sql:
+                cursor.rows = [(1,)]
+
+        cursor.execute = execute
+        result, _, _ = self.query(payload, cursor)
+        self.assertEqual(result["job_availability"]["migration_total"], 0)
+        self.assertEqual(result["job_availability"]["migration_incomplete_total"], 1)
+        self.assertEqual(result["job_availability"]["total"], 0)
+        self.assertEqual(self.router(result)._get_routed_payload()["job_route"], "PREREQUISITE_REQUIRED")
 
     def test_missing_or_conflicting_targets_never_expand_to_all(self):
         cases = [self.intent(targets={}), self.intent("all", "FULL_WORKFLOW", {"map_ids": [59]}),

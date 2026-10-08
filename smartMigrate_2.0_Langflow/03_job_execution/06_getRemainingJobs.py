@@ -71,8 +71,9 @@ class NewType06GetRemainingJobs(Component):
                         requested_jobs = self._load_target_jobs(conn, targets)
 
                 summary = {
-                    "total": sum(counts.values()),
+                    "total": sum(counts[key] for key in ("MIG", "SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING")),
                     "migration_total": counts["MIG"],
+                    "migration_incomplete_total": counts["MIG_INCOMPLETE"],
                     "sql_conversion_total": counts["SQL_CONVERSION"],
                     "sql_tuning_total": counts["SQL_TUNING"],
                     "sql_formatting_total": counts["SQL_FORMATTING"],
@@ -145,6 +146,12 @@ class NewType06GetRemainingJobs(Component):
         mig_table = self._qualify("NEXT_MIG_INFO")
         sql_table = self._qualify("NEXT_SQL_INFO")
         queries = {
+            "MIG_INCOMPLETE": f"""
+                SELECT COUNT(*)
+                  FROM {mig_table}
+                 WHERE UPPER(TRIM(NVL(USE_YN, 'N'))) = 'Y'
+                   AND (STATUS IS NULL OR UPPER(TRIM(STATUS)) <> 'PASS')
+            """,
             "MIG": f"""
                 SELECT COUNT(*)
                   FROM {mig_table}

@@ -47,6 +47,8 @@ SQL 작업은 `SQL_SEQ`로 찾는 것이 가장 정확하다. 이를 모르면 `
 
 `RUNNING-*`은 이미 처리 중인 상태이므로 자동 후보가 아니다.
 
+SQL Conversion/Tuning은 특정 SQL_SEQ 실행을 요청해도 사용 대상 Migration(`USE_YN=Y`)이 모두 `PASS`여야 시작한다. 08에서 미완료가 확인되면 실행 분기로 전달하지 않고 선행 작업 안내를 반환한다. 이 미완료 건수는 자동 실행 후보 건수와 별도이며 retry 소진 실패, 실행 중 상태도 포함한다. 전체 workflow는 선행 Migration부터 처리한다.
+
 ## 3. DB Migration
 
 표준 실행기는 `10C_migOneJobPocExecutor3.py`다. 생성 → INSERT 실행 → 건수 검증 → 레코드 검증 순서로 진행한다.

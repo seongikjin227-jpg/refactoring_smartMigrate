@@ -177,6 +177,8 @@ DBA mapping rule 작성 기준은 `12C_sql_conversion_mapping_rule_contract.md`�
 
 `12C_sqlConversionOneJobPocExecutor.py`는 `NEXT_SQL_INFO`의 SQL 한 건을 TOBE SQL로 변환하고 binding/validation SQL을 만든다.
 
+도메인 실행의 Migration 선행 조건은 06의 미완료 집계와 08 라우터에서 판단한다. 12C에 전달된 Conversion 단건은 Migration 완료 여부나 full workflow의 관련 매핑 상태를 다시 검사해 중단하지 않고 변환을 실행한다. PASS 상태라는 이유로 실행 시작을 건너뛰지도 않는다. 매핑 규칙·원본 SQL 등 실제 변환에 필요한 입력은 변환 과정에서 조회·검증하며 오류는 해당 실행의 실패 결과로 기록한다.
+
 ### 입력과 산출
 
 | 항목 | 내용 |

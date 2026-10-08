@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 from typing import Any
 
 from lfx.custom.custom_component.component import Component
@@ -61,6 +62,10 @@ class NewType12BSqlConversionLoop(Component):
             payload = self._data_dict(item)
             self._validate_sql_key(payload, index)
             job_keys.append(self._job_key(payload))
+        self._log_detail("12B_LOOP_INPUT", "INITIALIZE", {
+            "input_type": type(self.data).__name__, "job_count": len(data_list),
+            "items": [self._item_summary(item) for item in data_list],
+        })
         self.update_ctx(
             {
                 f"{self._id}_data": data_list,
@@ -112,7 +117,16 @@ class NewType12BSqlConversionLoop(Component):
         start_vertex_id = self._get_loop_body_start_vertex()
         start_edge = get_loop_body_start_edge(self._vertex)
         end_vertex_id = self.get_incoming_edge_by_target_param("item")
+        self._log_detail("12B_LOOP_BODY", "EXECUTE", {
+            "job_count": len(data_list), "start_vertex_id": start_vertex_id,
+            "end_vertex_id": end_vertex_id, "body_vertex_ids": sorted(loop_body_vertex_ids),
+            "target_input": getattr(getattr(start_edge, "target_handle", None), "field_name", None),
+            "items": [self._item_summary(item) for item in data_list],
+        })
+        if not loop_body_vertex_ids or not start_vertex_id or not start_edge or not end_vertex_id:
+            raise ValueError("12B Loop body를 구성하지 못했습니다. Item → 12C Job Item과 12D Loop Result → 12B Item 반환 연결을 확인해 주세요.")
         return await execute_loop_body(
+            # The helper injects each Data row into the first executor's input.
             graph=self.graph,
             data_list=data_list,
             loop_body_vertex_ids=loop_body_vertex_ids,
@@ -148,6 +162,11 @@ class NewType12BSqlConversionLoop(Component):
             raise
         elapsed = time.perf_counter() - started_at
         self.update_ctx({f"{self._id}_aggregated": aggregated_results, f"{self._id}_iterated": True})
+        self._log_detail("12B_LOOP_COMPLETE", "DONE", {
+            "job_count": len(data_list), "result_count": len(aggregated_results),
+            "elapsed_seconds": round(elapsed, 3),
+            "results": [self._item_summary(item) for item in aggregated_results],
+        })
         return aggregated_results
 
     # Loop body로 전달할 현재 item payload를 반환한다.
@@ -196,6 +215,20 @@ class NewType12BSqlConversionLoop(Component):
         except Exception as exc:
             logging.getLogger("smartmigrate.workflow").error(f"error done_output: {exc}", extra={"workflow_log": [0, "WORKFLOW", "12B_SQL_LOOP", "ERROR", "DONE_OUTPUT", "ERROR", 0]})
             raise
+
+    def _item_summary(self, item: Any) -> dict[str, Any]:
+        payload = self._data_dict(item)
+        return {key: payload.get(key) for key in (
+            "component", "job_route", "planned_job_route", "job_name", "sql_seq", "sql_id", "space_nm",
+            "job_index", "total_jobs", "status", "message",
+        )}
+
+    def _log_detail(self, log_type: str, step: str, detail: dict[str, Any]) -> None:
+        logging.getLogger("smartmigrate.workflow").info(
+            "%s: %s", log_type, json.dumps(detail, ensure_ascii=False, default=str),
+            extra={"workflow_log": [0, "WORKFLOW", log_type, "INFO", step, "INFO", 0,
+                                    json.dumps(detail, ensure_ascii=False, default=str)]},
+        )
 
     # 입력 payload나 job item이 실행 가능한 구조인지 검증한다.
     def _validate_sql_key(self, payload: dict[str, Any], index: int) -> None:
