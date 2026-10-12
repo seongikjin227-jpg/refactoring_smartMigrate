@@ -155,8 +155,9 @@ class NewType04Dashboard(Component):
     def _sql_tuning_summary(self) -> dict[str, Any]:
         # SQL Tuning 단계의 전체/대상/성공/실패 건수를 계산한다.
         table = self._qualify("NEXT_SQL_INFO")
-        total_scope = self._sql_status_target_condition("STATUS_TUNING", ("PASS", "PASS-TUNING"))
-        base_where = "UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')"
+        # 세 SQL 단계의 작업 대상은 Conversion 기준으로 동일하게 집계한다.
+        total_scope = self._sql_status_target_condition("STATUS_CONVERSION", ("PASS", "PASS-CONVERSION"))
+        base_where = f"{total_scope} AND UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION')"
         pending_where = f"{base_where} AND (STATUS_TUNING IS NULL OR UPPER(TRIM(NVL(STATUS_TUNING, ''))) LIKE 'FAIL-%') AND NVL(RETRY_COUNT, 0) < 2"
         fail_where = f"{base_where} AND ({self._fail_status_condition('STATUS_TUNING')})"
         target_where = pending_where
@@ -168,11 +169,11 @@ class NewType04Dashboard(Component):
         return self._stage_summary(
             agent="SQL_TUNING",
             table=table,
-            target_condition="total excludes STATUS_TUNING='NA'; remaining requires conversion PASS, tuning NULL/FAIL-*, and RETRY_COUNT < 2",
+            target_condition="total uses the SQL Conversion target scope; remaining requires conversion PASS, tuning NULL/FAIL-*, and RETRY_COUNT < 2",
             total=total,
             target_count=target,
             pending_count=pending,
-            progress_count=total - target,
+            progress_count=pass_count + fail_count,
             progress_base=total,
             success_count=pass_count,
             success_base=pass_count + fail_count,
@@ -185,8 +186,9 @@ class NewType04Dashboard(Component):
     def _sql_formatting_summary(self) -> dict[str, Any]:
         # SQL Formatting 단계의 적용 및 자동 실행 대상 건수를 계산한다.
         table = self._qualify("NEXT_SQL_INFO")
-        total_scope = self._sql_status_target_condition("STATUS_TUNING", ("PASS", "PASS-TUNING"))
-        base_where = "UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING')"
+        # 분모는 공통 SQL 작업 대상, 분자는 실제 포맷팅 적용 완료 건수다.
+        total_scope = self._sql_status_target_condition("STATUS_CONVERSION", ("PASS", "PASS-CONVERSION"))
+        base_where = f"{total_scope} AND UPPER(TRIM(STATUS_CONVERSION)) IN ('PASS', 'PASS-CONVERSION') AND UPPER(TRIM(STATUS_TUNING)) IN ('PASS', 'PASS-TUNING')"
         target_where = f"{base_where} AND (FORMATTED_SQL IS NULL OR NVL(DBMS_LOB.GETLENGTH(FORMATTED_SQL), 0) = 0)"
         applied_where = f"{base_where} AND FORMATTED_SQL IS NOT NULL AND DBMS_LOB.GETLENGTH(FORMATTED_SQL) > 0"
         total = self._count(table, total_scope)
@@ -195,10 +197,10 @@ class NewType04Dashboard(Component):
         return self._stage_summary(
             agent="SQL_FORMATTING",
             table=table,
-            target_condition="total excludes STATUS_TUNING='NA'; remaining requires tuning PASS and FORMATTED_SQL empty",
+            target_condition="total uses the SQL Conversion target scope; remaining requires conversion PASS, tuning PASS and FORMATTED_SQL empty",
             total=total,
             target_count=target,
-            progress_count=total - target,
+            progress_count=applied,
             progress_base=total,
             success_count=applied,
             success_base=0,
