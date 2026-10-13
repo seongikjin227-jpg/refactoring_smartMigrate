@@ -19,7 +19,7 @@
 - 여러 table 후보 중 mapping rule이 존재하는 table이 하나라도 있으면 SQL Conversion은 계속 진행한다.
 - 프롬프트에는 조회된 mapping rule만 포함한다.
 - 여러 table 후보 중 일부 table의 mapping rule이 없더라도 그 이유만으로 fail 처리하지 않는다.
-- 전체 후보에서 조회된 mapping rule이 0건이면 `FAIL-TOBE`로 종료한다.
+- 전체 후보에서 조회된 mapping rule이 0건이어도 원본 테이블명과 컬럼명을 유지하여 SQL Conversion을 진행한다.
 - `TARGET_TABLE` 자체가 비어 있으면 mapping rule scope를 알 수 없으므로 `FAIL-TOBE`로 종료한다.
 
 ## 3. Column Mapping 의미
@@ -37,20 +37,21 @@
 
 ## 4. Unmapped Object 정책
 
-매핑룰에 없는 source object는 이름이 그대로 유지되는 것이 아니다. 미사용으로 해석한다.
+테이블 매핑이 없으면 원본 테이블명과 해당 테이블의 컬럼명, alias, join, filter, projection, MyBatis fragment를 유지한다.
 
-- mapping rule에 없는 source table은 TO-BE SQL에서 미사용 table이다.
-- mapping rule에 없는 source column은 TO-BE SQL에서 미사용 column이다.
-- DBA가 TO-BE SQL에서 계속 사용해야 하는 table/column은 이름이 AS-IS와 TO-BE에서 같더라도 반드시 mapping rule에 명시해야 한다.
-- 즉, "매핑룰에 없음"은 "이름 변경 없음"이 아니라 "TO-BE에서 사용하지 않음"이다.
+- mapping rule에 없는 source table은 TO-BE SQL에서 원본 이름으로 사용한다. 스키마 prefix는 기존 target_schema 규칙을 따른다.
+- 물리 테이블명은 원본 SQL의 테이블명 또는 명시된 `TO_TABLE`만 사용한다. RAG, Correct SQL 힌트, 업무 의미로 테이블명을 추측하거나 생성하지 않는다.
+- 매핑된 source table에서 mapping rule에 없는 source column은 미사용 column이다.
+- 매핑 없는 테이블의 컬럼에는 미사용 column 정책을 적용하지 않는다.
+- 매핑된 테이블에서 계속 사용할 컬럼은 이름이 같더라도 column mapping에 명시해야 한다.
 
 ## 5. TO-BE SQL 생성 기준
 
-TO-BE SQL 생성기는 mapping rule에 있는 table/column만 target 구조로 변환해 사용한다.
+TO-BE SQL 생성기는 명시된 table/column mapping을 적용하고, 테이블 매핑이 없는 대상은 원본 이름을 유지한다.
 
-- source table은 mapping rule이 실제 `TO_TABLE`로 매핑한 경우에만 TO-BE SQL에서 사용한다.
-- source column은 mapping rule이 실제 `TO_COL`로 매핑한 경우에만 TO-BE SQL에서 사용한다.
-- 미사용 table/column 전용 `SELECT`, `WHERE`, `JOIN`, `GROUP BY`, `HAVING`, `ORDER BY`, MyBatis dynamic fragment는 제거한다.
+- 매핑된 source table은 실제 `TO_TABLE`로 변환하고, 매핑 없는 source table은 원본 이름으로 사용한다.
+- 매핑된 source table의 컬럼은 실제 `TO_COL`로 매핑된 경우에 사용한다. 매핑 없는 테이블의 컬럼은 원본 이름으로 유지한다.
+- 매핑된 테이블의 미사용 column 전용 `SELECT`, `WHERE`, `JOIN`, `GROUP BY`, `HAVING`, `ORDER BY`, MyBatis dynamic fragment는 제거한다.
 - mapped object와 unused object가 하나의 predicate/expression에 섞여 있으면 안전하게 분리 가능한 unused 조건만 제거한다.
 - 안전하게 분리하기 어렵다면 해당 predicate/expression 전체를 제거해 invalid TO-BE reference를 피한다.
 
@@ -59,7 +60,7 @@ TO-BE SQL 생성기는 mapping rule에 있는 table/column만 target 구조로 �
 TEST SQL은 AS-IS `FROM SQL`과 변환된 `TO-BE SQL`의 row count를 비교한다. 단, TO-BE에서 사용하지 않는 조건은 AS-IS count 쪽에서도 제거해 비교 범위를 맞춘다.
 
 - TO-BE로 넘어오며 사용하지 않게 된 AS-IS filter/condition은 `FROM_COUNT` 쪽에서도 제거한다.
-- 미사용 table/column 전용 join/filter/HAVING/GROUP BY/ORDER BY/MyBatis fragment는 `FROM_COUNT` 쪽에서 제거한다.
+- 매핑된 테이블의 미사용 column 전용 join/filter/HAVING/GROUP BY/ORDER BY/MyBatis fragment는 `FROM_COUNT` 쪽에서 제거한다. 매핑 없는 테이블의 참조와 조건은 유지한다.
 - 제거된 AS-IS filter에만 쓰이던 bind parameter는 최종 TEST SQL에서도 요구하지 않는다.
 - 목적은 "원본 SQL 전체 조건"과 비교하는 것이 아니라, "TO-BE SQL로 이관된 의미 범위"와 비교하는 것이다.
 
@@ -100,8 +101,9 @@ FR_COL = STATUS_CD -> TO_COL = STATUS_CD
 | 상황 | 처리 |
 |---|---|
 | `TARGET_TABLE`이 비어 있음 | `FAIL-TOBE` |
-| `TARGET_TABLE` 후보 전체에서 PASS mapping rule 0건 | `FAIL-TOBE` |
+| `TARGET_TABLE` 후보 전체에서 PASS mapping rule 0건 | 원본 테이블명과 컬럼명을 유지해 진행 |
 | `TARGET_TABLE` 후보 중 일부만 mapping rule 있음 | 조회된 rule만 사용해 진행 |
 | `TO_COL`이 null/blank 계열 | 해당 column 미사용 |
-| source column이 mapping rule에 없음 | 해당 column 미사용 |
+| 매핑된 source table의 column이 mapping rule에 없음 | 해당 column 미사용 |
+| source table이 mapping rule에 없음 | 원본 테이블명과 해당 컬럼 및 조건 유지 |
 
