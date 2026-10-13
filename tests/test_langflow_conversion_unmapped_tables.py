@@ -2,6 +2,7 @@
 import ast
 from contextlib import contextmanager
 import json
+import logging
 import re
 from pathlib import Path
 import unittest
@@ -19,7 +20,7 @@ prompt_nodes = [
         and node.target.id == "SQL_PROMPT_TEMPLATES")
 ]
 namespace = dict(Component=object, contextmanager=contextmanager, json=json, re=re,
-                 SQL_OUTPUT_FORMATTING_GUIDE="")
+                 logging=logging, RAG_SEARCH="SEARCH", SQL_OUTPUT_FORMATTING_GUIDE="")
 future = ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0)
 module = ast.Module(body=[future] + prompt_nodes + [component_node], type_ignores=[])
 exec(compile(ast.fix_missing_locations(module), str(PATH), "exec"), namespace)
@@ -76,7 +77,7 @@ class UnmappedTablePolicyTests(unittest.TestCase):
         }})
         prompt = self.generate([], general_rules=[rule])
         general_section = prompt.split("[SQL_CONVERSION_GENERAL_RAG_GUIDANCE]", 1)[1].split(
-            "[SQL_CONVERSION_SEARCH_RAG_TOP_3_BY_FULL_SQL]", 1)[0]
+            "[SQL_CONVERSION_SEARCH_RAG_BY_SOURCE_TABLE]", 1)[0]
         self.assertIn("RAG_ID=7 | SOURCE_TABLES=A", general_section)
         self.assertIn(f"SOURCE_SQL: {rule['source_sql']}", general_section)
         self.assertIn(f"TARGET_SQL: {rule['target_sql']}", general_section)
@@ -90,6 +91,59 @@ class UnmappedTablePolicyTests(unittest.TestCase):
         self.assertIn("Preserve join semantics.", prompt)
         self.assertNotIn("SOURCE_SQL:", prompt)
         self.assertNotIn("TARGET_SQL:", prompt)
+
+
+class ConversionSearchTableScopeTests(unittest.TestCase):
+    def component(self, batches):
+        component = Conversion()
+        component.rag_top_k = 1
+        component._milvus_config = Mock(return_value={"rag_collection": "SM_RAG_RULES"})
+        iterator = Mock()
+        iterator.next.side_effect = batches
+        client = Mock()
+        client.query_iterator.return_value = iterator
+        client.search.side_effect = AssertionError("Conversion must not run vector search")
+        component._milvus_client = Mock(return_value=client)
+        component._embed_texts = Mock(side_effect=AssertionError("Conversion must not embed SQL"))
+        return component, client, iterator
+
+    def row(self, rule_id, source_tables='["A"]'):
+        return {
+            "rag_id": str(rule_id), "category": "SQL_CONVERSION", "rule_type": "SEARCH",
+            "source_tables": source_tables, "guidance_text": f"Guide {rule_id}",
+            "source_sql": f"SELECT ID FROM A /* source {rule_id} */",
+            "target_sql": f"SELECT ID FROM NEW_A /* target {rule_id} */",
+        }
+
+    def test_all_overlapping_rules_across_batches_reach_prompt_without_top_k(self):
+        component, client, iterator = self.component([
+            [self.row(i) for i in range(1000)],
+            [self.row(1000, '["SRC.B", "C"]'), self.row(1001, '["OTHER"]'), self.row(1002, '')],
+            [],
+        ])
+        examples = component._retrieve_rag_examples({}, {}, "SQL_CONVERSION", "SELECT ID FROM A", {"A", "B"}, "42")
+        matches = examples[0]["top_rule_matches"]
+        self.assertEqual(len(matches), 1001)
+        self.assertEqual({rule["rule_id"] for rule in matches}, {str(i) for i in range(1001)})
+        client.search.assert_not_called()
+        component._embed_texts.assert_not_called()
+        iterator.close.assert_called_once()
+        query_args = client.query_iterator.call_args.kwargs
+        self.assertEqual(query_args["limit"], -1)
+        self.assertEqual(query_args["filter"], 'category == "SQL_CONVERSION" and rule_type == "SEARCH" and is_active == true')
+        prompt = component._mapping_prompt_text([], [], examples, {"source_schema": "SRC", "target_schema": "DST"})
+        self.assertIn("[SQL_CONVERSION_SEARCH_RAG_BY_SOURCE_TABLE]", prompt)
+        for rule_id in (0, 999, 1000):
+            self.assertIn(f"GUIDANCE_TEXT: Guide {rule_id}\n", prompt)
+            self.assertIn(f"SOURCE_SQL: {self.row(rule_id)['source_sql']}", prompt)
+            self.assertIn(f"TARGET_SQL: {self.row(rule_id)['target_sql']}", prompt)
+        self.assertNotIn("SCORE=", prompt)
+
+    def test_iterator_is_closed_and_errors_are_not_hidden(self):
+        component, _, iterator = self.component([RuntimeError("Milvus read failed")])
+        with self.assertRaisesRegex(RuntimeError, "Milvus read failed"):
+            component._retrieve_rag_examples({}, {}, "SQL_CONVERSION", "SELECT ID FROM A", {"A"}, "42")
+        iterator.close.assert_called_once()
 
 
 if __name__ == "__main__":

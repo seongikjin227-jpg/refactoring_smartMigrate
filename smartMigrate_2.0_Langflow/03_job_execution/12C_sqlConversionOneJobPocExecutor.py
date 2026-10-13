@@ -268,7 +268,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         StrInput(name="rag_collection_name", display_name="RAG Collection Name", value="SM_RAG_RULES", required=False),
         StrInput(name="correct_sql_collection_name", display_name="Correct SQL Collection Name", value="SM_CORRECT_SQL_CONVERSION", required=False),
         StrInput(name="asis_sql_collection_name", display_name="AS-IS SQL Collection Name", value="SM_ASIS_SQL", required=False),
-        IntInput(name="rag_top_k", display_name="MIG RAG Top K", value=3, required=False),
+        IntInput(name="rag_top_k", display_name="SQL Tuning RAG Top K", value=3, required=False),
         IntInput(name="correct_sql_top_k", display_name="Correct SQL Top K", value=1, required=False),
     ]
 
@@ -783,7 +783,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         map_id = self._workflow_log_job_id(job)
         # TO_SQL 프롬프트 맥락은 다음 순서로 조립한다.
         # migration 테이블/컬럼 매핑 규칙, SQL_CONVERSION GENERAL guide,
-        # SQL block별 vector 유사도 순서로 뽑은 SQL_CONVERSION SEARCH 예시를 차례로 넣는다.
+        # source table 범위가 겹치는 모든 SQL_CONVERSION SEARCH 예시를 차례로 넣는다.
         if general_rules is None or examples is None:
             source_tables = self._source_tables(target_table)
             general_rules = self._load_rag_general_rules(db_config, "SQL_CONVERSION", source_tables, map_id)
@@ -1325,22 +1325,11 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
     # -------------------------------------------------------------------------
     # Milvus RAG SEARCH 조회
     # -------------------------------------------------------------------------
-    # 12C는 더 이상 Oracle RAG 전체 row로 메모리 FAISS index를 만들지 않는다.
-    # 실행 중 검색 흐름:
-    # 1. 12C가 처리 중인 현재 SQL 텍스트를 가져온다.
-    # 2. embedding 비교가 흔들리지 않도록 SQL 구조를 정규화한다.
-    # 3. SQL/block마다 embedding API를 한 번 호출한다.
-    # 4. 생성된 query vector를 Milvus로 보낸다.
-    # 5. COSINE 기준으로 SM_RAG_RULES.dense_vector를 검색한다.
-    #
-    # SM_RAG_RULES.dense_vector는 04_saveVectorDB가 NEXT_MIG_RAG_INFO.SOURCE_SQL에서 생성한다.
-    # 따라서 이 검색은 현재 SQL과 저장된 SOURCE_SQL 예시의 유사도 비교다.
-    # 비교 의미는 "현재 FROM SQL/block" 대 "저장된 RAG SOURCE_SQL 예시"다.
-    #
-    # 반환된 guidance_text/source_sql/target_sql은 프롬프트 metadata다.
-    # 유사도 계산에는 dense_vector만 사용한다.
-    # Milvus dense_vector로 SQL block별 SEARCH RAG 예시를 찾는다. 15C 튜닝도 같은 검색 구조다.
+    # SQL Conversion은 source table이 겹치는 SEARCH 규칙을 모두 포함한다.
+    # SQL Tuning만 SQL block별 dense vector 유사도와 top-k를 사용한다.
     def _retrieve_rag_examples(self, db_config: dict[str, Any], rag_config: dict[str, Any], category: str, sql_text: str, source_tables: set[str], map_id: str) -> list[dict[str, Any]]:
+        if category == "SQL_CONVERSION":
+            return self._retrieve_conversion_table_examples(sql_text, source_tables, map_id)
         if category == "SQL_TUNING":
             blocks = self._split_sql_blocks(sql_text)
             blocks = [block for block in blocks if block["block_type"] == "SUBQUERY"] + [block for block in blocks if block["block_type"] != "SUBQUERY"]
@@ -1396,6 +1385,44 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         match_count = sum(len(block["top_rule_matches"]) for block in payloads)
         search_mode = f"block_top{top_k}" if category == "SQL_TUNING" else f"full_sql_top{top_k}"
         return payloads
+
+    def _retrieve_conversion_table_examples(self, sql_text: str, source_tables: set[str], map_id: str) -> list[dict[str, Any]]:
+        config = self._milvus_config()
+        iterator = self._milvus_client().query_iterator(
+            collection_name=config["rag_collection"],
+            filter=f'category == "SQL_CONVERSION" and rule_type == "{RAG_SEARCH}" and is_active == true',
+            output_fields=["rag_id", "category", "rule_type", "source_tables", "guidance_text", "source_sql", "target_sql"],
+            batch_size=1000,
+            limit=-1,
+        )
+        matches = []
+        fetched_count = 0
+        try:
+            while True:
+                rows = iterator.next()
+                if not rows:
+                    break
+                fetched_count += len(rows)
+                for row in rows:
+                    rule = self._milvus_rag_entity({"entity": row})
+                    if set(rule["source_tables"]) & source_tables:
+                        matches.append(rule)
+        finally:
+            iterator.close()
+        matches.sort(key=lambda rule: rule["rule_id"])
+        logging.getLogger("smartmigrate.workflow").info(
+            "SQL Conversion SEARCH RAG loaded by source table overlap",
+            extra={"workflow_log": [
+                map_id, "SQL_CONVERSION", "RAG_RETRIEVE", "INFO", "SQL_CONVERSION_SEARCH",
+                "PASS" if matches else "SKIP", 0,
+                f"source_tables={sorted(source_tables)}, fetched_rows={fetched_count}, matched_rows={len(matches)}, "
+                "selection=source_table_overlap, top_k=none",
+            ]},
+        )
+        return [{
+            "block_id": "FULL_SQL", "block_type": "FULL", "source_sql": str(sql_text or ""),
+            "search_method": "source_table_overlap", "top_rule_matches": matches,
+        }]
 
     # GENERAL RAG guide는 Milvus scalar filter만으로 조회한다.
     # GENERAL 규칙은 유사도 정렬 대상이 아니며 category, rule_type,
@@ -1502,7 +1529,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 lines.append(f"  SOURCE_SQL: {rule['source_sql']}")
             if rule.get("target_sql"):
                 lines.append(f"  TARGET_SQL: {rule['target_sql']}")
-        lines.extend(["", "[SQL_CONVERSION_SEARCH_RAG_TOP_3_BY_FULL_SQL]", self._serialize_conversion_examples(examples)])
+        lines.extend(["", "[SQL_CONVERSION_SEARCH_RAG_BY_SOURCE_TABLE]", self._serialize_conversion_examples(examples)])
         return "\n".join(lines)
     def _source_filter_prompt_text(self, mapping_rules: list[dict[str, str]]) -> str:
         lines = ["[ASIS_SOURCE_FILTER_CONDITIONS]"]
@@ -1622,9 +1649,9 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         lines = []
         for block in examples:
             for match in block["top_rule_matches"]:
-                lines.append(f"- BLOCK={block['block_id']} SCORE={match.get('score')} RULE_ID={match.get('rule_id')}")
-                if match.get("guidance"):
-                    lines.extend(f"  GUIDANCE: {guide}" for guide in match["guidance"])
+                lines.append(f"- BLOCK={block['block_id']} MATCH=SOURCE_TABLE_OVERLAP RULE_ID={match.get('rule_id')} SOURCE_TABLES={','.join(match.get('source_tables') or [])}")
+                guidance_text = "\n".join(match.get("guidance") or [])
+                lines.append(f"  GUIDANCE_TEXT: {guidance_text}")
                 lines.append(f"  SOURCE_SQL: {match.get('source_sql') or ''}")
                 lines.append(f"  TARGET_SQL: {match.get('target_sql') or ''}")
         return "\n".join(lines) if lines else "- (empty)"
