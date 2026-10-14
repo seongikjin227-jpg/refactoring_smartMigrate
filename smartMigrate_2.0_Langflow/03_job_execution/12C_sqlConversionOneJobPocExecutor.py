@@ -94,6 +94,7 @@ FROM SQL의 결과 의미를 보존하면서 매핑 규칙, SQL_CONVERSION RAG, 
 - 모든 SQL은 Oracle 19c 문법에 맞게 생성하거나 수정하십시오.
 - 매핑된 source table/column의 이름 변경은 명시된 TO_TABLE/TO_COL을 기준으로 작성하십시오.
 - mapping rules는 테이블명과 컬럼명 변경의 우선 기준입니다.
+- COMPLEX도 FR_TABLE이 단일 테이블명이면 해당 테이블의 FR_COL 표현식과 TO_COL 매핑을 적용하십시오. 이 경우 FR_TABLE_QUERY나 FROM/JOIN이 없다는 이유로 매핑을 제외하지 마십시오.
 - 미매핑 여부는 SIMPLE의 FR_TABLE과 COMPLEX의 SOURCE_PHYSICAL_TABLES/FR_TABLE_QUERY 내부 FROM/JOIN을 함께 확인한 뒤 판단하십시오. COMPLEX 원천 SELECT 내부 테이블을 FR_TABLE 문자열이 테이블명과 다르다는 이유로 미매핑 처리하지 마십시오.
 - COMPLEX의 FR_TABLE_QUERY는 TO_TABLE을 구성한 원천 데이터셋과 컬럼 lineage입니다. SELECT 출력 컬럼/alias인 FR_COL을 원천 테이블의 컬럼·표현식까지 추적하여 TO_COL로 변환하십시오. 출력 alias와 실제 원천 컬럼명이 달라도 같은 매핑일 수 있습니다.
 - COMPLEX와 대응하는 원본 SQL의 조인·서브쿼리·투영·조건 범위를 명시된 TO_TABLE과 TO_COL로 재작성하십시오. 원천 SELECT를 TO-BE에 그대로 복사하는 것을 변환 완료로 간주하지 마십시오. SOURCE_PHYSICAL_TABLES는 매핑 후보 범위이며 각 테이블이 TO_TABLE과 독립적인 1:1 매핑이라는 뜻이 아닙니다.
@@ -1494,12 +1495,12 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             fr_table = str(rule.get("fr_table") or "").strip()
             to_table = self._qualify_mapping_table(rule.get("to_table") or "", target_schema)
             condition = str(rule.get("condition") or "").strip()
-            if map_type == "COMPLEX":
+            if map_type == "COMPLEX" and not self._is_mapping_table_reference(fr_table):
                 while fr_table.endswith(";"):
                     fr_table = fr_table[:-1].rstrip()
                 from_expr = f"(\n{fr_table}\n) SRC"
             else:
-                from_expr = self._qualify_mapping_table(fr_table, source_schema)
+                from_expr = self._qualify_mapping_table(fr_table.rstrip(";").rstrip(), source_schema)
             group_key = (map_type, from_expr, to_table, condition)
             source_tables_by_group.setdefault(group_key, set()).update(self._mapping_source_tables(rule))
             grouped.setdefault(group_key, set()).add(
@@ -1509,16 +1510,21 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         lines = ["[MIGRATION_MAPPING_RULES]"]
         if not grouped:
             lines.append("- (empty)")
-        for map_type, from_expr, to_table, condition in sorted(grouped):
-            source_key = "FR_TABLE_QUERY" if map_type == "COMPLEX" else "FR_TABLE"
+        # 프롬프트 표시 순서는 SIMPLE → COMPLEX → 기타 유형으로 고정한다.
+        for map_type, from_expr, to_table, condition in sorted(
+            grouped, key=lambda key: ({"SIMPLE": 0, "COMPLEX": 1}.get(key[0], 2), key)
+        ):
+            source_key = "FR_TABLE_QUERY" if map_type == "COMPLEX" and from_expr.startswith("(\n") else "FR_TABLE"
             lines.append(f"- MAP_TYPE={map_type} | {source_key}={from_expr} | TO_TABLE={to_table}")
             physical_tables = source_tables_by_group[(map_type, from_expr, to_table, condition)]
             lines.append(f"  - SOURCE_PHYSICAL_TABLES={','.join(sorted(physical_tables)) or '(unresolved; inspect FR_TABLE_QUERY)'}")
-            if map_type == "COMPLEX":
+            if source_key == "FR_TABLE_QUERY":
                 lines.append("  - FR_TABLE_QUERY is the source dataset definition, not SQL to copy unchanged into TO-BE.")
                 lines.append("  - Trace each projected FR_COL/output alias to its source columns and expressions, then map it to TO_COL in TO_TABLE.")
                 lines.append("  - Match the original query's joins, filters, subqueries and projections to this dataset before rewriting the corresponding scope to TO_TABLE.")
                 lines.append("  - SOURCE_PHYSICAL_TABLES are covered source candidates, not independent one-to-one mappings to TO_TABLE; do not replace every member with the same target table.")
+            elif map_type == "COMPLEX":
+                lines.append("  - FR_TABLE is a single source table; apply the explicit FR_COL expressions and TO_COL mappings without requiring a source SELECT query.")
             if condition:
                 lines.append(f"  - CONDITION={condition}")
             for fr_col, to_col in sorted(grouped[(map_type, from_expr, to_table, condition)]):
@@ -1576,10 +1582,15 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         normalized = str(table_name or "").upper()
         return any(re.search(rf"(?<![A-Z0-9_$#]){re.escape(table)}(?![A-Z0-9_$#])", normalized) for table in candidates)
 
+    def _is_mapping_table_reference(self, fr_table: str) -> bool:
+        identifier = r'(?:[A-Za-z_][A-Za-z0-9_$#]*|"(?:[^"]|"")+")'
+        return bool(re.fullmatch(rf"{identifier}(?:\.{identifier})?", str(fr_table or "").strip().rstrip(";").strip()))
+
     def _mapping_source_tables(self, rule: dict[str, str]) -> set[str]:
-        if str(rule.get("map_type") or "").strip().upper() == "COMPLEX":
-            return self._query_physical_tables(str(rule.get("fr_table") or ""))
-        return self._source_tables(str(rule.get("fr_table") or ""))
+        fr_table = str(rule.get("fr_table") or "").strip()
+        if str(rule.get("map_type") or "").strip().upper() == "COMPLEX" and not self._is_mapping_table_reference(fr_table):
+            return self._query_physical_tables(fr_table)
+        return self._source_tables(fr_table)
 
     def _query_physical_tables(self, sql_text: str) -> set[str]:
         """Extract FROM/JOIN relations, including comma joins and nested queries.
