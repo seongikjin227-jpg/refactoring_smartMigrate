@@ -13,7 +13,10 @@
 
 ## 2. Mapping Rule 조회 기준
 
-12C는 `NEXT_SQL_INFO.TARGET_TABLE` 값을 source table scope로 보고 PASS mapping rule을 조회한다. SIMPLE은 `FR_TABLE`의 테이블명으로, COMPLEX는 `FR_TABLE` SELECT의 FROM/JOIN 내부 물리 테이블로 범위를 비교한다. 쉼표 조인과 중첩 쿼리도 포함하며, 주석·문자열·CTE 이름·inline view alias는 물리 테이블로 취급하지 않는다.
+12C는 `NEXT_SQL_INFO.TARGET_TABLE` 값을 source table scope로 보고 PASS mapping rule을 조회한다. SIMPLE 및 단일 테이블명을 가진 COMPLEX는 `FR_TABLE`의 테이블명으로, SELECT를 가진 COMPLEX는 FROM/JOIN 내부 물리 테이블로 범위를 비교한다. 쉼표 조인과 중첩 쿼리도 포함하며, 주석·문자열·CTE 이름·inline view alias는 물리 테이블로 취급하지 않는다.
+
+- master와 detail은 LEFT JOIN한다. 상세 행이 없는 MAP_ID도 SIMPLE/COMPLEX와 관계없이 테이블 매핑을 프롬프트에 전달한다. `STATUS='PASS'` 조건은 유지하며 `USE_YN`으로 제한하지 않는다.
+- 상세 없는 매핑은 `COLUMN_MAPPING_STATUS=NOT_PROVIDED (table mapping only)`로 표시한다. 빈 `FR_COL -> __UNUSED__` 행을 만들지 않으며 `FR_TABLE`/`TO_TABLE`과 조건은 유지한다. 프롬프트 표시 순서는 SIMPLE → COMPLEX → 기타 유형이다.
 
 - `TARGET_TABLE` 값은 단일 table일 수도 있고 여러 table 후보일 수도 있다.
 - 여러 table 후보 중 mapping rule이 존재하는 table이 하나라도 있으면 SQL Conversion은 계속 진행한다.
@@ -42,9 +45,9 @@ SIMPLE 매핑과 적용 가능한 COMPLEX 쿼리 범위를 모두 확인한 뒤 
 
 - mapping rule에 없는 source table은 TO-BE SQL에서 원본 이름으로 사용한다. 스키마 prefix는 기존 target_schema 규칙을 따른다.
 - 물리 테이블명은 원본 SQL의 테이블명 또는 명시된 `TO_TABLE`만 사용한다. RAG, Correct SQL 힌트, 업무 의미로 테이블명을 추측하거나 생성하지 않는다.
-- 매핑된 source table에서 mapping rule에 없는 source column은 미사용 column이다.
+- 컬럼 상세가 제공된 SIMPLE 매핑에서 목록에 없는 source column은 미사용 column이다. 상세가 전혀 없는 테이블 매핑에서는 모든 컬럼을 미사용으로 판단하지 않고 원본 컬럼 참조를 유지한다. 임의의 컬럼 변경은 생성하지 않으며 실제 대상 스키마와 검증 결과를 확인한다.
 - 매핑 없는 테이블의 컬럼에는 미사용 column 정책을 적용하지 않는다.
-- 매핑된 테이블에서 계속 사용할 컬럼은 이름이 같더라도 column mapping에 명시해야 한다.
+- 컬럼 상세 목록을 제공하는 매핑에서는 계속 사용할 컬럼을 이름이 같더라도 명시해야 한다. 테이블 매핑만 제공하는 경우에는 컬럼 상세 미제공 상태로 구분한다.
 
 ### COMPLEX 원천 SELECT 해석
 

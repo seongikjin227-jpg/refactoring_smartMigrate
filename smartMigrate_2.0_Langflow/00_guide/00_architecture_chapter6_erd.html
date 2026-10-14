@@ -1,7 +1,7 @@
 <!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SmartMigrate ERD</title>
 <style>body{margin:0;background:#ffffff;font-family:'Segoe UI','Malgun Gothic',sans-serif;color:#243447}header{padding:18px 24px;background:white;position:sticky;top:0;z-index:1;border-bottom:1px solid #ddd}h1{font-size:22px;margin:0 0 12px}button,a{margin-right:8px}button{padding:7px 12px;cursor:pointer}p{margin:10px 0;font-size:14px}#viewport{overflow:auto;height:calc(100vh - 170px)}svg{display:block;width:100%;height:auto}section[hidden]{display:none}.notes{margin:24px;padding:20px 24px;max-width:1100px;background:white;border:1px solid #cbd5e1;border-radius:10px;line-height:1.7}.notes h2{margin:0 0 14px;font-size:20px}.notes p{font-size:16px;overflow-wrap:anywhere}.notes code{font-family:Consolas,monospace}@media print{header{position:static}button{display:none}#viewport{height:auto;overflow:visible}.notes{break-before:page}@page{size:A3 landscape;margin:10mm}}</style>
-<style>body[data-view="features"]{background:#ffffff}button[aria-pressed="true"]{background:#18334e;color:white;border-color:#18334e}@media print{svg{width:100% !important}body[data-view="features"] header,body[data-view="features"] .notes{display:none}}</style><style id="print-page"></style>
-<header><h1>SmartMigrate · 구조와 주요 기능</h1><button data-view="oracle">Oracle 전체 컬럼</button><button data-view="milvus">Milvus 동기화</button><button data-view="features">주요 기능 · PPT 장표</button><button id="out" aria-label="축소">−</button><button id="fit">화면 맞춤</button><button id="in" aria-label="확대">+</button><button id="print">인쇄 / PDF</button><span id="scale">100%</span><p id="view-description">문서 기준 · 기본 DDL에 FK 없음 · 파란 점선: 논리 참조 · 주황 점선: 조건부 로그 대상 식별</p><a href="00_architecture_chapter6_erd.svg">Oracle SVG</a><a href="00_architecture_chapter6_erd_milvus.svg">Milvus SVG</a><a href="00_agent_features.svg" download>주요 기능 SVG (PPT 삽입용)</a><a href="00_architecture_chapter6_erd.md">설명 / Mermaid</a></header>
+<style>body[data-view="features"]{background:#ffffff}button[aria-pressed="true"]{background:#18334e;color:white;border-color:#18334e}@media print{svg{width:100% !important}body[data-view="features"] header,body[data-view="features"] .notes{display:none}}</style><style>@media print{body[data-view="scenarios"] header,body[data-view="scenarios"] .notes{display:none}}</style><style id="print-page"></style>
+<header><h1>SmartMigrate · 구조와 주요 기능</h1><button data-view="oracle">Oracle 전체 컬럼</button><button data-view="milvus">Milvus 동기화</button><button data-view="features">주요 기능 · PPT 장표</button><button data-view="scenarios">시연 시나리오 · PPT</button><button id="out" aria-label="축소">−</button><button id="fit">화면 맞춤</button><button id="in" aria-label="확대">+</button><button id="print">인쇄 / PDF</button><span id="scale">100%</span><p id="view-description">문서 기준 · 기본 DDL에 FK 없음 · 파란 점선: 논리 참조 · 주황 점선: 조건부 로그 대상 식별</p><a href="00_architecture_chapter6_erd.svg">Oracle SVG</a><a href="00_architecture_chapter6_erd_milvus.svg">Milvus SVG</a><a href="00_agent_features.svg" download>주요 기능 SVG (PPT 삽입용)</a><a href="00_demo_scenarios.svg" download>시연 시나리오 SVG (PPT 삽입용)</a><a href="00_architecture_chapter6_erd.md">설명 / Mermaid</a></header>
 <main id="viewport"><section id="oracle"><svg xmlns="http://www.w3.org/2000/svg" width="2050" height="1490" viewBox="0 0 2050 1490" role="img" aria-labelledby="title desc">
 <title id="title">SmartMigrate · Oracle ERD</title><desc id="desc">Chapter 6 DDL의 5개 테이블, 전체 컬럼, PK/UK/NOT NULL 및 논리 참조. 기본 DDL에는 FK 없음.</desc>
 <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs>
@@ -473,17 +473,115 @@
 <p><strong>Tuning.</strong> 관련 규칙을 적용해 TUNED_TO_SQL과 변경 사유인 TUNED_RESULT를 만듭니다. SELECT가 변경된 경우 TUNED_TEST_SQL을 생성·실행해 기존 TO_SQL과 건수를 비교합니다. 검증 SQL은 런타임 결과와 로그에 기록되며 독립 DB 컬럼명이 아닙니다. 비SELECT 또는 튜닝 변경 없음은 검증을 생략합니다. 이 검증은 실행계획이나 응답시간 개선을 판정하는 성능 벤치마크가 아닙니다.</p>
 <p><strong>Formatting.</strong> 배치는 이번 실행에서 전달된 생성 SQL 목록의 해당 컬럼을 갱신합니다. 단건은 TUNED_TO_SQL을 정리해 FORMATTED_SQL에 저장합니다. 출력 항목·형식·빈 결과를 확인하며 결과 데이터 비교 검증을 수행하지 않습니다.</p>
 <p><strong>Management.</strong> 매핑 생성·실제 적용은 설정에 따라 구분됩니다. Correct SQL 저장은 해당 단계의 확인 완료 상태를 반영합니다. 규칙 변경·재시도 준비와 실제 작업 실행은 별도 요청입니다.</p>
+</aside></section><section id="scenarios" hidden><svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="scenarios-title scenarios-desc">
+<title id="scenarios-title">SmartMigrate · 두 가지 채팅 시연 시나리오</title>
+<desc id="scenarios-desc">기존 SQL 보정과 새 매핑 Migration의 두 흐름. 상세 채팅 문장은 사용자 가이드 참조.</desc>
+<defs><marker id="scenarios-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#8292a5"/></marker></defs>
+<rect width="1920" height="1080" fill="white"/>
+<text x="60" y="76" fill="#18334e" font-size="36" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SmartMigrate · 채팅으로 준비하고, 보정하고, 실행하기</text>
+<text x="60" y="121" fill="#516176" font-size="23" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">두 가지 시연 시나리오  |  30~40분 상세 시연  |  권장 진행 순서: 01 DB Migration → 02 SQL Conversion / Tuning</text>
+<rect x="60" y="171" width="1800" height="350" rx="18" fill="#f8fafc" stroke="#dbe3ec"/>
+<rect x="88" y="195" width="54" height="44" rx="12" fill="#6a4e9b"/>
+<text x="101" y="225" fill="#ffffff" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">01</text>
+<text x="162" y="227" fill="#6a4e9b" font-size="29" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">DB Migration · 매핑 등록과 이관 검증</text>
+<text x="162" y="262" fill="#516176" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">핵심: 템플릿 준비 → 실제 매핑 반영 → 이관 → 검증 실패 분석과 보정</text>
+<rect x="100" y="293" width="250" height="138" rx="13" fill="white" stroke="#6a4e9b" stroke-width="1.5"/>
+<text x="118" y="327" fill="#6a4e9b" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">일반 대화</text>
+<text x="118" y="356" fill="#6a4e9b" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">템플릿 다운로드</text>
+<text x="118" y="387" fill="#516176" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">업무 순서 안내</text>
+<text x="118" y="413" fill="#516176" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">AI 생성 XLSX 검토</text>
+<path d="M358 358 H377" stroke="#8292a5" stroke-width="2.5" marker-end="url(#scenarios-arrow)"/>
+<rect x="385" y="293" width="250" height="138" rx="13" fill="white" stroke="#6a4e9b" stroke-width="1.5"/>
+<text x="403" y="327" fill="#6a4e9b" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">파일 작성·등록</text>
+<text x="403" y="356" fill="#6a4e9b" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">매핑룰 조회</text>
+<text x="403" y="387" fill="#516176" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">테이블 + 컬럼 상세</text>
+<text x="403" y="413" fill="#516176" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">저장 값과 입력 비교</text>
+<path d="M643 358 H662" stroke="#8292a5" stroke-width="2.5" marker-end="url(#scenarios-arrow)"/>
+<rect x="670" y="293" width="250" height="138" rx="13" fill="white" stroke="#6a4e9b" stroke-width="1.5"/>
+<text x="688" y="327" fill="#6a4e9b" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">작업 관리</text>
+<text x="688" y="356" fill="#6a4e9b" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">Migration 실행</text>
+<text x="688" y="387" fill="#516176" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">대상 · 우선순위 관리</text>
+<text x="688" y="413" fill="#516176" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">범위를 정해 실행</text>
+<path d="M928 358 H947" stroke="#8292a5" stroke-width="2.5" marker-end="url(#scenarios-arrow)"/>
+<rect x="955" y="293" width="250" height="138" rx="13" fill="white" stroke="#6a4e9b" stroke-width="1.5"/>
+<text x="973" y="327" fill="#6a4e9b" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">진행·결과</text>
+<text x="973" y="356" fill="#6a4e9b" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">생성 SQL 조회</text>
+<text x="973" y="387" fill="#516176" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">건수 · 레코드 검증</text>
+<text x="973" y="413" fill="#516176" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">MIG / VERIFY SQL</text>
+<path d="M1213 358 H1232" stroke="#8292a5" stroke-width="2.5" marker-end="url(#scenarios-arrow)"/>
+<rect x="1240" y="293" width="250" height="138" rx="13" fill="white" stroke="#6a4e9b" stroke-width="1.5"/>
+<text x="1258" y="327" fill="#6a4e9b" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">실패 분석</text>
+<text x="1258" y="356" fill="#6a4e9b" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">Correct SQL 입력</text>
+<text x="1258" y="387" fill="#516176" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">별도 검증 실패 사례</text>
+<text x="1258" y="413" fill="#516176" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">확인한 SQL 저장</text>
+<path d="M1498 358 H1517" stroke="#8292a5" stroke-width="2.5" marker-end="url(#scenarios-arrow)"/>
+<rect x="1525" y="293" width="250" height="138" rx="13" fill="white" stroke="#6a4e9b" stroke-width="1.5"/>
+<text x="1543" y="327" fill="#6a4e9b" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">재실행 요청</text>
+<text x="1543" y="356" fill="#6a4e9b" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">검증 결과 확인</text>
+<text x="1543" y="387" fill="#516176" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">상태에 맞는 단계 재개</text>
+<text x="1543" y="413" fill="#516176" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">최종 결과와 로그</text>
+<text x="100" y="480" fill="#6a4e9b" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">Migration Correct SQL: 확인한 MIG_SQL → 검증부터 재개   ·   검증 완료 VERIFY_SQL → PASS   |   유사 SQL REF_SEQ는 Conversion 전용</text>
+<rect x="60" y="547" width="1800" height="350" rx="18" fill="#f8fafc" stroke="#dbe3ec"/>
+<rect x="88" y="571" width="54" height="44" rx="12" fill="#246a89"/>
+<text x="101" y="601" fill="#ffffff" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">02</text>
+<text x="162" y="603" fill="#246a89" font-size="29" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SQL Conversion / Tuning · 보정과 재실행</text>
+<text x="162" y="638" fill="#516176" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">핵심: RAG와 검색 자료 → Correct SQL → REF_SEQ → Conversion / Tuning / Formatting</text>
+<rect x="100" y="669" width="250" height="138" rx="13" fill="white" stroke="#246a89" stroke-width="1.5"/>
+<text x="118" y="703" fill="#246a89" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">대시보드</text>
+<text x="118" y="732" fill="#246a89" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">실패·SQL 조회</text>
+<text x="118" y="763" fill="#516176" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">일반 대화로 시작</text>
+<text x="118" y="789" fill="#516176" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">상태 · 오류 · 생성 SQL</text>
+<path d="M358 734 H377" stroke="#8292a5" stroke-width="2.5" marker-end="url(#scenarios-arrow)"/>
+<rect x="385" y="669" width="250" height="138" rx="13" fill="white" stroke="#246a89" stroke-width="1.5"/>
+<text x="403" y="703" fill="#246a89" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">RAG 관리</text>
+<text x="403" y="732" fill="#246a89" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">VectorDB 동기화</text>
+<text x="403" y="763" fill="#516176" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">등록 · 조회 · 수정</text>
+<text x="403" y="789" fill="#516176" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">검색 자료에 반영</text>
+<path d="M643 734 H662" stroke="#8292a5" stroke-width="2.5" marker-end="url(#scenarios-arrow)"/>
+<rect x="670" y="669" width="250" height="138" rx="13" fill="white" stroke="#246a89" stroke-width="1.5"/>
+<text x="688" y="703" fill="#246a89" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">Correct SQL</text>
+<text x="688" y="732" fill="#246a89" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">저장·자동 동기화</text>
+<text x="688" y="763" fill="#516176" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">TOBE / BIND / TEST</text>
+<text x="688" y="789" fill="#516176" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">검토한 SQL 입력</text>
+<path d="M928 734 H947" stroke="#8292a5" stroke-width="2.5" marker-end="url(#scenarios-arrow)"/>
+<rect x="955" y="669" width="250" height="138" rx="13" fill="white" stroke="#246a89" stroke-width="1.5"/>
+<text x="973" y="703" fill="#246a89" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">유사 SQL 검색</text>
+<text x="973" y="732" fill="#246a89" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">REF_SEQ 자동 등록</text>
+<text x="973" y="763" fill="#516176" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">AS-IS 유사도 80% 초과</text>
+<text x="973" y="789" fill="#516176" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">동일 실패 단계 후보</text>
+<path d="M1213 734 H1232" stroke="#8292a5" stroke-width="2.5" marker-end="url(#scenarios-arrow)"/>
+<rect x="1240" y="669" width="250" height="138" rx="13" fill="white" stroke="#246a89" stroke-width="1.5"/>
+<text x="1258" y="703" fill="#246a89" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">재실행</text>
+<text x="1258" y="732" fill="#246a89" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">Tuning · Formatting</text>
+<text x="1258" y="763" fill="#516176" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">참고 SQL로 재개</text>
+<text x="1258" y="789" fill="#516176" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">남은 후속 단계 처리</text>
+<path d="M1498 734 H1517" stroke="#8292a5" stroke-width="2.5" marker-end="url(#scenarios-arrow)"/>
+<rect x="1525" y="669" width="250" height="138" rx="13" fill="white" stroke="#246a89" stroke-width="1.5"/>
+<text x="1543" y="703" fill="#246a89" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">결과·생성 SQL</text>
+<text x="1543" y="732" fill="#246a89" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">검증·로그 조회</text>
+<text x="1543" y="763" fill="#516176" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">변환 · 튜닝 변경 사유</text>
+<text x="1543" y="789" fill="#516176" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">정리된 SQL 확인</text>
+<text x="100" y="856" fill="#246a89" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">자동 참조 대상: TOBE → FAIL-TOBE   ·   BIND → FAIL-BIND   ·   TEST → FAIL-TEST   |   REF_SEQ 등록과 실제 실행은 별도</text>
+<text x="60" y="967" fill="#18334e" font-size="23" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">시연 준비  실제 대상 번호 · 실패 단계별 작업 · 검토한 SQL · 매핑 상세 행 · 검색 자료 동기화</text>
+<text x="60" y="1010" fill="#516176" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">진행 조회는 실행 중 별도 채팅에서 확인  |  마무리: 최근 전체 결과 → 남은 전체 워크플로우 → 선행 조건 안내</text>
+</svg><aside class="notes" aria-labelledby="scenarios-notes-title">
+<h2 id="scenarios-notes-title">30~40분 채팅 시연 · PPT 사용 안내</h2>
+<p>위 도식은 <strong>1920 × 1080 (16:9)</strong> 한 장입니다. <a href="00_demo_scenarios.svg" download>시연 시나리오 SVG 다운로드</a> 후 PowerPoint의 삽입 → 그림에서 사용하세요. 이 탭의 인쇄 / PDF는 설명 영역을 제외하고 장표만 출력합니다.</p>
+<p><strong>권장 순서: 01 → 02.</strong> 새 매핑 Migration을 먼저 진행하고, 사용 대상 Migration 완료 후 기존 SQL 보정과 후속 처리를 시연합니다. 각 흐름에 15~18분, 전체 결과와 예외 안내에 3~4분을 배정합니다. 실제 실행 대기 시간은 환경에 따라 달라집니다.</p>
+<p><strong>준비 데이터.</strong> 테이블/컬럼 매핑, 실패 단계별 독립 SQL 작업, 80% 초과 유사 후보, 사람이 검토한 SQL과 실제 바인드 값, 검색 자료를 준비합니다. 진행 중 조회는 별도 채팅/세션을 사용하며 지원되지 않는 환경에서는 단계별 로그 조회로 대체합니다.</p>
+<p><strong>자동 REF_SEQ.</strong> Conversion Correct SQL 저장·동기화 후 AS-IS SQL 기준으로 검색합니다. TO_SQL→FAIL-TOBE, BIND_SQL→FAIL-BIND, TEST_SQL→FAIL-TEST이며 유사도는 엄격히 80% 초과입니다. 후보의 실패 상태를 유지하고 REF_SEQ와 RETRY_COUNT=0만 반영합니다. Migration에는 이 자동 적용이 없습니다.</p>
+<p><a href="00_user_guide.md">사용자 가이드 · 실제 채팅 문장과 준비 조건</a></p>
 </aside></section></main>
 <script>
 let zoom=1,active='oracle';
-const descriptions={oracle:'문서 기준 · 기본 DDL에 FK 없음 · 파란 점선: 논리 참조 · 주황 점선: 조건부 로그 대상 식별',milvus:'Oracle 원천 → Milvus 검색 컬렉션 · 화살표는 동기화 방향',features:'Management / 작업 실행 · 생성 SQL과 검증 기준 · 16:9 PPT 장표'};
+const descriptions={oracle:'문서 기준 · 기본 DDL에 FK 없음 · 파란 점선: 논리 참조 · 주황 점선: 조건부 로그 대상 식별',milvus:'Oracle 원천 → Milvus 검색 컬렉션 · 화살표는 동기화 방향',features:'Management / 작업 실행 · 생성 SQL과 검증 기준 · 16:9 PPT 장표',scenarios:'두 가지 채팅 시연 · 30~40분 · 16:9 PPT 장표 · 상세 문장은 사용자 가이드 참조'};
 function render(){
   document.querySelectorAll('section').forEach(s=>{s.hidden=s.id!==active;s.querySelector('svg').style.width=(zoom*100)+'%'});
   document.querySelectorAll('button[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===active)));
   document.body.dataset.view=active;
   document.getElementById('scale').textContent=Math.round(zoom*100)+'%';
   document.getElementById('view-description').textContent=descriptions[active];
-  document.getElementById('print-page').textContent=active==='features'?'@page { size:338.6667mm 190.5mm; margin:0; }':'';
+  document.getElementById('print-page').textContent=['features','scenarios'].includes(active)?'@page { size:338.6667mm 190.5mm; margin:0; }':'';
 }
 function selectView(view){active=Object.hasOwn(descriptions,view)?view:'oracle';zoom=1;render();document.getElementById('viewport').scrollTo(0,0)}
 document.querySelectorAll('button[data-view]').forEach(b=>b.onclick=()=>{selectView(b.dataset.view);location.hash=active});

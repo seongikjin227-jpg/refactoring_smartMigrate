@@ -102,7 +102,8 @@ FROM SQL의 결과 의미를 보존하면서 매핑 규칙, SQL_CONVERSION RAG, 
 - SIMPLE 매핑도 없고 적용 가능한 COMPLEX 원천 쿼리 범위에도 포함되지 않는 source table은 원본 테이블명을 그대로 유지하십시오. 해당 테이블의 컬럼명, alias, join, filter, projection, MyBatis 동적 fragment도 유지하십시오.
 - 물리 테이블명은 FROM SQL의 기존 테이블명 또는 mapping rules에 명시된 TO_TABLE만 사용하십시오. RAG 예시, Correct SQL 힌트, 업무 의미를 근거로 새로운 테이블명을 추측하거나 만들어내지 마십시오.
 - source column이 TO_COL=__UNUSED__, NULL, blank, NONE, N/A, NA, '-'로 매핑되면 해당 컬럼은 TO-BE SQL에서 미사용 컬럼입니다. SELECT, WHERE, JOIN, GROUP BY, ORDER BY, MyBatis 동적 fragment에서 사용하지 마십시오.
-- SIMPLE 매핑된 source table의 mapping rules에 없는 source column은 TO-BE SQL에서 미사용 컬럼입니다. COMPLEX에서는 원천 SELECT의 출력 컬럼/alias와 FR_COL의 lineage를 먼저 해석하십시오. 출력 alias와 이름이 다른 내부 조인·필터 컬럼을 FR_COL에 없다는 이유만으로 미사용 처리하지 마십시오. 매핑 없는 테이블의 컬럼에는 미사용 정책을 적용하지 마십시오.
+- COLUMN_MAPPING_STATUS=NOT_PROVIDED이면 테이블 매핑만 제공된 것입니다. FR_TABLE/TO_TABLE 매핑은 적용하되 컬럼 상세가 없다는 이유로 모든 컬럼을 미사용 처리하거나 임의의 컬럼 매핑을 만들지 마십시오. 컬럼명은 원문을 유지하고 대상 스키마와 검증 결과를 확인하십시오.
+- 컬럼 상세가 제공된 SIMPLE 매핑의 mapping rules에 없는 source column은 TO-BE SQL에서 미사용 컬럼입니다. COMPLEX에서는 원천 SELECT의 출력 컬럼/alias와 FR_COL의 lineage를 먼저 해석하십시오. 출력 alias와 이름이 다른 내부 조인·필터 컬럼을 FR_COL에 없다는 이유만으로 미사용 처리하지 마십시오. 매핑 없는 테이블의 컬럼에는 미사용 정책을 적용하지 마십시오.
 - 매핑된 source table/column은 명시된 TO_TABLE/TO_COL로 변환하고, 매핑 없는 테이블과 그 컬럼은 원본 이름으로 사용하십시오. mapped 대상과 unused 컬럼이 한 predicate/expression에 섞여 있으면 안전하게 분리 가능한 unused 조건만 제거하고, 분리하기 어렵다면 해당 predicate/expression 전체를 제거하십시오.
 - 가능한 한 원본 쿼리 구조, 필터 의도, 집계 의도, 조인 의도, alias, MyBatis 동적 태그 구조를 유지하십시오. 단, COMPLEX의 원천 조인·서브쿼리가 이미 TO_TABLE로 이관된 데이터셋을 구성한다면 해당 범위는 TO_TABLE 기준으로 재작성하고 원천 구조 유지보다 명시된 COMPLEX 매핑을 우선하십시오.
 - MyBatis 바인딩 파라미터 태그 #{{param}}, ${{param}}는 제거하거나 값으로 치환하지 마십시오.
@@ -1299,7 +1300,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             SELECT M.MAP_TYPE, M.FR_TABLE, D.FR_COL, M.TO_TABLE, D.TO_COL,
                    M.CONDITION
               FROM {map_table} M
-              JOIN {detail_table} D ON M.MAP_ID = D.MAP_ID
+              LEFT JOIN {detail_table} D ON M.MAP_ID = D.MAP_ID
              WHERE UPPER(TRIM(M.STATUS)) = 'PASS'
              ORDER BY M.MAP_ID, D.MAP_DTL
         """
@@ -1503,9 +1504,11 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 from_expr = self._qualify_mapping_table(fr_table.rstrip(";").rstrip(), source_schema)
             group_key = (map_type, from_expr, to_table, condition)
             source_tables_by_group.setdefault(group_key, set()).update(self._mapping_source_tables(rule))
-            grouped.setdefault(group_key, set()).add(
-                (str(rule.get("fr_col") or "").strip(), self._mapping_to_col_prompt_value(rule.get("to_col")))
-            )
+            column_mappings = grouped.setdefault(group_key, set())
+            fr_col = str(rule.get("fr_col") or "").strip()
+            # LEFT JOIN의 상세 없는 행을 빈 FR_COL → __UNUSED__ 매핑으로 만들지 않는다.
+            if fr_col:
+                column_mappings.add((fr_col, self._mapping_to_col_prompt_value(rule.get("to_col"))))
 
         lines = ["[MIGRATION_MAPPING_RULES]"]
         if not grouped:
@@ -1527,7 +1530,11 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 lines.append("  - FR_TABLE is a single source table; apply the explicit FR_COL expressions and TO_COL mappings without requiring a source SELECT query.")
             if condition:
                 lines.append(f"  - CONDITION={condition}")
-            for fr_col, to_col in sorted(grouped[(map_type, from_expr, to_table, condition)]):
+            column_mappings = grouped[(map_type, from_expr, to_table, condition)]
+            if not column_mappings:
+                lines.append("  - COLUMN_MAPPING_STATUS=NOT_PROVIDED (table mapping only)")
+                lines.append("  - Apply the table/dataset mapping; preserve original column references and do not invent column renames or mark all columns unused merely because column details are absent.")
+            for fr_col, to_col in sorted(column_mappings):
                 lines.append(f"  - FR_COL={fr_col} -> TO_COL={to_col}")
         lines.extend(
             [
@@ -1536,7 +1543,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 "- Check SIMPLE FR_TABLE and COMPLEX SOURCE_PHYSICAL_TABLES plus FR_TABLE_QUERY lineage before classifying any source table as unmapped.",
                 "- Preserve original table names, column names, aliases, joins, filters, projections, and MyBatis fragments only for references outside both SIMPLE mappings and applicable COMPLEX query scopes.",
                 "- Physical table names must come from FROM SQL or an explicit TO_TABLE mapping. Never invent table names from RAG, Correct SQL hints, or business meaning.",
-                "- For SIMPLE mappings, source columns not listed under a mapped source table are unused in TO-BE SQL. This does not apply to columns of unmapped tables.",
+                "- For SIMPLE mappings with supplied column details, source columns not listed under a mapped source table are unused in TO-BE SQL. This does not apply to unmapped tables or table-only mappings marked COLUMN_MAPPING_STATUS=NOT_PROVIDED.",
                 "- For COMPLEX mappings, FR_COL identifies projected output columns/aliases: resolve their source lineage before applying unused-column policy. Internal join/filter columns are not automatically unused just because their names differ from FR_COL.",
                 "- Source columns mapped to TO_COL=__UNUSED__ are unused in TO-BE SQL.",
             ]

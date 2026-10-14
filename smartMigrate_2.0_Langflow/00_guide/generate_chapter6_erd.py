@@ -228,6 +228,54 @@ def features_svg():
     return '\n'.join(parts)
 
 
+def scenarios_svg():
+    """Two chat demonstration stories on one 1920x1080 PowerPoint slide."""
+    parts = ['<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">',
+             '<title id="title">SmartMigrate · 두 가지 채팅 시연 시나리오</title>',
+             '<desc id="desc">기존 SQL 보정과 새 매핑 Migration의 두 흐름. 상세 채팅 문장은 사용자 가이드 참조.</desc>',
+             '<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#8292a5"/></marker></defs>',
+             '<rect width="1920" height="1080" fill="white"/>',
+             text(60, 76, 'SmartMigrate · 채팅으로 준비하고, 보정하고, 실행하기', 36, '#18334e', 'bold'),
+             text(60, 121, '두 가지 시연 시나리오  |  30~40분 상세 시연  |  권장 진행 순서: 01 DB Migration → 02 SQL Conversion / Tuning', 23, '#516176')]
+
+    def panel(y, number, heading, subtitle, color, stages, note):
+        parts.append(f'<rect x="60" y="{y}" width="1800" height="350" rx="18" fill="#f8fafc" stroke="#dbe3ec"/>')
+        parts.append(f'<rect x="88" y="{y+24}" width="54" height="44" rx="12" fill="{color}"/>')
+        parts.append(text(101, y+54, number, 25, '#ffffff', 'bold'))
+        parts.append(text(162, y+56, heading, 29, color, 'bold'))
+        parts.append(text(162, y+91, subtitle, 20, '#516176'))
+        for index, (title_lines, detail_lines) in enumerate(stages):
+            x, top = 100 + index*285, y+122
+            parts.append(f'<rect x="{x}" y="{top}" width="250" height="138" rx="13" fill="white" stroke="{color}" stroke-width="1.5"/>')
+            for line_index, label in enumerate(title_lines):
+                parts.append(text(x+18, top+34+line_index*29, label, 24, color, 'bold'))
+            for line_index, label in enumerate(detail_lines):
+                parts.append(text(x+18, top+94+line_index*26, label, 19, '#516176'))
+            if index < len(stages)-1:
+                parts.append(f'<path d="M{x+258} {top+65} H{x+277}" stroke="#8292a5" stroke-width="2.5" marker-end="url(#arrow)"/>')
+        parts.append(text(100, y+309, note, 21, color))
+
+    panel(171, '01', 'DB Migration · 매핑 등록과 이관 검증', '핵심: 템플릿 준비 → 실제 매핑 반영 → 이관 → 검증 실패 분석과 보정', '#6a4e9b', [
+        (['일반 대화', '템플릿 다운로드'], ['업무 순서 안내', 'AI 생성 XLSX 검토']),
+        (['파일 작성·등록', '매핑룰 조회'], ['테이블 + 컬럼 상세', '저장 값과 입력 비교']),
+        (['작업 관리', 'Migration 실행'], ['대상 · 우선순위 관리', '범위를 정해 실행']),
+        (['진행·결과', '생성 SQL 조회'], ['건수 · 레코드 검증', 'MIG / VERIFY SQL']),
+        (['실패 분석', 'Correct SQL 입력'], ['별도 검증 실패 사례', '확인한 SQL 저장']),
+        (['재실행 요청', '검증 결과 확인'], ['상태에 맞는 단계 재개', '최종 결과와 로그']),
+    ], 'Migration Correct SQL: 확인한 MIG_SQL → 검증부터 재개   ·   검증 완료 VERIFY_SQL → PASS   |   유사 SQL REF_SEQ는 Conversion 전용')
+    panel(547, '02', 'SQL Conversion / Tuning · 보정과 재실행', '핵심: RAG와 검색 자료 → Correct SQL → REF_SEQ → Conversion / Tuning / Formatting', '#246a89', [
+        (['대시보드', '실패·SQL 조회'], ['일반 대화로 시작', '상태 · 오류 · 생성 SQL']),
+        (['RAG 관리', 'VectorDB 동기화'], ['등록 · 조회 · 수정', '검색 자료에 반영']),
+        (['Correct SQL', '저장·자동 동기화'], ['TOBE / BIND / TEST', '검토한 SQL 입력']),
+        (['유사 SQL 검색', 'REF_SEQ 자동 등록'], ['AS-IS 유사도 80% 초과', '동일 실패 단계 후보']),
+        (['재실행', 'Tuning · Formatting'], ['참고 SQL로 재개', '남은 후속 단계 처리']),
+        (['결과·생성 SQL', '검증·로그 조회'], ['변환 · 튜닝 변경 사유', '정리된 SQL 확인']),
+    ], '자동 참조 대상: TOBE → FAIL-TOBE   ·   BIND → FAIL-BIND   ·   TEST → FAIL-TEST   |   REF_SEQ 등록과 실제 실행은 별도')
+    parts += [text(60, 967, '시연 준비  실제 대상 번호 · 실패 단계별 작업 · 검토한 SQL · 매핑 상세 행 · 검색 자료 동기화', 23, '#18334e', 'bold'),
+              text(60, 1010, '진행 조회는 실행 중 별도 채팅에서 확인  |  마무리: 최근 전체 결과 → 남은 전체 워크플로우 → 선행 조건 안내', 21, '#516176'), '</svg>']
+    return '\n'.join(parts)
+
+
 def inline_svg(svg, prefix):
     """Namespace accessibility and arrow IDs when several diagrams share a page."""
     return (svg.replace('id="title"', f'id="{prefix}-title"')
@@ -241,6 +289,9 @@ def main():
     tables = parse_schema()
     oracle, milvus, mmd = oracle_svg(tables), milvus_svg(), mermaid(tables)
     features = features_svg()
+    scenarios = scenarios_svg()
+    ET.fromstring(scenarios)
+    (ROOT / '00_demo_scenarios.svg').write_text(scenarios, encoding='utf-8')
     ET.fromstring(features)
     (ROOT / '00_agent_features.svg').write_text(features, encoding='utf-8')
     for suffix, contents in [('.svg', oracle), ('_milvus.svg', milvus), ('.mmd', mmd)]:
@@ -353,21 +404,22 @@ python smartMigrate_2.0_Langflow/00_guide/generate_chapter6_erd.py
 <p><strong>Formatting.</strong> 배치는 이번 실행에서 전달된 생성 SQL 목록의 해당 컬럼을 갱신합니다. 단건은 TUNED_TO_SQL을 정리해 FORMATTED_SQL에 저장합니다. 출력 항목·형식·빈 결과를 확인하며 결과 데이터 비교 검증을 수행하지 않습니다.</p>
 <p><strong>Management.</strong> 매핑 생성·실제 적용은 설정에 따라 구분됩니다. Correct SQL 저장은 해당 단계의 확인 완료 상태를 반영합니다. 규칙 변경·재시도 준비와 실제 작업 실행은 별도 요청입니다.</p>
 </aside>'''
+    scenario_notes = '<aside class="notes" aria-labelledby="scenarios-notes-title">\n<h2 id="scenarios-notes-title">30~40분 채팅 시연 · PPT 사용 안내</h2>\n<p>위 도식은 <strong>1920 × 1080 (16:9)</strong> 한 장입니다. <a href="00_demo_scenarios.svg" download>시연 시나리오 SVG 다운로드</a> 후 PowerPoint의 삽입 → 그림에서 사용하세요. 이 탭의 인쇄 / PDF는 설명 영역을 제외하고 장표만 출력합니다.</p>\n<p><strong>권장 순서: 01 → 02.</strong> 새 매핑 Migration을 먼저 진행하고, 사용 대상 Migration 완료 후 기존 SQL 보정과 후속 처리를 시연합니다. 각 흐름에 15~18분, 전체 결과와 예외 안내에 3~4분을 배정합니다. 실제 실행 대기 시간은 환경에 따라 달라집니다.</p>\n<p><strong>준비 데이터.</strong> 테이블/컬럼 매핑, 실패 단계별 독립 SQL 작업, 80% 초과 유사 후보, 사람이 검토한 SQL과 실제 바인드 값, 검색 자료를 준비합니다. 진행 중 조회는 별도 채팅/세션을 사용하며 지원되지 않는 환경에서는 단계별 로그 조회로 대체합니다.</p>\n<p><strong>자동 REF_SEQ.</strong> Conversion Correct SQL 저장·동기화 후 AS-IS SQL 기준으로 검색합니다. TO_SQL→FAIL-TOBE, BIND_SQL→FAIL-BIND, TEST_SQL→FAIL-TEST이며 유사도는 엄격히 80% 초과입니다. 후보의 실패 상태를 유지하고 REF_SEQ와 RETRY_COUNT=0만 반영합니다. Migration에는 이 자동 적용이 없습니다.</p>\n<p><a href="00_user_guide.md">사용자 가이드 · 실제 채팅 문장과 준비 조건</a></p>\n</aside>'
     page = f'''<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SmartMigrate ERD</title>
 <style>body{{margin:0;background:#ffffff;font-family:'Segoe UI','Malgun Gothic',sans-serif;color:#243447}}header{{padding:18px 24px;background:white;position:sticky;top:0;z-index:1;border-bottom:1px solid #ddd}}h1{{font-size:22px;margin:0 0 12px}}button,a{{margin-right:8px}}button{{padding:7px 12px;cursor:pointer}}p{{margin:10px 0;font-size:14px}}#viewport{{overflow:auto;height:calc(100vh - 170px)}}svg{{display:block;width:100%;height:auto}}section[hidden]{{display:none}}.notes{{margin:24px;padding:20px 24px;max-width:1100px;background:white;border:1px solid #cbd5e1;border-radius:10px;line-height:1.7}}.notes h2{{margin:0 0 14px;font-size:20px}}.notes p{{font-size:16px;overflow-wrap:anywhere}}.notes code{{font-family:Consolas,monospace}}@media print{{header{{position:static}}button{{display:none}}#viewport{{height:auto;overflow:visible}}.notes{{break-before:page}}@page{{size:A3 landscape;margin:10mm}}}}</style>
-<style>body[data-view="features"]{{background:#ffffff}}button[aria-pressed="true"]{{background:#18334e;color:white;border-color:#18334e}}@media print{{svg{{width:100% !important}}body[data-view="features"] header,body[data-view="features"] .notes{{display:none}}}}</style><style id="print-page"></style>
-<header><h1>SmartMigrate · 구조와 주요 기능</h1><button data-view="oracle">Oracle 전체 컬럼</button><button data-view="milvus">Milvus 동기화</button><button data-view="features">주요 기능 · PPT 장표</button><button id="out" aria-label="축소">−</button><button id="fit">화면 맞춤</button><button id="in" aria-label="확대">+</button><button id="print">인쇄 / PDF</button><span id="scale">100%</span><p id="view-description">문서 기준 · 기본 DDL에 FK 없음 · 파란 점선: 논리 참조 · 주황 점선: 조건부 로그 대상 식별</p><a href="{PREFIX}.svg">Oracle SVG</a><a href="{PREFIX}_milvus.svg">Milvus SVG</a><a href="00_agent_features.svg" download>주요 기능 SVG (PPT 삽입용)</a><a href="{PREFIX}.md">설명 / Mermaid</a></header>
-<main id="viewport"><section id="oracle">{oracle}{oracle_notes}</section><section id="milvus" hidden>{inline_svg(milvus, 'milvus')}</section><section id="features" hidden>{inline_svg(features, 'features')}{feature_notes}</section></main>
+<style>body[data-view="features"]{{background:#ffffff}}button[aria-pressed="true"]{{background:#18334e;color:white;border-color:#18334e}}@media print{{svg{{width:100% !important}}body[data-view="features"] header,body[data-view="features"] .notes{{display:none}}}}</style><style>@media print{{body[data-view="scenarios"] header,body[data-view="scenarios"] .notes{{display:none}}}}</style><style id="print-page"></style>
+<header><h1>SmartMigrate · 구조와 주요 기능</h1><button data-view="oracle">Oracle 전체 컬럼</button><button data-view="milvus">Milvus 동기화</button><button data-view="features">주요 기능 · PPT 장표</button><button data-view="scenarios">시연 시나리오 · PPT</button><button id="out" aria-label="축소">−</button><button id="fit">화면 맞춤</button><button id="in" aria-label="확대">+</button><button id="print">인쇄 / PDF</button><span id="scale">100%</span><p id="view-description">문서 기준 · 기본 DDL에 FK 없음 · 파란 점선: 논리 참조 · 주황 점선: 조건부 로그 대상 식별</p><a href="{PREFIX}.svg">Oracle SVG</a><a href="{PREFIX}_milvus.svg">Milvus SVG</a><a href="00_agent_features.svg" download>주요 기능 SVG (PPT 삽입용)</a><a href="00_demo_scenarios.svg" download>시연 시나리오 SVG (PPT 삽입용)</a><a href="{PREFIX}.md">설명 / Mermaid</a></header>
+<main id="viewport"><section id="oracle">{oracle}{oracle_notes}</section><section id="milvus" hidden>{inline_svg(milvus, 'milvus')}</section><section id="features" hidden>{inline_svg(features, 'features')}{feature_notes}</section><section id="scenarios" hidden>{inline_svg(scenarios, 'scenarios')}{scenario_notes}</section></main>
 <script>
 let zoom=1,active='oracle';
-const descriptions={{oracle:'문서 기준 · 기본 DDL에 FK 없음 · 파란 점선: 논리 참조 · 주황 점선: 조건부 로그 대상 식별',milvus:'Oracle 원천 → Milvus 검색 컬렉션 · 화살표는 동기화 방향',features:'Management / 작업 실행 · 생성 SQL과 검증 기준 · 16:9 PPT 장표'}};
+const descriptions={{oracle:'문서 기준 · 기본 DDL에 FK 없음 · 파란 점선: 논리 참조 · 주황 점선: 조건부 로그 대상 식별',milvus:'Oracle 원천 → Milvus 검색 컬렉션 · 화살표는 동기화 방향',features:'Management / 작업 실행 · 생성 SQL과 검증 기준 · 16:9 PPT 장표',scenarios:'두 가지 채팅 시연 · 30~40분 · 16:9 PPT 장표 · 상세 문장은 사용자 가이드 참조'}};
 function render(){{
   document.querySelectorAll('section').forEach(s=>{{s.hidden=s.id!==active;s.querySelector('svg').style.width=(zoom*100)+'%'}});
   document.querySelectorAll('button[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===active)));
   document.body.dataset.view=active;
   document.getElementById('scale').textContent=Math.round(zoom*100)+'%';
   document.getElementById('view-description').textContent=descriptions[active];
-  document.getElementById('print-page').textContent=active==='features'?'@page {{ size:338.6667mm 190.5mm; margin:0; }}':'';
+  document.getElementById('print-page').textContent=['features','scenarios'].includes(active)?'@page {{ size:338.6667mm 190.5mm; margin:0; }}':'';
 }}
 function selectView(view){{active=Object.hasOwn(descriptions,view)?view:'oracle';zoom=1;render();document.getElementById('viewport').scrollTo(0,0)}}
 document.querySelectorAll('button[data-view]').forEach(b=>b.onclick=()=>{{selectView(b.dataset.view);location.hash=active}});
@@ -379,7 +431,7 @@ document.getElementById('print').onclick=()=>window.print();
 selectView(location.hash.slice(1));
 </script></html>'''
     (ROOT / (PREFIX+'.html')).write_text(page, encoding='utf-8')
-    print('Generated 3 SVG diagrams, HTML viewer, Markdown guide, and Mermaid source.')
+    print('Generated 4 SVG diagrams, HTML viewer, Markdown guide, and Mermaid source.')
     print('Column counts:', {name: len(cols) for name, cols in tables.items()})
 
 

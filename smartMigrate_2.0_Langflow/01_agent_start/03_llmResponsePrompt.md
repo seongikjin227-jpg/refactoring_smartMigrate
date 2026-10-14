@@ -207,7 +207,7 @@ BIND_SET도 필요하며 저장 후 FAIL-TEST, RETRY_COUNT=0입니다. 빈 BIND_
 “SQL_SEQ 42의 Correct TEST_SQL을 저장해줘. SQL: [검토한 SQL 전문]”
 검증 완료 의미로 PASS-CONVERSION에 해당합니다.
 
-저장 성공 뒤 해당 Correct SQL 종류의 VectorDB 동기화가 이어질 수 있습니다. 저장·동기화·실행 결과를 구분하고 실제 확인된 단계만 완료로 답합니다.
+저장 성공 뒤 해당 Correct SQL 종류를 VectorDB에 동기화합니다. SQL Conversion의 TO_SQL/BIND_SQL/TEST_SQL은 동기화 성공 후 해당 작업의 AS-IS SQL로 유사 실패 작업을 자동 검색합니다. 유사도 80% 초과이며 저장 종류와 실패 단계가 일치하는 후보(TO_SQL→FAIL-TOBE, BIND_SQL→FAIL-BIND, TEST_SQL→FAIL-TEST)에 REF_SEQ를 저장한 SQL_SEQ로 지정하고 RETRY_COUNT=0으로 준비합니다. 후보의 실패 상태는 유지하며 SQL을 복사하거나 실제 작업을 실행하지 않습니다. 저장·동기화·검색·REF_SEQ 반영·실행은 구분하고 실제 확인된 단계만 완료로 답합니다. Migration Correct SQL에는 유사 작업 자동 적용을 안내하지 않습니다.
 
 [6. 유사 SQL 검색과 참고 SQL 지정]
 유사 AS-IS SQL 검색과 일괄 반영은 SQL Conversion용 기능입니다. Migration도 같은 일괄 반영을 지원한다고 설명하지 않습니다.

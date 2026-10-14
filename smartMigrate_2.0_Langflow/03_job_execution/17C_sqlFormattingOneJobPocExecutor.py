@@ -243,7 +243,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             step_name="FORMAT_COMPLETE",
             status=status,
             message="SQL formatting completed" if status == FORMATTED else "SQL formatting failed",
-            generate_sql=self._json_dump(results),
+            generate_sql=self._json_dump(self._formatting_log_results(results, (payload.get("generated_sql_list") or []) + candidates)),
         )
         return {
             **payload,
@@ -294,7 +294,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
 
         self._update_row(db_config, job, {"FORMATTED_SQL": formatted_sql})
         results = [{"table": "NEXT_SQL_INFO", "column": "FORMATTED_SQL", "key": self._sql_item_key(job), "status": FORMATTED, "method": "llm_batch"}]
-        self._log_formatting_event(log_payload, step_name="FORMAT_COMPLETE", status=FORMATTED, message="SQL formatting completed", generate_sql=self._json_dump(results))
+        self._log_formatting_event(log_payload, step_name="FORMAT_COMPLETE", status=FORMATTED, message="SQL formatting completed", generate_sql=self._json_dump(self._formatting_log_results(results, [job])))
         return self._result(
             payload=payload,
             job=job,
@@ -312,6 +312,23 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                 "next_node": self._dashboard_node(payload),
             },
         )
+
+    # DB 처리용 SPACE_NM||SQL_ID key는 결과 로그에 쓰지 않고 SQL_SEQ로 표시한다.
+    def _formatting_log_results(self, results: list[dict[str, Any]], items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        sql_seqs = {
+            self._sql_item_key(item): item.get("sql_seq")
+            for item in items
+            if isinstance(item, dict) and self._sql_item_key(item)
+        }
+        logged_results = []
+        for result in results:
+            logged = {key: value for key, value in result.items() if key not in {"sql_id", "space_nm"}}
+            if result.get("table") == "NEXT_SQL_INFO":
+                logged.pop("key", None)
+                sql_seq = sql_seqs.get(str(result.get("key") or ""))
+                logged["sql_seq"] = str(sql_seq).strip() if not self._is_blank_log_value(sql_seq) else "0"
+            logged_results.append(logged)
+        return logged_results
 
     # formatting 단계별 이벤트를 workflow 로그에 남긴다.
     def _log_formatting_event(self, payload: dict[str, Any], *, step_name: str, status: str, message: str, generate_sql: Any = None) -> None:
@@ -358,7 +375,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             raise ValueError("17C SQL formatting log requires NEXT_MIG_INFO.MAP_ID or NEXT_SQL_INFO.SQL_SEQ")
         return "MISSING_IDENTIFIER"
 
-    # SPACE_NM/SQL_ID 기반으로 로그 식별자를 만든다. 12C/15C와 같은 SQL row 기준이다.
+    # SQL 로그 식별자는 12C와 동일하게 SQL_SEQ만 사용한다.
     def _sql_log_identity(self, *sources: dict[str, Any]) -> str:
         sql_seq = ""
         for source in sources:
@@ -458,16 +475,23 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
                 params[sql_param] = sql_id
             with self._connect(db_config) as conn:
                 cur = conn.cursor()
-                cur.execute(f"SELECT TO_CHAR(SPACE_NM) AS SPACE_NM, TO_CHAR(SQL_ID) AS SQL_ID, {', '.join(columns)} FROM {table} WHERE {' OR '.join(predicates)}", params)
+                cur.execute(f"SELECT TO_CHAR(SPACE_NM) AS SPACE_NM, TO_CHAR(SQL_ID) AS SQL_ID, SQL_SEQ, {', '.join(columns)} FROM {table} WHERE {' OR '.join(predicates)}", params)
                 # Oracle CLOB은 locator로 올 수 있으므로 연결이 닫히기 전에 문자열로 읽어 둔다.
+                rows = cur.fetchall()
                 by_key = {
                     self._sql_item_key({"space_nm": row[0], "sql_id": row[1]}): {
-                        column: self._lob_to_str(row[index + 2]).strip()
+                        column: self._lob_to_str(row[index + 3]).strip()
                         for index, column in enumerate(columns)
                     }
-                    for row in cur.fetchall()
+                    for row in rows
+                }
+                sql_seqs_by_key = {
+                    self._sql_item_key({"space_nm": row[0], "sql_id": row[1]}): self._lob_to_str(row[2]).strip()
+                    for row in rows
                 }
             for item in sql_items:
+                if str(item["key"]) in sql_seqs_by_key:
+                    item["sql_seq"] = sql_seqs_by_key[str(item["key"])]
                 loaded[item["item_id"]] = by_key.get(str(item["key"]), {}).get(item["column"], "")
 
         return loaded
@@ -799,7 +823,7 @@ class NewType17CSqlFormattingOneJobPocExecutor(Component):
             if not row:
                 raise ValueError(
                     "NEXT_SQL_INFO row not found: "
-                    f"sql_seq={payload.get('sql_seq')}, space_nm={payload.get('space_nm')}, sql_id={payload.get('sql_id')}"
+                    f"SQL_SEQ = {payload.get('sql_seq') or '0'}"
                 )
             keys = [alias for _, alias, _ in aliases]
             loaded = {key: self._lob_to_str(row[index]) for index, key in enumerate(keys)}
