@@ -1,0 +1,496 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SmartMigrate ERD</title>
+<style>body{margin:0;background:#ffffff;font-family:'Segoe UI','Malgun Gothic',sans-serif;color:#243447}header{padding:18px 24px;background:white;position:sticky;top:0;z-index:1;border-bottom:1px solid #ddd}h1{font-size:22px;margin:0 0 12px}button,a{margin-right:8px}button{padding:7px 12px;cursor:pointer}p{margin:10px 0;font-size:14px}#viewport{overflow:auto;height:calc(100vh - 170px)}svg{display:block;width:100%;height:auto}section[hidden]{display:none}.notes{margin:24px;padding:20px 24px;max-width:1100px;background:white;border:1px solid #cbd5e1;border-radius:10px;line-height:1.7}.notes h2{margin:0 0 14px;font-size:20px}.notes p{font-size:16px;overflow-wrap:anywhere}.notes code{font-family:Consolas,monospace}@media print{header{position:static}button{display:none}#viewport{height:auto;overflow:visible}.notes{break-before:page}@page{size:A3 landscape;margin:10mm}}</style>
+<style>body[data-view="features"]{background:#ffffff}button[aria-pressed="true"]{background:#18334e;color:white;border-color:#18334e}@media print{svg{width:100% !important}body[data-view="features"] header,body[data-view="features"] .notes{display:none}}</style><style id="print-page"></style>
+<header><h1>SmartMigrate · 구조와 주요 기능</h1><button data-view="oracle">Oracle 전체 컬럼</button><button data-view="milvus">Milvus 동기화</button><button data-view="features">주요 기능 · PPT 장표</button><button id="out" aria-label="축소">−</button><button id="fit">화면 맞춤</button><button id="in" aria-label="확대">+</button><button id="print">인쇄 / PDF</button><span id="scale">100%</span><p id="view-description">문서 기준 · 기본 DDL에 FK 없음 · 파란 점선: 논리 참조 · 주황 점선: 조건부 로그 대상 식별</p><a href="00_architecture_chapter6_erd.svg">Oracle SVG</a><a href="00_architecture_chapter6_erd_milvus.svg">Milvus SVG</a><a href="00_agent_features.svg" download>주요 기능 SVG (PPT 삽입용)</a><a href="00_architecture_chapter6_erd.md">설명 / Mermaid</a></header>
+<main id="viewport"><section id="oracle"><svg xmlns="http://www.w3.org/2000/svg" width="2050" height="1490" viewBox="0 0 2050 1490" role="img" aria-labelledby="title desc">
+<title id="title">SmartMigrate · Oracle ERD</title><desc id="desc">Chapter 6 DDL의 5개 테이블, 전체 컬럼, PK/UK/NOT NULL 및 논리 참조. 기본 DDL에는 FK 없음.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs>
+<rect width="2050" height="1490" fill="#ffffff"/>
+<text x="55" y="58" fill="#243447" font-size="30" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SmartMigrate · Oracle ERD</text>
+<text x="55" y="94" fill="#243447" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">문서 기준 · 전체 컬럼 · PK / UK / NN · 기본 DDL에 FOREIGN KEY 없음</text>
+<text x="55" y="127" fill="#243447" font-size="17" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">파란 점선: 논리 참조 (참조하는 컬럼 → 대상 키)    주황 점선: 로그 대상 식별 (조건부, FK 아님)</text>
+<rect x="90" y="200" width="530" height="668" rx="10" fill="white" stroke="#cbd5e1"/>
+<rect x="90" y="200" width="530" height="62" rx="10" fill="#246a89"/>
+<text x="106" y="227" fill="#fff" font-size="22" font-weight="bold" font-family="Consolas, monospace">NEXT_MIG_INFO</text>
+<text x="106" y="249" fill="#fff" font-size="15" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">DB Migration 작업 master</text>
+<text x="106" y="281" fill="#243447" font-size="13" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">KEY / NULL</text>
+<text x="205" y="281" fill="#243447" font-size="13" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">COLUMN</text>
+<text x="435" y="281" fill="#243447" font-size="13" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">ORACLE TYPE</text>
+<rect x="91" y="290" width="528" height="28" fill="#f1f5f9"/>
+<text x="106" y="310" fill="#246a89" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">PK NN</text>
+<text x="205" y="310" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">MAP_ID</text>
+<text x="435" y="310" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">NUMBER</text>
+<text x="106" y="338" fill="#246a89" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="205" y="338" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">MAP_TYPE</text>
+<text x="435" y="338" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">VARCHAR2(100)</text>
+<rect x="91" y="346" width="528" height="28" fill="#f1f5f9"/>
+<text x="106" y="366" fill="#246a89" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">NN</text>
+<text x="205" y="366" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">FR_TABLE</text>
+<text x="435" y="366" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">VARCHAR2(4000)</text>
+<text x="106" y="394" fill="#246a89" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">NN</text>
+<text x="205" y="394" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">TO_TABLE</text>
+<text x="435" y="394" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">VARCHAR2(4000)</text>
+<rect x="91" y="402" width="528" height="28" fill="#f1f5f9"/>
+<text x="106" y="422" fill="#246a89" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="205" y="422" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">TRUNC_YN</text>
+<text x="435" y="422" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CHAR(1)</text>
+<text x="106" y="450" fill="#246a89" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="205" y="450" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CONDITION</text>
+<text x="435" y="450" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CLOB</text>
+<rect x="91" y="458" width="528" height="28" fill="#f1f5f9"/>
+<text x="106" y="478" fill="#246a89" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="205" y="478" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">USE_YN</text>
+<text x="435" y="478" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CHAR(1)</text>
+<text x="106" y="506" fill="#246a89" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="205" y="506" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">PRIORITY</text>
+<text x="435" y="506" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">NUMBER</text>
+<rect x="91" y="514" width="528" height="28" fill="#f1f5f9"/>
+<text x="106" y="534" fill="#246a89" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="205" y="534" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">PRIOR_MAP_ID</text>
+<text x="435" y="534" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">NUMBER</text>
+<text x="106" y="562" fill="#246a89" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="205" y="562" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">STATUS</text>
+<text x="435" y="562" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">VARCHAR2(100)</text>
+<rect x="91" y="570" width="528" height="28" fill="#f1f5f9"/>
+<text x="106" y="590" fill="#246a89" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="205" y="590" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">USER_EDITED</text>
+<text x="435" y="590" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CHAR(1)</text>
+<text x="106" y="618" fill="#246a89" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="205" y="618" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">MIG_SQL</text>
+<text x="435" y="618" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CLOB</text>
+<rect x="91" y="626" width="528" height="28" fill="#f1f5f9"/>
+<text x="106" y="646" fill="#246a89" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="205" y="646" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">VERIFY_SQL</text>
+<text x="435" y="646" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CLOB</text>
+<text x="106" y="674" fill="#246a89" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="205" y="674" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">VERIFY2_SQL</text>
+<text x="435" y="674" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CLOB</text>
+<rect x="91" y="682" width="528" height="28" fill="#f1f5f9"/>
+<text x="106" y="702" fill="#246a89" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="205" y="702" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">BATCH_CNT</text>
+<text x="435" y="702" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">NUMBER</text>
+<text x="106" y="730" fill="#246a89" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="205" y="730" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">RETRY_COUNT</text>
+<text x="435" y="730" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">NUMBER</text>
+<rect x="91" y="738" width="528" height="28" fill="#f1f5f9"/>
+<text x="106" y="758" fill="#246a89" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="205" y="758" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">ELAPSED_SECONDS</text>
+<text x="435" y="758" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">NUMBER</text>
+<text x="106" y="786" fill="#246a89" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="205" y="786" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">LOG</text>
+<text x="435" y="786" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">VARCHAR2(4000)</text>
+<rect x="91" y="794" width="528" height="28" fill="#f1f5f9"/>
+<text x="106" y="814" fill="#246a89" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="205" y="814" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">REG_TS</text>
+<text x="435" y="814" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">TIMESTAMP</text>
+<text x="106" y="842" fill="#246a89" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="205" y="842" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">UPD_TS</text>
+<text x="435" y="842" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">TIMESTAMP</text>
+<rect x="720" y="200" width="530" height="276" rx="10" fill="white" stroke="#cbd5e1"/>
+<rect x="720" y="200" width="530" height="62" rx="10" fill="#246a89"/>
+<text x="736" y="227" fill="#fff" font-size="22" font-weight="bold" font-family="Consolas, monospace">NEXT_MIG_INFO_DTL</text>
+<text x="736" y="249" fill="#fff" font-size="15" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">컬럼 매핑 detail · 복합 PK</text>
+<text x="736" y="281" fill="#243447" font-size="13" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">KEY / NULL</text>
+<text x="835" y="281" fill="#243447" font-size="13" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">COLUMN</text>
+<text x="1065" y="281" fill="#243447" font-size="13" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">ORACLE TYPE</text>
+<rect x="721" y="290" width="528" height="28" fill="#f1f5f9"/>
+<text x="736" y="310" fill="#246a89" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">PK NN</text>
+<text x="835" y="310" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">MAP_ID</text>
+<text x="1065" y="310" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">NUMBER</text>
+<text x="736" y="338" fill="#246a89" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">PK NN</text>
+<text x="835" y="338" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">MAP_DTL</text>
+<text x="1065" y="338" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">NUMBER</text>
+<rect x="721" y="346" width="528" height="28" fill="#f1f5f9"/>
+<text x="736" y="366" fill="#246a89" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">NN</text>
+<text x="835" y="366" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">FR_COL</text>
+<text x="1065" y="366" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">VARCHAR2(4000)</text>
+<text x="736" y="394" fill="#246a89" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="835" y="394" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">TO_COL</text>
+<text x="1065" y="394" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">VARCHAR2(4000)</text>
+<rect x="721" y="402" width="528" height="28" fill="#f1f5f9"/>
+<text x="736" y="422" fill="#246a89" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="835" y="422" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">REG_TS</text>
+<text x="1065" y="422" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">TIMESTAMP</text>
+<text x="736" y="450" fill="#246a89" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="835" y="450" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">UPD_TS</text>
+<text x="1065" y="450" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">TIMESTAMP</text>
+<rect x="1370" y="200" width="580" height="808" rx="10" fill="white" stroke="#cbd5e1"/>
+<rect x="1370" y="200" width="580" height="62" rx="10" fill="#6554a4"/>
+<text x="1386" y="227" fill="#fff" font-size="22" font-weight="bold" font-family="Consolas, monospace">NEXT_SQL_INFO</text>
+<text x="1386" y="249" fill="#fff" font-size="15" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">SQL Conversion / Tuning / Formatting</text>
+<text x="1386" y="281" fill="#243447" font-size="13" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">KEY / NULL</text>
+<text x="1485" y="281" fill="#243447" font-size="13" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">COLUMN</text>
+<text x="1715" y="281" fill="#243447" font-size="13" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">ORACLE TYPE</text>
+<rect x="1371" y="290" width="578" height="28" fill="#f1f5f9"/>
+<text x="1386" y="310" fill="#6554a4" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">UK NN</text>
+<text x="1485" y="310" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">SQL_SEQ</text>
+<text x="1715" y="310" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">NUMBER</text>
+<text x="1386" y="338" fill="#6554a4" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">PK NN</text>
+<text x="1485" y="338" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">SPACE_NM</text>
+<text x="1715" y="338" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">VARCHAR2(200)</text>
+<rect x="1371" y="346" width="578" height="28" fill="#f1f5f9"/>
+<text x="1386" y="366" fill="#6554a4" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">PK NN</text>
+<text x="1485" y="366" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">SQL_ID</text>
+<text x="1715" y="366" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">VARCHAR2(200)</text>
+<text x="1386" y="394" fill="#6554a4" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="1485" y="394" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">REF_SEQ</text>
+<text x="1715" y="394" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">NUMBER</text>
+<rect x="1371" y="402" width="578" height="28" fill="#f1f5f9"/>
+<text x="1386" y="422" fill="#6554a4" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="1485" y="422" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">STATUS_CONVERSION</text>
+<text x="1715" y="422" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">VARCHAR2(100)</text>
+<text x="1386" y="450" fill="#6554a4" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="1485" y="450" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">STATUS_TUNING</text>
+<text x="1715" y="450" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">VARCHAR2(100)</text>
+<rect x="1371" y="458" width="578" height="28" fill="#f1f5f9"/>
+<text x="1386" y="478" fill="#6554a4" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="1485" y="478" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">PRIORITY</text>
+<text x="1715" y="478" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">NUMBER</text>
+<text x="1386" y="506" fill="#6554a4" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="1485" y="506" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">USER_EDITED</text>
+<text x="1715" y="506" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CHAR(1)</text>
+<rect x="1371" y="514" width="578" height="28" fill="#f1f5f9"/>
+<text x="1386" y="534" fill="#6554a4" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="1485" y="534" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">TARGET_TABLE</text>
+<text x="1715" y="534" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">VARCHAR2(4000)</text>
+<text x="1386" y="562" fill="#6554a4" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="1485" y="562" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">TAG_KIND</text>
+<text x="1715" y="562" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">VARCHAR2(100)</text>
+<rect x="1371" y="570" width="578" height="28" fill="#f1f5f9"/>
+<text x="1386" y="590" fill="#6554a4" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="1485" y="590" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">FR_SQL</text>
+<text x="1715" y="590" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CLOB</text>
+<text x="1386" y="618" fill="#6554a4" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="1485" y="618" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">EDIT_FR_SQL</text>
+<text x="1715" y="618" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CLOB</text>
+<rect x="1371" y="626" width="578" height="28" fill="#f1f5f9"/>
+<text x="1386" y="646" fill="#6554a4" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="1485" y="646" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">TO_SQL</text>
+<text x="1715" y="646" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CLOB</text>
+<text x="1386" y="674" fill="#6554a4" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="1485" y="674" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">BIND_SQL</text>
+<text x="1715" y="674" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CLOB</text>
+<rect x="1371" y="682" width="578" height="28" fill="#f1f5f9"/>
+<text x="1386" y="702" fill="#6554a4" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="1485" y="702" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">BIND_SET</text>
+<text x="1715" y="702" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CLOB</text>
+<text x="1386" y="730" fill="#6554a4" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="1485" y="730" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">TEST_SQL</text>
+<text x="1715" y="730" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CLOB</text>
+<rect x="1371" y="738" width="578" height="28" fill="#f1f5f9"/>
+<text x="1386" y="758" fill="#6554a4" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="1485" y="758" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">TUNED_TO_SQL</text>
+<text x="1715" y="758" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CLOB</text>
+<text x="1386" y="786" fill="#6554a4" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="1485" y="786" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">TUNED_RESULT</text>
+<text x="1715" y="786" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CLOB</text>
+<rect x="1371" y="794" width="578" height="28" fill="#f1f5f9"/>
+<text x="1386" y="814" fill="#6554a4" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="1485" y="814" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">TUNED_FR_SQL</text>
+<text x="1715" y="814" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CLOB</text>
+<text x="1386" y="842" fill="#6554a4" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="1485" y="842" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">FORMATTED_SQL</text>
+<text x="1715" y="842" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CLOB</text>
+<rect x="1371" y="850" width="578" height="28" fill="#f1f5f9"/>
+<text x="1386" y="870" fill="#6554a4" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="1485" y="870" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">BLOCK_RAG_CONTENT</text>
+<text x="1715" y="870" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CLOB</text>
+<text x="1386" y="898" fill="#6554a4" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="1485" y="898" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">BATCH_CNT</text>
+<text x="1715" y="898" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">NUMBER</text>
+<rect x="1371" y="906" width="578" height="28" fill="#f1f5f9"/>
+<text x="1386" y="926" fill="#6554a4" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="1485" y="926" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">RETRY_COUNT</text>
+<text x="1715" y="926" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">NUMBER</text>
+<text x="1386" y="954" fill="#6554a4" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="1485" y="954" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">LOG</text>
+<text x="1715" y="954" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">VARCHAR2(4000)</text>
+<rect x="1371" y="962" width="578" height="28" fill="#f1f5f9"/>
+<text x="1386" y="982" fill="#6554a4" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="1485" y="982" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">UPD_TS</text>
+<text x="1715" y="982" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">TIMESTAMP</text>
+<rect x="720" y="780" width="530" height="416" rx="10" fill="white" stroke="#cbd5e1"/>
+<rect x="720" y="780" width="530" height="62" rx="10" fill="#9c6020"/>
+<text x="736" y="807" fill="#fff" font-size="22" font-weight="bold" font-family="Consolas, monospace">NEXT_MIG_LOG</text>
+<text x="736" y="829" fill="#fff" font-size="15" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">공용 workflow / 실행 로그</text>
+<text x="736" y="861" fill="#243447" font-size="13" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">KEY / NULL</text>
+<text x="835" y="861" fill="#243447" font-size="13" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">COLUMN</text>
+<text x="1065" y="861" fill="#243447" font-size="13" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">ORACLE TYPE</text>
+<rect x="721" y="870" width="528" height="28" fill="#f1f5f9"/>
+<text x="736" y="890" fill="#9c6020" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">PK NN</text>
+<text x="835" y="890" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">LOG_ID</text>
+<text x="1065" y="890" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">NUMBER</text>
+<text x="736" y="918" fill="#9c6020" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="835" y="918" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">MAP_ID</text>
+<text x="1065" y="918" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">VARCHAR2(200)</text>
+<rect x="721" y="926" width="528" height="28" fill="#f1f5f9"/>
+<text x="736" y="946" fill="#9c6020" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="835" y="946" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">MIG_KIND</text>
+<text x="1065" y="946" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">VARCHAR2(100)</text>
+<text x="736" y="974" fill="#9c6020" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="835" y="974" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">LOG_TYPE</text>
+<text x="1065" y="974" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">VARCHAR2(100)</text>
+<rect x="721" y="982" width="528" height="28" fill="#f1f5f9"/>
+<text x="736" y="1002" fill="#9c6020" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="835" y="1002" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">LOG_LEVEL</text>
+<text x="1065" y="1002" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">VARCHAR2(50)</text>
+<text x="736" y="1030" fill="#9c6020" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="835" y="1030" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">STEP_NAME</text>
+<text x="1065" y="1030" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">VARCHAR2(200)</text>
+<rect x="721" y="1038" width="528" height="28" fill="#f1f5f9"/>
+<text x="736" y="1058" fill="#9c6020" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="835" y="1058" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">STATUS</text>
+<text x="1065" y="1058" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">VARCHAR2(100)</text>
+<text x="736" y="1086" fill="#9c6020" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="835" y="1086" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">MESSAGE</text>
+<text x="1065" y="1086" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CLOB</text>
+<rect x="721" y="1094" width="528" height="28" fill="#f1f5f9"/>
+<text x="736" y="1114" fill="#9c6020" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="835" y="1114" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">RETRY_COUNT</text>
+<text x="1065" y="1114" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">NUMBER</text>
+<text x="736" y="1142" fill="#9c6020" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="835" y="1142" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">GENERATE_SQL</text>
+<text x="1065" y="1142" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CLOB</text>
+<rect x="721" y="1150" width="528" height="28" fill="#f1f5f9"/>
+<text x="736" y="1170" fill="#9c6020" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="835" y="1170" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CREATED_AT</text>
+<text x="1065" y="1170" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">TIMESTAMP</text>
+<rect x="90" y="990" width="530" height="416" rx="10" fill="white" stroke="#cbd5e1"/>
+<rect x="90" y="990" width="530" height="62" rx="10" fill="#357855"/>
+<text x="106" y="1017" fill="#fff" font-size="22" font-weight="bold" font-family="Consolas, monospace">NEXT_MIG_RAG_INFO</text>
+<text x="106" y="1039" fill="#fff" font-size="15" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">RAG Guide 원천 · 직접 키 관계 없음</text>
+<text x="106" y="1071" fill="#243447" font-size="13" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">KEY / NULL</text>
+<text x="205" y="1071" fill="#243447" font-size="13" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">COLUMN</text>
+<text x="435" y="1071" fill="#243447" font-size="13" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">ORACLE TYPE</text>
+<rect x="91" y="1080" width="528" height="28" fill="#f1f5f9"/>
+<text x="106" y="1100" fill="#357855" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">PK NN</text>
+<text x="205" y="1100" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">RAG_ID</text>
+<text x="435" y="1100" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">NUMBER</text>
+<text x="106" y="1128" fill="#357855" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">NN</text>
+<text x="205" y="1128" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CATEGORY</text>
+<text x="435" y="1128" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">VARCHAR2(50)</text>
+<rect x="91" y="1136" width="528" height="28" fill="#f1f5f9"/>
+<text x="106" y="1156" fill="#357855" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">NN</text>
+<text x="205" y="1156" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">RULE_TYPE</text>
+<text x="435" y="1156" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">VARCHAR2(50)</text>
+<text x="106" y="1184" fill="#357855" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="205" y="1184" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">SOURCE_TABLES</text>
+<text x="435" y="1184" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">VARCHAR2(4000)</text>
+<rect x="91" y="1192" width="528" height="28" fill="#f1f5f9"/>
+<text x="106" y="1212" fill="#357855" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="205" y="1212" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">USE_YN</text>
+<text x="435" y="1212" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CHAR(1)</text>
+<text x="106" y="1240" fill="#357855" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="205" y="1240" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">GUIDANCE_TEXT</text>
+<text x="435" y="1240" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CLOB</text>
+<rect x="91" y="1248" width="528" height="28" fill="#f1f5f9"/>
+<text x="106" y="1268" fill="#357855" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="205" y="1268" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">SOURCE_SQL</text>
+<text x="435" y="1268" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CLOB</text>
+<text x="106" y="1296" fill="#357855" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="205" y="1296" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">TARGET_SQL</text>
+<text x="435" y="1296" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CLOB</text>
+<rect x="91" y="1304" width="528" height="28" fill="#f1f5f9"/>
+<text x="106" y="1324" fill="#357855" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="205" y="1324" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">HIT_CNT</text>
+<text x="435" y="1324" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">NUMBER</text>
+<text x="106" y="1352" fill="#357855" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="205" y="1352" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">CREATED_AT</text>
+<text x="435" y="1352" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">TIMESTAMP</text>
+<rect x="91" y="1360" width="528" height="28" fill="#f1f5f9"/>
+<text x="106" y="1380" fill="#357855" font-size="14" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif"></text>
+<text x="205" y="1380" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">UPDATED_AT</text>
+<text x="435" y="1380" fill="#243447" font-size="16" font-weight="normal" font-family="Consolas, monospace">TIMESTAMP</text>
+<path d="M 720 304 H 670 V 170 H 645 V 304 H 620" fill="none" stroke="#5268bb" stroke-width="2.5" stroke-dasharray="8 5" marker-end="url(#arrow)"/>
+<text x="740" y="179" fill="#243447" font-size="15" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">DTL.MAP_ID → master.MAP_ID  |  의도: master 1 : detail 0..N</text>
+<path d="M 90 528 H 35 V 304 H 90" fill="none" stroke="#5268bb" stroke-width="2.5" stroke-dasharray="8 5" marker-end="url(#arrow)"/>
+<text x="95" y="179" fill="#243447" font-size="15" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">PRIOR_MAP_ID → MAP_ID  |  선행 0..1 / 후속 0..N</text>
+<path d="M 1950 388 H 2005 V 304 H 1950" fill="none" stroke="#5268bb" stroke-width="2.5" stroke-dasharray="8 5" marker-end="url(#arrow)"/>
+<text x="1380" y="170" fill="#243447" font-size="15" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">REF_SEQ → SQL_SEQ (UK)  |  참조 0..1 / 피참조 0..N</text>
+<path d="M 720 912 H 655 V 304 H 620" fill="none" stroke="#b66b22" stroke-width="2.5" stroke-dasharray="8 5" marker-end="url(#arrow)"/>
+<text x="680" y="714" fill="#965719" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">로그 MAP_ID: DB_MIGRATION → MAP_ID</text>
+<path d="M 1250 912 H 1310 V 304 H 1370" fill="none" stroke="#b66b22" stroke-width="2.5" stroke-dasharray="8 5" marker-end="url(#arrow)"/>
+<text x="730" y="747" fill="#965719" font-size="15" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">SQL 계열 → SQL_SEQ = 값  |  Formatting: SQL_SEQ 또는 MAP_ID</text>
+<text x="55" y="1420" fill="#243447" font-size="18" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">PK = Primary Key (복합 PK는 표시된 컬럼을 함께 사용) · UK = UNIQUE · NN = NOT NULL</text>
+<text x="55" y="1455" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">Source: 00_architecture_chapter6_oracle_ddl.md</text>
+</svg><aside class="notes" aria-labelledby="oracle-notes-title">
+<h2 id="oracle-notes-title">관계·제약 설명</h2>
+<p><strong>로그 대상 구분.</strong> 로그는 <code>MAP_ID</code> 문자열과 <code>MIG_KIND</code>로 대상을 구분한다. WORKFLOW / 관리 로그는 특정 작업과 연결되지 않을 수 있다.</p>
+<p><strong>Correct SQL 참조.</strong> <code>NEXT_SQL_INFO</code>에는 <code>CHECK (REF_SEQ IS NULL OR REF_SEQ &lt;&gt; SQL_SEQ)</code>가 있다. <code>REF_SEQ</code> 지정 시 Correct SQL 컬렉션에 대상이 존재하는지 앱에서 검증한다.</p>
+<p><strong>테이블 범위 메타데이터.</strong> <code>TARGET_TABLE</code>, <code>FR_TABLE</code>, <code>SOURCE_TABLES</code>는 scope 메타데이터다. 동일한 테이블명 문자열만으로 FK 또는 N:M 관계를 만들지 않는다.</p>
+<p><strong>관계의 보장 범위.</strong> 1 / 0..1 / 0..N은 문서상 의도이며 DB가 보장하지 않는다. 기본 DDL에 FK가 없으므로 고아 참조가 저장될 수 있다.</p>
+<p><strong>채번.</strong> <code>NEXT_SQL_INFO_SQL_SEQ</code>는 <code>SQL_SEQ</code>, <code>MIGRATION_LOG_SEQ</code>는 <code>LOG_ID</code>를 채번한다. <code>RAG_ID</code>는 IDENTITY다.</p>
+<p>기본값·CHECK·인덱스 상세는 동반 Markdown과 원문 DDL을 참조한다.</p>
+</aside></section><section id="milvus" hidden><svg xmlns="http://www.w3.org/2000/svg" width="1850" height="1060" viewBox="0 0 1850 1060" role="img" aria-labelledby="milvus-title milvus-desc">
+<title id="milvus-title">SmartMigrate · Oracle → Milvus</title><desc id="milvus-desc">Oracle 원천과 네 Milvus 검색 컬렉션의 동기화 흐름. ERD의 FK 관계가 아님.</desc>
+<defs><marker id="milvus-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs>
+<rect width="1850" height="1060" fill="#ffffff"/>
+<text x="55" y="58" fill="#243447" font-size="30" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SmartMigrate · Oracle → Milvus</text>
+<text x="55" y="96" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">검색용 복제 / 단계별 저장 흐름 · 화살표는 동기화 방향이며 FK 또는 보장된 카디널리티가 아님</text>
+<text x="65" y="144" fill="#243447" font-size="23" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">Oracle 원천</text>
+<text x="960" y="144" fill="#243447" font-size="23" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">Milvus 검색 컬렉션</text>
+<rect x="65" y="180" width="530" height="119" rx="10" fill="white" stroke="#357855" stroke-width="2"/>
+<text x="85" y="212" fill="#357855" font-size="22" font-weight="bold" font-family="Consolas, monospace">NEXT_MIG_RAG_INFO</text>
+<text x="85" y="244" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">PK: RAG_ID</text>
+<text x="85" y="271" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">category / rule_type / guidance / SQL 예시</text>
+<rect x="65" y="410" width="530" height="146" rx="10" fill="white" stroke="#6554a4" stroke-width="2"/>
+<text x="85" y="442" fill="#6554a4" font-size="22" font-weight="bold" font-family="Consolas, monospace">NEXT_SQL_INFO</text>
+<text x="85" y="474" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">PK: SPACE_NM + SQL_ID · UK: SQL_SEQ</text>
+<text x="85" y="501" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">AS-IS SQL / 보정 SQL / 단계별 결과 SQL</text>
+<text x="85" y="528" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">REF_SEQ: Correct SQL 참고 대상</text>
+<rect x="65" y="770" width="530" height="119" rx="10" fill="white" stroke="#246a89" stroke-width="2"/>
+<text x="85" y="802" fill="#246a89" font-size="22" font-weight="bold" font-family="Consolas, monospace">NEXT_MIG_INFO</text>
+<text x="85" y="834" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">PK: MAP_ID</text>
+<text x="85" y="861" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">MIG_SQL / VERIFY_SQL / 사용자 보정</text>
+<rect x="960" y="180" width="825" height="119" rx="10" fill="white" stroke="#357855" stroke-width="2"/>
+<text x="980" y="212" fill="#357855" font-size="22" font-weight="bold" font-family="Consolas, monospace">SM_RAG_RULES</text>
+<text x="980" y="244" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">rag_id / category / rule_type / use_yn / source_tables</text>
+<text x="980" y="271" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">guidance_text / source_sql / target_sql</text>
+<rect x="960" y="360" width="825" height="146" rx="10" fill="white" stroke="#6554a4" stroke-width="2"/>
+<text x="980" y="392" fill="#6554a4" font-size="22" font-weight="bold" font-family="Consolas, monospace">SM_ASIS_SQL</text>
+<text x="980" y="424" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">sql_seq / space_nm / sql_id / tag_kind / target_table</text>
+<text x="980" y="451" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">fr_sql / edit_fr_sql (EDIT_FR_SQL 우선)</text>
+<text x="980" y="478" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">실행 status와 TO-BE 결과 SQL은 저장하지 않음</text>
+<rect x="960" y="550" width="825" height="146" rx="10" fill="white" stroke="#6554a4" stroke-width="2"/>
+<text x="980" y="582" fill="#6554a4" font-size="22" font-weight="bold" font-family="Consolas, monospace">SM_CORRECT_SQL_CONVERSION</text>
+<text x="980" y="614" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">sql_seq / space_nm / sql_id / status_conversion</text>
+<text x="980" y="641" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">correct_sql_kind / user_edited / tag_kind / target_table</text>
+<text x="980" y="668" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">source_sql / to_sql / bind_sql / test_sql</text>
+<rect x="960" y="770" width="825" height="119" rx="10" fill="white" stroke="#246a89" stroke-width="2"/>
+<text x="980" y="802" fill="#246a89" font-size="22" font-weight="bold" font-family="Consolas, monospace">SM_CORRECT_SQL_MIGRATION</text>
+<text x="980" y="834" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">map_id / correct_sql_kind / fr_table / to_table / condition</text>
+<text x="980" y="861" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">mig_sql / verify_sql / user_edited / status</text>
+<path d="M 595 240 H 960" fill="none" stroke="#357855" stroke-width="2.5" marker-end="url(#milvus-arrow)"/>
+<text x="630" y="222" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">04_saveVectorDB.py</text>
+<path d="M 595 460 H 770 V 420 H 960" fill="none" stroke="#6554a4" stroke-width="2.5" marker-end="url(#milvus-arrow)"/>
+<text x="620" y="402" fill="#243447" font-size="17" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">AS-IS SQL 동기화</text>
+<path d="M 595 505 H 760 V 610 H 960" fill="none" stroke="#6554a4" stroke-width="2.5" marker-end="url(#milvus-arrow)"/>
+<text x="620" y="654" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">save_correct_sql → sync_correct_sql</text>
+<text x="620" y="681" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">USER_EDITED=&#x27;Y&#x27; 단계 SQL</text>
+<path d="M 595 831 H 960" fill="none" stroke="#246a89" stroke-width="2.5" marker-end="url(#milvus-arrow)"/>
+<text x="620" y="798" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">save_migration_* → sync_correct_sql</text>
+<text x="620" y="869" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">kind: MIG_SQL / VERIFY_SQL</text>
+<text x="65" y="958" fill="#243447" font-size="17" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">공통 필드: doc_id VARCHAR(256) PK · content · content_hash · is_active · updated_at · dense_vector · sparse_vector (선택)</text>
+<text x="65" y="993" fill="#243447" font-size="17" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">REF_SEQ는 이미 SM_CORRECT_SQL_CONVERSION에 존재하는 SQL_SEQ만 지정 가능. 최신 실행 상태는 Oracle를 다시 조회.</text>
+<text x="65" y="1028" fill="#243447" font-size="17" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">doc_id가 컬렉션 PK이며, sql_seq / map_id는 원천 식별 메타데이터. 단계별 Correct SQL 문서는 원천 한 건당 여러 건 가능.</text>
+</svg></section><section id="features" hidden><svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="features-title features-desc">
+<title id="features-title">SmartMigrate · 주요 기능</title><desc id="features-desc">자연어 요청을 Management와 작업 실행으로 구분. 실행별 생성 SQL과 실제 검증 기준을 정리한 16:9 장표.</desc>
+<defs><marker id="features-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs>
+<rect width="1920" height="1080" fill="#ffffff"/>
+<text x="55" y="58" fill="#243447" font-size="30" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SmartMigrate · 주요 기능</text>
+<text x="55" y="99" fill="#516176" font-size="26" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">자연어로 작업을 관리하고, 매핑 기반 SQL 생성부터 실행·검증까지 연결</text>
+<rect x="60" y="126" width="1800" height="64" rx="14" fill="#18334e" stroke="#18334e"/>
+<text x="90" y="167" fill="#fff" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">사용자 요청</text>
+<text x="300" y="167" fill="#fff" font-size="23" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">“상태·SQL·로그를 보여줘”</text>
+<text x="800" y="167" fill="#9cd8ee" font-size="23" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">요청 분류  →</text>
+<text x="1120" y="167" fill="#fff" font-size="23" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">“Migration / Conversion 작업을 실행해줘”</text>
+<path d="M 960 190 V 212 H 320 V 235" fill="none" stroke="#246a89" stroke-width="2.5" marker-end="url(#features-arrow)"/>
+<path d="M 960 212 H 1245 V 235" fill="none" stroke="#6554a4" stroke-width="2.5" marker-end="url(#features-arrow)"/>
+<rect x="60" y="235" width="520" height="690" rx="14" fill="white" stroke="#d8e0eb"/>
+<rect x="630" y="235" width="1230" height="690" rx="14" fill="white" stroke="#d8e0eb"/>
+<text x="85" y="278" fill="#246a89" font-size="30" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">01  Management</text>
+<text x="85" y="310" fill="#516176" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">현황 조회 · 데이터 변경 · 검토 자료 관리</text>
+<text x="655" y="278" fill="#6554a4" font-size="30" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">02  작업 실행 요청</text>
+<text x="655" y="310" fill="#516176" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">단건 / 도메인 / 전체 workflow  ·  대상과 선행 조건 확인 후 실행</text>
+<rect x="80" y="337" width="480" height="120" rx="10" fill="#eef6fa" stroke="#d8e7ef"/>
+<text x="100" y="370" fill="#246a89" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">현황·결과 조회</text>
+<text x="100" y="402" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">대시보드 · 진행 상태 · 잔여 작업</text>
+<text x="100" y="431" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">생성 SQL · 검증 결과 · 실패 원인 / 로그</text>
+<rect x="80" y="475" width="480" height="120" rx="10" fill="#eef6fa" stroke="#d8e7ef"/>
+<text x="100" y="508" fill="#246a89" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">매핑·작업 정보 관리</text>
+<text x="100" y="540" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">테이블 / 컬럼 매핑 SQL 생성·적용</text>
+<text x="100" y="569" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">사용 여부 · 우선순위 · 재시도 준비</text>
+<rect x="80" y="613" width="480" height="120" rx="10" fill="#eef6fa" stroke="#d8e7ef"/>
+<text x="100" y="646" fill="#246a89" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">Correct SQL 보정</text>
+<text x="100" y="678" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">사람이 검토한 단계 SQL 저장</text>
+<text x="100" y="707" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">완료 단계 반영 · 해당 SQL 검색 자료 동기화</text>
+<rect x="80" y="751" width="480" height="120" rx="10" fill="#eef6fa" stroke="#d8e7ef"/>
+<text x="100" y="784" fill="#246a89" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">참고 규칙·사례 관리</text>
+<text x="100" y="816" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">RAG Guide 등록 / 수정 · VectorDB 동기화</text>
+<text x="100" y="845" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">유사 실패 SQL 검색 · 참고 SQL 지정</text>
+<text x="85" y="908" fill="#246a89" font-size="21" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">조회·변경과 실제 작업 실행은 별도 요청</text>
+<text x="655" y="348" fill="#516176" font-size="20" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">실행 단계</text>
+<text x="855" y="348" fill="#516176" font-size="20" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">생성 SQL / 산출물</text>
+<text x="1355" y="348" fill="#516176" font-size="20" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">실제 검증 / 완료 기준</text>
+<rect x="647" y="365" width="1196" height="147" rx="8" fill="#f5f7fb" stroke="#e6ebf2"/>
+<rect x="647" y="365" width="5" height="147" rx="2" fill="#246a89" stroke="#246a89"/>
+<text x="667" y="392" fill="#246a89" font-size="16" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">STEP 1</text>
+<text x="667" y="423" fill="#246a89" font-size="22" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">DB Migration</text>
+<text x="667" y="451" fill="#516176" font-size="17" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">이관 · 실행 · 검증</text>
+<text x="855" y="396" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">MIG_SQL · INSERT INTO … SELECT …</text>
+<text x="855" y="425" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">VERIFY_SQL · 원천 / 대상 건수 비교</text>
+<text x="855" y="454" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">VERIFY2_SQL · PK 기준 레코드 비교</text>
+<text x="855" y="483" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">매핑 + DDL 기반 생성 · INSERT 실행</text>
+<text x="1355" y="396" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">전체 행 수 + 비교 컬럼 COUNT 대조</text>
+<text x="1355" y="425" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">SUCCESS_YN=&#x27;Y&#x27; · 모든 DIFF_*=0</text>
+<text x="1355" y="454" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">PK로 연결한 비교 대상 컬럼 값 대조</text>
+<text x="1355" y="483" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">MISMATCH_CNT=0 → PASS</text>
+<rect x="647" y="520" width="1196" height="132" rx="8" fill="#f5f7fb" stroke="#e6ebf2"/>
+<rect x="647" y="520" width="5" height="132" rx="2" fill="#6554a4" stroke="#6554a4"/>
+<text x="667" y="547" fill="#6554a4" font-size="16" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">STEP 2</text>
+<text x="667" y="578" fill="#6554a4" font-size="22" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SQL Conversion</text>
+<text x="667" y="606" fill="#516176" font-size="17" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">변환 · 바인드 · 검증</text>
+<text x="855" y="551" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">TO_SQL · 매핑 기반 TO-BE SQL</text>
+<text x="855" y="580" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">BIND_SQL 실행 → BIND_SET (최대 3개)</text>
+<text x="855" y="609" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">TEST_SQL · AS-IS / TO-BE 건수 비교</text>
+<text x="855" y="638" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">RAG SEARCH · 테이블 범위 일치 규칙 전부</text>
+<text x="1355" y="551" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">동일 바인드 케이스별 결과 건수 대조</text>
+<text x="1355" y="580" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">CASE_NO · FROM_COUNT / TO_COUNT</text>
+<text x="1355" y="609" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">각 케이스: FROM_COUNT = TO_COUNT &gt; 0</text>
+<rect x="647" y="660" width="1196" height="132" rx="8" fill="#f5f7fb" stroke="#e6ebf2"/>
+<rect x="647" y="660" width="5" height="132" rx="2" fill="#357855" stroke="#357855"/>
+<text x="667" y="687" fill="#357855" font-size="16" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">STEP 3</text>
+<text x="667" y="718" fill="#357855" font-size="22" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SQL Tuning</text>
+<text x="667" y="746" fill="#516176" font-size="17" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">규칙 적용 · 검증</text>
+<text x="855" y="691" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">TUNED_TO_SQL · 규칙 기반 튜닝 SQL</text>
+<text x="855" y="720" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">TUNED_RESULT · 변경 사유 (설명)</text>
+<text x="855" y="749" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">TUNED_TEST_SQL · 튜닝 전후 건수 비교</text>
+<text x="1355" y="691" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">TO_SQL ↔ TUNED_TO_SQL 건수 대조</text>
+<text x="1355" y="720" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">동일 BIND_SET 사용 (최대 3개)</text>
+<text x="1355" y="749" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">각 케이스: FROM_COUNT = TO_COUNT &gt; 0</text>
+<rect x="647" y="800" width="1196" height="97" rx="8" fill="#f5f7fb" stroke="#e6ebf2"/>
+<rect x="647" y="800" width="5" height="97" rx="2" fill="#9c6020" stroke="#9c6020"/>
+<text x="667" y="827" fill="#9c6020" font-size="16" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">STEP 4</text>
+<text x="667" y="858" fill="#9c6020" font-size="22" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SQL Formatting</text>
+<text x="667" y="886" fill="#516176" font-size="17" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">서식 정리 · 저장</text>
+<text x="855" y="831" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">배치: 생성 SQL의 해당 컬럼 갱신</text>
+<text x="855" y="860" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">단건: TUNED_TO_SQL → FORMATTED_SQL</text>
+<text x="1355" y="831" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">응답 항목·출력 형식과 빈 결과 확인</text>
+<text x="1355" y="860" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">서식 정리 결과 저장 · DB 결과 비교 없음</text>
+<rect x="60" y="950" width="1800" height="74" rx="14" fill="#e7edf5" stroke="#e7edf5"/>
+<text x="85" y="980" fill="#18334e" font-size="22" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">공통 기반</text>
+<text x="255" y="980" fill="#243447" font-size="22" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">Oracle: 매핑 · SQL · 상태 · 로그 저장</text>
+<text x="825" y="980" fill="#243447" font-size="22" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">Milvus: 참고 규칙 · Correct SQL 검색</text>
+<text x="1370" y="980" fill="#243447" font-size="22" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">DB 상태 기반 재개 · 실패 분석</text>
+<text x="85" y="1009" fill="#516176" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">검증 범위: Conversion / Tuning은 SELECT 건수 비교 · 비SELECT는 생략 · Tuning 변경 없음도 생략</text>
+<text x="60" y="1057" fill="#516176" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">전체 실행 순서  Migration → Conversion → Tuning → Formatting  |  유사 SQL 검색·일괄 반영: Conversion 전용</text>
+</svg><aside class="notes" aria-labelledby="features-notes-title">
+<h2 id="features-notes-title">장표 사용과 검증 범위</h2>
+<p>위 그림은 1920 × 1080 (16:9)입니다. <strong>주요 기능 SVG</strong>를 저장한 뒤 PowerPoint의 삽입 → 그림에서 선택하면 한 장표로 사용할 수 있습니다. 이 탭에서 인쇄 / PDF를 선택하면 설명 영역을 제외하고 장표만 출력합니다.</p>
+<p><strong>Migration.</strong> MIG_SQL은 INSERT INTO … SELECT … 형태의 이관 SQL입니다. VERIFY_SQL은 전체 행 수와 비교 대상 컬럼의 COUNT를 대조합니다. VERIFY2_SQL은 MIG_SQL과 VERIFY_SQL, 대상 PK 정보를 바탕으로 시스템이 조합하며, PK로 연결한 레코드의 비교 대상 값을 대조합니다. LOB/LONG 및 감사 컬럼 등 제외 조건이 있으므로 모든 컬럼의 전수 값 비교라고 해석하지 않습니다. TRUNC_YN 설정에 따라 대상 초기화가 선행될 수 있습니다.</p>
+<p><strong>Conversion RAG SEARCH.</strong> 활성 SQL_CONVERSION SEARCH 규칙 중 원천 테이블 범위가 겹치는 규칙을 개수 제한 없이 전부 반영합니다. 각 규칙의 GUIDANCE_TEXT, SOURCE_SQL, TARGET_SQL이 TO_SQL 생성 프롬프트에 포함됩니다. SQL Tuning용 RAG Top K 설정은 이 경로에 적용되지 않습니다.</p>
+<p><strong>Conversion 검증.</strong> TO_SQL을 생성하고, BIND_SQL을 실행해 검증용 바인드 값을 확보합니다. TEST_SQL은 최대 3개 바인드 케이스를 대상으로 AS-IS와 TO-BE 결과 건수를 비교합니다. 이 3개 제한은 RAG 가이던스 개수가 아닌 검증 케이스 수입니다. 케이스별 건수 불일치나 양쪽 모두 0건이면 실패합니다. 비SELECT 작업은 바인드·테스트를 생략합니다. 마지막 재시도에서 긴 원본 SQL을 사전 튜닝해 TUNED_FR_SQL을 생성하는 보조 경로도 있습니다.</p>
+<p><strong>Tuning.</strong> 관련 규칙을 적용해 TUNED_TO_SQL과 변경 사유인 TUNED_RESULT를 만듭니다. SELECT가 변경된 경우 TUNED_TEST_SQL을 생성·실행해 기존 TO_SQL과 건수를 비교합니다. 검증 SQL은 런타임 결과와 로그에 기록되며 독립 DB 컬럼명이 아닙니다. 비SELECT 또는 튜닝 변경 없음은 검증을 생략합니다. 이 검증은 실행계획이나 응답시간 개선을 판정하는 성능 벤치마크가 아닙니다.</p>
+<p><strong>Formatting.</strong> 배치는 이번 실행에서 전달된 생성 SQL 목록의 해당 컬럼을 갱신합니다. 단건은 TUNED_TO_SQL을 정리해 FORMATTED_SQL에 저장합니다. 출력 항목·형식·빈 결과를 확인하며 결과 데이터 비교 검증을 수행하지 않습니다.</p>
+<p><strong>Management.</strong> 매핑 생성·실제 적용은 설정에 따라 구분됩니다. Correct SQL 저장은 해당 단계의 확인 완료 상태를 반영합니다. 규칙 변경·재시도 준비와 실제 작업 실행은 별도 요청입니다.</p>
+</aside></section></main>
+<script>
+let zoom=1,active='oracle';
+const descriptions={oracle:'문서 기준 · 기본 DDL에 FK 없음 · 파란 점선: 논리 참조 · 주황 점선: 조건부 로그 대상 식별',milvus:'Oracle 원천 → Milvus 검색 컬렉션 · 화살표는 동기화 방향',features:'Management / 작업 실행 · 생성 SQL과 검증 기준 · 16:9 PPT 장표'};
+function render(){
+  document.querySelectorAll('section').forEach(s=>{s.hidden=s.id!==active;s.querySelector('svg').style.width=(zoom*100)+'%'});
+  document.querySelectorAll('button[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===active)));
+  document.body.dataset.view=active;
+  document.getElementById('scale').textContent=Math.round(zoom*100)+'%';
+  document.getElementById('view-description').textContent=descriptions[active];
+  document.getElementById('print-page').textContent=active==='features'?'@page { size:338.6667mm 190.5mm; margin:0; }':'';
+}
+function selectView(view){active=Object.hasOwn(descriptions,view)?view:'oracle';zoom=1;render();document.getElementById('viewport').scrollTo(0,0)}
+document.querySelectorAll('button[data-view]').forEach(b=>b.onclick=()=>{selectView(b.dataset.view);location.hash=active});
+window.addEventListener('hashchange',()=>selectView(location.hash.slice(1)));
+document.getElementById('in').onclick=()=>{zoom=Math.min(4,zoom+.25);render()};
+document.getElementById('out').onclick=()=>{zoom=Math.max(.5,zoom-.25);render()};
+document.getElementById('fit').onclick=()=>{zoom=1;render()};
+document.getElementById('print').onclick=()=>window.print();
+selectView(location.hash.slice(1));
+</script></html>

@@ -37,62 +37,51 @@ python -m http.server 8001
 
 ```text
 smartMigrate_2.0_Langflow/
-  README.md
-
-  00_guide/
-    00_user_guide.md
-    00_developer_guidebook.html
-    00_architecture*.md
-    00_logging_rules.txt
-    00A_file_upload_runtime_guide.md
-    00_follow_up_payload_contract.md
-    00_full_workflow_loop_guide.md
-    00_job_execution_payload_plan.md
-    99.LogHelper.py
-
-  01_agent_start/
-    00A_logRuntimeStart.py
-    02_intentRouter.py
-    03_llmResponsePrompt.md
-
-  02_flow_management/
-    04_mappingRuleUpdateSqlGenerate.py
-    04_managementRouter.py
-    04_dashboard.py
-    04_currentProgress.py
-    04_managementAgentPrompt.md
-    04_selectCommandTool.py
-    04_updateCommandTool.py
-    04_ragCommandTool.py
-    04_saveVectorDB.py
-
-  03_job_execution/
-    06_getRemainingJobs.py
-    08_jobExecutionRouter.py
-    10A_migJobsToLoopTable.py
-    10B_migLoop.py
-    10C_migOneJobPocExecutor3.py  # 표준: count + record verification
-    10D_migIterationDashboard.py
-    11_finalDashboard.py
-    11B_failureCauseAnalyzer.py
-    12A_sqlConversionJobsToLoopTable.py
-    12B_sqlConversionLoop.py
-    12C_sqlConversionOneJobPocExecutor.py
-    12C_sql_conversion_mapping_rule_contract.md
-    12D_sqlConversionIterationDashboard.py
-    15A_sqlTuningJobsToLoopTable.py
-    15B_sqlTuningLoop.py
-    15C_sqlTuningOneJobPocExecutor.py
-    15D_sqlTuningIterationDashboard.py
-    17A_sqlFormattingJobsToLoopTable.py
-    17B_sqlFormattingLoop.py
-    17C_sqlFormattingOneJobPocExecutor.py
-    17D_sqlFormattingIterationDashboard.py
-    18A_fullWorkflowJobsToLoopTable.py
-    18B_fullWorkflowLoop2.py
-    18D_fullWorkflowDashboard.py
-
-  archive/  # 구버전 10C/18B와 00B 단독 진단 도구; README 참조
+├─ README.md                                      # 패키지 개요와 연결·실행 안내
+│
+├─ 01_agent_start/                                # 요청 수신·분류와 사용 안내
+│  ├─ 00A_logRuntimeStart.py                      # 런타임 로그 핸들러 준비
+│  ├─ 02_intentRouter.py                          # 안내·관리·실행 요청 분류
+│  └─ 03_llmResponsePrompt.md                     # 기능 설명과 요청 예시 프롬프트
+│
+├─ 02_flow_management/                            # 조회·수정과 참고 자료 관리
+│  ├─ 04_mappingRuleUpdateSqlGenerate.py          # 매핑 SQL 생성·검증·DB 적용
+│  ├─ 04_managementRouter.py                     # 관리 요청의 세부 기능 선택
+│  ├─ 04_dashboard.py                            # 전체·도메인별 작업 현황 조회
+│  ├─ 04_currentProgress.py                      # 실행 중인 작업과 최근 로그 조회
+│  ├─ 04_managementAgentPrompt.md                # Management Agent 동작 지침
+│  ├─ 04_selectCommandTool.py                    # 작업·SQL·로그 읽기 전용 조회
+│  ├─ 04_updateCommandTool.py                    # 상태·설정·Correct SQL 변경
+│  ├─ 04_ragCommandTool.py                       # 참고 규칙 관리와 유사 SQL 검색
+│  └─ 04_saveVectorDB.py                         # 검색 자료를 Milvus에 동기화
+│
+├─ 03_job_execution/                              # 대상 확인과 도메인별 작업 실행
+│  ├─ 06_getRemainingJobs.py                     # 실행 가능 대상과 잔여 작업 조회
+│  ├─ 08_jobExecutionRouter.py                   # 실행 범위·도메인·선행 조건 판단
+│  ├─ 10A_migJobsToLoopTable.py                  # Migration 반복 실행 대상 구성
+│  ├─ 10B_migLoop.py                             # Migration 작업 순차 반복
+│  ├─ 10C_migOneJobPocExecutor3.py                # 이관 실행·건수 검증·레코드 검증
+│  ├─ 10D_migIterationDashboard.py               # Migration 건별 진행 결과
+│  ├─ 11_finalDashboard.py                      # 도메인 실행의 최종 결과 집계
+│  ├─ 11B_failureCauseAnalyzer.py                # 실행 범위의 실패 원인 분석
+│  ├─ 12A_sqlConversionJobsToLoopTable.py         # Conversion 반복 실행 대상 구성
+│  ├─ 12B_sqlConversionLoop.py                   # Conversion 작업 순차 반복
+│  ├─ 12C_sqlConversionOneJobPocExecutor.py       # SQL 변환·바인드·검증 실행
+│  ├─ 12C_sql_conversion_mapping_rule_contract.md # Conversion 매핑 규칙 적용 계약
+│  ├─ 12D_sqlConversionIterationDashboard.py     # Conversion 건별 진행 결과
+│  ├─ 15A_sqlTuningJobsToLoopTable.py             # Tuning 반복 실행 대상 구성
+│  ├─ 15B_sqlTuningLoop.py                       # Tuning 작업 순차 반복
+│  ├─ 15C_sqlTuningOneJobPocExecutor.py           # SQL 튜닝과 검증 실행
+│  ├─ 15D_sqlTuningIterationDashboard.py         # Tuning 건별 진행 결과
+│  ├─ 17A_sqlFormattingJobsToLoopTable.py         # Formatting 반복 실행 대상 구성
+│  ├─ 17B_sqlFormattingLoop.py                   # Formatting 작업 순차 반복
+│  ├─ 17C_sqlFormattingOneJobPocExecutor.py       # SQL 서식 정리와 결과 저장
+│  ├─ 17D_sqlFormattingIterationDashboard.py     # Formatting 건별 진행 결과
+│  ├─ 18A_fullWorkflowJobsToLoopTable.py          # 전체 워크플로우 대상 구성
+│  ├─ 18B_fullWorkflowLoop2.py                   # Migration부터 Formatting까지 반복
+│  └─ 18D_fullWorkflowDashboard.py               # 전체 워크플로우 결과 집계
+│
+└─ archive/                                      # 구버전 실행기·진단 도구 보관
 ```
 
 ## 폴더 역할

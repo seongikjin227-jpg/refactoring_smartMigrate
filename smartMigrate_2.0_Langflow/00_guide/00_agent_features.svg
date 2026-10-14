@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
+<title id="title">SmartMigrate · 주요 기능</title><desc id="desc">자연어 요청을 Management와 작업 실행으로 구분. 실행별 생성 SQL과 실제 검증 기준을 정리한 16:9 장표.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs>
+<rect width="1920" height="1080" fill="#ffffff"/>
+<text x="55" y="58" fill="#243447" font-size="30" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SmartMigrate · 주요 기능</text>
+<text x="55" y="99" fill="#516176" font-size="26" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">자연어로 작업을 관리하고, 매핑 기반 SQL 생성부터 실행·검증까지 연결</text>
+<rect x="60" y="126" width="1800" height="64" rx="14" fill="#18334e" stroke="#18334e"/>
+<text x="90" y="167" fill="#fff" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">사용자 요청</text>
+<text x="300" y="167" fill="#fff" font-size="23" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">“상태·SQL·로그를 보여줘”</text>
+<text x="800" y="167" fill="#9cd8ee" font-size="23" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">요청 분류  →</text>
+<text x="1120" y="167" fill="#fff" font-size="23" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">“Migration / Conversion 작업을 실행해줘”</text>
+<path d="M 960 190 V 212 H 320 V 235" fill="none" stroke="#246a89" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M 960 212 H 1245 V 235" fill="none" stroke="#6554a4" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="60" y="235" width="520" height="690" rx="14" fill="white" stroke="#d8e0eb"/>
+<rect x="630" y="235" width="1230" height="690" rx="14" fill="white" stroke="#d8e0eb"/>
+<text x="85" y="278" fill="#246a89" font-size="30" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">01  Management</text>
+<text x="85" y="310" fill="#516176" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">현황 조회 · 데이터 변경 · 검토 자료 관리</text>
+<text x="655" y="278" fill="#6554a4" font-size="30" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">02  작업 실행 요청</text>
+<text x="655" y="310" fill="#516176" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">단건 / 도메인 / 전체 workflow  ·  대상과 선행 조건 확인 후 실행</text>
+<rect x="80" y="337" width="480" height="120" rx="10" fill="#eef6fa" stroke="#d8e7ef"/>
+<text x="100" y="370" fill="#246a89" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">현황·결과 조회</text>
+<text x="100" y="402" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">대시보드 · 진행 상태 · 잔여 작업</text>
+<text x="100" y="431" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">생성 SQL · 검증 결과 · 실패 원인 / 로그</text>
+<rect x="80" y="475" width="480" height="120" rx="10" fill="#eef6fa" stroke="#d8e7ef"/>
+<text x="100" y="508" fill="#246a89" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">매핑·작업 정보 관리</text>
+<text x="100" y="540" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">테이블 / 컬럼 매핑 SQL 생성·적용</text>
+<text x="100" y="569" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">사용 여부 · 우선순위 · 재시도 준비</text>
+<rect x="80" y="613" width="480" height="120" rx="10" fill="#eef6fa" stroke="#d8e7ef"/>
+<text x="100" y="646" fill="#246a89" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">Correct SQL 보정</text>
+<text x="100" y="678" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">사람이 검토한 단계 SQL 저장</text>
+<text x="100" y="707" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">완료 단계 반영 · 해당 SQL 검색 자료 동기화</text>
+<rect x="80" y="751" width="480" height="120" rx="10" fill="#eef6fa" stroke="#d8e7ef"/>
+<text x="100" y="784" fill="#246a89" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">참고 규칙·사례 관리</text>
+<text x="100" y="816" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">RAG Guide 등록 / 수정 · VectorDB 동기화</text>
+<text x="100" y="845" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">유사 실패 SQL 검색 · 참고 SQL 지정</text>
+<text x="85" y="908" fill="#246a89" font-size="21" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">조회·변경과 실제 작업 실행은 별도 요청</text>
+<text x="655" y="348" fill="#516176" font-size="20" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">실행 단계</text>
+<text x="855" y="348" fill="#516176" font-size="20" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">생성 SQL / 산출물</text>
+<text x="1355" y="348" fill="#516176" font-size="20" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">실제 검증 / 완료 기준</text>
+<rect x="647" y="365" width="1196" height="147" rx="8" fill="#f5f7fb" stroke="#e6ebf2"/>
+<rect x="647" y="365" width="5" height="147" rx="2" fill="#246a89" stroke="#246a89"/>
+<text x="667" y="392" fill="#246a89" font-size="16" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">STEP 1</text>
+<text x="667" y="423" fill="#246a89" font-size="22" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">DB Migration</text>
+<text x="667" y="451" fill="#516176" font-size="17" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">이관 · 실행 · 검증</text>
+<text x="855" y="396" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">MIG_SQL · INSERT INTO … SELECT …</text>
+<text x="855" y="425" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">VERIFY_SQL · 원천 / 대상 건수 비교</text>
+<text x="855" y="454" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">VERIFY2_SQL · PK 기준 레코드 비교</text>
+<text x="855" y="483" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">매핑 + DDL 기반 생성 · INSERT 실행</text>
+<text x="1355" y="396" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">전체 행 수 + 비교 컬럼 COUNT 대조</text>
+<text x="1355" y="425" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">SUCCESS_YN=&#x27;Y&#x27; · 모든 DIFF_*=0</text>
+<text x="1355" y="454" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">PK로 연결한 비교 대상 컬럼 값 대조</text>
+<text x="1355" y="483" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">MISMATCH_CNT=0 → PASS</text>
+<rect x="647" y="520" width="1196" height="132" rx="8" fill="#f5f7fb" stroke="#e6ebf2"/>
+<rect x="647" y="520" width="5" height="132" rx="2" fill="#6554a4" stroke="#6554a4"/>
+<text x="667" y="547" fill="#6554a4" font-size="16" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">STEP 2</text>
+<text x="667" y="578" fill="#6554a4" font-size="22" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SQL Conversion</text>
+<text x="667" y="606" fill="#516176" font-size="17" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">변환 · 바인드 · 검증</text>
+<text x="855" y="551" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">TO_SQL · 매핑 기반 TO-BE SQL</text>
+<text x="855" y="580" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">BIND_SQL 실행 → BIND_SET (최대 3개)</text>
+<text x="855" y="609" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">TEST_SQL · AS-IS / TO-BE 건수 비교</text>
+<text x="855" y="638" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">RAG SEARCH · 테이블 범위 일치 규칙 전부</text>
+<text x="1355" y="551" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">동일 바인드 케이스별 결과 건수 대조</text>
+<text x="1355" y="580" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">CASE_NO · FROM_COUNT / TO_COUNT</text>
+<text x="1355" y="609" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">각 케이스: FROM_COUNT = TO_COUNT &gt; 0</text>
+<rect x="647" y="660" width="1196" height="132" rx="8" fill="#f5f7fb" stroke="#e6ebf2"/>
+<rect x="647" y="660" width="5" height="132" rx="2" fill="#357855" stroke="#357855"/>
+<text x="667" y="687" fill="#357855" font-size="16" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">STEP 3</text>
+<text x="667" y="718" fill="#357855" font-size="22" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SQL Tuning</text>
+<text x="667" y="746" fill="#516176" font-size="17" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">규칙 적용 · 검증</text>
+<text x="855" y="691" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">TUNED_TO_SQL · 규칙 기반 튜닝 SQL</text>
+<text x="855" y="720" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">TUNED_RESULT · 변경 사유 (설명)</text>
+<text x="855" y="749" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">TUNED_TEST_SQL · 튜닝 전후 건수 비교</text>
+<text x="1355" y="691" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">TO_SQL ↔ TUNED_TO_SQL 건수 대조</text>
+<text x="1355" y="720" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">동일 BIND_SET 사용 (최대 3개)</text>
+<text x="1355" y="749" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">각 케이스: FROM_COUNT = TO_COUNT &gt; 0</text>
+<rect x="647" y="800" width="1196" height="97" rx="8" fill="#f5f7fb" stroke="#e6ebf2"/>
+<rect x="647" y="800" width="5" height="97" rx="2" fill="#9c6020" stroke="#9c6020"/>
+<text x="667" y="827" fill="#9c6020" font-size="16" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">STEP 4</text>
+<text x="667" y="858" fill="#9c6020" font-size="22" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SQL Formatting</text>
+<text x="667" y="886" fill="#516176" font-size="17" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">서식 정리 · 저장</text>
+<text x="855" y="831" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">배치: 생성 SQL의 해당 컬럼 갱신</text>
+<text x="855" y="860" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">단건: TUNED_TO_SQL → FORMATTED_SQL</text>
+<text x="1355" y="831" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">응답 항목·출력 형식과 빈 결과 확인</text>
+<text x="1355" y="860" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">서식 정리 결과 저장 · DB 결과 비교 없음</text>
+<rect x="60" y="950" width="1800" height="74" rx="14" fill="#e7edf5" stroke="#e7edf5"/>
+<text x="85" y="980" fill="#18334e" font-size="22" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">공통 기반</text>
+<text x="255" y="980" fill="#243447" font-size="22" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">Oracle: 매핑 · SQL · 상태 · 로그 저장</text>
+<text x="825" y="980" fill="#243447" font-size="22" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">Milvus: 참고 규칙 · Correct SQL 검색</text>
+<text x="1370" y="980" fill="#243447" font-size="22" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">DB 상태 기반 재개 · 실패 분석</text>
+<text x="85" y="1009" fill="#516176" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">검증 범위: Conversion / Tuning은 SELECT 건수 비교 · 비SELECT는 생략 · Tuning 변경 없음도 생략</text>
+<text x="60" y="1057" fill="#516176" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">전체 실행 순서  Migration → Conversion → Tuning → Formatting  |  유사 SQL 검색·일괄 반영: Conversion 전용</text>
+</svg>

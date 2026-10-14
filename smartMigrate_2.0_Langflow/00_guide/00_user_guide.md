@@ -1,179 +1,253 @@
-# SmartMigrate 사용자 운영 가이드
+# SmartMigrate 사용자 가이드
 
-이 문서는 운영자와 SQL 검토자가 채팅/Management 화면에서 작업을 조회하고, Correct SQL을 저장하고, 재실행을 준비하는 방법을 설명한다. 사용자는 Langflow payload JSON이나 LLM endpoint를 직접 입력할 필요가 없다.
+SmartMigrate는 채팅으로 DB Migration과 SQL Conversion·Tuning·Formatting 작업을 조회하고 실행하는 에이전트입니다. 테이블·컬럼 매핑을 등록하고, 생성된 SQL과 검증 결과를 확인하며, 실패한 작업을 보정해 다음 단계로 진행할 수 있습니다.
 
-기능 설명과 사용자 요청 템플릿은 [03 일반 응답 프롬프트](../01_agent_start/03_llmResponsePrompt.md), 정보 누락·오류 상황의 복구 안내는 [응답·예외 가이드](00_response_and_exception_guide.md)를 참고한다.
+이 가이드는 DB 마이그레이션 업무에는 익숙하지만 SmartMigrate를 처음 사용하는 운영자를 위한 문서입니다. 에이전트의 구성, 첫 작업 순서, 기능별 요청 방법을 설명합니다.
 
-## 1. 핵심 원칙
+## 1. SmartMigrate로 할 수 있는 일
 
-- 재개 위치는 `USER_EDITED`나 SQL CLOB 존재 여부가 아닌 **DB status**가 결정한다. `USER_EDITED='Y'`는 사람이 수정했음을 보여 주는 표시값이다.
-- Correct SQL을 저장하면 그 SQL 단계가 사람 확인을 통과했다는 뜻으로 다음 status와 `RETRY_COUNT=0`을 함께 저장한다. 같은 단계를 다시 생성하지 않는다.
-- Management에서 재시도 가능 상태로 만드는 일과 executor 실제 실행은 별도다. 준비 뒤에는 별도로 실행을 요청한다.
-- SQL Conversion의 유사 AS-IS SQL 검색/일괄 반영은 제공하지만 DB Migration에는 제공하지 않는다.
-- Correct SQL은 저장 성공 뒤 해당 한 단계만 Vector DB에 동기화한다. 상태 변경이나 RAG Guide 변경만으로는 자동 동기화하지 않는다.
+| 기능 | 운영자가 요청하는 일 | 확인할 결과 |
+|---|---|---|
+| 매핑 등록·수정 | AS-IS / TO-BE 테이블과 컬럼의 대응 관계 등록 | 매핑 SQL 생성 여부와 실제 DB 반영 여부 |
+| 작업 관리 (Management) | 대상 목록, 진행 상태, 결과, SQL, 로그 조회 및 관리값 변경 | 작업 번호, 현재 상태, 실패 원인, 변경 결과 |
+| DB Migration | 등록된 매핑을 기준으로 이관 SQL 생성·실행·검증 | INSERT 실행, 건수 검증, 레코드 검증 결과 |
+| SQL Conversion | AS-IS SQL을 TO-BE SQL로 변환하고 검증 | 변환 SQL, 바인드 정보, 검증 결과 |
+| SQL Tuning | 변환된 SQL의 튜닝과 검증 | 튜닝 SQL과 변경 사유, 검증 결과 |
+| SQL Formatting | 실행 흐름에서 생성된 SQL의 서식 정리 | Formatting 대상과 저장된 결과 |
+| SQL 보정·참고 자료 관리 | 사람이 검토한 SQL 저장, 유사 SQL 검색, 규칙·사례 관리 | 저장한 SQL 단계, 참고 대상, 검색 자료 동기화 결과 |
 
-## 2. 작업 조회와 자동 실행 후보
+처음에는 **작업 현황 조회**로 시작하는 것을 권장합니다. 실행할 대상과 현재 상태를 확인한 뒤 특정 작업을 지정하면 처리 범위를 파악하기 쉽습니다.
 
-SQL 작업은 `SQL_SEQ`로 찾는 것이 가장 정확하다. 이를 모르면 `SQL_ID`와 `SPACE_NM`을 함께 제공한다. DB Migration은 `MAP_ID`로 찾는다.
+## 2. 에이전트는 어떻게 구성되어 있나요?
 
-| 원하는 일 | 자연어 요청 예시 |
-|---|---|
-| 최근 Migration 결과 | `Mig 실행 결과` 또는 `최근 마이그레이션 10건의 상태와 검증 결과, 실패 원인과 로그를 보여줘.` |
-| 최근 Conversion 결과 | `SQL Conversion 실행 결과와 실패한 작업의 SQL_SEQ, 오류를 정리해줘.` |
-| 최근 전체 결과 | `최근 실행 결과를 도메인별로 보여줘.` |
-| Migration 상태/로그 | `MAP_ID 101의 Migration 상태와 최근 로그를 보여줘.` |
-| Migration SQL | `MAP_ID 101의 MIG_SQL과 VERIFY_SQL을 보여줘.` |
-| Conversion SQL | `SQL_SEQ 42의 Conversion 상태와 TO_SQL을 보여줘.` |
-| SQL_SEQ를 모르는 작업 | `SQL_ID S001, SPACE_NM PAYMENT의 상태를 보여줘.` |
-| 남은 작업 | `Conversion, Tuning, Formatting의 남은 작업을 보여줘.` |
-| 실패 원인 | `최근 SQL Conversion 실패 원인을 요약해줘.` |
+사용자는 하나의 채팅 창에 요청합니다. SmartMigrate는 요청을 안내, 작업 관리, 작업 실행으로 구분해 해당 기능으로 전달합니다. 내부 에이전트를 사용자가 직접 골라 호출할 필요는 없습니다.
 
-최근 결과 조회는 작업 번호 없이 요청할 수 있으며 작업 실행이나 상태 변경을 수행하지 않는다. 최근 갱신 작업의 목록·갱신 시각·상태와 실제 로그를 확인한다. 전체 상태 집계는 최근 실행의 처리 건수와 다르다. 특정 실행 결과가 필요하면 실행 시각이나 대상 번호를 추가한다. 검증 수치와 오류는 실제 조회로 확인된 내용만 제공한다.
+```mermaid
+flowchart TD
+    USER["운영자 · 채팅 요청"] --> ROUTER["요청 분류 · 목적과 대상 확인"]
+    ROUTER --> GUIDE["사용 안내<br/>기능 설명 · 요청 방법"]
+    ROUTER --> MANAGEMENT["작업 관리 · Management<br/>현황 조회 · 매핑/SQL/규칙 관리"]
+    ROUTER --> EXECUTION["작업 실행<br/>대상과 선행 조건 확인"]
+    EXECUTION --> MIG["DB Migration"]
+    EXECUTION --> CONV["SQL Conversion"]
+    EXECUTION --> TUNE["SQL Tuning"]
+    EXECUTION --> FORMAT["SQL Formatting"]
+    MANAGEMENT <--> RECORDS["작업 기록 · Oracle<br/>매핑 · SQL · 상태 · 로그"]
+    MIG <--> RECORDS
+    CONV <--> RECORDS
+    TUNE <--> RECORDS
+    FORMAT <--> RECORDS
+    REFERENCES["검색 자료 · Milvus<br/>참고 규칙 · 검토된 SQL 사례"] -. "SQL 생성 시 참고" .-> MIG
+    REFERENCES -. "SQL 변환·튜닝 시 참고" .-> CONV
+    REFERENCES -. "SQL 변환·튜닝 시 참고" .-> TUNE
+```
 
-### 파일 업로드 요청 템플릿
+작업 관리는 현재 기록을 조회하거나 지정한 정보를 변경합니다. 작업 실행은 대상과 실행 조건을 확인한 뒤 SQL 생성·실행·검증을 진행합니다. 두 기능은 구분되어 있으므로 **조회하거나 재시도 준비값을 변경했다고 작업이 실행되는 것은 아닙니다.**
+
+Oracle에는 작업의 현재 상태, SQL과 로그가 저장됩니다. Milvus에는 SQL 생성에 참고할 규칙과 검토된 사례가 검색용으로 저장됩니다. 실행 결과는 작업 상태와 실제 로그를 기준으로 확인합니다.
+
+전체 워크플로우를 요청하면 다음 순서로 처리합니다. 특정 단계만 요청할 수도 있지만 해당 단계의 선행 조건을 만족해야 합니다.
+
+```text
+DB Migration → SQL Conversion → SQL Tuning → SQL Formatting
+```
+
+## 3. 처음 사용할 때의 순서
+
+### 1단계. 사용할 환경과 작업 자료 확인
+
+운영 담당자에게 사용할 DB 환경, 작업 데이터의 등록 여부, 실행 가능한 범위를 확인합니다. 이미 작업이 등록되어 있다면 매핑을 다시 등록할 필요 없이 현황 조회부터 시작합니다. 사용자 요청에 DB 비밀번호나 API key를 넣을 필요는 없습니다.
+
+새 Migration 작업에는 테이블·컬럼 매핑이 필요하고, SQL Conversion에는 변환할 AS-IS SQL과 작업 식별자가 필요합니다. 작업 자료가 등록되지 않았다면 매핑은 아래 5절을, SQL 작업의 초기 등록은 해당 환경의 운영 담당자 안내를 따르세요.
+
+### 2단계. 전체 현황과 대상 번호 확인
+
+먼저 다음 문장으로 현재 등록된 작업을 확인하세요.
+
+> 전체 작업의 성공·실패·잔여 건수를 대시보드로 보여줘.
+
+이어 필요한 도메인의 목록을 조회합니다.
+
+> DB Migration의 남은 작업 목록과 MAP_ID, 현재 상태를 보여줘.
+
+> PAYMENT 공간에서 실패한 SQL Conversion 작업의 SQL_SEQ와 상태를 보여줘.
+
+조회 요청은 실제 작업을 실행하거나 상태를 변경하지 않습니다.
+
+### 3단계. 특정 작업의 내용과 실행 조건 확인
+
+아래 번호와 업무 공간·SQL ID는 모두 예시입니다. 실제 조회한 값으로 바꿔 사용하세요.
+
+> MAP_ID 101의 매핑 정보, 현재 상태와 최근 로그를 보여줘.
+
+> SQL_SEQ 42의 AS-IS SQL, Conversion 상태와 최근 실패 원인을 보여줘.
+
+SQL Conversion과 Tuning은 **사용 대상으로 설정된 DB Migration이 모두 완료되어야** 시작할 수 있습니다. SQL 한 건만 지정하더라도 이 조건을 확인합니다. 선행 작업이 남아 있으면 응답에서 안내한 대상과 상태를 먼저 확인하세요.
+
+### 4단계. 범위를 정해 실행 요청
+
+> MAP_ID 101의 Migration을 실행해줘.
+
+> SQL_SEQ 42의 Conversion을 실행해줘.
+
+전체 단계의 남은 작업을 순서대로 처리하려면 다음과 같이 요청합니다.
+
+> 전체 워크플로우의 남은 작업을 실행해줘.
+
+전체 실행은 특정 한 건 실행보다 넓은 범위를 처리합니다. 처음에는 대상 한 건의 처리 흐름과 결과를 확인한 뒤 실행 범위를 넓히는 것을 권장합니다. 완료되었거나 이미 실행 중인 작업은 요청했다고 자동으로 다시 실행되는 것이 아닙니다.
+
+### 5단계. 결과 확인과 후속 조치
+
+> MAP_ID 101의 최근 실행 결과와 건수·레코드 검증 결과를 보여줘.
+
+> SQL_SEQ 42의 Conversion·Tuning 상태와 생성된 SQL을 보여줘.
+
+결과에서 대상 번호, 처리 단계, 성공·실패 상태, 검증 결과와 오류를 확인합니다. 실패하면 원인을 조회한 뒤 SQL 보정이나 재시도 준비가 필요한지 판단합니다. 방법은 아래 7절에서 설명합니다.
+
+## 4. 요청할 때는 목적·작업 종류·대상을 함께 적으세요
+
+| 대상 | 사용할 식별자 | 요청 예시 |
+|---|---|---|
+| DB Migration | `MAP_ID` | `MAP_ID 101의 상태와 최근 로그를 보여줘.` |
+| SQL Conversion / Tuning / Formatting | `SQL_SEQ` | `SQL_SEQ 42의 Tuning을 실행해줘.` |
+| SQL_SEQ를 모르는 SQL 작업 | `SQL_ID`와 `SPACE_NM` | `SQL_ID S001, SPACE_NM PAYMENT의 상태를 보여줘.` |
+| 특정 작업이 아닌 전체 현황 | 도메인 또는 전체 범위 | `최근 실행 결과를 도메인별로 보여줘.` |
+
+`SPACE_NM`은 SQL 작업의 업무 공간 이름입니다. `SQL_ID`만으로는 공간이 다른 작업을 구분하기 어려우므로 공간 이름도 함께 적습니다.
+
+현재 SmartMigrate는 이전 대화의 작업 대상을 자동으로 복원하지 않습니다. 후속 요청에도 작업 종류와 번호를 다시 적어 주세요. 예를 들어 `그거 실행해` 대신 `SQL_SEQ 42의 Conversion을 실행해줘`라고 요청합니다.
+
+특정 업무 공간의 작업을 실행하려면 먼저 목록을 조회하고, 실행할 `SQL_SEQ`를 지정하세요. 최근 결과 조회는 작업 번호를 몰라도 요청할 수 있습니다. 특정 실행 결과가 필요하면 대상 번호나 실행 시각을 함께 적습니다.
+
+## 5. 매핑 등록과 수정
+
+### 매핑 본문을 직접 전달하는 경우
+
+테이블 매핑에는 작업 번호와 원본·대상 테이블명을, 컬럼 매핑에는 부모 작업 번호와 상세 순번을 포함합니다. 다음 이름과 번호는 예시입니다.
+
+> MAP_ID 101, FR_TABLE CUSTOMER, TO_TABLE MEMBER를 등록해줘. 컬럼은 MAP_ID 101, MAP_DTL 1, FR_COL CUST_ID, TO_COL MEMBER_ID야.
+
+기존 매핑의 일부만 수정할 수도 있습니다.
+
+> MAP_ID 101의 TO_TABLE을 MEMBER_NEW로 수정해줘.
+
+> MAP_ID 101, MAP_DTL 1의 TO_COL을 MEMBER_ID로 수정해줘.
+
+`MAP_DTL`은 해당 Migration 작업 안에서 컬럼 매핑을 식별하는 상세 순번입니다. 여러 테이블의 매핑을 전달할 때는 각 컬럼이 어느 `MAP_ID`에 속하는지 명확히 적어 주세요.
+
+### 매핑 파일을 전달하는 경우
 
 파일 업로드 기능의 경우 현재 보안 문제로 인해 기능 제한이 있을 수 있습니다. 다음 템플릿을 복사하여 파일을 다시 첨부하고 요청해 주세요!
 
 > Super Agent의 파일 처리 기능을 활용하여 첨부파일의 내용을 조회해줘. Code Interpreter Tool은 사용하지 말고 해당 내용을 빠짐 없이 Smart Migrate 에이전트를 호출하여 전달하고 매핑룰을 등록해줘
 
-처리 결과에서는 매핑 SQL 생성 여부와 실제 DB 반영 여부를 확인한다.
+위 문장은 Super Agent에 보내는 요청입니다. 로컬 파일 경로만 전달하면 자동으로 내용을 읽을 수 없으므로, 파일 전달이 실패하면 매핑 본문 또는 접근 가능한 다운로드 URL을 제공합니다.
 
-| 도메인 | 자동 실행 후보 조건 |
+### 등록 결과에서 확인할 것
+
+파일을 읽은 것, 매핑 SQL을 생성한 것, DB에 실제 반영한 것은 서로 다른 결과입니다. 응답에서 생성·적용 여부와 대상별 성공·실패·미반영 건수를 확인하세요.
+
+기본 설정은 매핑 SQL 생성·검증입니다. 실제 DB 반영은 운영자가 설정한 적용 옵션으로 결정됩니다. 채팅에 `적용해줘`라고 적는 것만으로 설정이 바뀌지는 않습니다. SQL은 생성됐지만 미반영으로 표시된다면 운영 담당자에게 해당 환경의 적용 설정을 확인하세요.
+
+## 6. 실행 결과는 어떻게 읽나요?
+
+| 결과 표시 | 운영자가 확인할 의미 | 다음 행동 |
+|---|---|---|
+| 대기 / 미처리 | 아직 완료되지 않은 작업 | 대상과 선행 조건을 확인한 뒤 실행 요청 |
+| `RUNNING` 계열 | 처리 중인 작업 | 진행 상태와 로그 조회 |
+| `PASS` | Migration 및 검증 완료 | 검증 결과 확인 |
+| `PASS-CONVERSION` | SQL 변환 완료 | Tuning 진행 여부와 결과 확인 |
+| `PASS-TUNING` | SQL 튜닝 완료 | Formatting 대상과 결과 확인 |
+| `FAIL-*` | 특정 단계에서 실패 | 실패 단계·오류·이전 단계 SQL 확인 |
+| 실행 후보 없음 / 선행 조건 미충족 | 요청 범위에 실행 가능한 대상이 없거나 앞 단계가 미완료 | 대상 목록과 실행 불가 사유 확인 |
+
+Conversion이 완료되면 같은 실행 흐름에서 Tuning으로 이어질 수 있으므로 최종 응답에서 실제 처리한 단계를 확인하세요. Formatting은 해당 실행에서 생성된 SQL을 대상으로 하며, DB에 저장된 모든 SQL을 한꺼번에 다시 정리하지 않습니다.
+
+대시보드의 전체 성공·실패 건수는 등록된 작업의 현황입니다. 방금 실행한 작업의 처리 건수와 같다고 볼 수는 없습니다. 특정 실행을 검토할 때는 대상 번호·실행 시각·로그를 함께 확인하세요.
+
+실패 상태별 재개 위치와 자동 실행 조건은 [상세 운영 참고서](00_user_operations_reference.md)에 정리되어 있습니다.
+
+## 7. 실패한 작업을 보정하고 다시 진행하기
+
+먼저 실패 원인을 조회합니다.
+
+> SQL_SEQ 42의 Conversion 실패 단계, 오류와 저장된 SQL을 보여줘.
+
+재시도 횟수가 소진되어 준비가 필요하다면 다음과 같이 요청할 수 있습니다.
+
+> SQL_SEQ 42의 RETRY_COUNT를 0으로 초기화해줘.
+
+이 요청은 재시도 횟수를 초기화합니다. 실패 상태나 선행 조건도 확인해야 하며, 초기화만으로 실제 작업이 실행되지는 않습니다. 준비 결과를 확인한 뒤 실행을 따로 요청합니다.
+
+> SQL_SEQ 42의 Conversion을 재실행해줘.
+
+### 사람이 검토한 SQL 저장 — Correct SQL
+
+Correct SQL은 사람이 검토·확인한 단계의 SQL을 저장하는 기능입니다. **저장한 종류에 따라 해당 단계가 확인 완료된 것으로 처리되고 다음 재개 위치가 바뀝니다.** 초안 보관 용도로 사용하지 마세요.
+
+| 저장할 SQL | 저장이 의미하는 확인 | 이후 진행 |
+|---|---|---|
+| Migration `MIG_SQL` | INSERT 단계가 이미 사람 확인을 통과함 | 다음 실행은 INSERT를 반복하지 않고 검증부터 재개 |
+| Migration `VERIFY_SQL` | Migration 검증까지 완료함 | Migration 완료 처리 |
+| Conversion `TO_SQL` | 변환 SQL을 확인함 | 다음 실행은 바인드 단계부터 재개 |
+| Conversion `BIND_SQL` + `BIND_SET` | 바인드 SQL과 값 정보를 확인함 | 다음 실행은 테스트 단계부터 재개 |
+| Conversion `TEST_SQL` | Conversion 검증까지 완료함 | Conversion 완료 처리 |
+
+예를 들어 검토한 변환 SQL을 저장하려면 대상 번호, SQL 종류와 SQL 전문을 함께 전달합니다.
+
+> SQL_SEQ 42의 Correct TO_SQL을 저장해줘. SQL: [검토한 SQL 전문]
+
+대괄호 부분을 실제 SQL로 바꾸고, 한 번에 한 종류를 저장하세요. `BIND_SQL` 저장에는 `BIND_SET`도 필요합니다. 빈 바인드 값은 현재 저장 도구에서 허용되지 않으므로 해당 사례는 운영 담당자에게 확인하세요.
+
+저장 결과에서는 **DB 저장, 검색 자료 동기화, 실제 작업 실행**을 각각 확인하세요. Correct SQL 저장 후에는 해당 종류의 검색 자료 동기화가 수행되지만, 저장 자체는 다음 단계 실행 요청이 아닙니다. 다음 단계 실행이 필요하다면 대상 번호와 도메인을 지정해 따로 요청하세요. 상세 상태 전이는 [운영 참고서의 Correct SQL 설명](00_user_operations_reference.md)을 참조하세요.
+
+## 8. 참고 규칙과 유사 SQL 활용
+
+### 변환·튜닝 규칙 등록 — RAG Guide
+
+RAG Guide는 SQL 생성 시 참고할 공통 규칙이나 변환·튜닝 사례입니다. 프로젝트 규칙과 적용 조건을 명확히 전달할 때 사용합니다.
+
+SQL Conversion의 SEARCH 규칙은 활성 규칙 중 원천 테이블 범위가 겹치는 규칙을 **개수 제한 없이 모두** 참고합니다. 각 규칙의 가이던스와 원본·변환 SQL 사례가 변환 프롬프트에 포함됩니다. 변환 검증의 “최대 3개”는 바인드 케이스 수이며, RAG 규칙 개수 제한이 아닙니다.
+
+> SQL Tuning 사례를 등록해줘. GUIDANCE_TEXT는 [적용 조건], SOURCE_SQL은 [원본 SQL], TARGET_SQL은 [튜닝 SQL]이야.
+
+> RAG_ID 25의 규칙 내용을 [새 규칙]으로 수정해줘.
+
+대괄호 부분은 실제 내용으로 바꿉니다. 등록·수정한 규칙을 검색 자료에 반영하려면 별도로 동기화를 요청하세요. 규칙 변경만으로 동기화나 기존 작업 재실행이 이루어지지는 않습니다.
+
+> RAG Guide와 Correct SQL을 VectorDB에 동기화해줘.
+
+### 비슷한 실패 SQL 검색과 참고 대상 지정
+
+SQL Conversion에서는 AS-IS SQL이 유사한 실패 작업을 찾을 수 있습니다. 검토된 SQL 사례를 다른 작업의 참고 대상으로 지정할 때 활용합니다.
+
+> SQL_SEQ 42와 AS-IS SQL이 유사한 실패 Conversion 작업을 찾아줘.
+
+검색된 후보의 대상 번호, 실패 단계, 테이블과 유사도를 검토한 뒤 적용 대상을 지정합니다. 다음 예시는 42번의 Correct SQL 저장과 동기화가 완료되어 있고, 57번의 실패 단계에 사용할 수 있는 경우의 요청입니다.
+
+> SQL_SEQ 57의 참고 Correct SQL을 REF_SEQ 42로 지정해줘.
+
+`REF_SEQ`는 참고할 SQL 작업 번호입니다. 참고 대상으로 지정해도 SQL 전문을 그대로 복제하거나 작업을 즉시 실행하지 않습니다. 이후 실행에서 해당 단계의 힌트로 활용합니다. 유사 SQL 검색·일괄 반영은 SQL Conversion 기능이며 DB Migration에는 제공되지 않습니다.
+
+## 9. 자주 겪는 상황과 다음 요청
+
+| 상황 | 권장 행동 또는 요청 |
 |---|---|
-| DB Migration | `USE_YN='Y'`, `STATUS`가 NULL 또는 `FAIL-*`, `RETRY_COUNT < 2` |
-| SQL Conversion | `STATUS_CONVERSION`이 NULL 또는 `FAIL-*`, `RETRY_COUNT < 2` |
-| SQL Tuning | Conversion이 PASS이고 `STATUS_TUNING`이 NULL 또는 `FAIL-*`, `RETRY_COUNT < 2` |
-| SQL Formatting | Tuning이 PASS이고 `FORMATTED_SQL`이 비어 있음 |
+| 무엇부터 할지 모르겠음 | `전체 작업의 성공·실패·잔여 건수를 보여줘.` |
+| SQL 작업 번호를 모름 | `SQL_ID S001, SPACE_NM PAYMENT의 상태와 SQL_SEQ를 보여줘.` |
+| 최근 실행 결과를 보고 싶음 | `최근 마이그레이션 10건의 상태와 검증 결과, 실패 원인을 보여줘.` |
+| Conversion 실행이 선행 작업 때문에 막힘 | 사용 대상 Migration의 미완료 목록·상태·로그 확인 |
+| 재시도 준비 후에도 실행되지 않음 | 대상 상태와 실행 조건 확인 후 별도 실행 요청 |
+| Correct SQL 저장 후 검색되지 않음 | 해당 SQL 종류의 동기화 결과 확인 |
+| 응답에서 실행 완료 여부를 알 수 없음 | 대상 번호로 상태·최근 로그 재조회 |
+| DB 조회나 연결이 실패함 | 결과를 재조회하고, 반복되면 요청 시각·대상 번호·오류 요약을 운영 담당자에게 전달 |
 
-`RUNNING-*`은 이미 처리 중인 상태이므로 자동 후보가 아니다.
+조회 실패는 작업이 0건이거나 실행이 실패했다는 뜻이 아닙니다. 완료 여부가 불명확할 때는 먼저 실제 상태와 로그를 확인한 뒤 재실행을 결정하세요.
 
-SQL Conversion/Tuning은 특정 SQL_SEQ 실행을 요청해도 사용 대상 Migration(`USE_YN=Y`)이 모두 `PASS`여야 시작한다. 08에서 미완료가 확인되면 실행 분기로 전달하지 않고 선행 작업 안내를 반환한다. 이 미완료 건수는 자동 실행 후보 건수와 별도이며 retry 소진 실패, 실행 중 상태도 포함한다. 전체 workflow는 선행 Migration부터 처리한다.
+## 10. 상세 자료
 
-## 3. DB Migration
+- [상세 운영 참고서](00_user_operations_reference.md): 자동 실행 조건, 실패 상태별 재개 위치, Correct SQL 상태 전이, RAG 입력 조건과 모델 연결 설정
+- [아키텍처 가이드](00_architecture.md): 내부 컴포넌트와 실행 흐름
+- [Oracle / Milvus ERD 뷰어](00_architecture_chapter6_erd.html): 작업 테이블과 검색 자료의 연결 구조
 
-표준 실행기는 `10C_migOneJobPocExecutor3.py`다. 생성 → INSERT 실행 → 건수 검증 → 레코드 검증 순서로 진행한다.
-
-| status | 의미 | 다음 실행의 시작점 |
-|---|---|---|
-| `FAIL-TRUNCATE` | target 초기화/실행 준비 실패 | 새 executor 실행에서는 MIG_SQL 생성부터 다시 진행 |
-| `FAIL-INSERT` | MIG_SQL 생성 또는 INSERT 실행 실패 | MIG_SQL 생성부터 재시도 |
-| `FAIL-TEST` | INSERT 완료 후 건수 검증 실패 | VERIFY_SQL 생성·건수 검증부터 재시도 |
-| `FAIL-TEST2` | 건수 검증 통과 후 레코드 비교 실패 | 레코드 검증만 재시도 |
-| `PASS` | Migration 및 검증 완료 | 자동 재실행 대상 아님 |
-
-### Migration Correct SQL
-
-Correct SQL은 한 번에 한 종류만 저장한다.
-
-| 저장 대상 | 사용자가 보장하는 의미 | 저장 직후 status | 다음 동작 |
-|---|---|---|---|
-| `MIG_SQL` | INSERT가 이미 사람 확인을 통과함 | `FAIL-TEST`, `RETRY_COUNT=0` | INSERT를 다시 하지 않고 VERIFY_SQL 생성·건수 검증부터 시작 |
-| `VERIFY_SQL` | 검증까지 사람이 완료함 | `PASS`, `RETRY_COUNT=0` | Migration 완료 |
-
-예시: `MAP_ID 101의 Correct MIG_SQL을 아래 SQL로 저장해줘. SQL: ...`
-
-저장 성공 뒤 `MIG_SQL` 또는 `VERIFY_SQL` kind로 Vector DB 동기화를 수행한다. `VERIFY2_SQL`은 시스템이 `MIG_SQL`과 `VERIFY_SQL`로 조합하는 레코드 비교용 SQL이므로 Correct SQL로 직접 저장하거나 formatting 대상으로 지정하지 않는다. 레코드 비교 결과는 `MATCH_CNT`, `MISMATCH_CNT` 중심으로 확인하며, `MISMATCH_CNT=0`이면 통과다.
-
-## 4. SQL Conversion
-
-Conversion은 `TO_SQL` → `BIND_SQL`/`BIND_SET` → `TEST_SQL` 순서다. SELECT가 아닌 작업은 bind/test를 건너뛸 수 있다.
-
-| status | 의미 | 다음 실행의 시작점 |
-|---|---|---|
-| `FAIL-TOBE` | TO_SQL 생성 실패 | TO_SQL 생성 |
-| `FAIL-BIND` | BIND_SQL 생성 실패 | 저장된 TO_SQL을 재사용하고 bind 생성 |
-| `FAIL-TEST` | TEST_SQL 생성·실행 실패 | 저장된 TO_SQL/BIND 정보를 재사용하고 test 생성·실행 |
-| `PASS-CONVERSION` | Conversion 완료 | Tuning으로 진행 |
-
-`FAIL-BIND` 또는 `FAIL-TEST`에서 필요한 이전 단계 SQL이 비어 있으면 시스템은 이전 단계로 되돌아가 생성하지 않는다. 현재 failure status를 보존한 채 실패로 남긴다. 즉 `FAIL-BIND`가 `FAIL-TOBE`로 역행하지 않는다.
-
-### Conversion Correct SQL
-
-Correct SQL은 `TO_SQL`, `BIND_SQL`, `TEST_SQL` 중 정확히 하나만 저장한다. `USER_EDITED='Y'`도 기록되지만 재개 위치는 아래 status 전이로 정해진다.
-
-| 저장 대상 | 필수 추가값 | 저장 직후 status | 다음 실행 |
-|---|---|---|---|
-| `TO_SQL` | 없음 | `FAIL-BIND`, `RETRY_COUNT=0` | TO_SQL을 재생성하지 않고 bind 단계부터 시작 |
-| `BIND_SQL` | `BIND_SET` | `FAIL-TEST`, `RETRY_COUNT=0` | bind를 재생성하지 않고 test 단계부터 시작 |
-| `TEST_SQL` | 없음 | `PASS-CONVERSION`, `RETRY_COUNT=0` | Conversion 완료, Tuning 대상 |
-
-예시:
-
-- `SQL_SEQ 42의 Correct TO_SQL을 저장해줘. SQL: ...`
-- `SQL_SEQ 42의 Correct BIND_SQL과 BIND_SET을 저장해줘.`
-- `SQL_SEQ 42의 Correct TEST_SQL을 저장해줘.`
-
-저장 성공 후 해당 kind만 Vector DB에 동기화한다. 현재 Update Tool은 Correct `BIND_SQL` 저장 시 `BIND_SET`을 JSON 객체 배열로 검증하며 빈 배열은 허용하지 않는다. bind 변수가 없는 SELECT에서 빈 bind set을 허용해야 한다는 운영 정책과는 불일치하므로, 이 경우에는 자동 저장 전에 관리자 확인이 필요하다.
-
-### 유사 SQL 찾기 및 일괄 반영
-
-이 기능은 SQL Conversion 전용이다.
-
-1. Correct SQL을 저장하고 해당 kind의 Vector DB 동기화를 완료한다.
-2. `SQL_SEQ 42와 AS-IS SQL이 유사한 실패 Conversion 작업을 찾아줘.`라고 요청한다.
-3. 후보의 SQL 식별자, target table, `STATUS_CONVERSION`, 유사도를 확인한다.
-4. 승인된 후보에는 `REF_SEQ=42`와 `RETRY_COUNT=0`만 반영한다. 후보는 Correct SQL 종류와 같은 실패 단계여야 한다.
-5. `STATUS_CONVERSION`은 보존된다. 이후 실행 시 해당 stage에서 `REF_SEQ` Correct SQL을 힌트로 사용한다.
-
-유사도 검색은 읽기 전용이다. PASS 행이나 Tuning status를 기준으로 후보를 고르지 않으며, DB Migration에는 이 기능이 없다.
-
-## 5. SQL Tuning과 Formatting
-
-Conversion이 `PASS-CONVERSION`이면 같은 실행 흐름에서 Tuning으로 이어진다.
-
-| 도메인 | status/결과 | 재개 방식 |
-|---|---|---|
-| SQL Tuning | `FAIL-TUNED` | TUNED_TO_SQL 생성/튜닝 규칙 적용부터 재시도 |
-| SQL Tuning | `FAIL-TEST` | 저장된 TUNED_TO_SQL으로 tuned test 생성·검증만 재시도 |
-| SQL Tuning | `PASS-TUNING` | Formatting 대상 |
-| SQL Formatting | `FORMATTED_SQL` 비어 있음 | 이번 실행에서 생성된 SQL만 formatting |
-
-Formatting은 DB의 모든 SQL을 다시 포맷하지 않는다. 해당 실행에서 생성된 SQL 목록만 받아 `FORMATTED_SQL`에 저장한다. 대상이 없으면 `NO_FORMATTING_TARGETS`로 통과한다.
-
-## 6. RAG Guide 관리
-
-| 목적 | `CATEGORY` | `RULE_TYPE` | 주요 입력 |
-|---|---|---|---|
-| Conversion 공통 규칙 | `SQL_CONVERSION` | `GENERAL` | `SOURCE_TABLES`, `GUIDANCE_TEXT` |
-| Conversion 사례 | `SQL_CONVERSION` | `SEARCH` | `SOURCE_TABLES`, `SOURCE_SQL`, `TARGET_SQL` |
-| Tuning 공통 규칙 | `SQL_TUNING` | `GENERAL` | `GUIDANCE_TEXT` |
-| Tuning 사례 | `SQL_TUNING` | `SEARCH` | `GUIDANCE_TEXT`, `SOURCE_SQL`, `TARGET_SQL` |
-
-RAG Guide를 추가/수정/비활성화한 뒤에는 필요할 때 별도로 Vector DB 동기화를 요청한다. Correct SQL 동기화와 RAG Guide 동기화는 서로 다른 작업이다.
-
-## 7. LLM 연결과 실행 요청
-
-LLM 연결은 executor마다 endpoint/API key를 입력하는 방식이 아니다. Langflow에서 공식 OpenAI-compatible Chat Model을 설정하고 각 executor의 `Language Model` 입력에 연결한다.
-
-- 공식 모델 노드: `model_name`, `api_key`, `base_url`, `temperature` 설정
-- 배치 실행: `stream=False`, `stream_usage=False`
-- executor: 연결된 `LanguageModel`에 SQL/라우팅 프롬프트를 전달할 뿐 API key나 endpoint를 받지 않음
-- RAG embedding endpoint/API key/model은 Chat Model 설정과 별도
-
-실행 예시:
-
-- `MAP_ID 101 Migration을 실행해줘.`
-- `SQL_SEQ 42 Conversion을 재실행해줘.`
-- `PAYMENT 공간의 실패한 SQL Conversion 작업을 실행해줘.`
-- `전체 workflow의 남은 작업을 실행해줘.`
-
-## 8. 자주 보는 문제
-
-| 증상 | 확인할 내용 |
-|---|---|
-| 자동 실행 후보에 없음 | status가 NULL/`FAIL-*`인지, `RETRY_COUNT < 2`인지, Migration은 `USE_YN='Y'`인지 확인 |
-| Correct SQL 저장 뒤 실행되지 않음 | 저장은 실행 요청이 아니다. 저장된 status를 확인하고 별도로 실행 요청 |
-| `FAIL-BIND`인데 TO_SQL이 없음 | TO_SQL을 새로 만들지 않고 `FAIL-BIND`를 유지한다. 데이터 정합성을 확인 후 올바른 단계 SQL 저장 |
-| Correct SQL이 검색되지 않음 | 저장 뒤 해당 kind의 Vector DB 동기화가 완료됐는지 확인 |
-| Migration 유사 작업 일괄 반영 요청 | 지원하지 않는다. MAP_ID별 Correct SQL 저장과 동기화를 수행 |
-| Formatting 결과가 없음 | Tuning이 PASS인지, 이번 실행에서 생성된 SQL이 있는지 확인 |
-
-상세 상태 전이, LLM 연결 구조, DB 컬럼과 logging 규칙은 개발자용 [아키텍처 가이드](00_architecture.md)를 참고한다.
-
-## 매핑 룰 SQL 생성과 실행
-
-매핑 정보 전체를 요청문에 넣습니다. 예: `MAP_ID 101의 TO_TABLE을 MEMBER로 수정해줘.` 원본 테이블명/컬럼명, MAP_ID와 부모 관계를 명시해야 합니다. detail은 MAP_ID + MAP_DTL로 식별합니다. 매핑 생성기는 첨부 metadata를 별도로 읽지 않습니다.
-
-기본 설정은 SQL 생성만 수행합니다. DB에 실제 적용하려면 운영자가 Mapping Rule Update 컴포넌트의 Execute Generated SQL 옵션을 켜야 합니다. 실행 여부는 해당 옵션 하나로 결정하며 요청문 키워드로 바뀌지 않습니다. 출력에서 등록 대상 표와 성공/실패 집계를 확인합니다. 신규 master는 USE_YN=Y, PRIORITY=5가 기본입니다. SQL 원문은 로그에서 확인합니다.
-
-현재 Router는 이전 대화에서 작업 대상을 복원하지 않습니다. “네”, “그거 실행해” 대신 MAP_ID 또는 SQL_ID + SPACE_NM을 포함한 요청을 사용합니다. 파일 경로만 전달되고 URL이 없으면 자동 파싱할 수 없으므로 다운로드 URL 또는 매핑 본문을 제공합니다.
+사용자는 자연어로 목적과 대상을 전달하면 됩니다. 내부 메시지 형식이나 모델 endpoint를 요청문에 작성할 필요는 없습니다. 환경 구성과 연결 설정은 운영·개발 담당자가 별도로 관리합니다.

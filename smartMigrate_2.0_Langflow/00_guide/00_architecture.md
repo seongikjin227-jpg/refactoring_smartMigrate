@@ -5,7 +5,8 @@
 
 | 문서 | 목적 | 주요 독자 |
 |---|---|---|
-| `00_user_guide.md` | 사용자가 이용 가능한 기능, 질문 예시, 기능별 결과 | 일반 사용자, 운영자, 검수자 |
+| `00_user_guide.md` | 기능 구성, 첫 작업 순서, 기능별 요청과 결과 확인 | SmartMigrate를 처음 사용하는 DB 마이그레이션 운영자 |
+| `00_user_operations_reference.md` | 자동 실행 조건, 실패 상태별 재개, Correct SQL 상태 전이와 연결 설정 | 운영자, SQL 검토자 |
 | `00_architecture.md` | 개발자용 전체 구조, 핵심 흐름, 문서 목차 | 개발자, 운영 설계자 |
 | `00_architecture_chapter1_overview.md` | 시스템 목적, 컴포넌트 맵, 데이터 저장소, 외부 의존성 | 신규 개발자, 운영자 |
 | `00_architecture_chapter2_chat_management.md` | 사용자 채팅 분류, 02/04 라우팅, Dashboard/Progress/Management Agent + 4 tools 및 전용 매핑 분기 | 프론트/플로우 운영자 |

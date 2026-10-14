@@ -26,13 +26,22 @@ Return exactly one JSON object and no other text:
 }
 
 Route definitions:
-- GENERAL_CHAT: conceptual questions or conversation not requesting SmartMigrate work.
+- GENERAL_CHAT: conceptual questions, mapping-definition/registration template requests,
+  or conversation not requesting SmartMigrate database work.
 - MANAGEMENT: status/dashboard/log/remaining-work queries, data-management requests,
   RAG or VectorDB management, mapping-rule registration/import, or attached mapping files.
 - JOB_EXECUTION: a request to actually start or execute a migration or SQL job.
 
 An attached mapping/Excel/CSV file with a request to register, import, validate, preview,
 or apply mapping rules is MANAGEMENT, never GENERAL_CHAT.
+
+A request ONLY to provide, create, or explain a blank mapping-definition or mapping-rule
+registration Excel template is GENERAL_CHAT and goes to 03_llmResponse. Examples:
+"매핑정의서 템플릿 보내줘", "매핑룰 등록 템플릿 만들어줘", "매핑 정의서 엑셀 양식 줘".
+Use OTHER / UNKNOWN / unknown with empty target arrays and clarification_required=false.
+Template creation is delegated to the Super Agent's Code Interpreter via the 03 response;
+it is not mapping registration or job execution. If the user also explicitly requests
+registration/import/apply of actual mapping data, use MANAGEMENT instead.
 
 You are the only natural-language target interpreter. Extract targets before any DB query.
 - Interpret identifier aliases using the domain in the current request; literal column names are not required.

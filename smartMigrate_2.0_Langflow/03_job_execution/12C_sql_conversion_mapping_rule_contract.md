@@ -13,7 +13,7 @@
 
 ## 2. Mapping Rule 조회 기준
 
-12C는 `NEXT_SQL_INFO.TARGET_TABLE` 값을 source table scope로 보고 `NEXT_MIG_INFO.FR_TABLE`과 매칭되는 PASS mapping rule을 조회한다.
+12C는 `NEXT_SQL_INFO.TARGET_TABLE` 값을 source table scope로 보고 PASS mapping rule을 조회한다. SIMPLE은 `FR_TABLE`의 테이블명으로, COMPLEX는 `FR_TABLE` SELECT의 FROM/JOIN 내부 물리 테이블로 범위를 비교한다. 쉼표 조인과 중첩 쿼리도 포함하며, 주석·문자열·CTE 이름·inline view alias는 물리 테이블로 취급하지 않는다.
 
 - `TARGET_TABLE` 값은 단일 table일 수도 있고 여러 table 후보일 수도 있다.
 - 여러 table 후보 중 mapping rule이 존재하는 table이 하나라도 있으면 SQL Conversion은 계속 진행한다.
@@ -21,6 +21,7 @@
 - 여러 table 후보 중 일부 table의 mapping rule이 없더라도 그 이유만으로 fail 처리하지 않는다.
 - 전체 후보에서 조회된 mapping rule이 0건이어도 원본 테이블명과 컬럼명을 유지하여 SQL Conversion을 진행한다.
 - `TARGET_TABLE` 자체가 비어 있으면 mapping rule scope를 알 수 없으므로 `FAIL-TOBE`로 종료한다.
+- COMPLEX가 조회되면 원천 SELECT 전체와 `SOURCE_PHYSICAL_TABLES`, 컬럼 매핑을 함께 전달한다. 물리 테이블 집합은 후보 조회 기준이며 해당 테이블마다 독립적인 1:1 매핑이 있다는 뜻은 아니다.
 
 ## 3. Column Mapping 의미
 
@@ -37,13 +38,22 @@
 
 ## 4. Unmapped Object 정책
 
-테이블 매핑이 없으면 원본 테이블명과 해당 테이블의 컬럼명, alias, join, filter, projection, MyBatis fragment를 유지한다.
+SIMPLE 매핑과 적용 가능한 COMPLEX 쿼리 범위를 모두 확인한 뒤 매핑이 없는 참조에만 원본 테이블명과 해당 테이블의 컬럼명, alias, join, filter, projection, MyBatis fragment를 유지한다. COMPLEX `FR_TABLE`이 SELECT라는 이유로 내부 테이블을 미매핑으로 판단하지 않는다.
 
 - mapping rule에 없는 source table은 TO-BE SQL에서 원본 이름으로 사용한다. 스키마 prefix는 기존 target_schema 규칙을 따른다.
 - 물리 테이블명은 원본 SQL의 테이블명 또는 명시된 `TO_TABLE`만 사용한다. RAG, Correct SQL 힌트, 업무 의미로 테이블명을 추측하거나 생성하지 않는다.
 - 매핑된 source table에서 mapping rule에 없는 source column은 미사용 column이다.
 - 매핑 없는 테이블의 컬럼에는 미사용 column 정책을 적용하지 않는다.
 - 매핑된 테이블에서 계속 사용할 컬럼은 이름이 같더라도 column mapping에 명시해야 한다.
+
+### COMPLEX 원천 SELECT 해석
+
+- `FR_TABLE_QUERY`는 `TO_TABLE`을 구성한 원천 데이터셋 정의다. 이를 TO-BE SQL에 그대로 복사하는 것을 변환 완료로 보지 않는다.
+- `FR_COL`은 원천 SELECT의 출력 컬럼/alias를 기준으로 해석한다. 실제 원천 컬럼명과 alias가 다르면 출력 표현식을 추적해 `TO_COL`과 연결한다.
+- AS-IS SQL의 조인·서브쿼리·투영·조건이 이 데이터셋과 대응하는 범위를 찾아 `TO_TABLE`과 `TO_COL` 기준으로 재작성한다.
+- 여러 원천 테이블을 하나의 대상 테이블로 합치는 매핑에서 원천 테이블을 각각 같은 `TO_TABLE`로 단순 치환하지 않는다.
+- 내부 조인·필터 컬럼은 SELECT 출력 alias인 `FR_COL`과 이름이 다르다는 이유만으로 미사용 처리하지 않는다.
+- 동일 테이블이 다른 쿼리 범위에도 등장하거나 여러 매핑이 겹치면 테이블명만으로 대응 관계를 단정하지 않는다. 원천 SELECT와 컬럼 lineage를 함께 확인한다.
 
 ## 5. TO-BE SQL 생성 기준
 
@@ -95,6 +105,19 @@ FR_COL = STATUS_CD -> TO_COL = STATUS_CD
 
 - 이름이 같더라도 DBA가 이 컬럼을 TO-BE에서 사용하겠다고 명시한 것이다.
 - 이 row가 없으면 `STATUS_CD`는 미사용 컬럼으로 해석된다.
+
+### 여러 원천 테이블을 합치는 COMPLEX 매핑
+
+```text
+MAP_TYPE = COMPLEX
+FR_TABLE = SELECT a.ID AS CUSTOMER_ID, b.TYPE_CD AS CUSTOMER_TYPE
+           FROM ASIS_CUSTOMER a JOIN ASIS_TYPE b ON a.TYPE_ID = b.ID
+TO_TABLE = TOBE_MEMBER
+FR_COL = CUSTOMER_ID   -> TO_COL = MEMBER_ID
+FR_COL = CUSTOMER_TYPE -> TO_COL = MEMBER_TYPE
+```
+
+`SOURCE_PHYSICAL_TABLES`는 `ASIS_CUSTOMER,ASIS_TYPE`으로 전달된다. 해당 조인 결과와 대응하는 AS-IS 조회는 `TOBE_MEMBER.MEMBER_ID`, `TOBE_MEMBER.MEMBER_TYPE`을 사용하는 조회로 재작성한다. `a.ID`와 `b.TYPE_CD`는 출력 alias의 표현식을 통해 매핑한다. 두 원천 테이블을 각각 `TOBE_MEMBER`로 바꿔 자기 조인을 만드는 방식은 이 매핑의 의미가 아니다.
 
 ## 8. 실패 기준
 

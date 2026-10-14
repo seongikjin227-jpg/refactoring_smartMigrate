@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1850" height="1060" viewBox="0 0 1850 1060" role="img" aria-labelledby="title desc">
+<title id="title">SmartMigrate · Oracle → Milvus</title><desc id="desc">Oracle 원천과 네 Milvus 검색 컬렉션의 동기화 흐름. ERD의 FK 관계가 아님.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs>
+<rect width="1850" height="1060" fill="#ffffff"/>
+<text x="55" y="58" fill="#243447" font-size="30" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SmartMigrate · Oracle → Milvus</text>
+<text x="55" y="96" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">검색용 복제 / 단계별 저장 흐름 · 화살표는 동기화 방향이며 FK 또는 보장된 카디널리티가 아님</text>
+<text x="65" y="144" fill="#243447" font-size="23" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">Oracle 원천</text>
+<text x="960" y="144" fill="#243447" font-size="23" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">Milvus 검색 컬렉션</text>
+<rect x="65" y="180" width="530" height="119" rx="10" fill="white" stroke="#357855" stroke-width="2"/>
+<text x="85" y="212" fill="#357855" font-size="22" font-weight="bold" font-family="Consolas, monospace">NEXT_MIG_RAG_INFO</text>
+<text x="85" y="244" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">PK: RAG_ID</text>
+<text x="85" y="271" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">category / rule_type / guidance / SQL 예시</text>
+<rect x="65" y="410" width="530" height="146" rx="10" fill="white" stroke="#6554a4" stroke-width="2"/>
+<text x="85" y="442" fill="#6554a4" font-size="22" font-weight="bold" font-family="Consolas, monospace">NEXT_SQL_INFO</text>
+<text x="85" y="474" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">PK: SPACE_NM + SQL_ID · UK: SQL_SEQ</text>
+<text x="85" y="501" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">AS-IS SQL / 보정 SQL / 단계별 결과 SQL</text>
+<text x="85" y="528" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">REF_SEQ: Correct SQL 참고 대상</text>
+<rect x="65" y="770" width="530" height="119" rx="10" fill="white" stroke="#246a89" stroke-width="2"/>
+<text x="85" y="802" fill="#246a89" font-size="22" font-weight="bold" font-family="Consolas, monospace">NEXT_MIG_INFO</text>
+<text x="85" y="834" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">PK: MAP_ID</text>
+<text x="85" y="861" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">MIG_SQL / VERIFY_SQL / 사용자 보정</text>
+<rect x="960" y="180" width="825" height="119" rx="10" fill="white" stroke="#357855" stroke-width="2"/>
+<text x="980" y="212" fill="#357855" font-size="22" font-weight="bold" font-family="Consolas, monospace">SM_RAG_RULES</text>
+<text x="980" y="244" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">rag_id / category / rule_type / use_yn / source_tables</text>
+<text x="980" y="271" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">guidance_text / source_sql / target_sql</text>
+<rect x="960" y="360" width="825" height="146" rx="10" fill="white" stroke="#6554a4" stroke-width="2"/>
+<text x="980" y="392" fill="#6554a4" font-size="22" font-weight="bold" font-family="Consolas, monospace">SM_ASIS_SQL</text>
+<text x="980" y="424" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">sql_seq / space_nm / sql_id / tag_kind / target_table</text>
+<text x="980" y="451" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">fr_sql / edit_fr_sql (EDIT_FR_SQL 우선)</text>
+<text x="980" y="478" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">실행 status와 TO-BE 결과 SQL은 저장하지 않음</text>
+<rect x="960" y="550" width="825" height="146" rx="10" fill="white" stroke="#6554a4" stroke-width="2"/>
+<text x="980" y="582" fill="#6554a4" font-size="22" font-weight="bold" font-family="Consolas, monospace">SM_CORRECT_SQL_CONVERSION</text>
+<text x="980" y="614" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">sql_seq / space_nm / sql_id / status_conversion</text>
+<text x="980" y="641" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">correct_sql_kind / user_edited / tag_kind / target_table</text>
+<text x="980" y="668" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">source_sql / to_sql / bind_sql / test_sql</text>
+<rect x="960" y="770" width="825" height="119" rx="10" fill="white" stroke="#246a89" stroke-width="2"/>
+<text x="980" y="802" fill="#246a89" font-size="22" font-weight="bold" font-family="Consolas, monospace">SM_CORRECT_SQL_MIGRATION</text>
+<text x="980" y="834" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">map_id / correct_sql_kind / fr_table / to_table / condition</text>
+<text x="980" y="861" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">mig_sql / verify_sql / user_edited / status</text>
+<path d="M 595 240 H 960" fill="none" stroke="#357855" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="630" y="222" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">04_saveVectorDB.py</text>
+<path d="M 595 460 H 770 V 420 H 960" fill="none" stroke="#6554a4" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="620" y="402" fill="#243447" font-size="17" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">AS-IS SQL 동기화</text>
+<path d="M 595 505 H 760 V 610 H 960" fill="none" stroke="#6554a4" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="620" y="654" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">save_correct_sql → sync_correct_sql</text>
+<text x="620" y="681" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">USER_EDITED=&#x27;Y&#x27; 단계 SQL</text>
+<path d="M 595 831 H 960" fill="none" stroke="#246a89" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="620" y="798" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">save_migration_* → sync_correct_sql</text>
+<text x="620" y="869" fill="#243447" font-size="16" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">kind: MIG_SQL / VERIFY_SQL</text>
+<text x="65" y="958" fill="#243447" font-size="17" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">공통 필드: doc_id VARCHAR(256) PK · content · content_hash · is_active · updated_at · dense_vector · sparse_vector (선택)</text>
+<text x="65" y="993" fill="#243447" font-size="17" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">REF_SEQ는 이미 SM_CORRECT_SQL_CONVERSION에 존재하는 SQL_SEQ만 지정 가능. 최신 실행 상태는 Oracle를 다시 조회.</text>
+<text x="65" y="1028" fill="#243447" font-size="17" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">doc_id가 컬렉션 PK이며, sql_seq / map_id는 원천 식별 메타데이터. 단계별 Correct SQL 문서는 원천 한 건당 여러 건 가능.</text>
+</svg>

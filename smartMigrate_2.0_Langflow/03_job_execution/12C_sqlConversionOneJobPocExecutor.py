@@ -94,12 +94,16 @@ FROM SQL의 결과 의미를 보존하면서 매핑 규칙, SQL_CONVERSION RAG, 
 - 모든 SQL은 Oracle 19c 문법에 맞게 생성하거나 수정하십시오.
 - 매핑된 source table/column의 이름 변경은 명시된 TO_TABLE/TO_COL을 기준으로 작성하십시오.
 - mapping rules는 테이블명과 컬럼명 변경의 우선 기준입니다.
-- source table이 mapping rules의 FR_TABLE/FR_TABLE_QUERY에 없으면 원본 테이블명을 그대로 유지하십시오. 해당 테이블의 컬럼명, alias, join, filter, projection, MyBatis 동적 fragment도 유지하십시오.
+- 미매핑 여부는 SIMPLE의 FR_TABLE과 COMPLEX의 SOURCE_PHYSICAL_TABLES/FR_TABLE_QUERY 내부 FROM/JOIN을 함께 확인한 뒤 판단하십시오. COMPLEX 원천 SELECT 내부 테이블을 FR_TABLE 문자열이 테이블명과 다르다는 이유로 미매핑 처리하지 마십시오.
+- COMPLEX의 FR_TABLE_QUERY는 TO_TABLE을 구성한 원천 데이터셋과 컬럼 lineage입니다. SELECT 출력 컬럼/alias인 FR_COL을 원천 테이블의 컬럼·표현식까지 추적하여 TO_COL로 변환하십시오. 출력 alias와 실제 원천 컬럼명이 달라도 같은 매핑일 수 있습니다.
+- COMPLEX와 대응하는 원본 SQL의 조인·서브쿼리·투영·조건 범위를 명시된 TO_TABLE과 TO_COL로 재작성하십시오. 원천 SELECT를 TO-BE에 그대로 복사하는 것을 변환 완료로 간주하지 마십시오. SOURCE_PHYSICAL_TABLES는 매핑 후보 범위이며 각 테이블이 TO_TABLE과 독립적인 1:1 매핑이라는 뜻이 아닙니다.
+- COMPLEX 내부 테이블을 각각 같은 TO_TABLE로 단순 치환하지 마십시오. 원천 SELECT의 join/filter/집계와 출력 컬럼 lineage를 함께 비교하고, 대응하지 않는 별도 테이블 참조·쿼리 범위는 유지하십시오. 여러 매핑이 겹치면 테이블명만으로 선택하거나 새로운 대응 관계를 추측하지 마십시오.
+- SIMPLE 매핑도 없고 적용 가능한 COMPLEX 원천 쿼리 범위에도 포함되지 않는 source table은 원본 테이블명을 그대로 유지하십시오. 해당 테이블의 컬럼명, alias, join, filter, projection, MyBatis 동적 fragment도 유지하십시오.
 - 물리 테이블명은 FROM SQL의 기존 테이블명 또는 mapping rules에 명시된 TO_TABLE만 사용하십시오. RAG 예시, Correct SQL 힌트, 업무 의미를 근거로 새로운 테이블명을 추측하거나 만들어내지 마십시오.
 - source column이 TO_COL=__UNUSED__, NULL, blank, NONE, N/A, NA, '-'로 매핑되면 해당 컬럼은 TO-BE SQL에서 미사용 컬럼입니다. SELECT, WHERE, JOIN, GROUP BY, ORDER BY, MyBatis 동적 fragment에서 사용하지 마십시오.
-- 매핑된 source table의 mapping rules에 없는 source column은 TO-BE SQL에서 미사용 컬럼입니다. 매핑 없는 테이블의 컬럼에는 이 규칙을 적용하지 마십시오.
+- SIMPLE 매핑된 source table의 mapping rules에 없는 source column은 TO-BE SQL에서 미사용 컬럼입니다. COMPLEX에서는 원천 SELECT의 출력 컬럼/alias와 FR_COL의 lineage를 먼저 해석하십시오. 출력 alias와 이름이 다른 내부 조인·필터 컬럼을 FR_COL에 없다는 이유만으로 미사용 처리하지 마십시오. 매핑 없는 테이블의 컬럼에는 미사용 정책을 적용하지 마십시오.
 - 매핑된 source table/column은 명시된 TO_TABLE/TO_COL로 변환하고, 매핑 없는 테이블과 그 컬럼은 원본 이름으로 사용하십시오. mapped 대상과 unused 컬럼이 한 predicate/expression에 섞여 있으면 안전하게 분리 가능한 unused 조건만 제거하고, 분리하기 어렵다면 해당 predicate/expression 전체를 제거하십시오.
-- 가능한 한 원본 쿼리 구조, 필터 의도, 집계 의도, 조인 의도, alias, MyBatis 동적 태그 구조를 유지하십시오.
+- 가능한 한 원본 쿼리 구조, 필터 의도, 집계 의도, 조인 의도, alias, MyBatis 동적 태그 구조를 유지하십시오. 단, COMPLEX의 원천 조인·서브쿼리가 이미 TO_TABLE로 이관된 데이터셋을 구성한다면 해당 범위는 TO_TABLE 기준으로 재작성하고 원천 구조 유지보다 명시된 COMPLEX 매핑을 우선하십시오.
 - MyBatis 바인딩 파라미터 태그 #{{param}}, ${{param}}는 제거하거나 값으로 치환하지 마십시오.
 - parameter marker 형식(#{{param}} 또는 ${{param}})은 유지하되, parameter 이름은 매핑된 target 컬럼/업무 의미에 맞게 변경할 수 있습니다.
 - 기존 parameter가 매핑 후 동일 의미로 유지되면 parameter 이름도 유지하십시오.
@@ -1312,7 +1316,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             ]
         if not source_scope_tables:
             return rules
-        return [rule for rule in rules if self._table_matches(rule["fr_table"], source_scope_tables)]
+        return [rule for rule in rules if self._mapping_source_tables(rule) & source_scope_tables]
 
     # GENERAL RAG는 SQL 변환 프롬프트의 기준 규칙이다.
     # RAG 테이블/스키마 문제가 있으면 빈 규칙으로 우회하지 않고 즉시 오류를 노출한다.
@@ -1484,6 +1488,7 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         # FR_TABLE/TO_TABLE 단위로 묶어 복잡한 원천 쿼리는 한 번만 보이고 컬럼 매핑은 읽기 쉽게 유지한다.
         source_schema, target_schema = db_config["source_schema"], db_config["target_schema"]
         grouped: dict[tuple[str, str, str, str], set[tuple[str, str]]] = {}
+        source_tables_by_group: dict[tuple[str, str, str, str], set[str]] = {}
         for rule in mapping_rules:
             map_type = str(rule.get("map_type") or "").strip().upper() or "SIMPLE"
             fr_table = str(rule.get("fr_table") or "").strip()
@@ -1495,7 +1500,9 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
                 from_expr = f"(\n{fr_table}\n) SRC"
             else:
                 from_expr = self._qualify_mapping_table(fr_table, source_schema)
-            grouped.setdefault((map_type, from_expr, to_table, condition), set()).add(
+            group_key = (map_type, from_expr, to_table, condition)
+            source_tables_by_group.setdefault(group_key, set()).update(self._mapping_source_tables(rule))
+            grouped.setdefault(group_key, set()).add(
                 (str(rule.get("fr_col") or "").strip(), self._mapping_to_col_prompt_value(rule.get("to_col")))
             )
 
@@ -1505,8 +1512,13 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
         for map_type, from_expr, to_table, condition in sorted(grouped):
             source_key = "FR_TABLE_QUERY" if map_type == "COMPLEX" else "FR_TABLE"
             lines.append(f"- MAP_TYPE={map_type} | {source_key}={from_expr} | TO_TABLE={to_table}")
+            physical_tables = source_tables_by_group[(map_type, from_expr, to_table, condition)]
+            lines.append(f"  - SOURCE_PHYSICAL_TABLES={','.join(sorted(physical_tables)) or '(unresolved; inspect FR_TABLE_QUERY)'}")
             if map_type == "COMPLEX":
-                lines.append("  - Use the FR_TABLE_QUERY as one inline view and reference mapped FR_COL values from alias SRC.")
+                lines.append("  - FR_TABLE_QUERY is the source dataset definition, not SQL to copy unchanged into TO-BE.")
+                lines.append("  - Trace each projected FR_COL/output alias to its source columns and expressions, then map it to TO_COL in TO_TABLE.")
+                lines.append("  - Match the original query's joins, filters, subqueries and projections to this dataset before rewriting the corresponding scope to TO_TABLE.")
+                lines.append("  - SOURCE_PHYSICAL_TABLES are covered source candidates, not independent one-to-one mappings to TO_TABLE; do not replace every member with the same target table.")
             if condition:
                 lines.append(f"  - CONDITION={condition}")
             for fr_col, to_col in sorted(grouped[(map_type, from_expr, to_table, condition)]):
@@ -1515,9 +1527,11 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
             [
                 "",
                 "[UNMAPPED_OBJECT_POLICY]",
-                "- Preserve original table names, column names, aliases, joins, filters, projections, and MyBatis fragments for source tables not listed in MIGRATION_MAPPING_RULES.",
+                "- Check SIMPLE FR_TABLE and COMPLEX SOURCE_PHYSICAL_TABLES plus FR_TABLE_QUERY lineage before classifying any source table as unmapped.",
+                "- Preserve original table names, column names, aliases, joins, filters, projections, and MyBatis fragments only for references outside both SIMPLE mappings and applicable COMPLEX query scopes.",
                 "- Physical table names must come from FROM SQL or an explicit TO_TABLE mapping. Never invent table names from RAG, Correct SQL hints, or business meaning.",
-                "- Source columns not listed under a mapped source table are unused in TO-BE SQL. This does not apply to columns of unmapped tables.",
+                "- For SIMPLE mappings, source columns not listed under a mapped source table are unused in TO-BE SQL. This does not apply to columns of unmapped tables.",
+                "- For COMPLEX mappings, FR_COL identifies projected output columns/aliases: resolve their source lineage before applying unused-column policy. Internal join/filter columns are not automatically unused just because their names differ from FR_COL.",
                 "- Source columns mapped to TO_COL=__UNUSED__ are unused in TO-BE SQL.",
             ]
         )
@@ -1561,6 +1575,87 @@ class NewType12CSqlConversionOneJobPocExecutor(Component):
     def _table_matches(self, table_name: str, candidates: set[str]) -> bool:
         normalized = str(table_name or "").upper()
         return any(re.search(rf"(?<![A-Z0-9_$#]){re.escape(table)}(?![A-Z0-9_$#])", normalized) for table in candidates)
+
+    def _mapping_source_tables(self, rule: dict[str, str]) -> set[str]:
+        if str(rule.get("map_type") or "").strip().upper() == "COMPLEX":
+            return self._query_physical_tables(str(rule.get("fr_table") or ""))
+        return self._source_tables(str(rule.get("fr_table") or ""))
+
+    def _query_physical_tables(self, sql_text: str) -> set[str]:
+        """Extract FROM/JOIN relations, including comma joins and nested queries.
+
+        Ignore comments/literals, inline-view aliases and visible CTE names.
+        This is scope metadata only; the LLM resolves projected-column lineage.
+        """
+        token_pattern = r'''/\*.*?\*/|--[^\r\n]*|[qQ]'\[.*?\]'|[qQ]'\{.*?\}'|[qQ]'\(.*?\)'|[qQ]'<.*?>'|'(?:''|[^'])*'|"(?:""|[^"])*"|[A-Za-z_][A-Za-z0-9_$#]*|[().,;]'''
+        tokens = [match.group() for match in re.finditer(token_pattern, sql_text, re.S)
+                  if not match.group().startswith(("/*", "--", "'"))
+                  and not re.match(r"^[qQ]'", match.group())]
+        depths, closing, stack = [], {}, []
+        for index, token in enumerate(tokens):
+            if token == ")" and stack:
+                opening = stack.pop()
+                closing[opening] = index
+            depths.append(len(stack))
+            if token == "(":
+                stack.append(index)
+
+        identifier = re.compile(r'^(?:[A-Za-z_][A-Za-z0-9_$#]*|"(?:""|[^"])*")$')
+        cte_visibility: list[tuple[str, int, int]] = []
+        for index, token in enumerate(tokens):
+            if token.upper() != "WITH":
+                continue
+            scope_end = next((i for i in range(index + 1, len(tokens))
+                              if tokens[i] == ")" and depths[i] < depths[index]), len(tokens))
+            cursor = index + 1
+            while cursor < len(tokens) and identifier.fullmatch(tokens[cursor]):
+                name = tokens[cursor].strip('"').upper()
+                cursor += 1
+                if cursor in closing:  # Optional CTE output column list.
+                    cursor = closing[cursor] + 1
+                if cursor + 1 >= len(tokens) or tokens[cursor].upper() != "AS" or cursor + 1 not in closing:
+                    break
+                body_end = closing[cursor + 1]
+                cte_visibility.append((name, body_end + 1, scope_end))
+                cursor = body_end + 1
+                if cursor >= len(tokens) or tokens[cursor] != ",":
+                    break
+                cursor += 1
+
+        tables: set[str] = set()
+        from_clause: dict[int, bool] = {}
+        query_depths: set[int] = set()
+        boundaries = {"WHERE", "GROUP", "HAVING", "ORDER", "CONNECT", "START", "UNION", "MINUS", "INTERSECT", "MODEL", "FETCH", "OFFSET", "FOR"}
+        for index, token in enumerate(tokens):
+            depth = depths[index]
+            keyword = token.upper()
+            if token == ")":
+                from_clause = {level: active for level, active in from_clause.items() if level <= depth}
+                query_depths = {level for level in query_depths if level <= depth}
+            if keyword == "SELECT":
+                query_depths.add(depth)
+            if keyword in boundaries:
+                from_clause[depth] = False
+            if keyword == "FROM" and depth not in query_depths:
+                continue  # EXTRACT(... FROM value) is not a table reference.
+            if keyword in {"FROM", "JOIN"}:
+                from_clause[depth] = True
+            elif token != "," or not from_clause.get(depth):
+                continue
+            cursor = index + 1
+            if cursor >= len(tokens) or not identifier.fullmatch(tokens[cursor]):
+                continue
+            parts = [tokens[cursor]]
+            while cursor + 2 < len(tokens) and tokens[cursor + 1] == "." and identifier.fullmatch(tokens[cursor + 2]):
+                cursor += 2
+                parts.append(tokens[cursor])
+            name = parts[-1].strip('"').upper()
+            if name in {"SELECT", "WITH", "DUAL", "TABLE", "JSON_TABLE", "XMLTABLE"}:
+                continue
+            if len(parts) == 1 and any(cte == name and start <= index < end for cte, start, end in cte_visibility):
+                continue
+            tables.add(name)
+        return tables
 
     # 물리 테이블명이 schema-qualified가 아니면 system_schema를 붙인다.
     # 매핑 rule에 나온 물리 테이블명에 필요한 schema prefix를 붙인다.

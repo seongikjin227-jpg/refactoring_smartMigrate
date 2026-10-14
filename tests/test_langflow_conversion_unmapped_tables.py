@@ -3,6 +3,7 @@ import ast
 from contextlib import contextmanager
 import json
 import logging
+import os
 import re
 from pathlib import Path
 import unittest
@@ -19,7 +20,7 @@ prompt_nodes = [
     or (isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
         and node.target.id == "SQL_PROMPT_TEMPLATES")
 ]
-namespace = dict(Component=object, contextmanager=contextmanager, json=json, re=re,
+namespace = dict(Component=object, contextmanager=contextmanager, json=json, re=re, os=os,
                  logging=logging, RAG_SEARCH="SEARCH", SQL_OUTPUT_FORMATTING_GUIDE="")
 future = ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0)
 module = ast.Module(body=[future] + prompt_nodes + [component_node], type_ignores=[])
@@ -91,6 +92,78 @@ class UnmappedTablePolicyTests(unittest.TestCase):
         self.assertIn("Preserve join semantics.", prompt)
         self.assertNotIn("SOURCE_SQL:", prompt)
         self.assertNotIn("TARGET_SQL:", prompt)
+
+
+class ComplexMappingScopeTests(unittest.TestCase):
+    def test_complex_query_exposes_physical_tables_and_projected_lineage_to_llm(self):
+        source_query = "SELECT a.ID AS A_ID, b.ID AS B_ID FROM SRC.A a JOIN SRC.B b ON a.ID=b.REF_ID;"
+        prompt = UnmappedTablePolicyTests().generate([
+            {"map_type": "COMPLEX", "fr_table": source_query, "fr_col": "A_ID",
+             "to_table": "MERGED_AB", "to_col": "MEMBER_ID", "condition": ""},
+            {"map_type": "COMPLEX", "fr_table": source_query, "fr_col": "B_ID",
+             "to_table": "MERGED_AB", "to_col": "DETAIL_ID", "condition": ""},
+        ])
+        self.assertIn("MAP_TYPE=COMPLEX | FR_TABLE_QUERY=(", prompt)
+        self.assertIn("TO_TABLE=DST.MERGED_AB", prompt)
+        self.assertIn("SOURCE_PHYSICAL_TABLES=A,B", prompt)
+        self.assertIn("FR_COL=A_ID -> TO_COL=MEMBER_ID", prompt)
+        self.assertIn("FR_COL=B_ID -> TO_COL=DETAIL_ID", prompt)
+        self.assertIn("Trace each projected FR_COL/output alias", prompt)
+        self.assertIn("not SQL to copy unchanged into TO-BE", prompt)
+        self.assertIn("not independent one-to-one mappings", prompt)
+        self.assertNotIn("Use the FR_TABLE_QUERY as one inline view", prompt)
+
+    def test_unmapped_policy_requires_checking_complex_scope(self):
+        prompt = UnmappedTablePolicyTests().generate([])
+        self.assertIn("Check SIMPLE FR_TABLE and COMPLEX SOURCE_PHYSICAL_TABLES", prompt)
+        self.assertIn("outside both SIMPLE mappings and applicable COMPLEX query scopes", prompt)
+        self.assertIn("Internal join/filter columns are not automatically unused", prompt)
+
+    def test_comma_joins_nested_queries_ctes_and_quoted_identifiers(self):
+        query = '''WITH CTE_A (ID) AS (
+            SELECT a.ID FROM "SRC"."A" a, B b WHERE a.ID=b.ID
+        ), CTE_B AS (
+            SELECT ID FROM CTE_A
+        )
+        SELECT q.ID FROM CTE_B q
+        JOIN (SELECT ID FROM C WHERE EXISTS (SELECT 1 FROM D)) c ON q.ID=c.ID
+        WHERE 'FROM GHOST' = q'[JOIN GHOST2]' /* FROM GHOST3 */ -- JOIN GHOST4
+        '''
+        self.assertEqual(Conversion()._query_physical_tables(query), {"A", "B", "C", "D"})
+
+    def test_table_named_like_cte_in_its_definition_is_still_physical(self):
+        query = "WITH A AS (SELECT ID FROM A) SELECT ID FROM A"
+        self.assertEqual(Conversion()._query_physical_tables(query), {"A"})
+
+    def test_from_inside_scalar_functions_is_not_a_table(self):
+        query = "SELECT EXTRACT(YEAR FROM a.CREATED_AT), TRIM(BOTH 'x' FROM a.NAME) FROM A a"
+        self.assertEqual(Conversion()._query_physical_tables(query), {"A"})
+
+    def test_from_clause_state_does_not_leak_between_subqueries(self):
+        query = "SELECT * FROM (SELECT ID FROM A) q, (SELECT ID FROM B) r WHERE EXISTS (SELECT 1 FROM C)"
+        self.assertEqual(Conversion()._query_physical_tables(query), {"A", "B", "C"})
+
+    def test_loader_selects_complex_by_physical_tables_not_sql_text_mentions(self):
+        component = Conversion()
+        component._qualify = Mock(side_effect=lambda name, schema: name)
+        rows = [
+            ("COMPLEX", "SELECT a.ID AS ALIAS_ID FROM SRC.A a JOIN B b ON a.ID=b.ID", "ALIAS_ID", "NEW_AB", "ID", ""),
+            ("COMPLEX", "SELECT 'FROM A' AS ID FROM C /* JOIN B */", "ID", "NEW_C", "ID", ""),
+            ("SIMPLE", "D", "ID", "NEW_D", "ID", ""),
+        ]
+        cursor = Mock()
+        cursor.fetchall.return_value = rows
+        connection = Mock()
+        connection.cursor.return_value = cursor
+
+        @contextmanager
+        def connect(config):
+            yield connection
+
+        component._connect = connect
+        rules = component._load_mapping_rules({}, '["A", "D"]')
+        self.assertEqual([rule["to_table"] for rule in rules], ["NEW_AB", "NEW_D"])
+        self.assertIn("UPPER(TRIM(M.STATUS)) = 'PASS'", cursor.execute.call_args.args[0])
 
 
 class ConversionSearchTableScopeTests(unittest.TestCase):
