@@ -1,0 +1,162 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
+<title id="title">SmartMigrate · RAG / Milvus 코드와 업무별 조회</title><desc id="desc">왼쪽은 Milvus 접속·동기화·검색 코드, 오른쪽은 DB Migration, SQL Conversion, SQL Tuning의 조회 경로와 공통 General 규칙.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs>
+<rect width="1920" height="1080" fill="#ffffff"/>
+<text x="55" y="58" fill="#243447" font-size="30" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SmartMigrate · RAG / Milvus 코드와 업무별 조회</text>
+<text x="55" y="102" fill="#516176" font-size="25" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">Milvus 핵심 코드 + 조회 흐름도  |  무엇을 입력하고, 어떤 컬렉션과 비교하며, 무엇을 프롬프트에 반영하는가</text>
+<text x="60" y="155" fill="#18334e" font-size="27" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">01  접속 · 동기화 · 검색 코드</text>
+<text x="750" y="155" fill="#18334e" font-size="27" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">02  입력 → 조회·비교 대상 → 선택 결과</text>
+<rect x="60" y="180" width="640" height="243" rx="13" fill="#f5f7fb" stroke="#d8e0eb"/>
+<text x="82" y="215" fill="#246a89" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">MilvusClient · DB 접속</text>
+<text x="82" y="246" fill="#516176" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">_milvus_config() → _milvus_client()</text>
+<text x="82" y="284" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">from pymilvus import MilvusClient</text>
+<text x="82" y="307" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">client = MilvusClient(</text>
+<text x="82" y="330" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">    uri=cfg[&quot;uri&quot;], db_name=cfg[&quot;db_name&quot;],</text>
+<text x="82" y="353" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">    user=cfg[&quot;username&quot;], password=cfg[&quot;password&quot;],</text>
+<text x="82" y="376" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">    timeout=10,</text>
+<text x="82" y="399" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">)</text>
+<rect x="60" y="438" width="640" height="204" rx="13" fill="#f5f7fb" stroke="#d8e0eb"/>
+<text x="82" y="473" fill="#357855" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">검색 자료 동기화</text>
+<text x="82" y="504" fill="#516176" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">_sync_collection() · 변경분만 임베딩·upsert</text>
+<text x="82" y="542" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">vectors = self._embed_texts(texts, embed_config)</text>
+<text x="82" y="565" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">entities = [{**row, &quot;dense_vector&quot;: vector}</text>
+<text x="82" y="588" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">            for row, vector in zip(rows, vectors)]</text>
+<text x="82" y="611" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">client.upsert(collection_name=name, data=entities)</text>
+<rect x="60" y="657" width="640" height="288" rx="13" fill="#f5f7fb" stroke="#d8e0eb"/>
+<text x="82" y="692" fill="#6554a4" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">벡터 검색 · COSINE 유사도</text>
+<text x="82" y="723" fill="#516176" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">유사 AS-IS 검색 예시 · 저장 벡터 재사용 가능</text>
+<text x="82" y="761" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">vector = self._embed_texts([text], embed_config)[0]</text>
+<text x="82" y="784" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">hits = client.search(</text>
+<text x="82" y="807" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">    collection_name=cfg[&quot;asis_sql_collection&quot;],</text>
+<text x="82" y="830" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">    data=[vector], anns_field=&quot;dense_vector&quot;,</text>
+<text x="82" y="853" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">    filter=&quot;is_active == true&quot;, limit=20,</text>
+<text x="82" y="876" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">    search_params={&quot;metric_type&quot;: &quot;COSINE&quot;},</text>
+<text x="82" y="899" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">)</text>
+<text x="82" y="922" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace"># query() / query_iterator(): 벡터 순위 없는 조건 조회</text>
+<text x="750" y="188" fill="#516176" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">업무 · 입력</text>
+<text x="1080" y="188" fill="#516176" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">Milvus 컬렉션 · 조회 필드</text>
+<text x="1620" y="188" fill="#516176" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">방식 · 반영 결과</text>
+<rect x="738" y="319" width="1134" height="376" rx="13" fill="#f2eff8" stroke="#d9d1eb"/>
+<rect x="750" y="205" width="265" height="100" rx="13" fill="#ffffff" stroke="#9c6020"/>
+<rect x="750" y="205" width="265" height="32" rx="8" fill="#9c6020"/>
+<text x="762" y="228" fill="#ffffff" font-size="20" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">DB Migration</text>
+<rect x="751" y="242" width="263" height="27" fill="#f1f5f9"/>
+<text x="762" y="262" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">FR_TABLE / TO_TABLE</text>
+<text x="762" y="289" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">조건 · 컬럼 매핑 · 유형</text>
+<rect x="1080" y="205" width="480" height="100" rx="13" fill="#ffffff" stroke="#9c6020"/>
+<rect x="1080" y="205" width="480" height="32" rx="8" fill="#9c6020"/>
+<text x="1092" y="228" fill="#ffffff" font-size="21" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SM_CORRECT_SQL_MIGRATION</text>
+<rect x="1081" y="242" width="478" height="27" fill="#f1f5f9"/>
+<text x="1092" y="262" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">매핑 정보 → dense_vector</text>
+<text x="1092" y="289" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">mig_sql / verify_sql</text>
+<rect x="1620" y="205" width="240" height="100" rx="13" fill="#ffffff" stroke="#9c6020"/>
+<rect x="1620" y="205" width="240" height="32" rx="8" fill="#9c6020"/>
+<text x="1632" y="228" fill="#ffffff" font-size="20" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">COSINE · Top-K</text>
+<rect x="1621" y="242" width="238" height="27" fill="#f1f5f9"/>
+<text x="1632" y="262" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">같은 SQL 종류만 검색</text>
+<text x="1632" y="289" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">이관·검증 생성 힌트</text>
+<path d="M 1023 256 H 1071" fill="none" stroke="#9c6020" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M 1568 256 H 1611" fill="none" stroke="#9c6020" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="750" y="331" width="265" height="100" rx="13" fill="#ffffff" stroke="#6554a4"/>
+<rect x="750" y="331" width="265" height="32" rx="8" fill="#6554a4"/>
+<text x="762" y="354" fill="#ffffff" font-size="20" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SQL Conversion</text>
+<rect x="751" y="368" width="263" height="27" fill="#f1f5f9"/>
+<text x="762" y="388" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">SEARCH · TARGET_TABLE</text>
+<text x="762" y="415" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">AS-IS 테이블 범위</text>
+<rect x="1080" y="331" width="480" height="100" rx="13" fill="#ffffff" stroke="#6554a4"/>
+<rect x="1080" y="331" width="480" height="32" rx="8" fill="#6554a4"/>
+<text x="1092" y="354" fill="#ffffff" font-size="21" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SM_RAG_RULES</text>
+<rect x="1081" y="368" width="478" height="27" fill="#f1f5f9"/>
+<text x="1092" y="388" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">RULE_TYPE = SEARCH</text>
+<text x="1092" y="415" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">SOURCE_TABLES / SOURCE_SQL / TARGET_SQL</text>
+<rect x="1620" y="331" width="240" height="100" rx="13" fill="#ffffff" stroke="#6554a4"/>
+<rect x="1620" y="331" width="240" height="32" rx="8" fill="#6554a4"/>
+<text x="1632" y="354" fill="#ffffff" font-size="20" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">테이블 범위 필터</text>
+<rect x="1621" y="368" width="238" height="27" fill="#f1f5f9"/>
+<text x="1632" y="388" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">겹치는 사례 전부 반영</text>
+<text x="1632" y="415" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">벡터 Top-K 미사용</text>
+<path d="M 1023 382 H 1071" fill="none" stroke="#6554a4" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M 1568 382 H 1611" fill="none" stroke="#6554a4" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="750" y="457" width="265" height="100" rx="13" fill="#ffffff" stroke="#6554a4"/>
+<rect x="750" y="457" width="265" height="32" rx="8" fill="#6554a4"/>
+<text x="762" y="480" fill="#ffffff" font-size="20" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SQL Conversion</text>
+<rect x="751" y="494" width="263" height="27" fill="#f1f5f9"/>
+<text x="762" y="514" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">Correct · AS-IS SQL</text>
+<text x="762" y="541" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">REF_SEQ (선택)</text>
+<rect x="1080" y="457" width="480" height="100" rx="13" fill="#ffffff" stroke="#6554a4"/>
+<rect x="1080" y="457" width="480" height="32" rx="8" fill="#6554a4"/>
+<text x="1092" y="480" fill="#ffffff" font-size="21" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SM_CORRECT_SQL_CONVERSION</text>
+<rect x="1081" y="494" width="478" height="27" fill="#f1f5f9"/>
+<text x="1092" y="514" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">source_sql / dense_vector</text>
+<text x="1092" y="541" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">to_sql / bind_sql / test_sql</text>
+<rect x="1620" y="457" width="240" height="100" rx="13" fill="#ffffff" stroke="#6554a4"/>
+<rect x="1620" y="457" width="240" height="32" rx="8" fill="#6554a4"/>
+<text x="1632" y="480" fill="#ffffff" font-size="20" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">COSINE / REF_SEQ</text>
+<rect x="1621" y="494" width="238" height="27" fill="#f1f5f9"/>
+<text x="1632" y="514" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">REF_SEQ 있으면 지정 조회</text>
+<text x="1632" y="541" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">단계별 Correct SQL 힌트</text>
+<path d="M 1023 508 H 1071" fill="none" stroke="#6554a4" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M 1568 508 H 1611" fill="none" stroke="#6554a4" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="750" y="583" width="265" height="100" rx="13" fill="#ffffff" stroke="#6554a4"/>
+<rect x="750" y="583" width="265" height="32" rx="8" fill="#6554a4"/>
+<text x="762" y="606" fill="#ffffff" font-size="20" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SQL Conversion</text>
+<rect x="751" y="620" width="263" height="27" fill="#f1f5f9"/>
+<text x="762" y="640" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">유사 SQL · AS-IS SQL</text>
+<text x="762" y="667" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">EDIT_FR_SQL 우선</text>
+<rect x="1080" y="583" width="480" height="100" rx="13" fill="#ffffff" stroke="#6554a4"/>
+<rect x="1080" y="583" width="480" height="32" rx="8" fill="#6554a4"/>
+<text x="1092" y="606" fill="#ffffff" font-size="21" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SM_ASIS_SQL</text>
+<rect x="1081" y="620" width="478" height="27" fill="#f1f5f9"/>
+<text x="1092" y="640" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">fr_sql / edit_fr_sql / dense_vector</text>
+<text x="1092" y="667" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">sql_seq / target_table</text>
+<rect x="1620" y="583" width="240" height="100" rx="13" fill="#ffffff" stroke="#6554a4"/>
+<rect x="1620" y="583" width="240" height="32" rx="8" fill="#6554a4"/>
+<text x="1632" y="606" fill="#ffffff" font-size="20" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">COSINE</text>
+<rect x="1621" y="620" width="238" height="27" fill="#f1f5f9"/>
+<text x="1632" y="640" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">유사 작업 후보 조회</text>
+<text x="1632" y="667" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">Oracle 최신 상태 확인</text>
+<path d="M 1023 634 H 1071" fill="none" stroke="#6554a4" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M 1568 634 H 1611" fill="none" stroke="#6554a4" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="750" y="709" width="265" height="100" rx="13" fill="#ffffff" stroke="#357855"/>
+<rect x="750" y="709" width="265" height="32" rx="8" fill="#357855"/>
+<text x="762" y="732" fill="#ffffff" font-size="20" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SQL Tuning</text>
+<rect x="751" y="746" width="263" height="27" fill="#f1f5f9"/>
+<text x="762" y="766" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">SEARCH · TO_SQL 블록</text>
+<text x="762" y="793" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">MAIN / SUBQUERY</text>
+<rect x="1080" y="709" width="480" height="100" rx="13" fill="#ffffff" stroke="#357855"/>
+<rect x="1080" y="709" width="480" height="32" rx="8" fill="#357855"/>
+<text x="1092" y="732" fill="#ffffff" font-size="21" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SM_RAG_RULES</text>
+<rect x="1081" y="746" width="478" height="27" fill="#f1f5f9"/>
+<text x="1092" y="766" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">SEARCH · SOURCE_SQL → dense_vector</text>
+<text x="1092" y="793" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">GUIDANCE_TEXT / TARGET_SQL → 프롬프트</text>
+<rect x="1620" y="709" width="240" height="100" rx="13" fill="#ffffff" stroke="#357855"/>
+<rect x="1620" y="709" width="240" height="32" rx="8" fill="#357855"/>
+<text x="1632" y="732" fill="#ffffff" font-size="20" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">COSINE · Top-K</text>
+<rect x="1621" y="746" width="238" height="27" fill="#f1f5f9"/>
+<text x="1632" y="766" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">범위 확인 · 블록별 선택</text>
+<text x="1632" y="793" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">튜닝 사례·가이드 반영</text>
+<path d="M 1023 760 H 1071" fill="none" stroke="#357855" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M 1568 760 H 1611" fill="none" stroke="#357855" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="750" y="835" width="265" height="100" rx="13" fill="#ffffff" stroke="#516c86"/>
+<rect x="750" y="835" width="265" height="32" rx="8" fill="#516c86"/>
+<text x="762" y="858" fill="#ffffff" font-size="20" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">공통 · GENERAL</text>
+<rect x="751" y="872" width="263" height="27" fill="#f1f5f9"/>
+<text x="762" y="892" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">SQL Conversion / Tuning</text>
+<text x="762" y="919" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">현재 테이블 범위</text>
+<rect x="1080" y="835" width="480" height="100" rx="13" fill="#ffffff" stroke="#516c86"/>
+<rect x="1080" y="835" width="480" height="32" rx="8" fill="#516c86"/>
+<text x="1092" y="858" fill="#ffffff" font-size="21" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SM_RAG_RULES</text>
+<rect x="1081" y="872" width="478" height="27" fill="#f1f5f9"/>
+<text x="1092" y="892" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">RULE_TYPE = GENERAL</text>
+<text x="1092" y="919" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">SOURCE_TABLES / GUIDANCE_TEXT</text>
+<rect x="1620" y="835" width="240" height="100" rx="13" fill="#ffffff" stroke="#516c86"/>
+<rect x="1620" y="835" width="240" height="32" rx="8" fill="#516c86"/>
+<text x="1632" y="858" fill="#ffffff" font-size="20" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">조건 조회</text>
+<rect x="1621" y="872" width="238" height="27" fill="#f1f5f9"/>
+<text x="1632" y="892" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">적용 가능한 규칙 반영</text>
+<text x="1632" y="919" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">유사도 순위 없음</text>
+<path d="M 1023 886 H 1071" fill="none" stroke="#516c86" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M 1568 886 H 1611" fill="none" stroke="#516c86" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="60" y="994" fill="#18334e" font-size="23" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">GENERAL의 SOURCE_TABLES: 공란 → 공통 적용  /  값 있음 → 현재 테이블 범위와 겹침 확인</text>
+<text x="60" y="1038" fill="#516176" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">화살표는 조회·검색 흐름 (FK 관계 아님)  |  COSINE은 입력과 저장 데이터의 dense_vector 비교  |  SQL Formatting은 Milvus 직접 조회 없음</text>
+</svg>

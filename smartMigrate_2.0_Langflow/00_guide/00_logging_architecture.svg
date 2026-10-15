@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
+<title id="title">SmartMigrate · 공통 DB 로깅 아키텍처</title><desc id="desc">00A에서 공통 DB 핸들러 등록. 컴포넌트는 Python logging과 extra로 이벤트 전달. 핸들러가 NEXT_MIG_LOG에 저장.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs>
+<rect width="1920" height="1080" fill="#ffffff"/>
+<text x="55" y="58" fill="#243447" font-size="30" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SmartMigrate · 공통 DB 로깅 아키텍처</text>
+<text x="55" y="105" fill="#516176" font-size="27" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">로깅용 DB 설정은 시작 단계에 모으고, 각 컴포넌트는 메시지와 작업 이벤트만 전달</text>
+<rect x="60" y="162" width="400" height="162" rx="14" fill="#f8fafc" stroke="#246a89"/>
+<text x="80" y="202" fill="#246a89" font-size="26" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">01  시작 · 00A</text>
+<text x="80" y="246" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">DB 접속 정보 · system_schema 설정</text>
+<text x="80" y="279" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">SmartMigrateDBHandler 등록</text>
+<path d="M 469 242 H 519" fill="none" stroke="#8292a5" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="530" y="162" width="400" height="162" rx="14" fill="#f8fafc" stroke="#6554a4"/>
+<text x="550" y="202" fill="#6554a4" font-size="26" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">02  각 컴포넌트</text>
+<text x="550" y="246" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">Python 표준 logging 호출</text>
+<text x="550" y="279" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">메시지 + extra.workflow_log 전달</text>
+<path d="M 939 242 H 989" fill="none" stroke="#8292a5" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="1000" y="162" width="400" height="162" rx="14" fill="#f8fafc" stroke="#357855"/>
+<text x="1020" y="202" fill="#357855" font-size="26" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">03  공통 DB 핸들러</text>
+<text x="1020" y="246" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">LogRecord → 이벤트·DB 컬럼 변환</text>
+<text x="1020" y="279" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">emit() → _event() → _insert_row()</text>
+<path d="M 1409 242 H 1459" fill="none" stroke="#8292a5" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="1470" y="162" width="390" height="162" rx="14" fill="#f8fafc" stroke="#9c6020"/>
+<text x="1490" y="202" fill="#9c6020" font-size="26" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">04  Oracle 로그 저장</text>
+<text x="1490" y="246" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">NEXT_MIG_LOG · INSERT / COMMIT</text>
+<text x="1490" y="279" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">SQL·프롬프트는 CLOB으로 저장</text>
+<text x="60" y="373" fill="#18334e" font-size="26" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">코드로 보는 역할 분리</text>
+<rect x="60" y="401" width="500" height="478" rx="14" fill="#f5f7fb" stroke="#d8e0eb"/>
+<text x="82" y="438" fill="#246a89" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">00A · 핸들러 준비</text>
+<text x="82" y="469" fill="#516176" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">워크플로우 시작 시 등록 · 기존 공통 핸들러 교체</text>
+<text x="82" y="510" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">logger = logging.getLogger(</text>
+<text x="82" y="533" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">    &quot;smartmigrate.workflow&quot;</text>
+<text x="82" y="556" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">)</text>
+<text x="82" y="579" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">logger.setLevel(logging.DEBUG)</text>
+<text x="82" y="602" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">logger.propagate = False</text>
+<text x="82" y="625" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace"></text>
+<text x="82" y="648" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">handler = SmartMigrateDBHandler(</text>
+<text x="82" y="671" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">    self._db_config()</text>
+<text x="82" y="694" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">)</text>
+<text x="82" y="717" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">logger.addHandler(handler)</text>
+<text x="82" y="740" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace"></text>
+<text x="82" y="763" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace"># 핸들러가 DB 연결을 보유</text>
+<text x="82" y="786" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace"># 각 컴포넌트의 로깅 설정 중복 제거</text>
+<rect x="590" y="401" width="680" height="478" rx="14" fill="#f5f7fb" stroke="#d8e0eb"/>
+<text x="612" y="438" fill="#6554a4" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">각 컴포넌트 · 이벤트 발행</text>
+<text x="612" y="469" fill="#516176" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">같은 이름의 Logger 호출 · 로깅용 DB 접속/INSERT 불필요</text>
+<text x="612" y="510" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">logger = logging.getLogger(&quot;smartmigrate.workflow&quot;)</text>
+<text x="612" y="533" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">logger.info(</text>
+<text x="612" y="556" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">    &quot;TO-BE SQL 생성 완료&quot;,</text>
+<text x="612" y="579" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">    extra={&quot;workflow_log&quot;: [</text>
+<text x="612" y="602" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">        &quot;SQL_SEQ = 42&quot;,    # 작업 식별자</text>
+<text x="612" y="625" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">        &quot;SQL_CONVERSION&quot;, # 도메인</text>
+<text x="612" y="648" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">        &quot;TOBE_SQL&quot;,       # 로그 종류</text>
+<text x="612" y="671" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">        &quot;INFO&quot;,           # 로그 수준</text>
+<text x="612" y="694" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">        &quot;GENERATE_TOBE&quot;,  # 처리 단계</text>
+<text x="612" y="717" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">        &quot;SUCCESS&quot;,        # 상태</text>
+<text x="612" y="740" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">        0,                # 재시도 횟수</text>
+<text x="612" y="763" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">        generated_sql,    # 상세 본문 (선택)</text>
+<text x="612" y="786" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">    ]}</text>
+<text x="612" y="809" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">)</text>
+<rect x="1300" y="401" width="560" height="478" rx="14" fill="#f5f7fb" stroke="#d8e0eb"/>
+<text x="1322" y="438" fill="#357855" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SmartMigrateDBHandler · DB 저장</text>
+<text x="1322" y="469" fill="#516176" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">실제 구현의 핵심 발췌 · row 필드 매핑은 축약</text>
+<text x="1322" y="510" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">def emit(self, record):</text>
+<text x="1322" y="533" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">    event = self._event(record)</text>
+<text x="1322" y="556" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">    row = {</text>
+<text x="1322" y="579" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">        # 식별자·단계·상태 등 필드 매핑</text>
+<text x="1322" y="602" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">        # message ← record.getMessage()</text>
+<text x="1322" y="625" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">        # generate_sql ← event 상세 본문</text>
+<text x="1322" y="648" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">    }</text>
+<text x="1322" y="671" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">    self._insert_row(row)</text>
+<text x="1322" y="694" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace"></text>
+<text x="1322" y="717" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace"># _insert_row() 내부</text>
+<text x="1322" y="740" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">cursor.setinputsizes(</text>
+<text x="1322" y="763" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">    generate_sql=oracledb.DB_TYPE_CLOB</text>
+<text x="1322" y="786" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">)</text>
+<text x="1322" y="809" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">cursor.execute(INSERT_SQL, row)</text>
+<text x="1322" y="832" fill="#243447" font-size="18" font-weight="normal" font-family="Consolas, monospace">self.connection.commit()</text>
+<rect x="60" y="909" width="1800" height="112" rx="14" fill="#e7edf5" stroke="#e7edf5"/>
+<text x="85" y="944" fill="#18334e" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">NEXT_MIG_LOG</text>
+<text x="340" y="944" fill="#243447" font-size="23" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">작업 식별자 · 도메인 · 로그 종류 · 단계 · 상태 · 재시도 횟수</text>
+<text x="85" y="985" fill="#243447" font-size="22" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">MESSAGE ← 로그 메시지</text>
+<text x="540" y="985" fill="#243447" font-size="22" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">GENERATE_SQL (CLOB) ← SQL / 프롬프트 등 상세 본문</text>
+<text x="1420" y="985" fill="#243447" font-size="22" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">LOG_ID · 시각 자동 구성</text>
+<text x="60" y="1057" fill="#516176" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">같은 Python 프로세스의 공통 Logger / Handler 사용  |  Python 표준 logging + extra  |  DB 연결·컬럼 매핑·저장을 한곳에서 처리</text>
+</svg>

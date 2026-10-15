@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
+<title id="title">SmartMigrate · Correct SQL 입력과 후속 실행</title><desc id="desc">DB Migration과 SQL Conversion의 보정 SQL 저장 상태, 다음 실행 생성 단계, 유사 실패 작업 REF_SEQ 자동 등록 흐름.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs>
+<rect width="1920" height="1080" fill="#ffffff"/>
+<text x="55" y="58" fill="#243447" font-size="30" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SmartMigrate · Correct SQL 입력과 후속 실행</text>
+<text x="55" y="103" fill="#516176" font-size="25" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">확인한 SQL을 저장해 해당 단계를 완료 처리하고, 다음 실행은 저장된 상태에 맞는 단계부터 재개</text>
+<text x="60" y="156" fill="#18334e" font-size="27" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">01  SQL을 입력한 기준 작업</text>
+<text x="1205" y="156" fill="#6554a4" font-size="26" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">02  유사 후보 작업 · SQL Conversion 전용</text>
+<text x="80" y="194" fill="#516176" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">입력 SQL · 확인 의미</text>
+<text x="370" y="194" fill="#516176" font-size="19" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">저장 후 상태</text>
+<text x="650" y="194" fill="#516176" font-size="22" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">다음 실행 · Generate / Reuse</text>
+<rect x="60" y="212" width="1100" height="248" rx="12" fill="#f6f9fc" stroke="#cbdce6"/>
+<rect x="60" y="480" width="1100" height="419" rx="12" fill="#f6f4fb" stroke="#ded6ee"/>
+<text x="80" y="247" fill="#246a89" font-size="27" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">DB Migration</text>
+<text x="80" y="515" fill="#6554a4" font-size="27" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SQL Conversion</text>
+<rect x="80" y="263" width="250" height="90" rx="12" fill="#ffffff" stroke="#246a89"/>
+<rect x="370" y="263" width="235" height="90" rx="12" fill="#ffffff" stroke="#246a89"/>
+<rect x="650" y="263" width="490" height="90" rx="12" fill="#ffffff" stroke="#246a89"/>
+<text x="95" y="297" fill="#246a89" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">MIG_SQL</text>
+<text x="95" y="329" fill="#516176" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">INSERT 완료를 사람이 확인</text>
+<text x="384" y="315" fill="#246a89" font-size="22" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">FAIL-TEST</text>
+<path d="M 337 307 H 361" fill="none" stroke="#246a89" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M 612 307 H 641" fill="none" stroke="#246a89" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="665" y="294" fill="#246a89" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">LLM: Generate VERIFY_SQL</text>
+<text x="665" y="325" fill="#246a89" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">System: Build VERIFY2_SQL</text>
+<rect x="80" y="358" width="250" height="90" rx="12" fill="#ffffff" stroke="#246a89"/>
+<rect x="370" y="358" width="235" height="90" rx="12" fill="#ffffff" stroke="#246a89"/>
+<rect x="650" y="358" width="490" height="90" rx="12" fill="#ffffff" stroke="#246a89"/>
+<text x="95" y="392" fill="#246a89" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">VERIFY_SQL</text>
+<text x="95" y="424" fill="#516176" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">검증 완료를 사람이 확인</text>
+<text x="384" y="410" fill="#246a89" font-size="22" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">PASS</text>
+<path d="M 337 402 H 361" fill="none" stroke="#246a89" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M 612 402 H 641" fill="none" stroke="#246a89" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="665" y="389" fill="#246a89" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">Migration Complete</text>
+<text x="665" y="420" fill="#516176" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">추가 SQL 생성 없음</text>
+<rect x="80" y="535" width="250" height="90" rx="12" fill="#ffffff" stroke="#6554a4"/>
+<rect x="370" y="535" width="235" height="90" rx="12" fill="#ffffff" stroke="#6554a4"/>
+<rect x="650" y="535" width="490" height="90" rx="12" fill="#ffffff" stroke="#6554a4"/>
+<text x="95" y="569" fill="#6554a4" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">TO_SQL (TOBE)</text>
+<text x="95" y="601" fill="#516176" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">변환 SQL 확인</text>
+<text x="384" y="587" fill="#6554a4" font-size="22" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">FAIL-BIND</text>
+<path d="M 337 579 H 361" fill="none" stroke="#6554a4" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M 612 579 H 641" fill="none" stroke="#6554a4" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="665" y="560" fill="#6554a4" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">LLM: Generate BIND_SQL</text>
+<text x="665" y="587" fill="#6554a4" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">System: Get BIND_SET</text>
+<text x="665" y="614" fill="#6554a4" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">LLM: Generate TEST_SQL</text>
+<rect x="80" y="650" width="250" height="90" rx="12" fill="#ffffff" stroke="#6554a4"/>
+<rect x="370" y="650" width="235" height="90" rx="12" fill="#ffffff" stroke="#6554a4"/>
+<rect x="650" y="650" width="490" height="90" rx="12" fill="#ffffff" stroke="#6554a4"/>
+<text x="95" y="684" fill="#6554a4" font-size="20" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">BIND_SQL + BIND_SET</text>
+<text x="95" y="716" fill="#516176" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">두 값을 함께 업데이트 · 필수</text>
+<text x="384" y="702" fill="#6554a4" font-size="22" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">FAIL-TEST</text>
+<path d="M 337 694 H 361" fill="none" stroke="#6554a4" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M 612 694 H 641" fill="none" stroke="#6554a4" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="665" y="681" fill="#6554a4" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">LLM: Generate TEST_SQL</text>
+<text x="665" y="712" fill="#516176" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">Reuse: BIND_SQL + BIND_SET</text>
+<rect x="80" y="765" width="250" height="90" rx="12" fill="#ffffff" stroke="#6554a4"/>
+<rect x="370" y="765" width="235" height="90" rx="12" fill="#ffffff" stroke="#6554a4"/>
+<rect x="650" y="765" width="490" height="90" rx="12" fill="#ffffff" stroke="#6554a4"/>
+<text x="95" y="799" fill="#6554a4" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">TEST_SQL</text>
+<text x="95" y="831" fill="#516176" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">Conversion 검증 완료 확인</text>
+<text x="384" y="817" fill="#6554a4" font-size="22" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">PASS-CONVERSION</text>
+<path d="M 337 809 H 361" fill="none" stroke="#6554a4" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M 612 809 H 641" fill="none" stroke="#6554a4" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="665" y="796" fill="#6554a4" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">LLM: Generate TUNED_TO_SQL</text>
+<text x="665" y="827" fill="#516176" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">Save: TUNED_RESULT (튜닝 내역)</text>
+<rect x="1205" y="212" width="655" height="95" rx="12" fill="#f6f4fb" stroke="#ded6ee"/>
+<text x="1225" y="246" fill="#6554a4" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">Correct SQL 저장 → 해당 종류 VectorDB 동기화</text>
+<text x="1225" y="279" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">예: SQL_SEQ = 42 · TO_SQL / BIND_SQL / TEST_SQL</text>
+<rect x="1205" y="335" width="655" height="109" rx="12" fill="#f6f4fb" stroke="#ded6ee"/>
+<text x="1225" y="369" fill="#6554a4" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">현재 AS-IS SQL ↔ 후보 AS-IS SQL</text>
+<text x="1225" y="402" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">COSINE 검색 · 유사도가 엄격히 80% 초과인 후보</text>
+<rect x="1205" y="472" width="655" height="171" rx="12" fill="#f6f4fb" stroke="#ded6ee"/>
+<text x="1225" y="505" fill="#6554a4" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">저장한 SQL 종류와 후보 실패 단계 일치</text>
+<rect x="1225" y="520" width="615" height="31" fill="#e9e4f4"/>
+<text x="1240" y="543" fill="#243447" font-size="21" font-weight="normal" font-family="Consolas, monospace">TO_SQL</text>
+<text x="1450" y="543" fill="#6554a4" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">→</text>
+<text x="1500" y="543" fill="#243447" font-size="21" font-weight="normal" font-family="Consolas, monospace">FAIL-TOBE</text>
+<rect x="1225" y="555" width="615" height="31" fill="#ffffff"/>
+<text x="1240" y="578" fill="#243447" font-size="21" font-weight="normal" font-family="Consolas, monospace">BIND_SQL</text>
+<text x="1450" y="578" fill="#6554a4" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">→</text>
+<text x="1500" y="578" fill="#243447" font-size="21" font-weight="normal" font-family="Consolas, monospace">FAIL-BIND</text>
+<rect x="1225" y="590" width="615" height="31" fill="#e9e4f4"/>
+<text x="1240" y="613" fill="#243447" font-size="21" font-weight="normal" font-family="Consolas, monospace">TEST_SQL</text>
+<text x="1450" y="613" fill="#6554a4" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">→</text>
+<text x="1500" y="613" fill="#243447" font-size="21" font-weight="normal" font-family="Consolas, monospace">FAIL-TEST</text>
+<rect x="1205" y="671" width="655" height="116" rx="12" fill="#f6f4fb" stroke="#ded6ee"/>
+<text x="1225" y="705" fill="#6554a4" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">일치 후보에 REF_SEQ = 42 자동 등록</text>
+<text x="1225" y="738" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">RETRY_COUNT = 0 · 후보의 FAIL 상태는 유지</text>
+<text x="1225" y="766" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">기준 작업 자신 제외 · 후보별 추가 승인 없이 반영</text>
+<rect x="1205" y="815" width="655" height="102" rx="12" fill="#f6f4fb" stroke="#ded6ee"/>
+<text x="1225" y="849" fill="#6554a4" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">별도 재실행 요청 → 실패 단계에서 생성 재개</text>
+<text x="1225" y="882" fill="#243447" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">REF_SEQ의 Correct SQL을 생성 힌트로 사용</text>
+<path d="M 1532 312 V 329" fill="none" stroke="#6554a4" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M 1532 449 V 466" fill="none" stroke="#6554a4" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M 1532 648 V 665" fill="none" stroke="#6554a4" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M 1532 792 V 809" fill="none" stroke="#6554a4" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="60" y="947" fill="#18334e" font-size="23" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">저장 공통: USER_EDITED = Y · RETRY_COUNT = 0 · 저장한 SQL 한 종류만 VectorDB 동기화</text>
+<text x="60" y="994" fill="#516176" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">저장·참조 등록과 실행은 별도  |  DB 상태로 재개 단계 결정  |  Migration은 유사 작업 자동 REF_SEQ 적용 없음</text>
+<text x="60" y="1038" fill="#516176" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">좌측 상태 = 보정한 기준 작업의 새 상태  /  우측 FAIL 단계 = 참조 SQL을 연결할 유사 후보의 현재 상태</text>
+</svg>

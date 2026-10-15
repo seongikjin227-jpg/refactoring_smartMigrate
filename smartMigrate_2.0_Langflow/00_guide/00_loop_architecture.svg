@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="900" viewBox="0 0 900 900" role="img" aria-labelledby="title desc">
+<title id="title">18B · 동적 큐잉</title>
+<desc id="desc">작업 사이 DB 재조회, 중복 제외, 단계와 우선순위에 따른 남은 실행 큐 편입.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#8292a5"/></marker></defs>
+<rect width="900" height="900" fill="white"/>
+<text x="42" y="70" fill="#18334e" font-size="42" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">18B · 동적 큐잉</text>
+<text x="42" y="115" fill="#516176" font-size="28" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">새 실행 대상을 남은 큐에 자동 편입</text>
+<text x="42" y="160" fill="#18334e" font-size="26" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">18A 작업 목록 → list[Data] → ctx 실행 큐</text>
+<rect x="42" y="178" width="816" height="132" rx="14" fill="#eef2f7"/>
+<text x="62" y="214" fill="#243447" font-size="22" font-weight="normal" font-family="Consolas, monospace">data_list = self._validate_data(self.data)</text>
+<text x="62" y="248" fill="#243447" font-size="22" font-weight="normal" font-family="Consolas, monospace">self.update_ctx({f&quot;{self._id}_data&quot;: data_list,</text>
+<text x="62" y="282" fill="#243447" font-size="22" font-weight="normal" font-family="Consolas, monospace">                 f&quot;{self._id}_index&quot;: 0})</text>
+<rect x="42" y="338" width="816" height="83" rx="14" fill="#f5f7fb" stroke="#246a89" stroke-width="2"/>
+<text x="62" y="370" fill="#246a89" font-size="29" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">① DB 재조회</text>
+<text x="64" y="404" fill="#516176" font-size="23" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">다음 작업 실행 전, 현재 실행 가능 대상 확인</text>
+<path d="M 450 425 V 434" fill="none" stroke="#8292a5" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="42" y="439" width="816" height="83" rx="14" fill="#f5f7fb" stroke="#6554a4" stroke-width="2"/>
+<text x="62" y="471" fill="#6554a4" font-size="29" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">② 중복 제외</text>
+<text x="64" y="505" fill="#516176" font-size="23" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">남은 큐의 같은 단계·작업 번호와 비교</text>
+<path d="M 450 526 V 535" fill="none" stroke="#8292a5" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="42" y="540" width="816" height="83" rx="14" fill="#f5f7fb" stroke="#357855" stroke-width="2"/>
+<text x="62" y="572" fill="#357855" font-size="29" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">③ 큐에 추가</text>
+<text x="64" y="606" fill="#516176" font-size="23" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">단계 → 우선순위 순으로 미실행 구간에 삽입</text>
+<text x="42" y="678" fill="#18334e" font-size="26" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">예시 · Conversion 직전 새 Migration 발견</text>
+<rect x="42" y="710" width="235" height="62" rx="14" fill="#e7edf5" stroke="#516176" stroke-width="2"/>
+<text x="62" y="749.6666666666666" fill="#516176" font-size="26" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">완료한 작업</text>
+<rect x="317" y="710" width="235" height="62" rx="14" fill="#e3f2f8" stroke="#246a89" stroke-width="2"/>
+<text x="337" y="749.6666666666666" fill="#246a89" font-size="26" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">새 Migration</text>
+<rect x="592" y="710" width="266" height="62" rx="14" fill="#eeeaf7" stroke="#6554a4" stroke-width="2"/>
+<text x="612" y="749.6666666666666" fill="#6554a4" font-size="26" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">Conversion</text>
+<path d="M 284 741 H 306" fill="none" stroke="#8292a5" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M 560 741 H 580" fill="none" stroke="#8292a5" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="42" y="811" fill="#516176" font-size="23" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">완료 구간 유지</text>
+<text x="317" y="811" fill="#246a89" font-size="23" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">↑ 다음 실행 위치부터 추가</text>
+<text x="42" y="864" fill="#516176" font-size="24" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">작업 사이 재조회 · 큐가 소진되면 종료</text>
+</svg>

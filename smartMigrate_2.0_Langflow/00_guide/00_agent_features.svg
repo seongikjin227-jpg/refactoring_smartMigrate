@@ -1,38 +1,43 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
-<title id="title">SmartMigrate · 주요 기능</title><desc id="desc">자연어 요청을 Management와 작업 실행으로 구분. 실행별 생성 SQL과 실제 검증 기준을 정리한 16:9 장표.</desc>
+<title id="title">SmartMigrate · 주요 기능</title><desc id="desc">자연어 요청을 일반 대화, Management, 작업 실행으로 구분. 템플릿 제공, 매핑룰 등록과 실행별 생성 SQL 및 검증 기준을 정리한 16:9 장표.</desc>
 <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"/></marker></defs>
 <rect width="1920" height="1080" fill="#ffffff"/>
 <text x="55" y="58" fill="#243447" font-size="30" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">SmartMigrate · 주요 기능</text>
 <text x="55" y="99" fill="#516176" font-size="26" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">자연어로 작업을 관리하고, 매핑 기반 SQL 생성부터 실행·검증까지 연결</text>
 <rect x="60" y="126" width="1800" height="64" rx="14" fill="#18334e" stroke="#18334e"/>
 <text x="90" y="167" fill="#fff" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">사용자 요청</text>
-<text x="300" y="167" fill="#fff" font-size="23" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">“상태·SQL·로그를 보여줘”</text>
-<text x="800" y="167" fill="#9cd8ee" font-size="23" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">요청 분류  →</text>
-<text x="1120" y="167" fill="#fff" font-size="23" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">“Migration / Conversion 작업을 실행해줘”</text>
+<text x="300" y="167" fill="#fff" font-size="26" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">요청 분류  →  일반 대화 / Management / 작업 실행</text>
+<text x="1190" y="167" fill="#9cd8ee" font-size="22" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">사용자의 목적에 따라 세 경로로 연결</text>
 <path d="M 960 190 V 212 H 320 V 235" fill="none" stroke="#246a89" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M 960 212 H 605 V 395 H 320 V 410" fill="none" stroke="#246a89" stroke-width="2.5" marker-end="url(#arrow)"/>
 <path d="M 960 212 H 1245 V 235" fill="none" stroke="#6554a4" stroke-width="2.5" marker-end="url(#arrow)"/>
-<rect x="60" y="235" width="520" height="690" rx="14" fill="white" stroke="#d8e0eb"/>
+<rect x="60" y="235" width="520" height="150" rx="14" fill="#f3f8fb" stroke="#d8e0eb"/>
+<rect x="60" y="410" width="520" height="515" rx="14" fill="white" stroke="#d8e0eb"/>
 <rect x="630" y="235" width="1230" height="690" rx="14" fill="white" stroke="#d8e0eb"/>
-<text x="85" y="278" fill="#246a89" font-size="30" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">01  Management</text>
-<text x="85" y="310" fill="#516176" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">현황 조회 · 데이터 변경 · 검토 자료 관리</text>
-<text x="655" y="278" fill="#6554a4" font-size="30" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">02  작업 실행 요청</text>
+<text x="85" y="278" fill="#246a89" font-size="30" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">01  일반 대화</text>
+<text x="85" y="312" fill="#516176" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">기능 소개 · 사용 방법 · 요청 예시 안내</text>
+<text x="85" y="348" fill="#246a89" font-size="24" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">매핑정의서 템플릿 제공</text>
+<text x="85" y="374" fill="#516176" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">Super Agent가 XLSX 생성 · 다운로드 제공</text>
+<text x="85" y="450" fill="#246a89" font-size="30" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">02  Management</text>
+<text x="85" y="480" fill="#516176" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">현황 조회 · 매핑룰 등록 · 검토 자료 관리</text>
+<text x="655" y="278" fill="#6554a4" font-size="30" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">03  작업 실행 요청</text>
 <text x="655" y="310" fill="#516176" font-size="21" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">단건 / 도메인 / 전체 workflow  ·  대상과 선행 조건 확인 후 실행</text>
-<rect x="80" y="337" width="480" height="120" rx="10" fill="#eef6fa" stroke="#d8e7ef"/>
-<text x="100" y="370" fill="#246a89" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">현황·결과 조회</text>
-<text x="100" y="402" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">대시보드 · 진행 상태 · 잔여 작업</text>
-<text x="100" y="431" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">생성 SQL · 검증 결과 · 실패 원인 / 로그</text>
-<rect x="80" y="475" width="480" height="120" rx="10" fill="#eef6fa" stroke="#d8e7ef"/>
-<text x="100" y="508" fill="#246a89" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">매핑·작업 정보 관리</text>
-<text x="100" y="540" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">테이블 / 컬럼 매핑 SQL 생성·적용</text>
-<text x="100" y="569" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">사용 여부 · 우선순위 · 재시도 준비</text>
-<rect x="80" y="613" width="480" height="120" rx="10" fill="#eef6fa" stroke="#d8e7ef"/>
-<text x="100" y="646" fill="#246a89" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">Correct SQL 보정</text>
-<text x="100" y="678" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">사람이 검토한 단계 SQL 저장</text>
-<text x="100" y="707" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">완료 단계 반영 · 해당 SQL 검색 자료 동기화</text>
-<rect x="80" y="751" width="480" height="120" rx="10" fill="#eef6fa" stroke="#d8e7ef"/>
-<text x="100" y="784" fill="#246a89" font-size="25" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">참고 규칙·사례 관리</text>
-<text x="100" y="816" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">RAG Guide 등록 / 수정 · VectorDB 동기화</text>
-<text x="100" y="845" fill="#243447" font-size="20" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">유사 실패 SQL 검색 · 참고 SQL 지정</text>
+<rect x="80" y="496" width="480" height="90" rx="10" fill="#eef6fa" stroke="#d8e7ef"/>
+<text x="100" y="523" fill="#246a89" font-size="22" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">현황·결과 조회</text>
+<text x="100" y="547" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">대시보드 · 진행 상태 · 잔여 작업</text>
+<text x="100" y="571" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">생성 SQL · 검증 결과 · 실패 원인 / 로그</text>
+<rect x="80" y="594" width="480" height="90" rx="10" fill="#eef6fa" stroke="#d8e7ef"/>
+<text x="100" y="621" fill="#246a89" font-size="22" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">매핑룰 등록·수정 / 작업 관리</text>
+<text x="100" y="645" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">테이블 / 컬럼 매핑 등록 · SQL 생성·적용</text>
+<text x="100" y="669" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">사용 여부 · 우선순위 · 재시도 준비</text>
+<rect x="80" y="692" width="480" height="90" rx="10" fill="#eef6fa" stroke="#d8e7ef"/>
+<text x="100" y="719" fill="#246a89" font-size="22" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">Correct SQL 보정</text>
+<text x="100" y="743" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">사람이 검토한 단계 SQL 저장</text>
+<text x="100" y="767" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">완료 단계 반영 · 해당 SQL 검색 자료 동기화</text>
+<rect x="80" y="790" width="480" height="90" rx="10" fill="#eef6fa" stroke="#d8e7ef"/>
+<text x="100" y="817" fill="#246a89" font-size="22" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">참고 규칙·사례 관리</text>
+<text x="100" y="841" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">RAG Guide 등록 / 수정 · VectorDB 동기화</text>
+<text x="100" y="865" fill="#243447" font-size="18" font-weight="normal" font-family="Segoe UI, Malgun Gothic, sans-serif">유사 실패 SQL 검색 · 참고 SQL 지정</text>
 <text x="85" y="908" fill="#246a89" font-size="21" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">조회·변경과 실제 작업 실행은 별도 요청</text>
 <text x="655" y="348" fill="#516176" font-size="20" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">실행 단계</text>
 <text x="855" y="348" fill="#516176" font-size="20" font-weight="bold" font-family="Segoe UI, Malgun Gothic, sans-serif">생성 SQL / 산출물</text>

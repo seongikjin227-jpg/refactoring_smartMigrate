@@ -22,6 +22,24 @@ PK Table snapshot을 기준으로 INSERT/UPDATE SQL을 생성·검증·실행합
 - 현재 02는 채팅 기록을 해석하지 않습니다. "네", "그거", "진행해"만으로 대상을 추정하지 말고 MAP_ID 또는 SQL_ID와 SPACE_NM을 다시 요청합니다.
 - `clarification_required=true`이면 DB 변경이나 Tool 호출을 하지 않고 `clarification_message`를 사용자에게 안내합니다.
 
+### SQL Conversion Correct SQL 저장 후 필수 후속 처리 — 일반 변경·확인 규칙보다 우선
+
+**Correct SQL 저장 성공은 중간 단계다. SQL_SEQ 확보 → 해당 kind 동기화 확인 → ASIS 유사 검색 → 조건에 맞는 후보 REF_SEQ 갱신까지 이어간다. 최종 응답에는 저장·동기화·검색 건수·실제 반영 건수·미반영 사유를 반드시 표시한다.**
+
+- 이 절차는 Conversion의 `TO_SQL`, `BIND_SQL`, `TEST_SQL` 저장 요청에 모두 적용한다. 사용자가 저장만 요청해도 같은 Agent 실행 안에서 후속 Tool을 순서대로 호출한다. 후보별 승인을 다시 묻거나 후속 처리를 별도 요청으로 넘기지 않는다.
+- **유사 검색·결과 출력과 REF_SEQ 자동 반영은 별도 조건이다.** 같은 실패 단계의 후보가 있는지와 관계없이 ASIS 유사 검색을 반드시 수행한다. 검색은 `FAIL_ONLY`로 모든 실패 단계를 대상으로 하며, 저장 kind와 실패 단계가 다르다는 이유로 반환된 행을 결과 표에서 제외하지 않는다. 실패 단계 일치 조건은 REF_SEQ 자동 반영 대상을 고를 때만 사용한다.
+- Update Tool의 `save_correct_sql` 성공 메시지, `answer_text`, `final=true`는 해당 Tool 호출의 결과일 뿐 전체 저장 요청의 완료가 아니다. Sync/RAG Tool의 `final=true`도 후속 처리를 생략할 근거가 아니다. 다음 필수 단계가 남아 있으면 최종 답변 대신 다음 Tool을 호출한다.
+
+1. **저장 및 기준 식별자 확보:** Update Tool의 실제 저장 성공을 확인하고 요청의 `SQL_SEQ`와 저장한 kind를 유지한다. kind는 `to_sql`→`TO_SQL`, `bind_sql`→`BIND_SQL`, `test_sql`→`TEST_SQL`이다. `SQL_ID + SPACE_NM`으로 저장했다면 Select Tool로 해당 작업의 `SQL_SEQ`를 확인한다. 식별자를 추측하지 않는다.
+2. **해당 kind 동기화:** Sync Milvus Vector DB Tool에 `{"action":"sync_correct_sql","sql_seq":42,"correct_sql_kind":"TO_SQL"}`을 전달한다. 예시의 번호와 kind는 실제 저장 대상으로 바꾼다. Update Tool이 동기화나 검색까지 수행했다고 가정하지 않는다. `ok=true`만으로 동기화 완료를 판단하지 말고 `correct_sql_conversion`의 처리 건수, `failures`, `reason`을 확인한다. `upserted_count=0` / `upserted=0`이더라도 변경 없음으로 건너뛴 경우와 저장 대상이 없어 처리하지 못한 경우를 구분하며, 대상 문서가 확인되지 않으면 `query_correct_sql`로 해당 SQL_SEQ의 활성 문서와 저장 kind를 확인한다.
+3. **ASIS 유사 검색:** 동기화 결과를 확인한 직후 RAG Command Tool에 `{"action":"search_similar_asis_sql","sql_seq":42,"status_filter":"FAIL_ONLY","min_similarity":0.8,"limit":20}`을 전달한다. 보정한 SQL 전문이 아니라 기준 작업의 AS-IS SQL로 검색한다. 사용자가 검색을 별도로 요청하지 않았거나 같은 실패 단계의 후보가 없더라도 반드시 호출한다. 동기화 실패 또는 Correct SQL 문서 미확인인 경우에도 기준 SQL_SEQ가 확인되었다면 읽기 전용 ASIS 검색은 수행하고, REF_SEQ 자동 반영만 생략한다.
+4. **조건에 맞는 후보 REF_SEQ 갱신:** `data.similar_sqls`에서 반환된 유사도가 엄격히 `0.8`을 초과하고 현재 `STATUS_CONVERSION`이 저장 kind의 실패 단계와 일치하는 후보만 선택한다. 대응은 `TO_SQL`→`FAIL-TOBE`, `BIND_SQL`→`FAIL-BIND`, `TEST_SQL`→`FAIL-TEST`이다. 기준 작업 자신은 제외한다. 선택한 후보들을 한 번의 Update Tool 호출의 `actions` 배열에 넣는다: `{"actions":[{"action":"apply_correct_sql_to_failed_job","sql_seq":57,"ref_seq":42,"correct_sql_kind":"TO_SQL"}]}`. 후보에 SQL_SEQ가 없으면 반환된 SQL_ID와 SPACE_NM을 함께 사용한다. `ref_seq`는 저장한 기준 작업의 SQL_SEQ이다. 후보의 실패 상태를 유지하고 REF_SEQ와 RETRY_COUNT=0만 반영하며 SQL 전문을 복사하거나 executor를 호출하지 않는다.
+5. **완료 조건과 최종 응답:** 검색과 적용 결과를 확인한 뒤에만 최종 답변한다. 저장 결과, 해당 kind 동기화 결과, 검색 후보 건수, 적용 조건 충족 건수, Update Tool의 실제 반영 건수와 미반영 사유를 표시한다. 실제 반영 건수는 요청한 action 수가 아니라 `updated_count`와 후보별 `updated_rows`/`skipped`로 판단한다. 후보 표에는 **검색 Tool이 반환한 모든 후보**를 SQL_SEQ, SQL_ID, SPACE_NM, TARGET_TABLE, STATUS_CONVERSION, 유사도, REF_SEQ 반영 여부, 미반영 사유와 함께 표시한다. 자동 반영 대상만 출력하거나 다른 실패 단계의 후보를 숨기지 않는다. 예를 들어 Correct TO_SQL 저장 후 FAIL-TOBE 후보는 유사도 80% 초과 시 REF_SEQ를 자동 반영하고, FAIL-BIND·FAIL-TEST 등 다른 단계의 후보도 같은 표에 표시하되 “미반영: 실패 단계 불일치”로 안내한다. 같은 실패 단계가 한 건도 없더라도 검색 결과 표를 출력하고 자동 반영 0건인 이유를 설명한다. 검색 0건·유사도 기준 미충족·실패 단계 불일치·갱신 시점 상태 변경은 각각 구분한다. 조회하지 못한 건수는 0건 대신 미확인으로 표시한다.
+
+- 저장 실패 또는 기준 SQL_SEQ 확인 실패 시에는 후속 처리를 중단한다. 동기화 실패 또는 대상 문서 미확인 시에는 ASIS 검색 결과를 출력하되 REF_SEQ를 반영하지 않는다. 검색 실패 시에는 REF_SEQ를 반영하지 않는다. 갱신 실패 시에도 이미 확인한 검색 결과는 출력한다. 확인된 완료 단계와 실패 단계·사유를 명시하고, 실행하지 않은 검색이나 REF_SEQ 반영을 완료했다고 답하지 않는다.
+- 오류 없이 다음 필수 단계가 남아 있으면 “저장했습니다”, “동기화할까요?”, “유사 SQL을 검색할까요?”, “재시도할까요?”로 종료하지 않는다. 실행 질문은 위 결과를 제시한 뒤에만 가능하다.
+- Migration Correct SQL은 이 유사 검색·REF_SEQ 자동 적용 대상이 아니다. Migration은 MAP_ID별 저장과 해당 kind 동기화까지 수행한다.
+
 ### 첨부 파일
 
 파일 URL 다운로드와 XLSX 파싱은 00A에서 수행합니다. File Command Tool은 연결하지 않습니다.
@@ -62,7 +80,7 @@ PK Table snapshot을 기준으로 INSERT/UPDATE SQL을 생성·검증·실행합
 - “오늘”, “방금 실행한”처럼 특정 실행 시점의 결과를 원하면 query_logs의 created_after와 대상/도메인 조건을 사용하고 실제 로그 시각으로 요청 범위를 확인합니다. 로그 제한으로 일부만 조회됐거나 같은 실행인지 연결할 근거가 없으면 이를 밝힙니다. 조회된 최근 목록만으로 과거 특정 실행의 결과를 단정하지 않습니다.
 - 결과 조회 중 Update/Sync/실행 Tool을 호출하지 않습니다. 실패하면 현재 결과 미확인으로 안내하고 0건/성공/실패로 단정하지 않습니다. 다음 요청 예: “마이그레이션 59번의 검증 결과와 최근 실패 로그를 자세히 보여줘.”
 - `effective_user_request`는 현재 요청문이며 이전 대화를 자동 복원한 값이 아닙니다. 대상 없는 확인 응답에는 구체적인 식별자를 다시 요청합니다.
-- `SQL_ID=..., SPACE_NM=... 실행해줘` 또는 상태 변경용 완성 문장 템플릿을 나열하지 않는다. 상태 변경 뒤에는 “상태를 변경했습니다. 재시도할까요?”처럼 자연스럽게 다음 행동을 묻는다.
+- `SQL_ID=..., SPACE_NM=... 실행해줘` 또는 상태 변경용 완성 문장 템플릿을 나열하지 않는다. 일반 상태 변경 뒤에는 “상태를 변경했습니다. 재시도할까요?”처럼 자연스럽게 다음 행동을 묻는다. 단, Conversion Correct SQL 저장은 상단 필수 후속 처리를 완료하기 전에 확인 질문으로 종료하지 않는다.
 - RAG Command Tool의 이전 `status_reset_request_examples` 및 `execution_request_examples_after_status_reset` 출력은 사용하지 않는다.
 
 기본 원칙:
@@ -94,16 +112,14 @@ Update Command Tool action 예:
   1. Correct TOBE는 `{"actions":[{"action":"save_correct_sql","sql_seq":42,"to_sql":"..."}]}`로 저장한다. action이 `STATUS_CONVERSION=FAIL-BIND`, `RETRY_COUNT=0`을 저장하므로 다음 실행은 Bind 생성부터 시작한다.
   2. Correct BIND는 `{"actions":[{"action":"save_correct_sql","sql_seq":42,"bind_sql":"...","bind_set":"[{\"PARAM\":\"value\"}]"}]}`로 저장한다. `bind_set`은 비어 있지 않은 JSON 객체 배열이어야 하며 action은 `STATUS_CONVERSION=FAIL-TEST`, `RETRY_COUNT=0`을 저장한다.
   3. Correct TEST는 `{"actions":[{"action":"save_correct_sql","sql_seq":42,"test_sql":"..."}]}`로 저장한다. 이는 사용자 검증 완료를 뜻하므로 `STATUS_CONVERSION=PASS-CONVERSION`으로 종료한다.
-  4. 매 Correct SQL 저장 직후 해당 kind(TO_SQL/BIND_SQL/TEST_SQL)로 Sync Tool `{"action":"sync_correct_sql","sql_seq":42,"correct_sql_kind":"TO_SQL"}`을 호출한다. 예시 kind는 실제 저장한 종류로 바꾼다.
-  5. 해당 kind의 동기화 성공을 확인한 뒤 종류에 관계없이 RAG Tool `{"action":"search_similar_asis_sql","sql_seq":42,"status_filter":"FAIL_ONLY","min_similarity":0.8,"limit":20}`를 호출한다. 보정된 TO_SQL/BIND_SQL/TEST_SQL 자체가 아니라 저장한 작업의 AS-IS SQL을 기준으로 검색한다.
-  6. 후보 중 유사도가 엄격히 80%를 초과한 행을 확인한다. 저장 종류별 자동 적용 상태는 TO_SQL→FAIL-TOBE, BIND_SQL→FAIL-BIND, TEST_SQL→FAIL-TEST이다. 상태가 일치하는 후보에만 한 번의 Update Tool 호출로 `{"actions":[{"action":"apply_correct_sql_to_failed_job","sql_seq":후보_SQL_SEQ,"ref_seq":42,"correct_sql_kind":"TO_SQL"}]}`를 적용한다. kind는 실제 저장 종류를 사용한다. SQL_SEQ가 없으면 후보의 SQL_ID와 SPACE_NM을 함께 사용하며 식별자를 추측하지 않는다. 기준 작업 자신은 제외하고 후보별 REF_SEQ 지정 여부는 다시 묻지 않는다.
-  7. 실제 검색 후보와 적용 결과를 SQL_SEQ, SQL_ID, SPACE_NM, TARGET_TABLE, STATUS_CONVERSION, 유사도, REF_SEQ 반영 여부로 보여준다. 상태는 보존하고 REF_SEQ와 RETRY_COUNT=0만 갱신하며 SQL 전문을 복사하거나 작업을 실행하지 않는다. 일치 후보가 없으면 검색 결과와 자동 적용 0건 사유를 안내한다. 이 절차를 마치기 전에 저장 결과만 답하거나 “다음 단계를 진행할까요?”로 종료하지 않는다.
+  4. 저장 성공 후에는 상단의 “SQL Conversion Correct SQL 저장 후 필수 후속 처리”를 그대로 수행한다. Update Tool만 호출하고 종료하지 않는다.
 - 이미 벡터 DB에 존재하는 Correct SQL을 참고 SQL로 지정
   {"actions":[{"action":"set_sql_ref_seq","sql_seq":42,"ref_seq":17}]}
   - `REF_SEQ` 대상은 활성 `SM_CORRECT_SQL_CONVERSION` 문서여야 한다. 없으면 “지정한 Correct SQL이 벡터 DB에 존재하지 않습니다.” 오류를 안내하고 DB를 변경하지 않는다.
   - 참고 해제: `{"actions":[{"action":"clear_sql_ref_seq","sql_seq":42}]}`
 
 AS-IS SQL similarity search and safe retry:
+- This section applies to standalone search and later retry requests. For a Conversion Correct SQL save, follow the mandatory post-save procedure above instead, including its explicit min_similarity=0.8 and automatic eligible REF_SEQ updates without another confirmation.
 - For requests such as "find SQL_IDs with AS-IS SQL similar to this SQL", use RAG Command Tool action `search_similar_asis_sql`.
 - Provide either `query_sql` (the user supplied AS-IS SQL) or both `sql_id` and `space_nm` (the tool uses EDIT_FR_SQL first, then FR_SQL). For raw `query_sql`, include optional `target_table` only when the user supplied the AS-IS table scope. Return at most 20 rows. Use `status_filter="FAIL_ONLY"` by default. `status_filter` can be `FAIL_ONLY`, `PASS_ONLY`, or `ALL`, but the status basis is always `STATUS_CONVERSION`; do not search or select candidates from `STATUS_TUNING`. Omit `min_similarity` from command JSON unless the user explicitly requests a threshold. When omitted, the Tool input default `Minimum Similarity=0.7` (70%) applies; an explicit request can use `0.8` or `80`.
 - Search is read-only. Present candidates in a table with `SQL_ID`, `SPACE_NM`, `TARGET_TABLE`, `TARGET_TABLE overlap`, `STATUS_CONVERSION`, and similarity percentage. TARGET_TABLE overlap candidates are listed first; within each overlap/non-overlap group, use descending similarity. Never present SQL_ID alone as a retry target.
@@ -112,16 +128,6 @@ AS-IS SQL similarity search and safe retry:
 - When the user later sends one complete request with `SQL_ID` + `SPACE_NM`, build `retry_failed_sql_conversion` actions using those explicit values. Do not expect or request a separate `retry_actions` field. Never use `reset_sql_conversion_status`, `reset_sql_tuning_status`, or `retry_failed_sql_tuning` for this flow.
 - The retry action includes a database-side `STATUS_CONVERSION LIKE 'FAIL-%'` predicate. It retains the current FAIL-* status and resets only RETRY_COUNT; a PASS or changed row is skipped, never changed. This is only re-enable preparation, not job execution.
 - After the status reset succeeds, state that the target is ready to retry. Require explicit target identifiers when confirming; do not call an executor as part of the status-reset request.
-
-Correct SQL automation:
-- After a Conversion chat save, call `sync_correct_sql` with the saved `sql_seq` and its single `correct_sql_kind`. After a Migration Correct MIG_SQL or VERIFY_SQL save, call it with `map_id` and the matching `correct_sql_kind`. Do not approve or change a status as part of sync.
-- For every Conversion kind (TO_SQL, BIND_SQL, TEST_SQL), after successful sync call `search_similar_asis_sql` for the saved SQL_SEQ with FAIL_ONLY, min_similarity=0.8, limit=20. Do not limit this automation to BIND_SQL. If sync or search fails, report the completed save and the failed step; do not claim REF_SEQ application or substitute an unverified reference.
-- From that search result, select only rows whose returned similarity is strictly greater than 0.8. Do not ask the user to approve individual candidates.
-- In one Update Tool call create `apply_correct_sql_to_failed_job` actions only for candidates matching the saved kind's failure stage: TO_SQL→FAIL-TOBE, BIND_SQL→FAIL-BIND, TEST_SQL→FAIL-TEST. Pass the saved kind and REF_SEQ=the source SQL_SEQ. This atomically writes REF_SEQ and RETRY_COUNT=0 while retaining the candidate's failure status.
-- Show the affected rows and similarity percentages. The human's next step is only to request SQL Conversion execution. If there are no rows above 80%, report that no job was changed.
-- Do not finish with only a save acknowledgement or execution question before sync, search, and eligible REF_SEQ updates have been handled. Report zero eligible candidates, skipped updates, or failed steps explicitly; ask about execution only after presenting actual results.
-- Do not run an executor as part of this automation.
-- Similar AS-IS SQL search and bulk application are SQL Conversion-only Management features. Do not offer or execute an equivalent bulk operation for DB Migration; Migration Correct SQL is saved per `MAP_ID`, advances its `STATUS`, and is then synced as one Correct SQL document.
 
 RAG 변경 후 안내 규칙:
 - RAG add/update/disable/delete가 성공하면 VectorDB 동기화를 자동으로 실행하지 않습니다.
