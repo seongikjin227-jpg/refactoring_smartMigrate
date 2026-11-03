@@ -1,0 +1,366 @@
+{
+  "results": [
+    {
+      "key": "a",
+      "width": 1280,
+      "height": 800,
+      "pageHeight": 5613,
+      "horizontalOverflow": false,
+      "fontLoaded": true,
+      "sections": [
+        {
+          "id": "origin",
+          "visible": true
+        },
+        {
+          "id": "workflow",
+          "visible": true
+        },
+        {
+          "id": "architecture",
+          "visible": true
+        },
+        {
+          "id": "conversion",
+          "visible": true
+        },
+        {
+          "id": "validation",
+          "visible": true
+        },
+        {
+          "id": "dify",
+          "visible": true
+        },
+        {
+          "id": "expansion",
+          "visible": true
+        }
+      ],
+      "missingAnchors": [],
+      "clipped": []
+    },
+    {
+      "key": "a",
+      "width": 1440,
+      "height": 900,
+      "pageHeight": 5574,
+      "horizontalOverflow": false,
+      "fontLoaded": true,
+      "sections": [
+        {
+          "id": "origin",
+          "visible": true
+        },
+        {
+          "id": "workflow",
+          "visible": true
+        },
+        {
+          "id": "architecture",
+          "visible": true
+        },
+        {
+          "id": "conversion",
+          "visible": true
+        },
+        {
+          "id": "validation",
+          "visible": true
+        },
+        {
+          "id": "dify",
+          "visible": true
+        },
+        {
+          "id": "expansion",
+          "visible": true
+        }
+      ],
+      "missingAnchors": [],
+      "clipped": []
+    },
+    {
+      "key": "a",
+      "width": 1920,
+      "height": 1080,
+      "pageHeight": 5595,
+      "horizontalOverflow": false,
+      "fontLoaded": true,
+      "sections": [
+        {
+          "id": "origin",
+          "visible": true
+        },
+        {
+          "id": "workflow",
+          "visible": true
+        },
+        {
+          "id": "architecture",
+          "visible": true
+        },
+        {
+          "id": "conversion",
+          "visible": true
+        },
+        {
+          "id": "validation",
+          "visible": true
+        },
+        {
+          "id": "dify",
+          "visible": true
+        },
+        {
+          "id": "expansion",
+          "visible": true
+        }
+      ],
+      "missingAnchors": [],
+      "clipped": []
+    },
+    {
+      "key": "b",
+      "width": 1280,
+      "height": 800,
+      "pageHeight": 5257,
+      "horizontalOverflow": false,
+      "fontLoaded": true,
+      "sections": [
+        {
+          "id": "architecture",
+          "visible": true
+        },
+        {
+          "id": "origin",
+          "visible": true
+        },
+        {
+          "id": "workflow",
+          "visible": true
+        },
+        {
+          "id": "conversion",
+          "visible": true
+        },
+        {
+          "id": "validation",
+          "visible": true
+        },
+        {
+          "id": "dify",
+          "visible": true
+        },
+        {
+          "id": "expansion",
+          "visible": true
+        }
+      ],
+      "missingAnchors": [],
+      "clipped": []
+    },
+    {
+      "key": "b",
+      "width": 1440,
+      "height": 900,
+      "pageHeight": 5194,
+      "horizontalOverflow": false,
+      "fontLoaded": true,
+      "sections": [
+        {
+          "id": "architecture",
+          "visible": true
+        },
+        {
+          "id": "origin",
+          "visible": true
+        },
+        {
+          "id": "workflow",
+          "visible": true
+        },
+        {
+          "id": "conversion",
+          "visible": true
+        },
+        {
+          "id": "validation",
+          "visible": true
+        },
+        {
+          "id": "dify",
+          "visible": true
+        },
+        {
+          "id": "expansion",
+          "visible": true
+        }
+      ],
+      "missingAnchors": [],
+      "clipped": []
+    },
+    {
+      "key": "b",
+      "width": 1920,
+      "height": 1080,
+      "pageHeight": 5194,
+      "horizontalOverflow": false,
+      "fontLoaded": true,
+      "sections": [
+        {
+          "id": "architecture",
+          "visible": true
+        },
+        {
+          "id": "origin",
+          "visible": true
+        },
+        {
+          "id": "workflow",
+          "visible": true
+        },
+        {
+          "id": "conversion",
+          "visible": true
+        },
+        {
+          "id": "validation",
+          "visible": true
+        },
+        {
+          "id": "dify",
+          "visible": true
+        },
+        {
+          "id": "expansion",
+          "visible": true
+        }
+      ],
+      "missingAnchors": [],
+      "clipped": []
+    },
+    {
+      "key": "c",
+      "width": 1280,
+      "height": 800,
+      "pageHeight": 6172,
+      "horizontalOverflow": false,
+      "fontLoaded": true,
+      "sections": [
+        {
+          "id": "origin",
+          "visible": true
+        },
+        {
+          "id": "conversion",
+          "visible": true
+        },
+        {
+          "id": "workflow",
+          "visible": true
+        },
+        {
+          "id": "architecture",
+          "visible": true
+        },
+        {
+          "id": "validation",
+          "visible": true
+        },
+        {
+          "id": "dify",
+          "visible": true
+        },
+        {
+          "id": "expansion",
+          "visible": true
+        }
+      ],
+      "missingAnchors": [],
+      "clipped": []
+    },
+    {
+      "key": "c",
+      "width": 1440,
+      "height": 900,
+      "pageHeight": 6085,
+      "horizontalOverflow": false,
+      "fontLoaded": true,
+      "sections": [
+        {
+          "id": "origin",
+          "visible": true
+        },
+        {
+          "id": "conversion",
+          "visible": true
+        },
+        {
+          "id": "workflow",
+          "visible": true
+        },
+        {
+          "id": "architecture",
+          "visible": true
+        },
+        {
+          "id": "validation",
+          "visible": true
+        },
+        {
+          "id": "dify",
+          "visible": true
+        },
+        {
+          "id": "expansion",
+          "visible": true
+        }
+      ],
+      "missingAnchors": [],
+      "clipped": []
+    },
+    {
+      "key": "c",
+      "width": 1920,
+      "height": 1080,
+      "pageHeight": 6063,
+      "horizontalOverflow": false,
+      "fontLoaded": true,
+      "sections": [
+        {
+          "id": "origin",
+          "visible": true
+        },
+        {
+          "id": "conversion",
+          "visible": true
+        },
+        {
+          "id": "workflow",
+          "visible": true
+        },
+        {
+          "id": "architecture",
+          "visible": true
+        },
+        {
+          "id": "validation",
+          "visible": true
+        },
+        {
+          "id": "dify",
+          "visible": true
+        },
+        {
+          "id": "expansion",
+          "visible": true
+        }
+      ],
+      "missingAnchors": [],
+      "clipped": []
+    }
+  ],
+  "controls": "agent tabs, keyboard tabs, native disclosure, anchors, comparison links, default entry",
+  "consoleErrors": []
+}

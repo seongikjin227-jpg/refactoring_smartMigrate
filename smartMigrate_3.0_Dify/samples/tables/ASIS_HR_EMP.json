@@ -1,0 +1,117 @@
+{
+  "columns": [
+    "EMPLOYEE_ID",
+    "FIRST_NAME",
+    "LAST_NAME",
+    "EMAIL",
+    "HIRE_DATE",
+    "JOB_ID",
+    "SALARY",
+    "DEPARTMENT_ID"
+  ],
+  "primary_key": [
+    "EMPLOYEE_ID"
+  ],
+  "rows": [
+    {
+      "EMPLOYEE_ID": 100,
+      "FIRST_NAME": "Mina",
+      "LAST_NAME": "Kim",
+      "EMAIL": "mina.kim@example.test",
+      "HIRE_DATE": "2024-01-01",
+      "JOB_ID": "AD_MGR",
+      "SALARY": 9000,
+      "DEPARTMENT_ID": 10
+    },
+    {
+      "EMPLOYEE_ID": 101,
+      "FIRST_NAME": "Joon",
+      "LAST_NAME": "Lee",
+      "EMAIL": "joon.lee@example.test",
+      "HIRE_DATE": "2024-01-02",
+      "JOB_ID": "IT_PROG",
+      "SALARY": 8000,
+      "DEPARTMENT_ID": 20
+    },
+    {
+      "EMPLOYEE_ID": 102,
+      "FIRST_NAME": "Sara",
+      "LAST_NAME": "Park",
+      "EMAIL": "sara.park@example.test",
+      "HIRE_DATE": "2024-01-03",
+      "JOB_ID": "SA_REP",
+      "SALARY": 6500,
+      "DEPARTMENT_ID": 30
+    },
+    {
+      "EMPLOYEE_ID": 103,
+      "FIRST_NAME": "Alex",
+      "LAST_NAME": "Choi",
+      "EMAIL": "alex.choi@example.test",
+      "HIRE_DATE": "2024-01-04",
+      "JOB_ID": "IT_PROG",
+      "SALARY": 7000,
+      "DEPARTMENT_ID": 20
+    },
+    {
+      "EMPLOYEE_ID": 104,
+      "FIRST_NAME": "Yuna",
+      "LAST_NAME": "Han",
+      "EMAIL": "yuna.han@example.test",
+      "HIRE_DATE": "2024-01-05",
+      "JOB_ID": "AD_ASST",
+      "SALARY": 4500,
+      "DEPARTMENT_ID": 10
+    },
+    {
+      "EMPLOYEE_ID": 105,
+      "FIRST_NAME": "Noah",
+      "LAST_NAME": "Lim",
+      "EMAIL": "noah.lim@example.test",
+      "HIRE_DATE": "2024-01-06",
+      "JOB_ID": "SA_REP",
+      "SALARY": 6000,
+      "DEPARTMENT_ID": 30
+    },
+    {
+      "EMPLOYEE_ID": 106,
+      "FIRST_NAME": "Emma",
+      "LAST_NAME": "Jung",
+      "EMAIL": "emma.jung@example.test",
+      "HIRE_DATE": "2024-01-07",
+      "JOB_ID": "IT_PROG",
+      "SALARY": 7500,
+      "DEPARTMENT_ID": 20
+    },
+    {
+      "EMPLOYEE_ID": 107,
+      "FIRST_NAME": "Liam",
+      "LAST_NAME": "Shin",
+      "EMAIL": "liam.shin@example.test",
+      "HIRE_DATE": "2024-01-08",
+      "JOB_ID": "SA_MGR",
+      "SALARY": 9500,
+      "DEPARTMENT_ID": 30
+    },
+    {
+      "EMPLOYEE_ID": 108,
+      "FIRST_NAME": "Sora",
+      "LAST_NAME": "Kang",
+      "EMAIL": "sora.kang@example.test",
+      "HIRE_DATE": "2024-01-09",
+      "JOB_ID": "AD_ASST",
+      "SALARY": 4800,
+      "DEPARTMENT_ID": 10
+    },
+    {
+      "EMPLOYEE_ID": 109,
+      "FIRST_NAME": "Ian",
+      "LAST_NAME": "Oh",
+      "EMAIL": "ian.oh@example.test",
+      "HIRE_DATE": "2024-01-10",
+      "JOB_ID": "IT_PROG",
+      "SALARY": 6800,
+      "DEPARTMENT_ID": 20
+    }
+  ]
+}

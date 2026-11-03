@@ -1,0 +1,496 @@
+{
+  "schema_version": 1,
+  "revision": 0,
+  "pending_action": null,
+  "last_target": null,
+  "last_request_id": null,
+  "tables": {
+    "ASIS_HR_DEPT": {
+      "columns": [
+        "DEPARTMENT_ID",
+        "DEPARTMENT_NAME"
+      ],
+      "primary_key": [
+        "DEPARTMENT_ID"
+      ],
+      "rows": [
+        {
+          "DEPARTMENT_ID": 10,
+          "DEPARTMENT_NAME": "Administration"
+        },
+        {
+          "DEPARTMENT_ID": 20,
+          "DEPARTMENT_NAME": "Engineering"
+        },
+        {
+          "DEPARTMENT_ID": 30,
+          "DEPARTMENT_NAME": "Sales"
+        }
+      ]
+    },
+    "ASIS_HR_EMP": {
+      "columns": [
+        "EMPLOYEE_ID",
+        "FIRST_NAME",
+        "LAST_NAME",
+        "EMAIL",
+        "HIRE_DATE",
+        "JOB_ID",
+        "SALARY",
+        "DEPARTMENT_ID"
+      ],
+      "primary_key": [
+        "EMPLOYEE_ID"
+      ],
+      "rows": [
+        {
+          "EMPLOYEE_ID": 100,
+          "FIRST_NAME": "Mina",
+          "LAST_NAME": "Kim",
+          "EMAIL": "mina.kim@example.test",
+          "HIRE_DATE": "2024-01-01",
+          "JOB_ID": "AD_MGR",
+          "SALARY": 9000,
+          "DEPARTMENT_ID": 10
+        },
+        {
+          "EMPLOYEE_ID": 101,
+          "FIRST_NAME": "Joon",
+          "LAST_NAME": "Lee",
+          "EMAIL": "joon.lee@example.test",
+          "HIRE_DATE": "2024-01-02",
+          "JOB_ID": "IT_PROG",
+          "SALARY": 8000,
+          "DEPARTMENT_ID": 20
+        },
+        {
+          "EMPLOYEE_ID": 102,
+          "FIRST_NAME": "Sara",
+          "LAST_NAME": "Park",
+          "EMAIL": "sara.park@example.test",
+          "HIRE_DATE": "2024-01-03",
+          "JOB_ID": "SA_REP",
+          "SALARY": 6500,
+          "DEPARTMENT_ID": 30
+        },
+        {
+          "EMPLOYEE_ID": 103,
+          "FIRST_NAME": "Alex",
+          "LAST_NAME": "Choi",
+          "EMAIL": "alex.choi@example.test",
+          "HIRE_DATE": "2024-01-04",
+          "JOB_ID": "IT_PROG",
+          "SALARY": 7000,
+          "DEPARTMENT_ID": 20
+        },
+        {
+          "EMPLOYEE_ID": 104,
+          "FIRST_NAME": "Yuna",
+          "LAST_NAME": "Han",
+          "EMAIL": "yuna.han@example.test",
+          "HIRE_DATE": "2024-01-05",
+          "JOB_ID": "AD_ASST",
+          "SALARY": 4500,
+          "DEPARTMENT_ID": 10
+        },
+        {
+          "EMPLOYEE_ID": 105,
+          "FIRST_NAME": "Noah",
+          "LAST_NAME": "Lim",
+          "EMAIL": "noah.lim@example.test",
+          "HIRE_DATE": "2024-01-06",
+          "JOB_ID": "SA_REP",
+          "SALARY": 6000,
+          "DEPARTMENT_ID": 30
+        },
+        {
+          "EMPLOYEE_ID": 106,
+          "FIRST_NAME": "Emma",
+          "LAST_NAME": "Jung",
+          "EMAIL": "emma.jung@example.test",
+          "HIRE_DATE": "2024-01-07",
+          "JOB_ID": "IT_PROG",
+          "SALARY": 7500,
+          "DEPARTMENT_ID": 20
+        },
+        {
+          "EMPLOYEE_ID": 107,
+          "FIRST_NAME": "Liam",
+          "LAST_NAME": "Shin",
+          "EMAIL": "liam.shin@example.test",
+          "HIRE_DATE": "2024-01-08",
+          "JOB_ID": "SA_MGR",
+          "SALARY": 9500,
+          "DEPARTMENT_ID": 30
+        },
+        {
+          "EMPLOYEE_ID": 108,
+          "FIRST_NAME": "Sora",
+          "LAST_NAME": "Kang",
+          "EMAIL": "sora.kang@example.test",
+          "HIRE_DATE": "2024-01-09",
+          "JOB_ID": "AD_ASST",
+          "SALARY": 4800,
+          "DEPARTMENT_ID": 10
+        },
+        {
+          "EMPLOYEE_ID": 109,
+          "FIRST_NAME": "Ian",
+          "LAST_NAME": "Oh",
+          "EMAIL": "ian.oh@example.test",
+          "HIRE_DATE": "2024-01-10",
+          "JOB_ID": "IT_PROG",
+          "SALARY": 6800,
+          "DEPARTMENT_ID": 20
+        }
+      ]
+    },
+    "TOBE_HR_DEPT": {
+      "columns": [
+        "DEPT_ID",
+        "DEPT_NAME"
+      ],
+      "primary_key": [
+        "DEPT_ID"
+      ],
+      "rows": []
+    },
+    "TOBE_HR_EMP": {
+      "columns": [
+        "EMP_ID",
+        "GIVEN_NAME",
+        "FAMILY_NAME",
+        "EMAIL_ADDR",
+        "JOIN_DATE",
+        "JOB_CODE",
+        "BASE_SALARY",
+        "DEPT_ID"
+      ],
+      "primary_key": [
+        "EMP_ID"
+      ],
+      "rows": []
+    },
+    "NEXT_MIG_INFO": {
+      "columns": [
+        "MAP_ID",
+        "MAP_TYPE",
+        "FR_TABLE",
+        "TO_TABLE",
+        "TRUNC_YN",
+        "CONDITION",
+        "USE_YN",
+        "PRIORITY",
+        "PRIOR_MAP_ID",
+        "STATUS",
+        "USER_EDITED",
+        "MIG_SQL",
+        "VERIFY_SQL",
+        "VERIFY2_SQL",
+        "BATCH_CNT",
+        "RETRY_COUNT",
+        "ELAPSED_SECONDS",
+        "LOG",
+        "REG_TS",
+        "UPD_TS"
+      ],
+      "primary_key": [
+        "MAP_ID"
+      ],
+      "rows": [
+        {
+          "MAP_ID": 1,
+          "MAP_TYPE": "SIMPLE",
+          "FR_TABLE": "ASIS_HR_DEPT",
+          "TO_TABLE": "TOBE_HR_DEPT",
+          "TRUNC_YN": "N",
+          "CONDITION": null,
+          "USE_YN": "Y",
+          "PRIORITY": 1,
+          "PRIOR_MAP_ID": null,
+          "STATUS": null,
+          "USER_EDITED": "N",
+          "MIG_SQL": null,
+          "VERIFY_SQL": null,
+          "VERIFY2_SQL": null,
+          "BATCH_CNT": 0,
+          "RETRY_COUNT": 0,
+          "ELAPSED_SECONDS": null,
+          "LOG": null,
+          "REG_TS": null,
+          "UPD_TS": null
+        },
+        {
+          "MAP_ID": 2,
+          "MAP_TYPE": "SIMPLE",
+          "FR_TABLE": "ASIS_HR_EMP",
+          "TO_TABLE": "TOBE_HR_EMP",
+          "TRUNC_YN": "N",
+          "CONDITION": null,
+          "USE_YN": "Y",
+          "PRIORITY": 2,
+          "PRIOR_MAP_ID": 1,
+          "STATUS": null,
+          "USER_EDITED": "N",
+          "MIG_SQL": null,
+          "VERIFY_SQL": null,
+          "VERIFY2_SQL": null,
+          "BATCH_CNT": 0,
+          "RETRY_COUNT": 0,
+          "ELAPSED_SECONDS": null,
+          "LOG": null,
+          "REG_TS": null,
+          "UPD_TS": null
+        }
+      ]
+    },
+    "NEXT_MIG_INFO_DTL": {
+      "columns": [
+        "MAP_ID",
+        "MAP_DTL",
+        "FR_COL",
+        "TO_COL",
+        "REG_TS",
+        "UPD_TS"
+      ],
+      "primary_key": [
+        "MAP_ID",
+        "MAP_DTL"
+      ],
+      "rows": [
+        {
+          "MAP_ID": 1,
+          "MAP_DTL": 1,
+          "FR_COL": "DEPARTMENT_ID",
+          "TO_COL": "DEPT_ID",
+          "REG_TS": null,
+          "UPD_TS": null
+        },
+        {
+          "MAP_ID": 1,
+          "MAP_DTL": 2,
+          "FR_COL": "DEPARTMENT_NAME",
+          "TO_COL": "DEPT_NAME",
+          "REG_TS": null,
+          "UPD_TS": null
+        },
+        {
+          "MAP_ID": 2,
+          "MAP_DTL": 1,
+          "FR_COL": "EMPLOYEE_ID",
+          "TO_COL": "EMP_ID",
+          "REG_TS": null,
+          "UPD_TS": null
+        },
+        {
+          "MAP_ID": 2,
+          "MAP_DTL": 2,
+          "FR_COL": "FIRST_NAME",
+          "TO_COL": "GIVEN_NAME",
+          "REG_TS": null,
+          "UPD_TS": null
+        },
+        {
+          "MAP_ID": 2,
+          "MAP_DTL": 3,
+          "FR_COL": "LAST_NAME",
+          "TO_COL": "FAMILY_NAME",
+          "REG_TS": null,
+          "UPD_TS": null
+        },
+        {
+          "MAP_ID": 2,
+          "MAP_DTL": 4,
+          "FR_COL": "EMAIL",
+          "TO_COL": "EMAIL_ADDR",
+          "REG_TS": null,
+          "UPD_TS": null
+        },
+        {
+          "MAP_ID": 2,
+          "MAP_DTL": 5,
+          "FR_COL": "HIRE_DATE",
+          "TO_COL": "JOIN_DATE",
+          "REG_TS": null,
+          "UPD_TS": null
+        },
+        {
+          "MAP_ID": 2,
+          "MAP_DTL": 6,
+          "FR_COL": "JOB_ID",
+          "TO_COL": "JOB_CODE",
+          "REG_TS": null,
+          "UPD_TS": null
+        },
+        {
+          "MAP_ID": 2,
+          "MAP_DTL": 7,
+          "FR_COL": "SALARY",
+          "TO_COL": "BASE_SALARY",
+          "REG_TS": null,
+          "UPD_TS": null
+        },
+        {
+          "MAP_ID": 2,
+          "MAP_DTL": 8,
+          "FR_COL": "DEPARTMENT_ID",
+          "TO_COL": "DEPT_ID",
+          "REG_TS": null,
+          "UPD_TS": null
+        }
+      ]
+    },
+    "NEXT_SQL_INFO": {
+      "columns": [
+        "SQL_SEQ",
+        "SPACE_NM",
+        "SQL_ID",
+        "REF_SEQ",
+        "STATUS_CONVERSION",
+        "STATUS_TUNING",
+        "PRIORITY",
+        "USER_EDITED",
+        "TARGET_TABLE",
+        "TAG_KIND",
+        "FR_SQL",
+        "EDIT_FR_SQL",
+        "TO_SQL",
+        "BIND_SQL",
+        "BIND_SET",
+        "TEST_SQL",
+        "TUNED_TO_SQL",
+        "TUNED_RESULT",
+        "TUNED_FR_SQL",
+        "FORMATTED_SQL",
+        "BLOCK_RAG_CONTENT",
+        "BATCH_CNT",
+        "RETRY_COUNT",
+        "LOG",
+        "UPD_TS"
+      ],
+      "primary_key": [
+        "SQL_SEQ"
+      ],
+      "rows": [
+        {
+          "SQL_SEQ": 1,
+          "SPACE_NM": "HR_DEMO",
+          "SQL_ID": "EMP_DEPT_TUNING_DEMO",
+          "REF_SEQ": null,
+          "STATUS_CONVERSION": null,
+          "STATUS_TUNING": null,
+          "PRIORITY": 1,
+          "USER_EDITED": "N",
+          "TARGET_TABLE": "ASIS_HR_EMP,ASIS_HR_DEPT",
+          "TAG_KIND": "SELECT",
+          "FR_SQL": "SELECT e.EMPLOYEE_ID, e.FIRST_NAME, d.DEPARTMENT_NAME, e.SALARY\nFROM ASIS_HR_EMP e, ASIS_HR_DEPT d\nWHERE e.DEPARTMENT_ID = d.DEPARTMENT_ID(+)\n  AND e.DEPARTMENT_ID = :dept_id\n  AND e.EMPLOYEE_ID IN (\n    SELECT s.EMPLOYEE_ID FROM ASIS_HR_EMP s\n    WHERE s.SALARY >= :min_salary\n  )\nORDER BY e.EMPLOYEE_ID",
+          "EDIT_FR_SQL": null,
+          "TO_SQL": null,
+          "BIND_SQL": null,
+          "BIND_SET": "{\"dept_id\": 20, \"min_salary\": 7000}",
+          "TEST_SQL": null,
+          "TUNED_TO_SQL": null,
+          "TUNED_RESULT": null,
+          "TUNED_FR_SQL": null,
+          "FORMATTED_SQL": null,
+          "BLOCK_RAG_CONTENT": null,
+          "BATCH_CNT": 0,
+          "RETRY_COUNT": 0,
+          "LOG": null,
+          "UPD_TS": null
+        }
+      ]
+    },
+    "NEXT_MIG_RAG_INFO": {
+      "columns": [
+        "RAG_ID",
+        "CATEGORY",
+        "RULE_TYPE",
+        "SOURCE_TABLES",
+        "USE_YN",
+        "GUIDANCE_TEXT",
+        "SOURCE_SQL",
+        "TARGET_SQL",
+        "HIT_CNT",
+        "CREATED_AT",
+        "UPDATED_AT"
+      ],
+      "primary_key": [
+        "RAG_ID"
+      ],
+      "rows": [
+        {
+          "RAG_ID": 1,
+          "CATEGORY": "SQL_CONVERSION",
+          "RULE_TYPE": "GENERAL",
+          "SOURCE_TABLES": "ASIS_HR_EMP,ASIS_HR_DEPT",
+          "USE_YN": "Y",
+          "GUIDANCE_TEXT": "활성 매핑만 사용하고 테이블·컬럼을 TO-BE로 변환한다. 별칭·바인드·문자열 리터럴·조회 의미를 보존한다. Conversion에서는 WHERE 조건, Oracle (+) 조인, IN 서브쿼리 등 조회 구조를 유지하며 튜닝 규칙을 미리 적용하지 않는다.",
+          "SOURCE_SQL": null,
+          "TARGET_SQL": null,
+          "HIT_CNT": 0,
+          "CREATED_AT": null,
+          "UPDATED_AT": null
+        },
+        {
+          "RAG_ID": 2,
+          "CATEGORY": "SQL_TUNING",
+          "RULE_TYPE": "GENERAL",
+          "SOURCE_TABLES": "ASIS_HR_EMP,ASIS_HR_DEPT",
+          "USE_YN": "Y",
+          "GUIDANCE_TEXT": "[WHERE_ONE] TO_SQL을 입력으로 바깥 WHERE를 WHERE 1 = 1로 시작하도록 통일한다. OR 조건은 괄호로 묶어 의미를 보존한다. 작성 표준이며 성능 개선 주장이 아니다. 이 규칙이 비활성이면 강제로 적용하지 않는다.",
+          "SOURCE_SQL": "SELECT e.EMP_ID FROM TOBE_HR_EMP e WHERE e.DEPT_ID = :dept_id OR e.BASE_SALARY >= :min_salary",
+          "TARGET_SQL": "SELECT e.EMP_ID FROM TOBE_HR_EMP e WHERE 1 = 1 AND (e.DEPT_ID = :dept_id OR e.BASE_SALARY >= :min_salary)",
+          "HIT_CNT": 0,
+          "CREATED_AT": null,
+          "UPDATED_AT": null
+        },
+        {
+          "RAG_ID": 3,
+          "CATEGORY": "SQL_TUNING",
+          "RULE_TYPE": "GENERAL",
+          "SOURCE_TABLES": "ASIS_HR_EMP,ASIS_HR_DEPT",
+          "USE_YN": "Y",
+          "GUIDANCE_TEXT": "[ANSI_JOIN] Oracle (+) 외부 조인을 ANSI LEFT/RIGHT JOIN으로 통일한다. 선택 테이블의 조건 위치와 NULL/중복 행 의미를 보존한다. 예시의 E.DEPT_ID = D.DEPT_ID(+)는 직원 행을 보존하는 LEFT JOIN이다. 불명확하면 변경을 보류하고 사유를 기록한다. Oracle 동등성 검증은 별도다.",
+          "SOURCE_SQL": "SELECT E.EMP_ID, D.DEPT_NAME FROM TOBE_HR_EMP E, TOBE_HR_DEPT D WHERE E.DEPT_ID = D.DEPT_ID(+)",
+          "TARGET_SQL": "SELECT E.EMP_ID, D.DEPT_NAME FROM TOBE_HR_EMP E LEFT JOIN TOBE_HR_DEPT D ON E.DEPT_ID = D.DEPT_ID",
+          "HIT_CNT": 0,
+          "CREATED_AT": null,
+          "UPDATED_AT": null
+        },
+        {
+          "RAG_ID": 4,
+          "CATEGORY": "SQL_TUNING",
+          "RULE_TYPE": "GENERAL",
+          "SOURCE_TABLES": "ASIS_HR_EMP,ASIS_HR_DEPT",
+          "USE_YN": "Y",
+          "GUIDANCE_TEXT": "[REDUCE_SUBQUERY] 같은 테이블의 PK를 IN으로 다시 조회하는 중복 서브쿼리는 PK의 유일성·NOT NULL과 동일 행 조건이 보장될 때 바깥 WHERE 조건으로 축소한다. 예시의 EMP_ID는 TOBE_HR_EMP의 PK다. NULL/중복/집계/행 수 의미가 불명확하면 보류한다. 일반 IN/EXISTS를 JOIN으로 일괄 치환하지 않는다. 근거 없는 인덱스·실행 계획·성능 수치는 제시하지 않는다.",
+          "SOURCE_SQL": "SELECT e.EMP_ID, e.GIVEN_NAME FROM TOBE_HR_EMP e WHERE e.EMP_ID IN (SELECT s.EMP_ID FROM TOBE_HR_EMP s WHERE s.BASE_SALARY >= :min_salary)",
+          "TARGET_SQL": "SELECT e.EMP_ID, e.GIVEN_NAME FROM TOBE_HR_EMP e WHERE e.BASE_SALARY >= :min_salary",
+          "HIT_CNT": 0,
+          "CREATED_AT": null,
+          "UPDATED_AT": null
+        }
+      ]
+    },
+    "NEXT_MIG_LOG": {
+      "columns": [
+        "LOG_ID",
+        "MAP_ID",
+        "MIG_KIND",
+        "LOG_TYPE",
+        "LOG_LEVEL",
+        "STEP_NAME",
+        "STATUS",
+        "MESSAGE",
+        "RETRY_COUNT",
+        "GENERATE_SQL",
+        "CREATED_AT"
+      ],
+      "primary_key": [
+        "LOG_ID"
+      ],
+      "rows": []
+    }
+  }
+}

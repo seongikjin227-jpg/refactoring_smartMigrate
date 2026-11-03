@@ -1,0 +1,16 @@
+{
+  "columns": [
+    "EMP_ID",
+    "GIVEN_NAME",
+    "FAMILY_NAME",
+    "EMAIL_ADDR",
+    "JOIN_DATE",
+    "JOB_CODE",
+    "BASE_SALARY",
+    "DEPT_ID"
+  ],
+  "primary_key": [
+    "EMP_ID"
+  ],
+  "rows": []
+}

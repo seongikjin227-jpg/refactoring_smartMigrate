@@ -1,0 +1,47 @@
+[
+  {
+    "table": "ASIS_HR_DEPT",
+    "file": "ASIS_HR_DEPT.json",
+    "input": "asis_hr_dept_json"
+  },
+  {
+    "table": "ASIS_HR_EMP",
+    "file": "ASIS_HR_EMP.json",
+    "input": "asis_hr_emp_json"
+  },
+  {
+    "table": "TOBE_HR_DEPT",
+    "file": "TOBE_HR_DEPT.json",
+    "input": "tobe_hr_dept_json"
+  },
+  {
+    "table": "TOBE_HR_EMP",
+    "file": "TOBE_HR_EMP.json",
+    "input": "tobe_hr_emp_json"
+  },
+  {
+    "table": "NEXT_MIG_INFO",
+    "file": "NEXT_MIG_INFO.json",
+    "input": "next_mig_info_json"
+  },
+  {
+    "table": "NEXT_MIG_INFO_DTL",
+    "file": "NEXT_MIG_INFO_DTL.json",
+    "input": "next_mig_info_dtl_json"
+  },
+  {
+    "table": "NEXT_SQL_INFO",
+    "file": "NEXT_SQL_INFO.json",
+    "input": "next_sql_info_json"
+  },
+  {
+    "table": "NEXT_MIG_RAG_INFO",
+    "file": "NEXT_MIG_RAG_INFO.json",
+    "input": "next_mig_rag_info_json"
+  },
+  {
+    "table": "NEXT_MIG_LOG",
+    "file": "NEXT_MIG_LOG.json",
+    "input": "next_mig_log_json"
+  }
+]

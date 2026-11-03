@@ -1,0 +1,90 @@
+{
+  "results": [
+    {
+      "width": 1280,
+      "height": 800,
+      "pageHeight": 24589,
+      "overflow": false,
+      "fontLoaded": true,
+      "sections": [
+        "origin",
+        "validation-workload",
+        "responsibility",
+        "users",
+        "mapping",
+        "mapping-tables",
+        "workflow",
+        "architecture",
+        "execution",
+        "conversion",
+        "validation",
+        "dify",
+        "demo-outputs",
+        "dify-components",
+        "failures",
+        "expansion"
+      ],
+      "missingAnchors": [],
+      "clipped": [],
+      "removedConceptLinks": 0
+    },
+    {
+      "width": 1440,
+      "height": 900,
+      "pageHeight": 24176,
+      "overflow": false,
+      "fontLoaded": true,
+      "sections": [
+        "origin",
+        "validation-workload",
+        "responsibility",
+        "users",
+        "mapping",
+        "mapping-tables",
+        "workflow",
+        "architecture",
+        "execution",
+        "conversion",
+        "validation",
+        "dify",
+        "demo-outputs",
+        "dify-components",
+        "failures",
+        "expansion"
+      ],
+      "missingAnchors": [],
+      "clipped": [],
+      "removedConceptLinks": 0
+    },
+    {
+      "width": 1920,
+      "height": 1080,
+      "pageHeight": 23927,
+      "overflow": false,
+      "fontLoaded": true,
+      "sections": [
+        "origin",
+        "validation-workload",
+        "responsibility",
+        "users",
+        "mapping",
+        "mapping-tables",
+        "workflow",
+        "architecture",
+        "execution",
+        "conversion",
+        "validation",
+        "dify",
+        "demo-outputs",
+        "dify-components",
+        "failures",
+        "expansion"
+      ],
+      "missingAnchors": [],
+      "clipped": [],
+      "removedConceptLinks": 0
+    }
+  ],
+  "controls": "anchors, agent click/keyboard, expanded details, all entries",
+  "consoleErrors": []
+}

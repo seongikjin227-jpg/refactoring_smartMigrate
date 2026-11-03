@@ -1,0 +1,23 @@
+{
+  "columns": [
+    "DEPARTMENT_ID",
+    "DEPARTMENT_NAME"
+  ],
+  "primary_key": [
+    "DEPARTMENT_ID"
+  ],
+  "rows": [
+    {
+      "DEPARTMENT_ID": 10,
+      "DEPARTMENT_NAME": "Administration"
+    },
+    {
+      "DEPARTMENT_ID": 20,
+      "DEPARTMENT_NAME": "Engineering"
+    },
+    {
+      "DEPARTMENT_ID": 30,
+      "DEPARTMENT_NAME": "Sales"
+    }
+  ]
+}

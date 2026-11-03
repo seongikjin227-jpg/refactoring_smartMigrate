@@ -1,0 +1,10 @@
+{
+  "columns": [
+    "DEPT_ID",
+    "DEPT_NAME"
+  ],
+  "primary_key": [
+    "DEPT_ID"
+  ],
+  "rows": []
+}

@@ -1,0 +1,73 @@
+{
+  "columns": [
+    "MAP_ID",
+    "MAP_TYPE",
+    "FR_TABLE",
+    "TO_TABLE",
+    "TRUNC_YN",
+    "CONDITION",
+    "USE_YN",
+    "PRIORITY",
+    "PRIOR_MAP_ID",
+    "STATUS",
+    "USER_EDITED",
+    "MIG_SQL",
+    "VERIFY_SQL",
+    "VERIFY2_SQL",
+    "BATCH_CNT",
+    "RETRY_COUNT",
+    "ELAPSED_SECONDS",
+    "LOG",
+    "REG_TS",
+    "UPD_TS"
+  ],
+  "primary_key": [
+    "MAP_ID"
+  ],
+  "rows": [
+    {
+      "MAP_ID": 1,
+      "MAP_TYPE": "SIMPLE",
+      "FR_TABLE": "ASIS_HR_DEPT",
+      "TO_TABLE": "TOBE_HR_DEPT",
+      "TRUNC_YN": "N",
+      "CONDITION": null,
+      "USE_YN": "Y",
+      "PRIORITY": 1,
+      "PRIOR_MAP_ID": null,
+      "STATUS": null,
+      "USER_EDITED": "N",
+      "MIG_SQL": null,
+      "VERIFY_SQL": null,
+      "VERIFY2_SQL": null,
+      "BATCH_CNT": 0,
+      "RETRY_COUNT": 0,
+      "ELAPSED_SECONDS": null,
+      "LOG": null,
+      "REG_TS": null,
+      "UPD_TS": null
+    },
+    {
+      "MAP_ID": 2,
+      "MAP_TYPE": "SIMPLE",
+      "FR_TABLE": "ASIS_HR_EMP",
+      "TO_TABLE": "TOBE_HR_EMP",
+      "TRUNC_YN": "N",
+      "CONDITION": null,
+      "USE_YN": "Y",
+      "PRIORITY": 2,
+      "PRIOR_MAP_ID": 1,
+      "STATUS": null,
+      "USER_EDITED": "N",
+      "MIG_SQL": null,
+      "VERIFY_SQL": null,
+      "VERIFY2_SQL": null,
+      "BATCH_CNT": 0,
+      "RETRY_COUNT": 0,
+      "ELAPSED_SECONDS": null,
+      "LOG": null,
+      "REG_TS": null,
+      "UPD_TS": null
+    }
+  ]
+}

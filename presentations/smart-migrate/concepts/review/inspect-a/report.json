@@ -1,0 +1,1546 @@
+{
+ "url": "presentations/smart-migrate/concepts/a-report.html",
+ "at": "2026-10-25T08:27:21.558Z",
+ "allow": [
+  "few-pictures",
+  "still-page"
+ ],
+ "viewports": [
+  {
+   "width": 1440,
+   "height": 900,
+   "load": "load",
+   "screens": 7,
+   "filled": [
+    0.32,
+    0.3,
+    0.31,
+    0.38,
+    0.44,
+    0.66,
+    0.56
+   ],
+   "motion": {
+    "elements": 0,
+    "css": 0,
+    "transitions": 0,
+    "scripted": 0,
+    "videos": 0,
+    "playingVideos": 0
+   },
+   "metrics": {
+    "viewport": {
+     "w": 1440,
+     "h": 900
+    },
+    "page": {
+     "height": 5574,
+     "screens": 6.2,
+     "words": 749,
+     "img": 0,
+     "video": 0,
+     "canvas": 0,
+     "svg": 0,
+     "sections": 7,
+     "horizontalOverflow": 0,
+     "overflowCulprits": [],
+     "uiFragments": 0,
+     "uiAbuse": false,
+     "realPictures": 0,
+     "videoCount": 0,
+     "uiPictures": 0,
+     "pictureSamples": [],
+     "blendText": 0,
+     "sideScrollers": 0,
+     "brokenImages": [],
+     "emoji": [],
+     "videosNoPoster": 0
+    },
+    "hero": {
+     "text": "SmartMigrate Agent",
+     "words": 2,
+     "chars": 18,
+     "lines": 2,
+     "size": 72,
+     "vw": 5,
+     "font": "Pretendard",
+     "weight": 650,
+     "tracking": -0.035,
+     "leading": 1.3,
+     "upper": false,
+     "italic": false,
+     "mono": false,
+     "align": "left",
+     "position": "left",
+     "widthRatio": 0.44,
+     "top": 162,
+     "tag": "h1",
+     "kind": "heading"
+    },
+    "h1": {
+     "text": "SmartMigrate Agent",
+     "words": 2,
+     "lines": 2,
+     "size": 72,
+     "font": "Pretendard"
+    },
+    "headings": [
+     {
+      "text": "SmartMigrate Agent",
+      "words": 2,
+      "chars": 18,
+      "lines": 2,
+      "size": 72,
+      "vw": 5,
+      "font": "Pretendard",
+      "weight": 650,
+      "tracking": -0.035,
+      "leading": 1.3,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "left",
+      "widthRatio": 0.44,
+      "top": 162,
+      "tag": "h1",
+      "kind": "heading"
+     },
+     {
+      "text": "현장에서 시작한 문제",
+      "words": 3,
+      "chars": 11,
+      "lines": 2,
+      "size": 38,
+      "vw": 2.6,
+      "font": "Pretendard",
+      "weight": 650,
+      "tracking": -0.035,
+      "leading": 1.3,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "left",
+      "widthRatio": 0.19,
+      "top": 791,
+      "tag": "h2",
+      "kind": "heading"
+     },
+     {
+      "text": "매핑룰에서 검증까지",
+      "words": 2,
+      "chars": 10,
+      "lines": 2,
+      "size": 38,
+      "vw": 2.6,
+      "font": "Pretendard",
+      "weight": 650,
+      "tracking": -0.035,
+      "leading": 1.3,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "left",
+      "widthRatio": 0.19,
+      "top": 1241,
+      "tag": "h2",
+      "kind": "heading"
+     },
+     {
+      "text": "Supervisor와 전문 Agent",
+      "words": 3,
+      "chars": 20,
+      "lines": 2,
+      "size": 38,
+      "vw": 2.6,
+      "font": "Pretendard",
+      "weight": 650,
+      "tracking": -0.035,
+      "leading": 1.3,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "left",
+      "widthRatio": 0.19,
+      "top": 1710,
+      "tag": "h2",
+      "kind": "heading"
+     },
+     {
+      "text": "업무 SQL도 새 구조로",
+      "words": 4,
+      "chars": 13,
+      "lines": 2,
+      "size": 38,
+      "vw": 2.6,
+      "font": "Pretendard",
+      "weight": 650,
+      "tracking": -0.035,
+      "leading": 1.3,
+      "upper": true,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "left",
+      "widthRatio": 0.19,
+      "top": 2793,
+      "tag": "h2",
+      "kind": "heading"
+     },
+     {
+      "text": "검증은 어디까지인가",
+      "words": 2,
+      "chars": 10,
+      "lines": 2,
+      "size": 38,
+      "vw": 2.6,
+      "font": "Pretendard",
+      "weight": 650,
+      "tracking": -0.035,
+      "leading": 1.3,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "left",
+      "widthRatio": 0.19,
+      "top": 3527,
+      "tag": "h2",
+      "kind": "heading"
+     },
+     {
+      "text": "Dify에서의 개념 시연",
+      "words": 3,
+      "chars": 13,
+      "lines": 2,
+      "size": 38,
+      "vw": 2.6,
+      "font": "Pretendard",
+      "weight": 650,
+      "tracking": -0.035,
+      "leading": 1.3,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "left",
+      "widthRatio": 0.19,
+      "top": 4175,
+      "tag": "h2",
+      "kind": "heading"
+     },
+     {
+      "text": "실제 업무로 이어갈 확장",
+      "words": 4,
+      "chars": 13,
+      "lines": 2,
+      "size": 38,
+      "vw": 2.6,
+      "font": "Pretendard",
+      "weight": 650,
+      "tracking": -0.035,
+      "leading": 1.3,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "left",
+      "widthRatio": 0.19,
+      "top": 5071,
+      "tag": "h2",
+      "kind": "heading"
+     },
+     {
+      "text": "기존 자산을 재사용하고, 규칙과 검증으로 반복 업무를 줄입니다.",
+      "words": 8,
+      "chars": 35,
+      "lines": 2,
+      "size": 30,
+      "vw": 2.1,
+      "font": "Pretendard",
+      "weight": 600,
+      "tracking": -0.03,
+      "leading": 1.5,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "right",
+      "widthRatio": 0.67,
+      "top": 5304,
+      "tag": "p",
+      "kind": "statement"
+     }
+    ],
+    "headingSummary": {
+     "count": 9,
+     "maxLines": 2,
+     "over2Lines": 0,
+     "statements": 1,
+     "centered": 0,
+     "medianWords": 3,
+     "mixedFontHeadings": 0
+    },
+    "type": {
+     "families": [
+      {
+       "family": "Pretendard",
+       "share": 0.91,
+       "mono": false
+      },
+      {
+       "family": "Consolas",
+       "share": 0.09,
+       "mono": true
+      }
+     ],
+     "familyCount": 2,
+     "sizes": [
+      13,
+      14,
+      15,
+      16,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      30,
+      38,
+      72
+     ],
+     "sizeCount": 13,
+     "notLoaded": [
+      "Consolas"
+     ],
+     "body": {
+      "font": "Pretendard",
+      "size": 15,
+      "leading": 1.8,
+      "weight": 400,
+      "tracking": 0,
+      "contrast": 6.9
+     },
+     "measureChars": 81,
+     "max": {
+      "size": 72,
+      "vw": 5,
+      "font": "Pretendard",
+      "text": "SmartMigrateAgent"
+     },
+     "monoShare": 0.09,
+     "monoProseShare": 0,
+     "monoFamilies": [
+      "Consolas"
+     ],
+     "monoSamples": [],
+     "microLabels": 0,
+     "microLabelShare": 0,
+     "microSamples": [],
+     "upperShare": 0.46,
+     "centerShare": 0,
+     "smallText": 0
+    },
+    "eyebrows": [
+     {
+      "text": "파일 구조·PK·필수값 확인",
+      "above": "기존 자산을 재사용하고, 규칙과 검증으로 반복 업무를 줄입니다.",
+      "upper": true,
+      "tracked": false,
+      "mono": false,
+      "pill": false,
+      "size": 13,
+      "top": 5225
+     }
+    ],
+    "numbered": [],
+    "color": {
+     "bodyBg": "#ffffff",
+     "bodyBgHsl": {
+      "h": 0,
+      "s": 0,
+      "l": 1
+     },
+     "dark": false,
+     "sectionBgs": [
+      {
+       "color": "#f2f4f2",
+       "top": 1710,
+       "hsl": {
+        "h": 120,
+        "s": 0.08,
+        "l": 0.95
+       }
+      },
+      {
+       "color": "#203d33",
+       "top": 4991,
+       "hsl": {
+        "h": 159,
+        "s": 0.31,
+        "l": 0.18
+       }
+      }
+     ],
+     "textColors": [
+      {
+       "color": "#202524",
+       "share": 0.62
+      },
+      {
+       "color": "#535c58",
+       "share": 0.25
+      },
+      {
+       "color": "#ffffff",
+       "share": 0.07
+      },
+      {
+       "color": "#245b4b",
+       "share": 0.03
+      },
+      {
+       "color": "#d2e3da",
+       "share": 0.02
+      }
+     ],
+     "button": {
+      "bg": "#ffffff",
+      "hsl": {
+       "h": 0,
+       "s": 0,
+       "l": 1
+      },
+      "fg": "#202524"
+     },
+     "lowContrast": []
+    },
+    "buttons": {
+     "count": 2,
+     "inHero": 2,
+     "radius": 0,
+     "height": 60,
+     "withShadow": 0,
+     "withGradient": 0,
+     "mono": 0,
+     "upper": 0,
+     "heroLabels": [
+      "본문으로 이동",
+      "기획 배경부터 읽기"
+     ]
+    },
+    "surfaces": {
+     "shadowStatic": 0,
+     "shadowOverlay": 0,
+     "shadowSamples": [],
+     "gradients": 0,
+     "scrims": 0,
+     "gradientSamples": [],
+     "gradientText": 0,
+     "hairlines": 0,
+     "hairlineSamples": [],
+     "outlinedBoxes": 0,
+     "dashed": 0,
+     "blurred": 0,
+     "roundedBoxes": 0,
+     "boxRadius": 0,
+     "squareMedia": 0,
+     "roundedMedia": 0,
+     "mediaRadius": 0,
+     "textShadow": 0,
+     "cardRows": [
+      {
+       "count": 4,
+       "iconTopped": false,
+       "rounded": false,
+       "top": 1300
+      },
+      {
+       "count": 4,
+       "iconTopped": false,
+       "rounded": false,
+       "top": 1925
+      },
+      {
+       "count": 3,
+       "iconTopped": false,
+       "rounded": false,
+       "top": 5099
+      }
+     ]
+    },
+    "heroMedia": [],
+    "nav": {
+     "links": 8,
+     "fixed": true,
+     "height": 86,
+     "floatingPill": false,
+     "blur": false
+    },
+    "fontsLoaded": [
+     "pretendard"
+    ]
+   },
+   "layout": {
+    "viewport": {
+     "w": 1440,
+     "h": 900
+    },
+    "pageH": 5574,
+    "margins": {
+     "left": 72,
+     "right": 104
+    },
+    "sections": [
+     {
+      "sel": "div.hero",
+      "tag": "div",
+      "top": 86,
+      "height": 625,
+      "words": 46,
+      "media": 0,
+      "middle": 289,
+      "heading": {
+       "text": "SmartMigrate",
+       "size": 72,
+       "tag": "h1"
+      },
+      "left": 72,
+      "right": 360,
+      "textLeft": 72,
+      "textRight": 360,
+      "fullBleed": false,
+      "footer": false,
+      "hero": true,
+      "continues": false,
+      "pinned": false
+     },
+     {
+      "sel": "section#origin.section",
+      "tag": "section",
+      "top": 711,
+      "height": 450,
+      "words": 62,
+      "media": 0,
+      "middle": 94,
+      "heading": {
+       "text": "현장에서 시작한 문제",
+       "size": 38,
+       "tag": "h2"
+      },
+      "left": 72,
+      "right": 276,
+      "textLeft": 72,
+      "textRight": 276,
+      "fullBleed": false,
+      "footer": false,
+      "hero": false,
+      "continues": false,
+      "pinned": false
+     },
+     {
+      "sel": "section#workflow.section",
+      "tag": "section",
+      "top": 1161,
+      "height": 470,
+      "words": 76,
+      "media": 0,
+      "middle": 128,
+      "heading": {
+       "text": "매핑룰에서 검증까지",
+       "size": 38,
+       "tag": "h2"
+      },
+      "left": 72,
+      "right": 176,
+      "textLeft": 72,
+      "textRight": 176,
+      "fullBleed": false,
+      "footer": false,
+      "hero": false,
+      "continues": false,
+      "pinned": false
+     },
+     {
+      "sel": "section#architecture.section",
+      "tag": "section",
+      "top": 1630,
+      "height": 1082,
+      "words": 161,
+      "media": 0,
+      "middle": 120,
+      "heading": {
+       "text": "Supervisor와 전문 Agent",
+       "size": 38,
+       "tag": "h2"
+      },
+      "left": 72,
+      "right": 104,
+      "textLeft": 72,
+      "textRight": 126,
+      "fullBleed": false,
+      "footer": false,
+      "hero": false,
+      "continues": false,
+      "pinned": false
+     },
+     {
+      "sel": "section#conversion.section",
+      "tag": "section",
+      "top": 2713,
+      "height": 734,
+      "words": 91,
+      "media": 0,
+      "middle": 132,
+      "heading": {
+       "text": "업무 SQL도 새 구조로",
+       "size": 38,
+       "tag": "h2"
+      },
+      "left": 72,
+      "right": 266,
+      "textLeft": 72,
+      "textRight": 266,
+      "fullBleed": false,
+      "footer": false,
+      "hero": false,
+      "continues": false,
+      "pinned": false
+     },
+     {
+      "sel": "section#validation.section",
+      "tag": "section",
+      "top": 3447,
+      "height": 648,
+      "words": 88,
+      "media": 0,
+      "middle": 82,
+      "heading": {
+       "text": "검증은 어디까지인가",
+       "size": 38,
+       "tag": "h2"
+      },
+      "left": 72,
+      "right": 218,
+      "textLeft": 72,
+      "textRight": 218,
+      "fullBleed": false,
+      "footer": false,
+      "hero": false,
+      "continues": false,
+      "pinned": false
+     },
+     {
+      "sel": "section#dify.section",
+      "tag": "section",
+      "top": 4095,
+      "height": 897,
+      "words": 139,
+      "media": 0,
+      "middle": 82,
+      "heading": {
+       "text": "Dify에서의 개념 시연",
+       "size": 38,
+       "tag": "h2"
+      },
+      "left": 72,
+      "right": 101,
+      "textLeft": 72,
+      "textRight": 101,
+      "fullBleed": false,
+      "footer": false,
+      "hero": false,
+      "continues": false,
+      "pinned": false
+     },
+     {
+      "sel": "section#expansion.section.closing-section",
+      "tag": "section",
+      "top": 4991,
+      "height": 482,
+      "words": 54,
+      "media": 0,
+      "middle": 94,
+      "heading": {
+       "text": "실제 업무로 이어갈 확장",
+       "size": 38,
+       "tag": "h2"
+      },
+      "left": 72,
+      "right": 397,
+      "textLeft": 72,
+      "textRight": 397,
+      "fullBleed": false,
+      "footer": true,
+      "hero": false,
+      "continues": false,
+      "pinned": false
+     }
+    ],
+    "gaps": [],
+    "h1s": [
+     {
+      "text": "SmartMigrate Agent",
+      "size": 72,
+      "top": 162,
+      "firstScreen": true
+     }
+    ],
+    "edgeText": [],
+    "edges": [
+     {
+      "x": 72,
+      "n": 9
+     },
+     {
+      "x": 406,
+      "n": 7
+     },
+     {
+      "x": 430,
+      "n": 3
+     },
+     {
+      "x": 462,
+      "n": 3
+     },
+     {
+      "x": 794,
+      "n": 2
+     },
+     {
+      "x": 921,
+      "n": 2
+     },
+     {
+      "x": 598,
+      "n": 1
+     }
+    ],
+    "leftBlocks": 27,
+    "bodySize": 14,
+    "stage": false,
+    "explains": true,
+    "slivers": [],
+    "voidShare": 0.2,
+    "voidBox": {
+     "x": 0,
+     "y": 600,
+     "w": 1440,
+     "h": 180
+    }
+   },
+   "app": null,
+   "consoleErrors": []
+  },
+  {
+   "width": 1920,
+   "height": 1200,
+   "load": "load",
+   "screens": 5,
+   "filled": [
+    0.29,
+    0.31,
+    0.32,
+    0.38,
+    0.6
+   ],
+   "motion": {
+    "elements": 0,
+    "css": 0,
+    "transitions": 0,
+    "scripted": 0,
+    "videos": 0,
+    "playingVideos": 0
+   },
+   "metrics": {
+    "viewport": {
+     "w": 1920,
+     "h": 1200
+    },
+    "page": {
+     "height": 5595,
+     "screens": 4.7,
+     "words": 749,
+     "img": 0,
+     "video": 0,
+     "canvas": 0,
+     "svg": 0,
+     "sections": 7,
+     "horizontalOverflow": 0,
+     "overflowCulprits": [],
+     "uiFragments": 0,
+     "uiAbuse": false,
+     "realPictures": 0,
+     "videoCount": 0,
+     "uiPictures": 0,
+     "pictureSamples": [],
+     "blendText": 0,
+     "sideScrollers": 0,
+     "brokenImages": [],
+     "emoji": [],
+     "videosNoPoster": 0
+    },
+    "hero": {
+     "text": "SmartMigrate Agent",
+     "words": 2,
+     "chars": 18,
+     "lines": 2,
+     "size": 80,
+     "vw": 4.2,
+     "font": "Pretendard",
+     "weight": 650,
+     "tracking": -0.035,
+     "leading": 1.3,
+     "upper": false,
+     "italic": false,
+     "mono": false,
+     "align": "left",
+     "position": "left",
+     "widthRatio": 0.42,
+     "top": 162,
+     "tag": "h1",
+     "kind": "heading"
+    },
+    "h1": {
+     "text": "SmartMigrate Agent",
+     "words": 2,
+     "lines": 2,
+     "size": 80,
+     "font": "Pretendard"
+    },
+    "headings": [
+     {
+      "text": "SmartMigrate Agent",
+      "words": 2,
+      "chars": 18,
+      "lines": 2,
+      "size": 80,
+      "vw": 4.2,
+      "font": "Pretendard",
+      "weight": 650,
+      "tracking": -0.035,
+      "leading": 1.3,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "left",
+      "widthRatio": 0.42,
+      "top": 162,
+      "tag": "h1",
+      "kind": "heading"
+     },
+     {
+      "text": "현장에서 시작한 문제",
+      "words": 3,
+      "chars": 11,
+      "lines": 2,
+      "size": 38,
+      "vw": 2,
+      "font": "Pretendard",
+      "weight": 650,
+      "tracking": -0.035,
+      "leading": 1.3,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "left",
+      "widthRatio": 0.14,
+      "top": 812,
+      "tag": "h2",
+      "kind": "heading"
+     },
+     {
+      "text": "매핑룰에서 검증까지",
+      "words": 2,
+      "chars": 10,
+      "lines": 2,
+      "size": 38,
+      "vw": 2,
+      "font": "Pretendard",
+      "weight": 650,
+      "tracking": -0.035,
+      "leading": 1.3,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "left",
+      "widthRatio": 0.14,
+      "top": 1262,
+      "tag": "h2",
+      "kind": "heading"
+     },
+     {
+      "text": "Supervisor와 전문 Agent",
+      "words": 3,
+      "chars": 20,
+      "lines": 2,
+      "size": 38,
+      "vw": 2,
+      "font": "Pretendard",
+      "weight": 650,
+      "tracking": -0.035,
+      "leading": 1.3,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "left",
+      "widthRatio": 0.14,
+      "top": 1731,
+      "tag": "h2",
+      "kind": "heading"
+     },
+     {
+      "text": "업무 SQL도 새 구조로",
+      "words": 4,
+      "chars": 13,
+      "lines": 2,
+      "size": 38,
+      "vw": 2,
+      "font": "Pretendard",
+      "weight": 650,
+      "tracking": -0.035,
+      "leading": 1.3,
+      "upper": true,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "left",
+      "widthRatio": 0.14,
+      "top": 2814,
+      "tag": "h2",
+      "kind": "heading"
+     },
+     {
+      "text": "검증은 어디까지인가",
+      "words": 2,
+      "chars": 10,
+      "lines": 2,
+      "size": 38,
+      "vw": 2,
+      "font": "Pretendard",
+      "weight": 650,
+      "tracking": -0.035,
+      "leading": 1.3,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "left",
+      "widthRatio": 0.14,
+      "top": 3548,
+      "tag": "h2",
+      "kind": "heading"
+     },
+     {
+      "text": "Dify에서의 개념 시연",
+      "words": 3,
+      "chars": 13,
+      "lines": 2,
+      "size": 38,
+      "vw": 2,
+      "font": "Pretendard",
+      "weight": 650,
+      "tracking": -0.035,
+      "leading": 1.3,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "left",
+      "widthRatio": 0.14,
+      "top": 4195,
+      "tag": "h2",
+      "kind": "heading"
+     },
+     {
+      "text": "실제 업무로 이어갈 확장",
+      "words": 4,
+      "chars": 13,
+      "lines": 2,
+      "size": 38,
+      "vw": 2,
+      "font": "Pretendard",
+      "weight": 650,
+      "tracking": -0.035,
+      "leading": 1.3,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "left",
+      "widthRatio": 0.14,
+      "top": 5092,
+      "tag": "h2",
+      "kind": "heading"
+     }
+    ],
+    "headingSummary": {
+     "count": 8,
+     "maxLines": 2,
+     "over2Lines": 0,
+     "statements": 0,
+     "centered": 0,
+     "medianWords": 3,
+     "mixedFontHeadings": 0
+    },
+    "type": {
+     "families": [
+      {
+       "family": "Pretendard",
+       "share": 0.91,
+       "mono": false
+      },
+      {
+       "family": "Consolas",
+       "share": 0.09,
+       "mono": true
+      }
+     ],
+     "familyCount": 2,
+     "sizes": [
+      13,
+      14,
+      15,
+      16,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      30,
+      38,
+      80
+     ],
+     "sizeCount": 13,
+     "notLoaded": [
+      "Consolas"
+     ],
+     "body": {
+      "font": "Pretendard",
+      "size": 15,
+      "leading": 1.8,
+      "weight": 400,
+      "tracking": 0,
+      "contrast": 6.9
+     },
+     "measureChars": 81,
+     "max": {
+      "size": 80,
+      "vw": 4.2,
+      "font": "Pretendard",
+      "text": "SmartMigrateAgent"
+     },
+     "monoShare": 0.09,
+     "monoProseShare": 0,
+     "monoFamilies": [
+      "Consolas"
+     ],
+     "monoSamples": [],
+     "microLabels": 0,
+     "microLabelShare": 0,
+     "microSamples": [],
+     "upperShare": 0.46,
+     "centerShare": 0,
+     "smallText": 0
+    },
+    "eyebrows": [],
+    "numbered": [],
+    "color": {
+     "bodyBg": "#ffffff",
+     "bodyBgHsl": {
+      "h": 0,
+      "s": 0,
+      "l": 1
+     },
+     "dark": false,
+     "sectionBgs": [
+      {
+       "color": "#f2f4f2",
+       "top": 1731,
+       "hsl": {
+        "h": 120,
+        "s": 0.08,
+        "l": 0.95
+       }
+      },
+      {
+       "color": "#203d33",
+       "top": 5012,
+       "hsl": {
+        "h": 159,
+        "s": 0.31,
+        "l": 0.18
+       }
+      }
+     ],
+     "textColors": [
+      {
+       "color": "#202524",
+       "share": 0.62
+      },
+      {
+       "color": "#535c58",
+       "share": 0.25
+      },
+      {
+       "color": "#ffffff",
+       "share": 0.07
+      },
+      {
+       "color": "#245b4b",
+       "share": 0.03
+      },
+      {
+       "color": "#d2e3da",
+       "share": 0.02
+      }
+     ],
+     "button": {
+      "bg": "#ffffff",
+      "hsl": {
+       "h": 0,
+       "s": 0,
+       "l": 1
+      },
+      "fg": "#202524"
+     },
+     "lowContrast": []
+    },
+    "buttons": {
+     "count": 2,
+     "inHero": 2,
+     "radius": 0,
+     "height": 60,
+     "withShadow": 0,
+     "withGradient": 0,
+     "mono": 0,
+     "upper": 0,
+     "heroLabels": [
+      "본문으로 이동",
+      "기획 배경부터 읽기"
+     ]
+    },
+    "surfaces": {
+     "shadowStatic": 0,
+     "shadowOverlay": 0,
+     "shadowSamples": [],
+     "gradients": 0,
+     "scrims": 0,
+     "gradientSamples": [],
+     "gradientText": 0,
+     "hairlines": 0,
+     "hairlineSamples": [],
+     "outlinedBoxes": 0,
+     "dashed": 0,
+     "blurred": 0,
+     "roundedBoxes": 0,
+     "boxRadius": 0,
+     "squareMedia": 0,
+     "roundedMedia": 0,
+     "mediaRadius": 0,
+     "textShadow": 0,
+     "cardRows": [
+      {
+       "count": 4,
+       "iconTopped": false,
+       "rounded": false,
+       "top": 1321
+      },
+      {
+       "count": 4,
+       "iconTopped": false,
+       "rounded": false,
+       "top": 1946
+      },
+      {
+       "count": 3,
+       "iconTopped": false,
+       "rounded": false,
+       "top": 5120
+      }
+     ]
+    },
+    "heroMedia": [],
+    "nav": {
+     "links": 8,
+     "fixed": true,
+     "height": 86,
+     "floatingPill": false,
+     "blur": false
+    },
+    "fontsLoaded": [
+     "pretendard"
+    ]
+   },
+   "layout": {
+    "viewport": {
+     "w": 1920,
+     "h": 1200
+    },
+    "pageH": 5595,
+    "margins": {
+     "left": 140,
+     "right": 177
+    },
+    "sections": [
+     {
+      "sel": "div.hero",
+      "tag": "div",
+      "top": 86,
+      "height": 646,
+      "words": 46,
+      "media": 0,
+      "middle": 418,
+      "heading": {
+       "text": "SmartMigrate",
+       "size": 80,
+       "tag": "h1"
+      },
+      "left": 140,
+      "right": 596,
+      "textLeft": 140,
+      "textRight": 596,
+      "fullBleed": false,
+      "footer": false,
+      "hero": true,
+      "continues": false,
+      "pinned": false
+     },
+     {
+      "sel": "section#origin.section",
+      "tag": "section",
+      "top": 732,
+      "height": 450,
+      "words": 62,
+      "media": 0,
+      "middle": 94,
+      "heading": {
+       "text": "현장에서 시작한 문제",
+       "size": 38,
+       "tag": "h2"
+      },
+      "left": 140,
+      "right": 688,
+      "textLeft": 140,
+      "textRight": 688,
+      "fullBleed": false,
+      "footer": false,
+      "hero": false,
+      "continues": false,
+      "pinned": false
+     },
+     {
+      "sel": "section#workflow.section",
+      "tag": "section",
+      "top": 1182,
+      "height": 470,
+      "words": 76,
+      "media": 0,
+      "middle": 226,
+      "heading": {
+       "text": "매핑룰에서 검증까지",
+       "size": 38,
+       "tag": "h2"
+      },
+      "left": 140,
+      "right": 330,
+      "textLeft": 140,
+      "textRight": 330,
+      "fullBleed": false,
+      "footer": false,
+      "hero": false,
+      "continues": false,
+      "pinned": false
+     },
+     {
+      "sel": "section#architecture.section",
+      "tag": "section",
+      "top": 1651,
+      "height": 1082,
+      "words": 161,
+      "media": 0,
+      "middle": 120,
+      "heading": {
+       "text": "Supervisor와 전문 Agent",
+       "size": 38,
+       "tag": "h2"
+      },
+      "left": 140,
+      "right": 172,
+      "textLeft": 140,
+      "textRight": 194,
+      "fullBleed": false,
+      "footer": false,
+      "hero": false,
+      "continues": false,
+      "pinned": false
+     },
+     {
+      "sel": "section#conversion.section",
+      "tag": "section",
+      "top": 2734,
+      "height": 734,
+      "words": 91,
+      "media": 0,
+      "middle": 132,
+      "heading": {
+       "text": "업무 SQL도 새 구조로",
+       "size": 38,
+       "tag": "h2"
+      },
+      "left": 140,
+      "right": 507,
+      "textLeft": 140,
+      "textRight": 507,
+      "fullBleed": false,
+      "footer": false,
+      "hero": false,
+      "continues": false,
+      "pinned": false
+     },
+     {
+      "sel": "section#validation.section",
+      "tag": "section",
+      "top": 3468,
+      "height": 648,
+      "words": 88,
+      "media": 0,
+      "middle": 213,
+      "heading": {
+       "text": "검증은 어디까지인가",
+       "size": 38,
+       "tag": "h2"
+      },
+      "left": 140,
+      "right": 411,
+      "textLeft": 140,
+      "textRight": 411,
+      "fullBleed": false,
+      "footer": false,
+      "hero": false,
+      "continues": false,
+      "pinned": false
+     },
+     {
+      "sel": "section#dify.section",
+      "tag": "section",
+      "top": 4115,
+      "height": 897,
+      "words": 139,
+      "media": 0,
+      "middle": 82,
+      "heading": {
+       "text": "Dify에서의 개념 시연",
+       "size": 38,
+       "tag": "h2"
+      },
+      "left": 140,
+      "right": 177,
+      "textLeft": 140,
+      "textRight": 177,
+      "fullBleed": false,
+      "footer": false,
+      "hero": false,
+      "continues": false,
+      "pinned": false
+     },
+     {
+      "sel": "section#expansion.section.closing-section",
+      "tag": "section",
+      "top": 5012,
+      "height": 482,
+      "words": 54,
+      "media": 0,
+      "middle": 213,
+      "heading": {
+       "text": "실제 업무로 이어갈 확장",
+       "size": 38,
+       "tag": "h2"
+      },
+      "left": 140,
+      "right": 637,
+      "textLeft": 140,
+      "textRight": 637,
+      "fullBleed": false,
+      "footer": true,
+      "hero": false,
+      "continues": false,
+      "pinned": false
+     }
+    ],
+    "gaps": [],
+    "h1s": [
+     {
+      "text": "SmartMigrate Agent",
+      "size": 80,
+      "top": 162,
+      "firstScreen": true
+     }
+    ],
+    "edgeText": [],
+    "edges": [
+     {
+      "x": 140,
+      "n": 9
+     },
+     {
+      "x": 474,
+      "n": 7
+     },
+     {
+      "x": 498,
+      "n": 3
+     },
+     {
+      "x": 530,
+      "n": 3
+     },
+     {
+      "x": 1038,
+      "n": 2
+     },
+     {
+      "x": 1161,
+      "n": 2
+     },
+     {
+      "x": 666,
+      "n": 1
+     }
+    ],
+    "leftBlocks": 27,
+    "bodySize": 14,
+    "stage": false,
+    "explains": true,
+    "slivers": [],
+    "voidShare": 0.25,
+    "voidBox": {
+     "x": 1360,
+     "y": 160,
+     "w": 560,
+     "h": 1040
+    }
+   },
+   "app": null,
+   "consoleErrors": []
+  }
+ ],
+ "findings": [
+  {
+   "level": "FAIL",
+   "id": "eyebrow",
+   "width": 1440,
+   "message": "1 eyebrow/kicker label(s) above headings: \"파일 구조·PK·필수값 확인\" above \"기존 자산을 재사용하고, 규칙과 검증으로 반복 업무를 줄입니다.\"",
+   "fix": "Delete them. If the label carried real information, fold it into the headline or the supporting sentence."
+  },
+  {
+   "level": "WARN",
+   "id": "card-rows",
+   "width": 1440,
+   "message": "3 rows of identical boxed cards.",
+   "fix": "Vary the composition; not every section is a card grid.",
+   "alsoAt": [
+    1920
+   ]
+  },
+  {
+   "level": "WARN",
+   "id": "font-fallback",
+   "width": 1440,
+   "message": "Typeface(s) declared but not loaded, so a fallback is rendering: Consolas",
+   "fix": "Fix the font URL / family name, or the screenshots you are judging are not the design.",
+   "alsoAt": [
+    1920
+   ]
+  },
+  {
+   "level": "WARN",
+   "id": "size-count",
+   "width": 1440,
+   "message": "13 different font sizes (13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 30, 38, 72).",
+   "fix": "A page needs about five: display, heading, lead, body, small.",
+   "alsoAt": [
+    1920
+   ]
+  },
+  {
+   "level": "WARN",
+   "id": "body-size",
+   "width": 1440,
+   "message": "Body text is 15px.",
+   "fix": "Body copy 16–20px.",
+   "alsoAt": [
+    1920
+   ]
+  },
+  {
+   "level": "WARN",
+   "id": "grey-body",
+   "width": 1440,
+   "message": "The running text is a soft grey on its ground (6.9:1).",
+   "fix": "Set body copy in the full ink (7:1 or more). Keep the muted ink for secondary notes; pages read thin and unfinished when everything is grey.",
+   "alsoAt": [
+    1920
+   ]
+  },
+  {
+   "level": "WARN",
+   "id": "no-footage",
+   "width": 1440,
+   "message": "No video anywhere on the page.",
+   "fix": "Look for one honest clip with scripts/assets.mjs --video (the place, the material, the process) and use it as a muted loop with a poster frame. Defend its absence only if no clip fits the subject.",
+   "alsoAt": [
+    1920
+   ]
+  },
+  {
+   "level": "WARN",
+   "id": "off-centre",
+   "width": 1440,
+   "message": "The margins differ: 72px on the left, 104px on the right, at 1440px.",
+   "fix": "Put the navigation and the content on one pair of margins; check for padding on one side only, a scrollbar gutter, or a header on another inset than the page.",
+   "alsoAt": [
+    1920
+   ]
+  },
+  {
+   "level": "FAIL",
+   "id": "focal-point",
+   "width": 1920,
+   "message": "The first screen has no dominant element: the largest type is 80px (4.2vw) and no single picture holds a third of the viewport.",
+   "fix": "Make one thing lead: the headline at display size, or one large picture. A grid of many small pictures is not one thing; in blind tests jurors marked a first screen without a headline down every time. On the strongest studied sites the largest type has a median of 8.4vw."
+  }
+ ],
+ "images": [
+  {
+   "viewport": "desktop",
+   "width": 1440,
+   "fold": "C:\\Users\\11824\\Desktop\\SmartMigrate_Refactoring\\presentations\\smart-migrate\\concepts\\review\\inspect-a\\desktop-1440-fold.jpg",
+   "pages": [
+    "C:\\Users\\11824\\Desktop\\SmartMigrate_Refactoring\\presentations\\smart-migrate\\concepts\\review\\inspect-a\\desktop-1440-page-01.jpg",
+    "C:\\Users\\11824\\Desktop\\SmartMigrate_Refactoring\\presentations\\smart-migrate\\concepts\\review\\inspect-a\\desktop-1440-page-02.jpg"
+   ],
+   "film": []
+  },
+  {
+   "viewport": "desktop",
+   "width": 1920,
+   "fold": "C:\\Users\\11824\\Desktop\\SmartMigrate_Refactoring\\presentations\\smart-migrate\\concepts\\review\\inspect-a\\desktop-1920-fold.jpg",
+   "pages": [
+    "C:\\Users\\11824\\Desktop\\SmartMigrate_Refactoring\\presentations\\smart-migrate\\concepts\\review\\inspect-a\\desktop-1920-page-01.jpg",
+    "C:\\Users\\11824\\Desktop\\SmartMigrate_Refactoring\\presentations\\smart-migrate\\concepts\\review\\inspect-a\\desktop-1920-page-02.jpg"
+   ],
+   "film": []
+  }
+ ]
+}

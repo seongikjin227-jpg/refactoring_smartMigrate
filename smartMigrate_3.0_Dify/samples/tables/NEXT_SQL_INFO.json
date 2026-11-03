@@ -1,0 +1,61 @@
+{
+  "columns": [
+    "SQL_SEQ",
+    "SPACE_NM",
+    "SQL_ID",
+    "REF_SEQ",
+    "STATUS_CONVERSION",
+    "STATUS_TUNING",
+    "PRIORITY",
+    "USER_EDITED",
+    "TARGET_TABLE",
+    "TAG_KIND",
+    "FR_SQL",
+    "EDIT_FR_SQL",
+    "TO_SQL",
+    "BIND_SQL",
+    "BIND_SET",
+    "TEST_SQL",
+    "TUNED_TO_SQL",
+    "TUNED_RESULT",
+    "TUNED_FR_SQL",
+    "FORMATTED_SQL",
+    "BLOCK_RAG_CONTENT",
+    "BATCH_CNT",
+    "RETRY_COUNT",
+    "LOG",
+    "UPD_TS"
+  ],
+  "primary_key": [
+    "SQL_SEQ"
+  ],
+  "rows": [
+    {
+      "SQL_SEQ": 1,
+      "SPACE_NM": "HR_DEMO",
+      "SQL_ID": "EMP_DEPT_TUNING_DEMO",
+      "REF_SEQ": null,
+      "STATUS_CONVERSION": null,
+      "STATUS_TUNING": null,
+      "PRIORITY": 1,
+      "USER_EDITED": "N",
+      "TARGET_TABLE": "ASIS_HR_EMP,ASIS_HR_DEPT",
+      "TAG_KIND": "SELECT",
+      "FR_SQL": "SELECT e.EMPLOYEE_ID, e.FIRST_NAME, d.DEPARTMENT_NAME, e.SALARY\nFROM ASIS_HR_EMP e, ASIS_HR_DEPT d\nWHERE e.DEPARTMENT_ID = d.DEPARTMENT_ID(+)\n  AND e.DEPARTMENT_ID = :dept_id\n  AND e.EMPLOYEE_ID IN (\n    SELECT s.EMPLOYEE_ID FROM ASIS_HR_EMP s\n    WHERE s.SALARY >= :min_salary\n  )\nORDER BY e.EMPLOYEE_ID",
+      "EDIT_FR_SQL": null,
+      "TO_SQL": null,
+      "BIND_SQL": null,
+      "BIND_SET": "{\"dept_id\": 20, \"min_salary\": 7000}",
+      "TEST_SQL": null,
+      "TUNED_TO_SQL": null,
+      "TUNED_RESULT": null,
+      "TUNED_FR_SQL": null,
+      "FORMATTED_SQL": null,
+      "BLOCK_RAG_CONTENT": null,
+      "BATCH_CNT": 0,
+      "RETRY_COUNT": 0,
+      "LOG": null,
+      "UPD_TS": null
+    }
+  ]
+}

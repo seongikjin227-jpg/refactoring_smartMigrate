@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SmartMigrate Agent — 설계와 검증</title>
+<style>:root{--paper:#f3f4f1;--ink:#1d2724;--panel:#e3e7e2;--accent:#b8ebce;--dark:#203d32;--light:#f5fff8;--gap:12px;--edge:clamp(24px,4.4vw,72px)}
+*{box-sizing:border-box}html{scrollbar-color:var(--dark) var(--panel)}body{margin:0;background:var(--paper);color:var(--ink);font-family:"Malgun Gothic","Apple SD Gothic Neo",sans-serif;font-size:clamp(16px,1.35vw,21px);line-height:1.55;word-break:keep-all}::selection{background:var(--dark);color:var(--light)}a{color:inherit;text-underline-offset:.22em}button{font:inherit;color:inherit;cursor:pointer;border:0;border-radius:0;background:var(--panel);padding:9px 16px;min-height:44px;transition:background-color 140ms ease,transform 140ms ease}button:hover{background:var(--accent)}button:active{transform:scale(.97)}button:disabled{opacity:.4;cursor:default}button:focus-visible,a:focus-visible{outline:3px solid var(--dark);outline-offset:4px}button[aria-pressed=true]{background:var(--dark);color:var(--light)}
+header{min-height:72px;display:flex;align-items:center;justify-content:space-between;padding:12px var(--edge);gap:16px}.brand{font-weight:800;font-size:20px;text-decoration:none}nav{display:flex;gap:8px}nav button{font-size:14px}.slide{padding:24px var(--edge) 32px;min-height:calc(100svh - 148px);display:flex;flex-direction:column;justify-content:center;gap:22px}.slide+.slide{margin-top:48px}body.present:not(.all) .slide{display:none}body.present:not(.all) .slide.active{display:flex;margin-top:0}h1,h2,h3,p{margin:0}h1{font-size:clamp(46px,6vw,88px);line-height:1.03;font-weight:800;letter-spacing:-.04em}h2{font-size:clamp(30px,3.5vw,50px);line-height:1.22;letter-spacing:-.035em;text-wrap:balance}h3{font-size:clamp(20px,1.8vw,27px);line-height:1.3;letter-spacing:-.025em}p{max-width:75ch}.lead{font-size:clamp(19px,1.7vw,25px);line-height:1.5}.caption{font-size:14px;line-height:1.65}article{background:var(--panel);padding:clamp(20px,2.3vw,34px);display:flex;flex-direction:column;gap:16px}.mint{background:var(--accent)!important;color:var(--ink)!important}.dark{background:var(--dark)!important;color:var(--light)!important}small{font-size:14px}.two{display:grid;grid-template-columns:1fr 1fr;gap:var(--gap)}.three{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--gap)}.problems{display:grid;grid-template-columns:1fr 1.5fr 1fr;gap:var(--gap)}ul,ol{margin:0;padding-left:1.25em}li+li{margin-top:8px}.takeaway{font-size:clamp(18px,1.6vw,24px);font-weight:700}.slide.cover,body.present:not(.all) .slide.cover.active{display:grid;grid-template-columns:1.1fr 1fr;align-content:center;gap:24px 40px}.cover>div:first-child{display:flex;flex-direction:column;gap:30px}.board{display:grid;gap:var(--gap)}.board h2{font-size:28px}.wide{grid-column:1/-1}.pipeline{display:grid;grid-template-columns:repeat(4,1fr);gap:var(--gap)}.pipeline article{position:relative;padding:26px 22px;gap:20px}.pipeline article:not(:last-child)::after{content:"";position:absolute;right:-10px;top:50%;width:14px;height:14px;background:var(--dark);clip-path:polygon(0 0,100% 50%,0 100%);z-index:1}.mapping{display:flex;gap:18px;align-items:center;flex-wrap:wrap;padding:20px;background:var(--panel);font-size:16px}code{font-family:Consolas,monospace;font-size:.92em}pre{margin:0;overflow-x:auto;white-space:pre;line-height:1.8;font-size:clamp(14px,1.25vw,19px);word-break:normal}.architecture{display:grid;gap:10px}.strip{background:var(--panel);padding:18px 24px;display:flex;align-items:center;gap:24px}.strip strong{white-space:nowrap}.agents{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.agents article{padding:24px;gap:10px;font-size:16px}.agents strong{font-size:18px}.runline{display:grid;grid-template-columns:repeat(6,1fr);padding:0;list-style:none;gap:8px}.runline li{background:var(--panel);padding:20px 14px;margin:0;font-size:17px;font-weight:700;text-align:center}dl{display:grid;grid-template-columns:auto 1fr;gap:16px 24px;margin:0}dt{font-weight:700}dd{margin:0}.roles p{background:var(--panel);padding:22px;font-size:16px}.roles strong{display:block;margin-bottom:10px;font-size:18px}table{border-collapse:collapse;width:100%;font-size:clamp(16px,1.35vw,20px);font-variant-numeric:tabular-nums}th,td{text-align:left;padding:18px 20px;border-bottom:2px solid var(--paper)}thead{background:var(--dark);color:var(--light)}tbody{background:var(--panel)}tbody tr:nth-child(even){background:#d6e6db}th:first-child{white-space:nowrap}.dify{display:flex;align-items:stretch;gap:10px}.dify span{flex:1;background:var(--panel);padding:18px 12px;font-size:16px;text-align:center}.expansion{display:grid;grid-template-columns:1fr 1.4fr 1fr;gap:var(--gap)}.closing{font-size:clamp(23px,2.5vw,36px);font-weight:700;line-height:1.45}.note{display:none;padding:22px;background:#dae4f1;color:#20324e;font-size:16px;line-height:1.75}.note strong{display:block;margin-bottom:8px}body.show-notes .note{display:block}footer{position:sticky;bottom:0;display:flex;align-items:center;justify-content:center;gap:24px;min-height:76px;background:var(--paper);padding:12px var(--edge);font-size:16px}footer button{min-width:80px}.key-help{font-size:14px}.all .slide{min-height:auto;padding-top:56px;padding-bottom:56px}.all .slide+.slide{margin-top:12px;background:#e9ede7}body:not(.present) footer{display:none}body:fullscreen{overflow:auto}
+@media(max-width:900px){header{flex-wrap:wrap}nav{flex-wrap:wrap}.slide{gap:20px}.problems{grid-template-columns:1fr 1.4fr}.problems>article:last-child{grid-column:1/-1}.agents,.pipeline{grid-template-columns:repeat(2,1fr)}.pipeline article:nth-child(2)::after{display:none}.runline{grid-template-columns:repeat(3,1fr)}.strip{align-items:flex-start;flex-direction:column;gap:6px}.dify{flex-wrap:wrap}.dify span{min-width:130px}.roles{grid-template-columns:1fr}.expansion{grid-template-columns:1fr}.key-help{display:none}}
+@media(max-width:560px){:root{--edge:20px;--gap:10px}header{padding-top:16px;padding-bottom:8px;gap:10px}nav{gap:5px}nav button{font-size:13px;padding:8px 10px}.slide{padding-top:26px;padding-bottom:26px;min-height:calc(100svh - 180px)}.slide.cover,body.present:not(.all) .slide.cover.active,.two,.problems{grid-template-columns:1fr}.wide,.problems>article:last-child{grid-column:auto}.cover>div:first-child{gap:20px}.board article{padding:18px}.board h2{font-size:22px}.agents article{padding:17px;font-size:14px}.agents h3{font-size:19px}.agents strong{font-size:16px}.pipeline article{padding:18px 14px;gap:12px}.pipeline h3{font-size:20px}.pipeline p{font-size:16px}.pipeline small{font-size:13px}.runline li{padding:16px 9px;font-size:15px}dl{grid-template-columns:1fr;gap:6px}dd{margin-bottom:10px}th,td{padding:12px 8px;font-size:13px}footer{gap:18px}.mapping{gap:12px;font-size:14px}.caption{font-size:13px}.closing{font-size:24px}article{gap:12px}pre{font-size:13px}}
+/* Architecture connections describe the actual information flow. */
+.architecture{row-gap:18px}.architecture .strip,.architecture .agents{position:relative}.architecture .strip:not(:last-child)::after,.architecture .agents::after{content:"";position:absolute;bottom:-17px;left:calc(50% - 7px);width:14px;height:16px;background:var(--dark);clip-path:polygon(38% 0,62% 0,62% 60%,100% 60%,50% 100%,0 60%,38% 60%)}
+@media(max-width:560px){footer{position:static}.slide{min-height:calc(100svh - 190px)}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
+@media print{@page{size:A4 landscape;margin:10mm}body{font-size:12px;background:white;print-color-adjust:exact;-webkit-print-color-adjust:exact}header,footer,.note,noscript{display:none!important}body.present .slide,body.present:not(.all) .slide{display:flex!important;min-height:175mm;height:auto;break-after:page;page-break-after:always;padding:8mm;gap:14px;margin:0!important}.slide:last-child{break-after:auto}.cover{display:grid!important;grid-template-columns:1fr 1fr!important}h1{font-size:60px}h2{font-size:32px}h3{font-size:19px}.lead{font-size:18px}article{padding:18px;gap:10px}.caption{font-size:11px}pre{font-size:12px}th,td{font-size:12px;padding:12px}.agents article{padding:15px;font-size:13px}.agents strong{font-size:15px}.roles p{font-size:12px;padding:15px}.roles strong{font-size:15px}.takeaway{font-size:18px}}
+</style>
+</head>
+<body>
+<header><a href="#slide-1" class="brand">SQL깍두기</a><nav aria-label="발표 도구"><button id="overview" aria-pressed="false">전체 보기</button><button id="notes" aria-pressed="false">발표 노트</button><button id="fullscreen">전체 화면</button><button id="print">인쇄 / PDF</button></nav></header>
+<main>
+<section class="slide cover" id="slide-1">
+<div><h1>SmartMigrate<br>Agent</h1><p class="lead">신입사원의 SI 프로젝트 경험에서 시작한<br>Migration·개발 업무의 병목 개선</p></div>
+<div class="board"><article class="mint"><h2>설계의 기준</h2><p>AS-IS SQL + 매핑룰</p></article><article><h2>Agent의 역할</h2><p>생성 → 실행 → 검증 → 재처리</p></article><article class="dark"><h2>최종 연결</h2><p>이관된 데이터와 TO-BE SQL</p></article></div>
+<p class="caption wide">SQL깍두기 · 현장에서 느낀 병목부터 Agent 설계와 검증까지</p>
+<aside class="note wide"><strong>발표 노트 · 30초</strong> 안녕하세요. SQL깍두기 팀입니다. 저는 신입사원으로 SI 개발 프로젝트에 참여하며 노후 플랫폼 리팩토링을 경험했습니다. 그 과정에서 AS-IS SQL을 분석하고 TO-BE 구조에 맞춰 수정하는 반복 작업이 Migration과 개발 업무의 병목으로 느껴졌습니다. 이 경험을 바탕으로 기존 SQL과 매핑룰을 재사용하고 반복 작업을 줄이기 위해 SmartMigrate Agent를 기획했습니다.</aside>
+</section>
+<section class="slide" id="slide-2">
+<h2>현장에서 느낀 병목은<br>SQL 분석과 수정의 반복이었습니다.</h2><p class="lead">신입사원으로 참여한 SI 노후 플랫폼 리팩토링 프로젝트에서 출발했습니다.</p>
+<div class="problems"><article class="dark"><h3>프로젝트 경험</h3><p>노후 플랫폼 리팩토링<br>기존 구조와 SQL 파악<br>새 구조에 맞춘 개발</p></article><article class="mint"><h3>가장 크게 느낀 병목</h3><p>AS-IS SQL 분석<br>→ TO-BE SQL 수정<br>→ 다음 SQL에서 다시 반복</p><p>Migration과 개발 과정에서<br>되풀이되는 작업</p></article><article><h3>기획한 해결 방향</h3><p>기존 SQL 재활용<br>매핑룰 체계화<br>변환·검증 자동화</p></article></div>
+<p class="takeaway">매번 분석하고 수정하던 작업을, 공유된 매핑룰과 Agent의 실행 흐름으로 연결하고자 했습니다.</p>
+<aside class="note"><strong>발표 노트 · 1분</strong> 가장 크게 느낀 병목은 AS-IS SQL을 분석하고 TO-BE SQL로 수정하는 작업의 반복이었습니다. 기존 SQL에 담긴 업무 내용을 이해하고 새 구조에 맞게 바꾸는 일을 계속해야 했습니다. 그래서 기존 SQL을 재활용하고 테이블·컬럼 매핑을 기준으로 변환과 검증을 연결하면 Migration과 개발 업무의 반복을 줄일 수 있겠다고 생각했습니다. SmartMigrate Agent는 이 현장 경험에서 출발한 기획입니다. 개선 효과는 목표이며 아직 측정한 절감률을 뜻하지 않습니다.</aside>
+</section>
+<section class="slide" id="slide-3">
+<h2>매핑룰에서 SQL 검증까지</h2><p class="lead">데이터 이관 이후, 기존 업무 SQL을 새 구조로 연결합니다.</p>
+<div class="pipeline"><article><h3>매핑룰 입력</h3><p>Excel 업로드<br>또는 DB에 정리</p><small>Excel은 확장 구상</small></article><article><h3>이관 SQL 생성</h3><p>INSERT SQL<br>+ 검증 SQL</p><small>목표 산출물</small></article><article class="mint"><h3>이관·검증</h3><p>Oracle 실행<br>정합성 확인</p><small>DB 연결 가능한 경우</small></article><article class="dark"><h3>업무 SQL 변환</h3><p>AS-IS → TO-BE<br>변환 결과 검증</p><small>이관 완료 후 연결</small></article></div>
+<div class="mapping"><span>매핑 예시</span><code>EMPLOYEE_ID → EMP_ID</code><code>FIRST_NAME → GIVEN_NAME</code><code>SALARY → BASE_SALARY</code></div>
+<p class="caption">현재 Dify 예제는 MERGE/upsert 방식입니다. INSERT SQL은 이번 발표에서 설명하는 목표 산출물입니다.</p>
+<aside class="note"><strong>발표 노트 · 1분 30초</strong> 매핑룰을 Excel 또는 DB로 제공하고, INSERT SQL과 검증 SQL을 출력합니다. DB가 연결되면 이관과 검증 결과를 얻고, 이후 AS-IS SQL을 TO-BE SQL로 변환해 검증합니다. Excel 업로드와 결과 Excel 생성은 확장 구상입니다.</aside>
+</section>
+<section class="slide" id="slide-4">
+<h2>Supervisor와 전문 Agent</h2><p class="lead">공통 규칙과 상태를 공유하며, Agent마다 책임을 나눕니다.</p>
+<div class="architecture"><div class="strip"><strong>입력 자산</strong><span>매핑 마스터·상세 / DDL / AS-IS SQL / 작업 요청</span></div><div class="strip dark"><h3>Supervisor</h3><span>대기 작업 조회 · 도구 선택 · Agent 호출 · 후속 단계 연결</span></div>
+<div class="agents"><article class="mint"><h3>Migration</h3><p>매핑 + DDL</p><strong>이관 SQL·검증 SQL</strong><p>실행 / 검증 / 재시도</p></article><article><h3>Conversion</h3><p>AS-IS SQL + 매핑</p><strong>TO-BE SQL</strong><p>바인드 / 결과 검증</p></article><article><h3>Tuning</h3><p>검증된 TO-BE SQL</p><strong>튜닝 SQL·제안</strong><p>규칙 적용 / 결과 확인</p></article><article><h3>Formatting</h3><p>처리된 SQL</p><strong>정리된 SQL</strong><p>가독성 / 산출물 정리</p></article></div>
+<div class="strip"><strong>공유 저장소</strong><span>매핑룰 · SQL 원본과 산출물 · 작업 상태 · 로그 · 참고 규칙</span></div></div>
+<p class="caption">원본 구현의 책임 구조를 설명한 개념도입니다. Dify 시연은 하나의 통합 Workflow Tool로 축소했습니다.</p>
+<aside class="note"><strong>발표 노트 · 2분</strong> Supervisor는 조회한 작업을 registry에 보관하고 도구를 선택해 Agent를 호출합니다. Migration은 데이터 이관, Conversion은 업무 SQL 변환, Tuning은 규칙 기반 개선, Formatting은 가독성을 맡습니다. 별도 매핑 수집 Agent가 있다는 의미는 아닙니다.</aside>
+</section>
+<section class="slide" id="slide-5">
+<h2>Migration Agent의 실행 경로</h2><p class="lead">SQL 생성부터 실행·검증 결과 저장까지 이어갑니다.</p>
+<ol class="runline"><li>선행 작업 확인</li><li>원천·대상 DDL</li><li>SQL 생성</li><li>이관 실행</li><li class="mint">검증</li><li class="dark">상태·로그 저장</li></ol>
+<div class="two"><article><h3>함께 만드는 산출물</h3><p>매핑룰과 DDL을 바탕으로<br>이관 SQL + 검증 SQL 생성</p><pre><code>매핑 기준 + 원천·대상 스키마
+→ migration_sql
+→ verification_sql</code></pre></article><article class="dark"><h3>실패 위치에 따른 재처리</h3><dl><dt>이관 실행 실패</dt><dd>SQL 재생성 후 재시도</dd><dt>검증 실패</dt><dd>기존 이관 SQL 유지, 검증 SQL 재생성</dd><dt>선행 작업 실패</dt><dd>후속 작업 건너뛰기</dd></dl></article></div>
+<p class="caption">원본 구현 설계 기준. DDL 조회와 Oracle 실행은 DB 접근 가능한 환경에서 수행합니다.</p>
+<aside class="note"><strong>발표 노트 · 1분 30초</strong> check_dependency → fetch_ddl → generate → execute → verify → finalize 흐름입니다. 두 SQL은 generate 노드에서 함께 생성됩니다. 검증 SQL 역시 생성물이므로 업무 기준 검토가 필요합니다. 검증 SQL 재생성만으로 정합성이 자동 증명되는 것은 아닙니다.</aside>
+</section>
+<section class="slide" id="slide-6">
+<h2>이관 후, 업무 SQL을 연결합니다.</h2>
+<div class="two"><article class="dark"><h3>AS-IS SQL</h3><pre><code>SELECT e.EMPLOYEE_ID,
+       e.FIRST_NAME, e.SALARY
+FROM ASIS_HR_EMP e
+WHERE e.DEPARTMENT_ID = :dept_id</code></pre></article><article class="mint"><h3>TO-BE SQL</h3><pre><code>SELECT e.EMP_ID,
+       e.GIVEN_NAME, e.BASE_SALARY
+FROM TOBE_HR_EMP e
+WHERE e.DEPT_ID = :dept_id</code></pre></article></div>
+<div class="three roles"><p><strong>Conversion</strong>매핑 반영 · 바인드 보존<br>SELECT 결과 건수 검증</p><p><strong>Tuning</strong>규칙 적용<br>튜닝 전후 SELECT 건수 비교</p><p><strong>Formatting</strong>최종 SQL 가독성 정리</p></div>
+<p class="caption">저장소 매핑과 SQL을 활용한 설명 예시입니다. 이 HTML에서 DB를 실행하지 않습니다.</p>
+<aside class="note"><strong>발표 노트 · 1분 30초</strong> 원본 Conversion은 SELECT인 경우 바인드가 있으면 최대 3개 사례를 추출해 건수를 비교합니다. non-SELECT는 검증 없이 산출물 생성 후 PASS 저장 경로가 있습니다. 모든 SQL이 실행 검증되는 것은 아닙니다. 튜닝의 건수 검증도 성능 향상 증명은 아닙니다.</aside>
+</section>
+<section class="slide" id="slide-7">
+<h2>검증의 범위를 명확히 합니다.</h2><p class="lead">SQL 생성, 실행 성공, 데이터 정합성은 각각 확인할 대상입니다.</p>
+<table><thead><tr><th>확인 대상</th><th>현재 근거</th><th>추가 확인 제안</th></tr></thead><tbody><tr><th>SQL 산출물</th><td>매핑 반영, 바인드·토큰 보존 등</td><td>실제 DDL·자료형·문법</td></tr><tr><th>이관 데이터</th><td>Dify 샘플: PK·매핑 컬럼 JSON 비교</td><td>Oracle에서 검증 SQL 실행</td></tr><tr><th>변환 SQL</th><td>원본 SELECT: 결과 건수 비교</td><td>PK별 값·NULL·중복·경계값</td></tr><tr><th>튜닝 SQL</th><td>원본 SELECT: 전후 건수 비교</td><td>실행 계획·시간·자원 사용</td></tr></tbody></table>
+<p class="takeaway">건수가 같아도 값이 다를 수 있습니다.<br>업무 의미와 성능까지 별도로 확인해야 합니다.</p>
+<aside class="note"><strong>발표 노트 · 1분 30초</strong> 건수 비교는 빠른 이상 탐지지만 의미 동등성을 증명하지 않습니다. 생성 SQL과 검증 SQL이 같은 잘못된 매핑을 따를 수 있어 매핑 자체의 업무 검토도 필요합니다. 오른쪽은 현재 완료 기능이 아닌 보강 제안입니다.</aside>
+</section>
+<section class="slide" id="slide-8">
+<h2>Dify에서는 더미 데이터로 시연</h2><p class="lead">이번 환경에서는 Dify 서버가 로컬 Oracle에 접근할 수 없어 DB 연결을 제외했습니다.</p>
+<div class="two"><article class="dark"><h3>환경 제약</h3><p>Dify 서버와 로컬 PC 사이<br>DB 접근 경로 없음</p><p>실제 Oracle SQL 실행과<br>실DB 검증 결과는 제시 불가</p></article><article class="mint"><h3>시연으로 남긴 것</h3><p>JSON 테이블 입력<br>매핑 기반 데이터 처리<br>SQL 산출물과 비교 결과<br>대화 내 변경 상태 유지</p></article></div>
+<div class="dify"><span>대화 입력</span><span>기본 Agent</span><span>통합 Workflow Tool</span><span>상태 확인·저장</span><span>해설 + 결과 표</span></div>
+<p class="caption">이번 배포 환경의 제약입니다. Dify 전체가 DB에 연결할 수 없다는 의미는 아닙니다.</p>
+<aside class="note"><strong>발표 노트 · 1분</strong> 임베딩·벡터 DB·외부 API 서버 없이 기본 노드와 등록 모델을 사용합니다. Tool 내부는 상태 준비 → 계획 LLM → 실행·검증 Code입니다. 최종 상태는 Code가 확인하고 LLM은 해설합니다. 실제 서버 실행 성공은 저장소 기록만으로 확정하지 않습니다.</aside>
+</section>
+<section class="slide" id="slide-9">
+<h2>작은 데이터로 전체 경로를 확인</h2>
+<div class="two"><article class="mint"><h3>시연 데이터</h3><p>부서 3개 · 직원 10명</p><p>매핑 2개 · 컬럼 규칙 10개<br>AS-IS SQL 8개</p><p>업무 테이블 4개 + 메타·로그 5개</p></article><article><h3>샘플 테스트 순서</h3><ol><li>매핑과 초기 테이블 조회</li><li>부서 → 직원 순서로 이관</li><li>추가·갱신·동일 건수 확인</li><li>PK와 매핑 컬럼 비교</li><li>변환·튜닝·포매팅 산출물 확인</li></ol></article></div>
+<div class="three roles"><p><strong>상태 검증</strong>다음 대화에서 변경 값 유지</p><p><strong>실패 처리</strong>잘못된 입력·오래된 상태 거부</p><p><strong>재처리</strong>매핑 변경 시 기존 결과 STALE</p></div>
+<aside class="note"><strong>발표 노트 · 1분 30초</strong> 이관은 JSON 행을 바꾸고 실제 비교를 수행합니다. 오프라인 테스트의 SQL fixture는 고정 산출물이므로 LLM 자연어 이해와 Dify 서버 실행을 검증하지 않습니다. 단순 컬럼 매핑과 제한된 단일 조건이 시연 범위입니다.</aside>
+</section>
+<section class="slide" id="slide-10">
+<h2>샘플 결과가 말해주는 범위</h2><p class="lead">저장소의 JSON 비교 기록입니다. Oracle 실행 결과와 구분합니다.</p>
+<table><thead><tr><th>대상</th><th>원천</th><th>대상 대응</th><th>값 일치</th><th>불일치</th></tr></thead><tbody><tr><th>부서</th><td>3</td><td>3</td><td>3</td><td>0</td></tr><tr><th>직원</th><td>10</td><td>10</td><td>10</td><td>0</td></tr></tbody></table>
+<div class="three roles"><p><strong>DEMO-PASS</strong>더미 이관·비교 완료</p><p><strong>DEMO-GENERATED</strong>SQL 변환 산출물 생성</p><p><strong>DEMO-PROPOSED</strong>튜닝 산출물 제안</p></div>
+<p class="takeaway">확인한 것: 더미 데이터의 상태 변화와 비교.<br>남은 것: 실제 Oracle·Dify 서버에서의 실행 검증.</p>
+<p class="caption">근거: migration_verification_example.md. 이번 HTML에서 테스트를 새로 실행한 결과는 아닙니다.</p>
+<aside class="note"><strong>발표 노트 · 1분</strong> PK와 매핑 컬럼을 비교해 부서 3행과 직원 10행이 일치한 기록입니다. COUNT와 행 값 CONCAT 비교를 제공합니다. 실제 Oracle에서 SQL의 자료형·CAST·NLS를 검증한 것은 아닙니다. DEMO 상태는 실DB PASS가 아닙니다.</aside>
+</section>
+<section class="slide" id="slide-11">
+<h2>Excel과 실제 DB로 확장</h2><p class="lead">매핑 입력부터 SQL과 검증 보고서까지 연결합니다.</p>
+<div class="expansion"><article><h3>입력</h3><p>Excel 매핑 업로드<br>또는 DB 매핑 관리</p><small>파일 구조·PK·필수값 검사</small></article><article class="mint"><h3>Agent 실행</h3><p>이관 SQL·검증 SQL 생성<br>Oracle 실행·결과 검증<br>TO-BE SQL 변환·검증</p><small>실DB 연결과 실행 검증 필요</small></article><article class="dark"><h3>출력</h3><p>SQL 파일<br>검증 실행 결과<br>매핑·결과 Excel</p><small>Excel 입출력은 확장 구상</small></article></div>
+<p class="closing">기존 자산을 재사용하고,<br>규칙과 검증으로 반복 업무를 줄입니다.</p>
+<aside class="note"><strong>발표 노트 · 1분</strong> 이 장은 목표 흐름입니다. Excel 필수값과 매핑 구조를 검사하고, DB에 접근 가능한 환경에서 SQL을 실행·검증합니다. SQL과 검증 결과, 매핑 내역을 파일과 Excel로 제공하는 방향입니다.</aside>
+</section>
+</main>
+<footer><button id="prev">이전</button><span id="position" role="status" aria-live="polite">1 / 11</span><span class="key-help">← → 이동 · N 노트 · O 전체 보기</span><button id="next">다음</button></footer>
+<noscript>JavaScript가 꺼져 있어 전체 슬라이드를 문서 형태로 표시합니다.</noscript>
+<script>(() => {
+  'use strict';
+  const slides = [...document.querySelectorAll('.slide')];
+  const byId = id => document.getElementById(id);
+  const prev = byId('prev'), next = byId('next'), position = byId('position');
+  let current = 0;
+  function fromHash() {
+    const match = /^#slide-(\d+)$/.exec(location.hash);
+    return match ? Math.max(0, Math.min(slides.length - 1, Number(match[1]) - 1)) : 0;
+  }
+  function render(index, updateHash = true) {
+    current = Math.max(0, Math.min(slides.length - 1, index));
+    slides.forEach((slide, i) => {
+      slide.classList.toggle('active', i === current);
+      if (i === current) slide.setAttribute('aria-current', 'step');
+      else slide.removeAttribute('aria-current');
+    });
+    position.textContent = `${current + 1} / ${slides.length}`;
+    prev.disabled = current === 0;
+    next.disabled = current === slides.length - 1;
+    document.title = `${current + 1}/${slides.length} · SmartMigrate Agent`;
+    if (updateHash) history.replaceState(null, '', `#slide-${current + 1}`);
+    if (document.body.classList.contains('all')) slides[current].scrollIntoView({block:'start'});
+    else window.scrollTo(0, 0);
+  }
+  function toggle(button, className) {
+    const enabled = document.body.classList.toggle(className);
+    button.setAttribute('aria-pressed', String(enabled));
+    return enabled;
+  }
+  prev.addEventListener('click', () => render(current - 1));
+  next.addEventListener('click', () => render(current + 1));
+  byId('overview').addEventListener('click', () => {
+    const enabled = toggle(byId('overview'), 'all');
+    byId('overview').textContent = enabled ? '슬라이드 보기' : '전체 보기';
+    render(current, false);
+  });
+  byId('notes').addEventListener('click', () => toggle(byId('notes'), 'show-notes'));
+  byId('print').addEventListener('click', () => window.print());
+  const fullscreen = byId('fullscreen');
+  if (!document.documentElement.requestFullscreen) fullscreen.hidden = true;
+  fullscreen.addEventListener('click', async () => {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await document.documentElement.requestFullscreen();
+    } catch (_) { position.textContent = '전체 화면을 사용할 수 없습니다.'; }
+  });
+  document.addEventListener('fullscreenchange', () => {
+    fullscreen.textContent = document.fullscreenElement ? '화면 복원' : '전체 화면';
+  });
+  document.addEventListener('keydown', event => {
+    if (event.ctrlKey || event.metaKey || event.altKey || /INPUT|TEXTAREA|SELECT|BUTTON|A/.test(event.target.tagName)) return;
+    if (['ArrowRight','PageDown',' '].includes(event.key)) { event.preventDefault(); render(current + 1); }
+    if (['ArrowLeft','PageUp'].includes(event.key)) { event.preventDefault(); render(current - 1); }
+    if (event.key === 'Home') { event.preventDefault(); render(0); }
+    if (event.key === 'End') { event.preventDefault(); render(slides.length - 1); }
+    if (event.key.toLowerCase() === 'n') byId('notes').click();
+    if (event.key.toLowerCase() === 'o') byId('overview').click();
+  });
+  window.addEventListener('hashchange', () => render(fromHash(), false));
+  document.body.classList.add('present');
+  render(fromHash(), false);
+})();
+</script></body></html>

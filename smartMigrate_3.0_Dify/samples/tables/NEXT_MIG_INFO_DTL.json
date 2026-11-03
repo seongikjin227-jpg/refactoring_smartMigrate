@@ -1,0 +1,96 @@
+{
+  "columns": [
+    "MAP_ID",
+    "MAP_DTL",
+    "FR_COL",
+    "TO_COL",
+    "REG_TS",
+    "UPD_TS"
+  ],
+  "primary_key": [
+    "MAP_ID",
+    "MAP_DTL"
+  ],
+  "rows": [
+    {
+      "MAP_ID": 1,
+      "MAP_DTL": 1,
+      "FR_COL": "DEPARTMENT_ID",
+      "TO_COL": "DEPT_ID",
+      "REG_TS": null,
+      "UPD_TS": null
+    },
+    {
+      "MAP_ID": 1,
+      "MAP_DTL": 2,
+      "FR_COL": "DEPARTMENT_NAME",
+      "TO_COL": "DEPT_NAME",
+      "REG_TS": null,
+      "UPD_TS": null
+    },
+    {
+      "MAP_ID": 2,
+      "MAP_DTL": 1,
+      "FR_COL": "EMPLOYEE_ID",
+      "TO_COL": "EMP_ID",
+      "REG_TS": null,
+      "UPD_TS": null
+    },
+    {
+      "MAP_ID": 2,
+      "MAP_DTL": 2,
+      "FR_COL": "FIRST_NAME",
+      "TO_COL": "GIVEN_NAME",
+      "REG_TS": null,
+      "UPD_TS": null
+    },
+    {
+      "MAP_ID": 2,
+      "MAP_DTL": 3,
+      "FR_COL": "LAST_NAME",
+      "TO_COL": "FAMILY_NAME",
+      "REG_TS": null,
+      "UPD_TS": null
+    },
+    {
+      "MAP_ID": 2,
+      "MAP_DTL": 4,
+      "FR_COL": "EMAIL",
+      "TO_COL": "EMAIL_ADDR",
+      "REG_TS": null,
+      "UPD_TS": null
+    },
+    {
+      "MAP_ID": 2,
+      "MAP_DTL": 5,
+      "FR_COL": "HIRE_DATE",
+      "TO_COL": "JOIN_DATE",
+      "REG_TS": null,
+      "UPD_TS": null
+    },
+    {
+      "MAP_ID": 2,
+      "MAP_DTL": 6,
+      "FR_COL": "JOB_ID",
+      "TO_COL": "JOB_CODE",
+      "REG_TS": null,
+      "UPD_TS": null
+    },
+    {
+      "MAP_ID": 2,
+      "MAP_DTL": 7,
+      "FR_COL": "SALARY",
+      "TO_COL": "BASE_SALARY",
+      "REG_TS": null,
+      "UPD_TS": null
+    },
+    {
+      "MAP_ID": 2,
+      "MAP_DTL": 8,
+      "FR_COL": "DEPARTMENT_ID",
+      "TO_COL": "DEPT_ID",
+      "REG_TS": null,
+      "UPD_TS": null
+    }
+  ]
+}

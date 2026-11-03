@@ -1,0 +1,20 @@
+{
+  "source": "02_smartmigrate_chatflow.yml",
+  "output": "02_smartmigrate_chatflow.yml",
+  "tool_provider_id": "e3baab53-054c-4302-8d05-b2058d2fcd4b",
+  "tool_name": "smart_migrate_tool",
+  "model_provider": "langgenius/openai_api_compatible/openai_api_compatible",
+  "model": "gpt-5.5",
+  "manual_inputs": [
+    "session_json"
+  ],
+  "prewired_inputs": [
+    "session_json"
+  ],
+  "auto_inputs": [
+    "request"
+  ],
+  "server_import_tested": false,
+  "agent_plugin_identifier": "langgenius/agent:0.0.18@653bd665354a6e9412dad9c6031022a3cb38dd81fb0f90a408c03b023bd13141",
+  "note": "Agent strategy identity remains from template; select the installed strategy if needed."
+}

@@ -1,0 +1,18 @@
+{
+  "artifact": "SmartMigrate-Agent.html",
+  "mode": "Read",
+  "direction": "dense-tiles",
+  "seed": 378759576,
+  "tokens": {
+    "colors": {"paper":"#f3f4f1","ink":"#1d2724","panel":"#e3e7e2","accent":"#b8ebce","dark":"#203d32","light":"#f5fff8"},
+    "fontFamily": ["Malgun Gothic","Apple SD Gothic Neo","sans-serif"],
+    "bodyLineHeight": 1.55,
+    "gap": "12px",
+    "pageGutter": "clamp(24px,4.4vw,72px)",
+    "mobileGutter": "20px",
+    "cornerRadius": "0",
+    "buttonFeedback": "transform 140ms ease"
+  },
+  "briefOverrides": ["Slide document rather than a marketing landing page", "Architecture and Agent roles are the primary visual material", "Offline Korean fonts", "Immediate keyboard navigation; no automatic motion"],
+  "source": "DESIGN.md"
+}

@@ -44,6 +44,13 @@ it is not mapping registration or job execution. If the user also explicitly req
 registration/import/apply of actual mapping data, use MANAGEMENT instead.
 
 You are the only natural-language target interpreter. Extract targets before any DB query.
+- RAG_ID identifies a RAG Guide rule, never a Migration MAP_ID or SQL_SEQ. RAG Guide
+  registration/update/disable and Vector DB/Milvus synchronization are MANAGEMENT / OTHER,
+  not job execution. A mentioned RAG_ID does not require a job target or SQL domain.
+  For "RAG_ID 83번 포함해서 RAG Guide와 Correct SQL을 Vector DB에 동기화해줘."
+  and "RAG Guide와 Correct SQL을 Vector DB에 동기화해줘", use MANAGEMENT / OTHER /
+  UNKNOWN / unknown, empty job target arrays, and clarification_required=false.
+  Preserve RAG_ID and sync scope in the original request for the Management Agent.
 - Interpret identifier aliases using the domain in the current request; literal column names are not required.
 - In Migration/MIG/이관/마이그레이션/맵 context, "번호", "순번", "작업 번호", "작업 순번",
   "마이그레이션 번호", "이관 번호", "맵 번호", "맵 아이디", "MAP_ID" and "N번" refer to MAP_ID.
@@ -411,7 +418,7 @@ class NewType02IntentRouter(Component):
             problem = "Migration과 SQL 작업을 나누어 요청해 주세요."
         elif has_target and scope != "targeted":
             problem = "특정 대상 실행인지 전체 실행인지 확인해 주세요."
-        elif scope == "targeted" and not has_target:
+        elif scope == "targeted" and not has_target and not (route == "MANAGEMENT" and action == "OTHER"):
             problem = "작업 대상 MAP_ID 또는 SQL_SEQ를 알려주세요."
         elif has_sql and not targets["sql_seqs"] and not (targets["sql_ids"] and targets["space_nms"]):
             problem = "SQL_SEQ 또는 SQL_ID와 SPACE_NM을 함께 알려주세요."
@@ -426,6 +433,10 @@ class NewType02IntentRouter(Component):
                 problem = "전체 워크플로우인지 특정 도메인 실행인지 확인해 주세요."
             elif (has_mig and domain != "MIG") or (has_sql and domain not in {"SQL_CONVERSION", "SQL_TUNING", "SQL_FORMATTING"}):
                 problem = "작업 도메인과 대상 식별자가 일치하지 않습니다."
+        # RAG_ID and other management identifiers are carried in user_request,
+        # outside the migration/SQL job target arrays. Let 04 resolve their details.
+        if route == "MANAGEMENT" and action == "OTHER" and not has_target:
+            scope = "unknown"
         if problem:
             clarification, reason = True, problem
         if clarification and not reason:

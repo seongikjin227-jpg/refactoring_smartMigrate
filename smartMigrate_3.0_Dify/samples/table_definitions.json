@@ -1,0 +1,159 @@
+{
+  "ASIS_HR_DEPT": {
+    "columns": [
+      "DEPARTMENT_ID",
+      "DEPARTMENT_NAME"
+    ],
+    "primary_key": [
+      "DEPARTMENT_ID"
+    ]
+  },
+  "ASIS_HR_EMP": {
+    "columns": [
+      "EMPLOYEE_ID",
+      "FIRST_NAME",
+      "LAST_NAME",
+      "EMAIL",
+      "HIRE_DATE",
+      "JOB_ID",
+      "SALARY",
+      "DEPARTMENT_ID"
+    ],
+    "primary_key": [
+      "EMPLOYEE_ID"
+    ]
+  },
+  "TOBE_HR_DEPT": {
+    "columns": [
+      "DEPT_ID",
+      "DEPT_NAME"
+    ],
+    "primary_key": [
+      "DEPT_ID"
+    ]
+  },
+  "TOBE_HR_EMP": {
+    "columns": [
+      "EMP_ID",
+      "GIVEN_NAME",
+      "FAMILY_NAME",
+      "EMAIL_ADDR",
+      "JOIN_DATE",
+      "JOB_CODE",
+      "BASE_SALARY",
+      "DEPT_ID"
+    ],
+    "primary_key": [
+      "EMP_ID"
+    ]
+  },
+  "NEXT_MIG_INFO": {
+    "columns": [
+      "MAP_ID",
+      "MAP_TYPE",
+      "FR_TABLE",
+      "TO_TABLE",
+      "TRUNC_YN",
+      "CONDITION",
+      "USE_YN",
+      "PRIORITY",
+      "PRIOR_MAP_ID",
+      "STATUS",
+      "USER_EDITED",
+      "MIG_SQL",
+      "VERIFY_SQL",
+      "VERIFY2_SQL",
+      "BATCH_CNT",
+      "RETRY_COUNT",
+      "ELAPSED_SECONDS",
+      "LOG",
+      "REG_TS",
+      "UPD_TS"
+    ],
+    "primary_key": [
+      "MAP_ID"
+    ]
+  },
+  "NEXT_MIG_INFO_DTL": {
+    "columns": [
+      "MAP_ID",
+      "MAP_DTL",
+      "FR_COL",
+      "TO_COL",
+      "REG_TS",
+      "UPD_TS"
+    ],
+    "primary_key": [
+      "MAP_ID",
+      "MAP_DTL"
+    ]
+  },
+  "NEXT_SQL_INFO": {
+    "columns": [
+      "SQL_SEQ",
+      "SPACE_NM",
+      "SQL_ID",
+      "REF_SEQ",
+      "STATUS_CONVERSION",
+      "STATUS_TUNING",
+      "PRIORITY",
+      "USER_EDITED",
+      "TARGET_TABLE",
+      "TAG_KIND",
+      "FR_SQL",
+      "EDIT_FR_SQL",
+      "TO_SQL",
+      "BIND_SQL",
+      "BIND_SET",
+      "TEST_SQL",
+      "TUNED_TO_SQL",
+      "TUNED_RESULT",
+      "TUNED_FR_SQL",
+      "FORMATTED_SQL",
+      "BLOCK_RAG_CONTENT",
+      "BATCH_CNT",
+      "RETRY_COUNT",
+      "LOG",
+      "UPD_TS"
+    ],
+    "primary_key": [
+      "SQL_SEQ"
+    ]
+  },
+  "NEXT_MIG_RAG_INFO": {
+    "columns": [
+      "RAG_ID",
+      "CATEGORY",
+      "RULE_TYPE",
+      "SOURCE_TABLES",
+      "USE_YN",
+      "GUIDANCE_TEXT",
+      "SOURCE_SQL",
+      "TARGET_SQL",
+      "HIT_CNT",
+      "CREATED_AT",
+      "UPDATED_AT"
+    ],
+    "primary_key": [
+      "RAG_ID"
+    ]
+  },
+  "NEXT_MIG_LOG": {
+    "columns": [
+      "LOG_ID",
+      "MAP_ID",
+      "MIG_KIND",
+      "LOG_TYPE",
+      "LOG_LEVEL",
+      "STEP_NAME",
+      "STATUS",
+      "MESSAGE",
+      "RETRY_COUNT",
+      "GENERATE_SQL",
+      "CREATED_AT"
+    ],
+    "primary_key": [
+      "LOG_ID"
+    ]
+  }
+}

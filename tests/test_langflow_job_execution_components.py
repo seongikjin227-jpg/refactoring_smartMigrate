@@ -139,6 +139,36 @@ class JobExecutionTests(unittest.TestCase):
         return [json.loads(r.workflow_log[7]) for r in self.capture.records
                 if getattr(r, "workflow_log", [None] * 3)[2] == kind and len(r.workflow_log) > 7]
 
+    def test_rag_sync_target_does_not_require_job_identifiers(self):
+        for scope in ("unknown", "targeted"):
+            with self.subTest(scope=scope):
+                component = Intent()
+                text = "RAG_ID 83번 포함해서 RAG Guide와 Correct SQL을 Vector DB에 동기화해줘."
+                component.input_message = Message(text)
+                component._classify = Mock(return_value=json.dumps({
+                    "route": "MANAGEMENT", "request_action": "OTHER",
+                    "requested_domain": "UNKNOWN", "execution_scope": scope,
+                    "target_filter": {}, "clarification_required": False,
+                }))
+                component.stop = Mock()
+                payload = component.management_response().data
+                self.assertEqual(payload["route"], "MANAGEMENT")
+                self.assertFalse(payload["clarification_required"])
+                self.assertFalse(payload["should_execute"])
+                self.assertEqual(payload["execution_scope"], "unknown")
+                self.assertEqual(payload["user_request"], text)
+                self.assertFalse(any(payload["target_filter"].values()))
+
+    def test_missing_job_target_still_requires_clarification(self):
+        for route, action in (("JOB_EXECUTION", "EXECUTE"), ("MANAGEMENT", "STATUS_QUERY")):
+            with self.subTest(route=route):
+                result = Intent()._intent_from_response(json.dumps({
+                    "route": route, "request_action": action,
+                    "requested_domain": "SQL_CONVERSION", "execution_scope": "targeted",
+                    "target_filter": {}, "clarification_required": False,
+                }))
+                self.assertTrue(result["clarification_required"])
+
     def test_korean_target_reaches_db_and_runs_without_second_llm(self):
         payload = self.interpret()
         self.assertEqual(payload["target_filter"]["map_ids"], [59])

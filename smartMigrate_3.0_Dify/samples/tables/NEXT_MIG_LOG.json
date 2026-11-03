@@ -1,0 +1,19 @@
+{
+  "columns": [
+    "LOG_ID",
+    "MAP_ID",
+    "MIG_KIND",
+    "LOG_TYPE",
+    "LOG_LEVEL",
+    "STEP_NAME",
+    "STATUS",
+    "MESSAGE",
+    "RETRY_COUNT",
+    "GENERATE_SQL",
+    "CREATED_AT"
+  ],
+  "primary_key": [
+    "LOG_ID"
+  ],
+  "rows": []
+}

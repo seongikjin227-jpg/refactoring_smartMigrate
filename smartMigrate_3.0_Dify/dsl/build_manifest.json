@@ -1,0 +1,20 @@
+{
+  "dsl_version": "0.6.0",
+  "target_dify_version": "1.15.0",
+  "architecture": "executing_workflow_tool_with_static_list_encoded_state_binding",
+  "compatibility_review": "1.15.0 official source; local tests only",
+  "model_provider": "langgenius/openai_api_compatible/openai_api_compatible",
+  "model": "gpt-5.5",
+  "agent_strategy": "function_calling",
+  "agent_maximum_iterations": 1,
+  "sample_sql_count": 1,
+  "workflow_tool_provider_id": "e3baab53-054c-4302-8d05-b2058d2fcd4b",
+  "agent_plugin_identifier": "langgenius/agent:0.0.18@653bd665354a6e9412dad9c6031022a3cb38dd81fb0f90a408c03b023bd13141",
+  "server_import_tested": false,
+  "requires_configuration": [
+    "Dify 등록 모델 선택",
+    "Workflow를 smart_migrate_tool Tool로 발행(request/session_json)",
+    "Agent Tool ID 확인",
+    "request 자동 ON/session_json 자동 OFF 및 V3 사전 연결 유지"
+  ]
+}
