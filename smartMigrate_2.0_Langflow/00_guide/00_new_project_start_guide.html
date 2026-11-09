@@ -1,0 +1,568 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SmartMigrate · 새 프로젝트 시작 가이드</title>
+<style>
+:root{--ink:#243447;--muted:#526577;--accent:#246a89;--line:#cfdae3;--paper:#fff;--soft:#f3f6f9;--warm:#fff6df;--focus:#155b83;color-scheme:light}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:150px}body{margin:0;color:var(--ink);background:var(--paper);font:16px/1.75 'Segoe UI','Malgun Gothic',sans-serif}::selection{background:#cce6f0;color:#17364b}a{color:#185f80;text-underline-offset:4px;overflow-wrap:anywhere}a:hover{text-decoration-thickness:2px}button,input{font:inherit}button{cursor:pointer;color:var(--ink);background:white;border:1px solid #a9bdcc;padding:7px 13px;border-radius:5px}button:hover{background:#eaf2f6}button:active{background:#dcecf4}:focus-visible{outline:3px solid var(--focus);outline-offset:3px}button:disabled{cursor:default;color:#657b89;background:#eef2f5}small{display:block;color:var(--muted);font-size:12px;margin-top:4px}code,pre{font-family:Consolas,'Malgun Gothic',monospace}code{font-size:.9em;overflow-wrap:anywhere}p code,li code,td code{color:#1d5975;background:#eef4f7;padding:1px 4px;border-radius:3px}pre{margin:16px 0;padding:18px 20px;background:var(--soft);border:1px solid var(--line);font-size:13px;line-height:1.65;overflow:auto;tab-size:4;max-height:650px}pre code{overflow-wrap:normal;font-size:inherit}h1,h2,h3{line-height:1.35;text-wrap:balance}h1{font-size:34px;letter-spacing:-.025em;margin:0 0 16px}h2{font-size:25px;margin:42px 0 18px}h3{font-size:19px;margin:30px 0 12px}p{margin:12px 0;max-width:94ch}li{margin:8px 0}strong{font-weight:650}.skip{position:fixed;top:-100px;left:16px;z-index:10;background:white;padding:12px}.skip:focus{top:10px}
+header{position:sticky;top:0;z-index:5;background:#fff;border-bottom:1px solid var(--line);padding:15px 28px 0}.topline{display:flex;justify-content:space-between;align-items:center;gap:16px;max-width:1440px;margin:auto}.brand{font-size:21px;font-weight:650;line-height:1.4}.header-actions{display:flex;gap:12px;align-items:center}.header-actions button{white-space:nowrap}.header-actions a{font-size:13px}nav{display:flex;gap:6px;max-width:1440px;margin:14px auto 0;overflow-x:auto;padding-bottom:11px}nav a{white-space:nowrap;text-decoration:none;color:var(--muted);padding:7px 14px;border-radius:4px;border:1px solid transparent;font-size:14px}nav a:hover{background:var(--soft)}nav a[aria-current="page"]{color:#fff;background:#18334e;border-color:#18334e}main{max-width:1440px;margin:0 auto;padding:30px 28px 60px}.intro{display:flex;align-items:flex-start;justify-content:space-between;gap:22px}.intro p{color:var(--muted);margin:0}.scope{font-size:13px;text-align:right;white-space:nowrap;padding-top:5px}.route{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));list-style:none;padding:0;margin:24px 0 20px;border:1px solid var(--line)}.route li{margin:0;padding:17px 19px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}.route li:nth-child(4n){border-right:0}.route li:nth-child(n+5){border-bottom:0}.route h2{font-size:18px;margin:0 0 5px}.route p{font-size:14px;line-height:1.65;margin:5px 0}.route small{font-size:12px}.step-num{color:var(--accent);font-variant-numeric:tabular-nums;margin-right:8px}.request-pair{display:grid;grid-template-columns:1fr 1fr;gap:22px}.request-pair h2{font-size:17px;margin:0 0 8px}.request-pair p{font-size:14px}.request-pair blockquote{margin:0;min-height:155px}blockquote{position:relative;margin:18px 0;padding:16px 18px;background:#edf5f8;border:1px solid #bdd2df;border-radius:6px}blockquote p{margin:0 0 12px;max-width:none}.copy-quote{font-size:12px;padding:4px 10px}.note{padding:13px 18px;background:var(--warm);margin:20px 0;font-size:14px}.read-body{margin-top:34px;padding-top:1px;border-top:1px solid var(--line)}.table-wrap{overflow:auto;margin:20px 0;border:1px solid var(--line);border-radius:6px}table{width:100%;border-collapse:collapse;text-align:left;font-size:14px}th,td{padding:12px 14px;vertical-align:top;border-bottom:1px solid #dae3eb}th{font-weight:650;background:#f5f8fa;color:#203c51;white-space:nowrap}tbody tr:last-child td{border-bottom:0}td:first-child{min-width:190px}td pre{font-size:12px;max-width:500px;max-height:260px}details{margin:18px 0;border:1px solid var(--line);border-radius:6px;padding:12px 16px}details details,td details{border:0;padding:0;margin:9px 0}summary{cursor:pointer;font-weight:600;color:#1f5976}summary:hover{text-decoration:underline;text-underline-offset:4px}.search-label{display:block;font-size:14px;font-weight:600;margin:24px 0 6px}input[type=search]{display:block;width:min(100%,620px);border:1px solid #90a9bb;border-radius:5px;padding:10px 12px;color:var(--ink);background:#fff;caret-color:var(--accent)}input::placeholder{color:#526577}#search-result,#search-empty{font-size:14px;color:var(--muted)}.settings-example{display:grid;grid-template-columns:1fr 1fr;gap:20px}.settings-example pre{margin:0}.sql-file{scroll-margin-top:155px}.sql-file summary{font-family:Consolas,monospace;font-size:15px}.status{position:fixed;bottom:20px;right:24px;z-index:20;padding:10px 16px;border-radius:6px;background:#18334e;color:white;font-size:14px;box-shadow:0 6px 20px #24344724}.status:empty{display:none}footer{font-size:13px;color:var(--muted);border-top:1px solid var(--line);padding:20px 28px;max-width:1440px;margin:auto}[hidden]{display:none!important}body:not(.ready) nav a[aria-current]{background:transparent;color:var(--muted)}.panel>h1{margin-top:4px}
+@media(min-width:1700px){main{padding-top:36px}.route li{padding:22px}.request-pair blockquote{min-height:145px}}
+@media(max-width:900px){header{padding:12px 18px 0}.brand{font-size:18px}.header-actions a{display:none}main{padding:24px 18px 40px}.intro{display:block}.scope{text-align:left;margin-top:12px;white-space:normal}.route{grid-template-columns:repeat(2,minmax(0,1fr))}.route li:nth-child(4n){border-right:1px solid var(--line)}.route li:nth-child(2n){border-right:0}.route li:nth-child(n+5){border-bottom:1px solid var(--line)}.route li:nth-child(n+7){border-bottom:0}.request-pair,.settings-example{grid-template-columns:1fr}.request-pair blockquote{min-height:0}h1{font-size:28px}h2{font-size:23px}}
+@media(max-width:480px){.header-actions button{font-size:12px;padding:6px}.brand{font-size:16px}.route{grid-template-columns:1fr}.route li{border-right:0!important;border-bottom:1px solid var(--line)!important}.route li:last-child{border-bottom:0!important}h1{font-size:26px}nav a{font-size:13px;padding:6px 9px}.scope{font-size:12px}.table-wrap{max-width:100%}blockquote{padding:14px}}
+@media print{header{position:static;padding:0 0 12px}.header-actions,nav,button,.search-label,input,.status,#search-result,footer{display:none!important}main{padding:0;max-width:none}.panel[hidden]{display:block!important}body.print-summary .panel:not(#summary),body.print-summary .read-body{display:none!important}h1{font-size:25px}h2{font-size:19px;break-after:avoid}h3{font-size:16px;break-after:avoid}p,li,td,th{font-size:11px}.route li{padding:12px}.request-pair{gap:14px}blockquote{padding:10px}.request-pair blockquote{min-height:0}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:none;font-size:9px;break-inside:auto}.table-wrap{overflow:visible}td:first-child{min-width:0}table{table-layout:auto}td{overflow-wrap:anywhere}details{break-inside:auto}.panel{break-before:page}.panel:first-child{break-before:auto}.read-body{margin-top:16px}.intro .scope{font-size:11px}@page{size:A4 landscape;margin:12mm}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<a class="skip" href="#content">본문으로 이동</a>
+<style id="guide-header-style">
+header.guide-header{box-sizing:border-box;position:sticky;top:0;z-index:20;margin:0;padding:0 28px;background:#fff;border-bottom:1px solid #cfdae3;color:#243447;font-family:'Segoe UI','Malgun Gothic',sans-serif;font-size:14px;line-height:1.5}
+.guide-header *{box-sizing:border-box}.guide-header .guide-title-row{display:flex;align-items:center;justify-content:space-between;gap:16px;max-width:1440px;height:58px;margin:0 auto;padding:0}
+.guide-header .guide-brand{margin:0;padding:0;font-size:22px;line-height:30px;font-weight:650;letter-spacing:-.02em;color:#243447}.guide-header .guide-current{margin:0;padding:0;font-size:14px;line-height:22px;color:#526577;white-space:nowrap}
+.guide-header nav{display:flex;align-items:center;gap:6px;min-width:0;max-width:1440px;height:44px;margin:0 auto;padding:0;overflow-x:auto;scrollbar-width:thin;line-height:1.5}
+.guide-header nav a,.guide-header nav button{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;margin:0;padding:6px 12px;min-height:32px;border:1px solid transparent;border-radius:4px;font-family:inherit;font-size:14px;line-height:18px;font-weight:400;color:#526577;text-decoration:none;white-space:nowrap;background:transparent;cursor:pointer}
+.guide-header nav a:hover,.guide-header nav button:hover{background:#f3f6f9;color:#243447}.guide-header nav a[aria-current='page'],.guide-header nav button[aria-pressed='true']{background:#18334e;border-color:#18334e;color:#fff}
+.guide-header .guide-global{border-bottom:1px solid #e4ebf0}.guide-header .guide-local-row{display:flex;align-items:center;gap:16px;max-width:1440px;height:46px;margin:0 auto}.guide-header .guide-local{flex:1;max-width:none;height:46px;margin:0}.guide-header .guide-local a,.guide-header .guide-local button{font-size:13px;padding:5px 10px;min-height:30px}
+.guide-header .guide-zoom{display:flex;align-items:center;gap:5px;flex:0 0 auto}.guide-header .guide-zoom button{margin:0;padding:4px 9px;min-height:30px;font:13px/20px 'Segoe UI','Malgun Gothic',sans-serif;color:#243447;background:#fff;border:1px solid #a9bdcc;border-radius:4px;cursor:pointer}.guide-header .guide-zoom span{min-width:43px;text-align:right;font-size:12px;font-variant-numeric:tabular-nums}
+.guide-header :focus-visible{outline:3px solid #155b83;outline-offset:2px}.guide-description{box-sizing:border-box;max-width:1496px;margin:0 auto;padding:10px 28px;font:13px/20px 'Segoe UI','Malgun Gothic',sans-serif;color:#526577}
+main{min-width:0;overflow-wrap:anywhere}html{scroll-padding-top:168px}body.guide-diagrams{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidden}body.guide-diagrams header.guide-header{flex:0 0 auto}body.guide-diagrams #viewport{height:auto;flex:1;min-height:0;overflow:auto}
+@media(max-width:900px){header.guide-header{padding:0 18px}.guide-header .guide-brand{font-size:20px}.guide-description{padding:10px 18px}.guide-header .guide-local-row{gap:8px}}
+@media(max-width:480px){header.guide-header{padding:0 14px}.guide-header .guide-brand{font-size:18px}.guide-header .guide-current{font-size:12px}.guide-header nav a,.guide-header nav button{font-size:13px;padding:6px 10px}.guide-header .guide-local a,.guide-header .guide-local button{font-size:12px}.guide-header .guide-zoom{gap:3px}.guide-header .guide-zoom button{padding:4px 6px}.guide-description{padding:8px 14px}}
+</style><header class="guide-header"><div class="guide-title-row"><div class="guide-brand">SmartMigrate · 가이드</div><div class="guide-current">시작 가이드</div></div><nav class="guide-global" aria-label="문서 이동"><a href="00_new_project_start_guide.html" aria-current="page">시작 가이드</a><a href="01_operations_guide.html">운영 가이드</a><a href="02_developer_reference.html">개발 참고서</a><a href="00_architecture_chapter6_erd.html">구조·기능 도식</a><a href="03_request_templates.html">템플릿 모음</a></nav><div class="guide-local-row"><nav class="guide-local" aria-label="문서 목차"><a href="#summary" aria-current="page">시작 순서</a><a href="#database">Oracle 준비</a><a href="#settings">컴포넌트 설정</a><a href="#flow">Flow 배포</a><a href="#mapping">매핑·SQL 등록</a><a href="#milvus">Milvus 생성·동기화</a><a href="#deploy">단건 실행</a><a href="#all">전체 보기</a></nav></div></header>
+<main id="content" tabindex="-1">
+<section class="panel" id="summary" aria-labelledby="summary-title">
+  <div class="intro"><div><h1 id="summary-title">새 프로젝트 시작 순서</h1><p>아래 순서대로 설정하고, 마지막에 작업 1건을 실행하세요.</p></div><div class="scope">프로젝트 담당자 · DBA · 개발자<br>Langflow 2.0 · Oracle</div></div>
+  <ol class="route">
+    <li><h2><span class="step-num">1</span>소스·타겟 사전 확인</h2><p>소스: 과거 데이터 보유<br>타겟: TO-BE 테이블 생성 완료</p><small>접속 계정의 양쪽 접근 권한 확인</small></li>
+    <li><h2><span class="step-num">2</span>관리 테이블 생성</h2><p>타겟 계정에서 관리 DDL 실행<br>테이블 5개 · 시퀀스 2개 · 인덱스·코멘트</p><small>01 생성 → 03 설치 확인 SQL</small></li>
+    <li><h2><span class="step-num">3</span>컴포넌트 설정 변경</h2><p>Oracle 직접 입력 16개 노드 변경<br>실행기 스키마 · Milvus · LLM 설정 확인</p><small>계정 수정 위치 탭에서 파일·행 번호 확인</small></li>
+    <li><h2><span class="step-num">4</span>Flow 저장·에이전트 배포</h2><p>Langflow 사이트에서 Flow 저장<br>에이전트 빌더 플랫폼에서 배포</p><small>저장한 새 프로젝트 Flow 연결</small></li>
+    <li><h2><span class="step-num">5</span>정의서 받기·작성·등록</h2><p>수퍼 에이전트로 고정 양식 받기<br>작성한 파일을 첨부하고 전체 내용 전달·등록</p><small>execute_updates=false 검토 → true 적용</small></li>
+    <li><h2><span class="step-num">6</span>원본 SQL 등록</h2><p>NEXT_SQL_INFO에 원본 SQL 등록<br>초기 동기화용 자료 최소 1건 준비</p><small>필요한 RAG 규칙도 함께 등록</small></li>
+    <li><h2><span class="step-num">7</span>Milvus 생성·동기화</h2><p>프로젝트 DB 생성 → sync_all 실행<br>컬렉션 4개 자동 생성·결과 확인</p><small>04_saveVectorDB 기존 기능 사용</small></li>
+    <li><h2><span class="step-num">8</span>단건 실행·결과 확인</h2><p>MAP_ID / SQL_SEQ 1건 실행<br>로그·건수·검증 SQL 확인 후 확대</p><small>단건 실행 탭 참고</small></li>
+  </ol>
+  <div class="request-pair">
+    <div><h2>템플릿 받기 — 수퍼 에이전트에 요청</h2><blockquote><p>매핑 정의서 템플릿 받기. Smart Migrate의 안내를 받은 후에 Code Interpreter를 실행하여 xlsx 파일을 생성해줘.</p><button class="copy-quote" type="button">요청문 복사</button></blockquote></div>
+    <div><h2>작성 후 업로드 — 파일 첨부와 함께 요청</h2><blockquote><p>Super Agent의 파일 처리 기능을 활용하여 첨부파일의 내용을 조회해줘. Code Interpreter Tool은 사용하지 말고 해당 내용을 빠짐 없이 Smart Migrate 에이전트를 호출하여 전달하고 매핑룰을 등록해줘</p><button class="copy-quote" type="button">요청문 복사</button></blockquote></div>
+  </div>
+  <p class="note">빈 양식 생성에는 Code Interpreter를 사용합니다. 작성한 파일의 조회·등록은 수퍼 에이전트의 파일 처리 기능을 사용합니다. 매핑 등록과 실제 이관 실행은 별도 단계입니다.</p>
+  <div class="read-body"><h2>1. 사전 작업과 새 프로젝트 설정값 준비</h2>
+<h3>1.1 먼저 준비되어 있어야 하는 것</h3>
+<ul><li><strong>소스 스키마 <code>SRC_NEW</code></strong>: 이관할 과거 AS-IS 업무 테이블과 실제 데이터가 있어야 합니다.</li><li><strong>타겟 스키마 <code>TGT_NEW</code></strong>: 이관받을 TO-BE 업무 테이블·컬럼·PK가 이미 생성되어 있어야 합니다.</li><li><strong>접속 계정은 일반적으로 타겟 계정 <code>TGT_NEW</code>를 사용</strong>합니다. <code>db_username = system_schema = target_schema = TGT_NEW</code>로 설정하고 소스 스키마 조회 권한을 부여하세요.</li></ul>
+<p>이 가이드는 업무 테이블을 새로 만드는 절차가 아닙니다. 제공 SQL은 SmartMigrate의 매핑·작업·로그용 관리 테이블만 생성합니다. TO-BE 업무 테이블이 있는 <code>TGT_NEW</code> 스키마에 관리 테이블도 함께 생성하세요. 별도 관리 계정을 사용하는 프로젝트에서만 접속 계정·관리 스키마·객체별 권한을 구분해 설정하세요.</p>
+<pre><code>Oracle 서비스: NEWPDB
+  SRC_NEW  → 과거 업무 테이블 + AS-IS 데이터
+  TGT_NEW  → 에이전트 접속 계정
+             생성 완료된 TO-BE 업무 테이블 + SmartMigrate 관리 테이블
+
+SM_NEW로 접속 → SRC_NEW 조회 → TGT_NEW로 이관·검증</code></pre>
+<p>대상 테이블에 데이터가 이미 있다면 이관 전 중복·초기화 방식을 DBA와 정하세요. 소스 데이터는 유지하고, 최초 실행은 <code>TRUNC_YN=N</code>으로 설정하세요.</p>
+<h3>1.2 입력할 설정값</h3>
+<p>아래 예시를 실제 프로젝트 값으로 바꾸세요.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="가로 스크롤 가능한 표"><table><thead><tr><th scope="col">설정</th><th scope="col">예시</th><th scope="col">입력할 곳</th></tr></thead><tbody><tr><td>Oracle 주소·포트·서비스</td><td><code>new-oracle.internal</code>, <code>1521</code>, <code>NEWPDB</code></td><td><code>db_host</code>, <code>db_port</code>, <code>db_service_name</code></td></tr><tr><td>Oracle 계정·비밀번호</td><td><code>TGT_NEW</code>, 새 비밀번호</td><td><code>db_username</code>, <code>db_password</code></td></tr><tr><td>관리 테이블 소유자</td><td><code>TGT_NEW</code></td><td><code>system_schema</code></td></tr><tr><td>원천·대상 스키마</td><td><code>SRC_NEW</code>, <code>TGT_NEW</code></td><td>10C·12C의 <code>source_schema</code>, <code>target_schema</code></td></tr><tr><td>SQL 업무 구분</td><td><code>NEW_PROJECT</code></td><td><code>NEXT_SQL_INFO.SPACE_NM</code></td></tr><tr><td>Milvus 주소·계정·비밀번호</td><td>새 Milvus 접속 정보</td><td><code>milvus_uri</code>, <code>milvus_username</code>, <code>milvus_password</code></td></tr><tr><td>Milvus 프로젝트 DB</td><td><code>SM_NEW_PROJECT</code></td><td><code>milvus_db_name</code></td></tr><tr><td>Embedding</td><td>서비스 URL·모델·API key</td><td><code>rag_embed_base_url</code>, <code>rag_embed_model</code>, <code>rag_embed_api_key</code></td></tr><tr><td>LLM</td><td>서비스 URL·모델·API key</td><td>연결된 Language Model 노드</td></tr></tbody></table></div>
+<p>Oracle 로그인 계정과 관리 테이블 소유자는 동일하게 시작하세요. 원천·대상 스키마는 같은 Oracle 접속에서 접근할 수 있어야 합니다. 프로젝트별 Langflow 실행 프로세스를 분리하세요.</p></div>
+</section>
+<section class="panel" id="settings" aria-labelledby="settings-title">
+  <h1 id="settings-title">이 컴포넌트에서 계정 정보를 수정하세요.</h1>
+  <p>아래 예시를 새 프로젝트 값으로 바꾸고, 이어지는 컴포넌트 목록의 입력값을 변경하세요.</p>
+  <div class="settings-example"><pre><code>db_host         = new-oracle.internal
+db_port         = 1521
+db_service_name = NEWPDB
+db_username     = TGT_NEW
+db_password     = [새 Oracle 비밀번호: Secret 입력]
+system_schema   = TGT_NEW</code></pre><pre><code>source_schema   = SRC_NEW
+target_schema   = TGT_NEW
+milvus_uri      = [새 Milvus 주소]
+milvus_username = [Milvus 계정]
+milvus_password = [Milvus 비밀번호: Secret 입력]
+milvus_db_name  = [프로젝트 전용 Milvus DB]</code></pre></div>
+  <p class="note">DB 이름처럼 보이는 항목을 구분하세요. <code>db_service_name</code>은 Oracle 서비스, <code>system_schema</code>는 관리 테이블 소유자, <code>milvus_db_name</code>은 별도 검색 저장소의 DB입니다.</p>
+  <h2>3. 컴포넌트 설정 변경</h2>
+<h3>3.1 설정만 바꿀 항목과 코드 재배포가 필요한 항목</h3>
+<div class="table-wrap" tabindex="0" role="region" aria-label="가로 스크롤 가능한 표"><table><thead><tr><th scope="col">바꾸려는 항목</th><th scope="col">작업</th></tr></thead><tbody><tr><td>DB 주소·서비스·계정·비밀번호·스키마</td><td>아래 컴포넌트의 노드 입력값을 변경하고 Flow 저장</td></tr><tr><td>Milvus DB·컬렉션·Embedding 모델</td><td>동기화·검색 노드의 입력값을 동일하게 변경</td></tr><tr><td>LLM 주소·모델·API key</td><td>연결된 Language Model 노드 변경</td></tr><tr><td><code>NEXT_*</code> 관리 테이블 이름</td><td>가급적 유지. 바꾸면 관련 조회·저장 SQL, 매핑 생성 허용목록·프롬프트를 수정하고 컴포넌트 재등록</td></tr><tr><td><code>MIGRATION_LOG_SEQ</code> 이름</td><td>바꾸면 <code>00A_logRuntimeStart.py</code>의 logger INSERT를 수정하고 재등록</td></tr></tbody></table></div>
+<h3>Oracle 입력을 변경할 16개 컴포넌트</h3><p>각 노드의 Oracle 6개 입력을 새 프로젝트 값으로 변경하세요. 입력 선언은 아래 파일·행 번호에서 확인하세요.</p><label class="search-label" for="component-search">컴포넌트 찾기</label><input id="component-search" type="search" placeholder="파일명 또는 역할 검색 (예: 10A, 로그, 매핑)"><p id="search-result" role="status">전체 16개 표시</p><div id="oracle-inventory"><div class="table-wrap" tabindex="0" role="region" aria-label="컴포넌트 설정 목록"><table><thead><tr><th scope="col">컴포넌트 / 파일</th><th scope="col">역할</th><th scope="col">계정·비밀번호·스키마 위치</th><th scope="col">변경 방법</th></tr></thead><tbody><tr data-search="00A_logRuntimeStart.py시작 로그·첨부 파싱"><td><a href="../01_agent_start/00A_logRuntimeStart.py"><code>00A_logRuntimeStart.py</code></a><small>01_agent_start</small></td><td>시작 로그·첨부 파싱</td><td><code>db_username</code> 151행<br><code>db_password</code> 152행<br><code>system_schema</code> 153행</td><td>Langflow 노드의 Oracle 6개 입력을 새 값으로 변경<details><summary>입력 선언 보기</summary><pre><code>148: StrInput(name=&quot;db_host&quot;, display_name=&quot;DB Host&quot;, required=True),
+149: IntInput(name=&quot;db_port&quot;, display_name=&quot;DB Port&quot;, value=1521, required=False),
+150: StrInput(name=&quot;db_service_name&quot;, display_name=&quot;DB Service Name&quot;, required=True),
+151: StrInput(name=&quot;db_username&quot;, display_name=&quot;DB Username&quot;, required=True),
+152: SecretStrInput(name=&quot;db_password&quot;, display_name=&quot;DB Password&quot;, required=True),
+153: StrInput(name=&quot;system_schema&quot;, display_name=&quot;System Schema&quot;, required=True),</code></pre></details></td></tr><tr data-search="04_currentProgress.py현재 실행 조회"><td><a href="../02_flow_management/04_currentProgress.py"><code>04_currentProgress.py</code></a><small>02_flow_management</small></td><td>현재 실행 조회</td><td><code>db_username</code> 60행<br><code>db_password</code> 61행<br><code>system_schema</code> 62행</td><td>Langflow 노드의 Oracle 6개 입력을 새 값으로 변경<details><summary>입력 선언 보기</summary><pre><code>57: StrInput(name=&quot;db_host&quot;, display_name=&quot;DB Host&quot;, required=True),
+58: IntInput(name=&quot;db_port&quot;, display_name=&quot;DB Port&quot;, value=1521, required=False),
+59: StrInput(name=&quot;db_service_name&quot;, display_name=&quot;DB Service Name&quot;, required=True),
+60: StrInput(name=&quot;db_username&quot;, display_name=&quot;DB Username&quot;, required=True),
+61: SecretStrInput(name=&quot;db_password&quot;, display_name=&quot;DB Password&quot;, required=True),
+62: StrInput(name=&quot;system_schema&quot;, display_name=&quot;System Schema&quot;, required=True),</code></pre></details></td></tr><tr data-search="04_dashboard.py전체 현황"><td><a href="../02_flow_management/04_dashboard.py"><code>04_dashboard.py</code></a><small>02_flow_management</small></td><td>전체 현황</td><td><code>db_username</code> 40행<br><code>db_password</code> 41행<br><code>system_schema</code> 42행</td><td>Langflow 노드의 Oracle 6개 입력을 새 값으로 변경<details><summary>입력 선언 보기</summary><pre><code>37: StrInput(name=&quot;db_host&quot;, display_name=&quot;DB Host&quot;, required=True),
+38: IntInput(name=&quot;db_port&quot;, display_name=&quot;DB Port&quot;, value=1521, required=False),
+39: StrInput(name=&quot;db_service_name&quot;, display_name=&quot;DB Service Name&quot;, required=True),
+40: StrInput(name=&quot;db_username&quot;, display_name=&quot;DB Username&quot;, required=True),
+41: SecretStrInput(name=&quot;db_password&quot;, display_name=&quot;DB Password&quot;, required=True),
+42: StrInput(name=&quot;system_schema&quot;, display_name=&quot;System Schema&quot;, required=True),</code></pre></details></td></tr><tr data-search="04_mappingRuleUpdateSqlGenerate.py매핑 SQL 생성·적용"><td><a href="../02_flow_management/04_mappingRuleUpdateSqlGenerate.py"><code>04_mappingRuleUpdateSqlGenerate.py</code></a><small>02_flow_management</small></td><td>매핑 SQL 생성·적용</td><td><code>db_username</code> 67행<br><code>db_password</code> 68행<br><code>system_schema</code> 69행</td><td>Langflow 노드의 Oracle 6개 입력을 새 값으로 변경<details><summary>입력 선언 보기</summary><pre><code>64: StrInput(name=&quot;db_host&quot;, display_name=&quot;DB Host&quot;, required=True),
+65: IntInput(name=&quot;db_port&quot;, display_name=&quot;DB Port&quot;, value=1521, required=False),
+66: StrInput(name=&quot;db_service_name&quot;, display_name=&quot;DB Service Name&quot;, required=True),
+67: StrInput(name=&quot;db_username&quot;, display_name=&quot;DB Username&quot;, required=True),
+68: SecretStrInput(name=&quot;db_password&quot;, display_name=&quot;DB Password&quot;, required=True),
+69: StrInput(name=&quot;system_schema&quot;, display_name=&quot;System Schema&quot;, required=True),</code></pre></details></td></tr><tr data-search="04_ragCommandTool.pyRAG·유사 SQL 검색"><td><a href="../02_flow_management/04_ragCommandTool.py"><code>04_ragCommandTool.py</code></a><small>02_flow_management</small></td><td>RAG·유사 SQL 검색</td><td><code>db_username</code> 42행<br><code>db_password</code> 43행<br><code>system_schema</code> 44행</td><td>Langflow 노드의 Oracle 6개 입력을 새 값으로 변경<details><summary>입력 선언 보기</summary><pre><code>39: StrInput(name=&quot;db_host&quot;, display_name=&quot;DB Host&quot;, required=True),
+40: IntInput(name=&quot;db_port&quot;, display_name=&quot;DB Port&quot;, value=1521, required=False),
+41: StrInput(name=&quot;db_service_name&quot;, display_name=&quot;DB Service Name&quot;, required=True),
+42: StrInput(name=&quot;db_username&quot;, display_name=&quot;DB Username&quot;, required=True),
+43: SecretStrInput(name=&quot;db_password&quot;, display_name=&quot;DB Password&quot;, required=True),
+44: StrInput(name=&quot;system_schema&quot;, display_name=&quot;System Schema&quot;, required=True),</code></pre></details></td></tr><tr data-search="04_saveVectorDB.py검색 데이터 동기화"><td><a href="../02_flow_management/04_saveVectorDB.py"><code>04_saveVectorDB.py</code></a><small>02_flow_management</small></td><td>검색 데이터 동기화</td><td><code>db_username</code> 74행<br><code>db_password</code> 75행<br><code>system_schema</code> 76행</td><td>Langflow 노드의 Oracle 6개 입력을 새 값으로 변경<details><summary>입력 선언 보기</summary><pre><code>71: StrInput(name=&quot;db_host&quot;, display_name=&quot;DB Host&quot;, required=True),
+72: IntInput(name=&quot;db_port&quot;, display_name=&quot;DB Port&quot;, value=1521, required=False),
+73: StrInput(name=&quot;db_service_name&quot;, display_name=&quot;DB Service Name&quot;, required=True),
+74: StrInput(name=&quot;db_username&quot;, display_name=&quot;DB Username&quot;, required=True),
+75: SecretStrInput(name=&quot;db_password&quot;, display_name=&quot;DB Password&quot;, required=True),
+76: StrInput(name=&quot;system_schema&quot;, display_name=&quot;System Schema&quot;, required=True),</code></pre></details></td></tr><tr data-search="04_selectCommandTool.py작업·결과 조회"><td><a href="../02_flow_management/04_selectCommandTool.py"><code>04_selectCommandTool.py</code></a><small>02_flow_management</small></td><td>작업·결과 조회</td><td><code>db_username</code> 39행<br><code>db_password</code> 40행<br><code>system_schema</code> 41행</td><td>Langflow 노드의 Oracle 6개 입력을 새 값으로 변경<details><summary>입력 선언 보기</summary><pre><code>36: StrInput(name=&quot;db_host&quot;, display_name=&quot;DB Host&quot;, required=True),
+37: IntInput(name=&quot;db_port&quot;, display_name=&quot;DB Port&quot;, value=1521, required=False),
+38: StrInput(name=&quot;db_service_name&quot;, display_name=&quot;DB Service Name&quot;, required=True),
+39: StrInput(name=&quot;db_username&quot;, display_name=&quot;DB Username&quot;, required=True),
+40: SecretStrInput(name=&quot;db_password&quot;, display_name=&quot;DB Password&quot;, required=True),
+41: StrInput(name=&quot;system_schema&quot;, display_name=&quot;System Schema&quot;, required=True),</code></pre></details></td></tr><tr data-search="04_updateCommandTool.py상태·Correct SQL 수정"><td><a href="../02_flow_management/04_updateCommandTool.py"><code>04_updateCommandTool.py</code></a><small>02_flow_management</small></td><td>상태·Correct SQL 수정</td><td><code>db_username</code> 35행<br><code>db_password</code> 36행<br><code>system_schema</code> 37행</td><td>Langflow 노드의 Oracle 6개 입력을 새 값으로 변경<details><summary>입력 선언 보기</summary><pre><code>32: StrInput(name=&quot;db_host&quot;, display_name=&quot;DB Host&quot;, required=True),
+33: IntInput(name=&quot;db_port&quot;, display_name=&quot;DB Port&quot;, value=1521, required=False),
+34: StrInput(name=&quot;db_service_name&quot;, display_name=&quot;DB Service Name&quot;, required=True),
+35: StrInput(name=&quot;db_username&quot;, display_name=&quot;DB Username&quot;, required=True),
+36: SecretStrInput(name=&quot;db_password&quot;, display_name=&quot;DB Password&quot;, required=True),
+37: StrInput(name=&quot;system_schema&quot;, display_name=&quot;System Schema&quot;, required=True),</code></pre></details></td></tr><tr data-search="06_getRemainingJobs.py잔여 작업 조회"><td><a href="../03_job_execution/06_getRemainingJobs.py"><code>06_getRemainingJobs.py</code></a><small>03_job_execution</small></td><td>잔여 작업 조회</td><td><code>db_username</code> 32행<br><code>db_password</code> 33행<br><code>system_schema</code> 34행</td><td>Langflow 노드의 Oracle 6개 입력을 새 값으로 변경<details><summary>입력 선언 보기</summary><pre><code>29: StrInput(name=&quot;db_host&quot;, display_name=&quot;DB Host&quot;, required=True),
+30: IntInput(name=&quot;db_port&quot;, display_name=&quot;DB Port&quot;, value=1521, required=False),
+31: StrInput(name=&quot;db_service_name&quot;, display_name=&quot;DB Service Name&quot;, required=True),
+32: StrInput(name=&quot;db_username&quot;, display_name=&quot;DB Username&quot;, required=True),
+33: SecretStrInput(name=&quot;db_password&quot;, display_name=&quot;DB Password&quot;, required=True),
+34: StrInput(name=&quot;system_schema&quot;, display_name=&quot;System Schema&quot;, required=True),</code></pre></details></td></tr><tr data-search="10A_migJobsToLoopTable.py이관 작업 구성"><td><a href="../03_job_execution/10A_migJobsToLoopTable.py"><code>10A_migJobsToLoopTable.py</code></a><small>03_job_execution</small></td><td>이관 작업 구성</td><td><code>db_username</code> 32행<br><code>db_password</code> 33행<br><code>system_schema</code> 34행</td><td>Langflow 노드의 Oracle 6개 입력을 새 값으로 변경<details><summary>입력 선언 보기</summary><pre><code>29: StrInput(name=&quot;db_host&quot;, display_name=&quot;DB Host&quot;, required=True),
+30: IntInput(name=&quot;db_port&quot;, display_name=&quot;DB Port&quot;, value=1521, required=False),
+31: StrInput(name=&quot;db_service_name&quot;, display_name=&quot;DB Service Name&quot;, required=True),
+32: StrInput(name=&quot;db_username&quot;, display_name=&quot;DB Username&quot;, required=True),
+33: SecretStrInput(name=&quot;db_password&quot;, display_name=&quot;DB Password&quot;, required=True),
+34: StrInput(name=&quot;system_schema&quot;, display_name=&quot;System Schema&quot;, required=True),</code></pre></details></td></tr><tr data-search="11_finalDashboard.py최종 현황"><td><a href="../03_job_execution/11_finalDashboard.py"><code>11_finalDashboard.py</code></a><small>03_job_execution</small></td><td>최종 현황</td><td><code>db_username</code> 40행<br><code>db_password</code> 41행<br><code>system_schema</code> 42행</td><td>Langflow 노드의 Oracle 6개 입력을 새 값으로 변경<details><summary>입력 선언 보기</summary><pre><code>37: StrInput(name=&quot;db_host&quot;, display_name=&quot;DB Host&quot;, required=True),
+38: IntInput(name=&quot;db_port&quot;, display_name=&quot;DB Port&quot;, value=1521, required=False),
+39: StrInput(name=&quot;db_service_name&quot;, display_name=&quot;DB Service Name&quot;, required=True),
+40: StrInput(name=&quot;db_username&quot;, display_name=&quot;DB Username&quot;, required=True),
+41: SecretStrInput(name=&quot;db_password&quot;, display_name=&quot;DB Password&quot;, required=True),
+42: StrInput(name=&quot;system_schema&quot;, display_name=&quot;System Schema&quot;, required=True),</code></pre></details></td></tr><tr data-search="11B_failureCauseAnalyzer.py실패 분석"><td><a href="../03_job_execution/11B_failureCauseAnalyzer.py"><code>11B_failureCauseAnalyzer.py</code></a><small>03_job_execution</small></td><td>실패 분석</td><td><code>db_username</code> 36행<br><code>db_password</code> 37행<br><code>system_schema</code> 38행</td><td>Langflow 노드의 Oracle 6개 입력을 새 값으로 변경<details><summary>입력 선언 보기</summary><pre><code>33: StrInput(name=&quot;db_host&quot;, display_name=&quot;DB Host&quot;, required=True),
+34: IntInput(name=&quot;db_port&quot;, display_name=&quot;DB Port&quot;, value=1521, required=False),
+35: StrInput(name=&quot;db_service_name&quot;, display_name=&quot;DB Service Name&quot;, required=True),
+36: StrInput(name=&quot;db_username&quot;, display_name=&quot;DB Username&quot;, required=True),
+37: SecretStrInput(name=&quot;db_password&quot;, display_name=&quot;DB Password&quot;, required=True),
+38: StrInput(name=&quot;system_schema&quot;, display_name=&quot;System Schema&quot;, required=True),</code></pre></details></td></tr><tr data-search="12A_sqlConversionJobsToLoopTable.py변환 작업 구성"><td><a href="../03_job_execution/12A_sqlConversionJobsToLoopTable.py"><code>12A_sqlConversionJobsToLoopTable.py</code></a><small>03_job_execution</small></td><td>변환 작업 구성</td><td><code>db_username</code> 32행<br><code>db_password</code> 33행<br><code>system_schema</code> 34행</td><td>Langflow 노드의 Oracle 6개 입력을 새 값으로 변경<details><summary>입력 선언 보기</summary><pre><code>29: StrInput(name=&quot;db_host&quot;, display_name=&quot;DB Host&quot;, required=True),
+30: IntInput(name=&quot;db_port&quot;, display_name=&quot;DB Port&quot;, value=1521, required=False),
+31: StrInput(name=&quot;db_service_name&quot;, display_name=&quot;DB Service Name&quot;, required=True),
+32: StrInput(name=&quot;db_username&quot;, display_name=&quot;DB Username&quot;, required=True),
+33: SecretStrInput(name=&quot;db_password&quot;, display_name=&quot;DB Password&quot;, required=True),
+34: StrInput(name=&quot;system_schema&quot;, display_name=&quot;System Schema&quot;, required=True),</code></pre></details></td></tr><tr data-search="15A_sqlTuningJobsToLoopTable.py튜닝 작업 구성"><td><a href="../03_job_execution/15A_sqlTuningJobsToLoopTable.py"><code>15A_sqlTuningJobsToLoopTable.py</code></a><small>03_job_execution</small></td><td>튜닝 작업 구성</td><td><code>db_username</code> 32행<br><code>db_password</code> 33행<br><code>system_schema</code> 34행</td><td>Langflow 노드의 Oracle 6개 입력을 새 값으로 변경<details><summary>입력 선언 보기</summary><pre><code>29: StrInput(name=&quot;db_host&quot;, display_name=&quot;DB Host&quot;, required=True),
+30: IntInput(name=&quot;db_port&quot;, display_name=&quot;DB Port&quot;, value=1521, required=False),
+31: StrInput(name=&quot;db_service_name&quot;, display_name=&quot;DB Service Name&quot;, required=True),
+32: StrInput(name=&quot;db_username&quot;, display_name=&quot;DB Username&quot;, required=True),
+33: SecretStrInput(name=&quot;db_password&quot;, display_name=&quot;DB Password&quot;, required=True),
+34: StrInput(name=&quot;system_schema&quot;, display_name=&quot;System Schema&quot;, required=True),</code></pre></details></td></tr><tr data-search="17A_sqlFormattingJobsToLoopTable.py서식 작업 구성"><td><a href="../03_job_execution/17A_sqlFormattingJobsToLoopTable.py"><code>17A_sqlFormattingJobsToLoopTable.py</code></a><small>03_job_execution</small></td><td>서식 작업 구성</td><td><code>db_username</code> 32행<br><code>db_password</code> 33행<br><code>system_schema</code> 34행</td><td>Langflow 노드의 Oracle 6개 입력을 새 값으로 변경<details><summary>입력 선언 보기</summary><pre><code>29: StrInput(name=&quot;db_host&quot;, display_name=&quot;DB Host&quot;, required=True),
+30: IntInput(name=&quot;db_port&quot;, display_name=&quot;DB Port&quot;, value=1521, required=False),
+31: StrInput(name=&quot;db_service_name&quot;, display_name=&quot;DB Service Name&quot;, required=True),
+32: StrInput(name=&quot;db_username&quot;, display_name=&quot;DB Username&quot;, required=True),
+33: SecretStrInput(name=&quot;db_password&quot;, display_name=&quot;DB Password&quot;, required=True),
+34: StrInput(name=&quot;system_schema&quot;, display_name=&quot;System Schema&quot;, required=True),</code></pre></details></td></tr><tr data-search="18A_fullWorkflowJobsToLoopTable.py전체 실행 작업 구성"><td><a href="../03_job_execution/18A_fullWorkflowJobsToLoopTable.py"><code>18A_fullWorkflowJobsToLoopTable.py</code></a><small>03_job_execution</small></td><td>전체 실행 작업 구성</td><td><code>db_username</code> 42행<br><code>db_password</code> 43행<br><code>system_schema</code> 44행</td><td>Langflow 노드의 Oracle 6개 입력을 새 값으로 변경<details><summary>입력 선언 보기</summary><pre><code>39: StrInput(name=&quot;db_host&quot;, display_name=&quot;DB Host&quot;, required=True),
+40: IntInput(name=&quot;db_port&quot;, display_name=&quot;DB Port&quot;, value=1521, required=False),
+41: StrInput(name=&quot;db_service_name&quot;, display_name=&quot;DB Service Name&quot;, required=True),
+42: StrInput(name=&quot;db_username&quot;, display_name=&quot;DB Username&quot;, required=True),
+43: SecretStrInput(name=&quot;db_password&quot;, display_name=&quot;DB Password&quot;, required=True),
+44: StrInput(name=&quot;system_schema&quot;, display_name=&quot;System Schema&quot;, required=True),</code></pre></details></td></tr></tbody></table></div></div><p id="search-empty" hidden>일치하는 컴포넌트가 없습니다. 파일명 일부 또는 역할로 다시 검색하세요.</p><h3>실행기 4개는 계정을 전달받는다</h3><div class="table-wrap" tabindex="0" role="region" aria-label="컴포넌트 설정 목록"><table><thead><tr><th scope="col">실행기</th><th scope="col">Oracle 설정 출처</th><th scope="col">이 실행기에서 수정할 스키마</th><th scope="col">수정 방법</th></tr></thead><tbody><tr><td><a href="../03_job_execution/10C_migOneJobPocExecutor3.py"><code>10C_migOneJobPocExecutor3.py</code></a><small>03_job_execution</small></td><td><code>job_item.db_config</code><br><small>_db_config: 2299행 / _connect: 2418행</small></td><td><code>source_schema</code> 225행, <code>target_schema</code> 226행</td><td>자기 노드에 Oracle 계정칸을 추가하지 않고 A 노드·상위 payload를 수정</td></tr><tr><td><a href="../03_job_execution/12C_sqlConversionOneJobPocExecutor.py"><code>12C_sqlConversionOneJobPocExecutor.py</code></a><small>03_job_execution</small></td><td><code>job_item.db_config</code><br><small>_db_config: 2207행 / _connect: 2190행</small></td><td><code>source_schema</code> 263행, <code>target_schema</code> 264행</td><td>자기 노드에 Oracle 계정칸을 추가하지 않고 A 노드·상위 payload를 수정</td></tr><tr><td><a href="../03_job_execution/15C_sqlTuningOneJobPocExecutor.py"><code>15C_sqlTuningOneJobPocExecutor.py</code></a><small>03_job_execution</small></td><td><code>job_item.db_config</code><br><small>_db_config: 1200행 / _connect: 1080행</small></td><td>별도 Oracle 스키마 입력 없음</td><td>자기 노드에 Oracle 계정칸을 추가하지 않고 A 노드·상위 payload를 수정</td></tr><tr><td><a href="../03_job_execution/17C_sqlFormattingOneJobPocExecutor.py"><code>17C_sqlFormattingOneJobPocExecutor.py</code></a><small>03_job_execution</small></td><td><code>job_item.db_config</code><br><small>_db_config: 897행 / _connect: 867행</small></td><td>별도 Oracle 스키마 입력 없음</td><td>자기 노드에 Oracle 계정칸을 추가하지 않고 A 노드·상위 payload를 수정</td></tr></tbody></table></div><h3>Milvus·Embedding 설정이 있는 6개 컴포넌트</h3><div class="table-wrap" tabindex="0" role="region" aria-label="컴포넌트 설정 목록"><table><thead><tr><th scope="col">컴포넌트</th><th scope="col">정확한 입력 이름과 행 번호</th><th scope="col">변경 내용</th></tr></thead><tbody><tr><td><a href="../02_flow_management/04_ragCommandTool.py"><code>04_ragCommandTool.py</code></a><small>02_flow_management</small></td><td><code>milvus_uri</code> 47행<br><code>milvus_username</code> 48행<br><code>milvus_password</code> 49행<br><code>milvus_db_name</code> 50행<br><code>asis_sql_collection_name</code> 51행<br><code>correct_sql_conversion_collection_name</code> 52행<br><code>correct_sql_migration_collection_name</code> 53행<br><code>rag_embed_base_url</code> 54행<br><code>rag_embed_api_key</code> 55행<br><code>rag_embed_model</code> 56행<br><code>rag_embed_timeout_seconds</code> 57행</td><td>Milvus URI·계정·비밀번호·DB와 컬렉션을 새 프로젝트로 변경. Embedding 입력이 있으면 URL·모델·API key도 변경.</td></tr><tr><td><a href="../02_flow_management/04_saveVectorDB.py"><code>04_saveVectorDB.py</code></a><small>02_flow_management</small></td><td><code>milvus_uri</code> 77행<br><code>milvus_username</code> 78행<br><code>milvus_password</code> 79행<br><code>milvus_db_name</code> 80행<br><code>rag_collection_name</code> 81행<br><code>correct_sql_conversion_collection_name</code> 82행<br><code>correct_sql_migration_collection_name</code> 83행<br><code>asis_sql_collection_name</code> 84행<br><code>rag_embed_base_url</code> 85행<br><code>rag_embed_api_key</code> 86행<br><code>rag_embed_model</code> 87행<br><code>rag_embed_timeout_seconds</code> 88행</td><td>Milvus URI·계정·비밀번호·DB와 컬렉션을 새 프로젝트로 변경. Embedding 입력이 있으면 URL·모델·API key도 변경.</td></tr><tr><td><a href="../02_flow_management/04_updateCommandTool.py"><code>04_updateCommandTool.py</code></a><small>02_flow_management</small></td><td><code>milvus_uri</code> 38행<br><code>milvus_username</code> 39행<br><code>milvus_password</code> 40행<br><code>milvus_db_name</code> 41행<br><code>correct_sql_conversion_collection_name</code> 42행</td><td>Milvus URI·계정·비밀번호·DB와 컬렉션을 새 프로젝트로 변경. Embedding 입력이 있으면 URL·모델·API key도 변경.</td></tr><tr><td><a href="../03_job_execution/10C_migOneJobPocExecutor3.py"><code>10C_migOneJobPocExecutor3.py</code></a><small>03_job_execution</small></td><td><code>rag_embed_base_url</code> 233행<br><code>rag_embed_api_key</code> 234행<br><code>rag_embed_model</code> 235행<br><code>rag_embed_timeout_seconds</code> 236행<br><code>milvus_uri</code> 237행<br><code>milvus_username</code> 238행<br><code>milvus_password</code> 239행<br><code>milvus_db_name</code> 240행<br><code>correct_sql_migration_collection_name</code> 241행</td><td>Milvus URI·계정·비밀번호·DB와 컬렉션을 새 프로젝트로 변경. Embedding 입력이 있으면 URL·모델·API key도 변경.</td></tr><tr><td><a href="../03_job_execution/12C_sqlConversionOneJobPocExecutor.py"><code>12C_sqlConversionOneJobPocExecutor.py</code></a><small>03_job_execution</small></td><td><code>rag_embed_base_url</code> 266행<br><code>rag_embed_api_key</code> 267행<br><code>rag_embed_model</code> 268행<br><code>rag_embed_timeout_seconds</code> 269행<br><code>milvus_uri</code> 270행<br><code>milvus_username</code> 271행<br><code>milvus_password</code> 272행<br><code>milvus_db_name</code> 273행<br><code>rag_collection_name</code> 274행<br><code>correct_sql_collection_name</code> 275행<br><code>asis_sql_collection_name</code> 276행</td><td>Milvus URI·계정·비밀번호·DB와 컬렉션을 새 프로젝트로 변경. Embedding 입력이 있으면 URL·모델·API key도 변경.</td></tr><tr><td><a href="../03_job_execution/15C_sqlTuningOneJobPocExecutor.py"><code>15C_sqlTuningOneJobPocExecutor.py</code></a><small>03_job_execution</small></td><td><code>rag_embed_base_url</code> 138행<br><code>rag_embed_api_key</code> 139행<br><code>rag_embed_model</code> 140행<br><code>rag_embed_timeout_seconds</code> 141행<br><code>milvus_uri</code> 142행<br><code>milvus_username</code> 143행<br><code>milvus_password</code> 144행<br><code>milvus_db_name</code> 145행<br><code>rag_collection_name</code> 146행</td><td>Milvus URI·계정·비밀번호·DB와 컬렉션을 새 프로젝트로 변경. Embedding 입력이 있으면 URL·모델·API key도 변경.</td></tr></tbody></table></div><h3>LLM 설정 변경</h3><p>아래 컴포넌트에 연결된 Language Model 노드의 URL·모델·API key를 변경하세요. 03 일반 응답과 Management Agent의 모델 노드도 함께 변경하세요.</p><div class="table-wrap" tabindex="0" role="region" aria-label="컴포넌트 설정 목록"><table><thead><tr><th scope="col">컴포넌트</th><th scope="col">모델 연결 입력</th><th scope="col">변경 위치</th></tr></thead><tbody><tr><td><a href="../01_agent_start/02_intentRouter.py"><code>02_intentRouter.py</code></a><small>01_agent_start</small></td><td><code>llm</code> 134행</td><td>연결된 Language Model 노드의 endpoint / model / API key를 새 환경으로 변경</td></tr><tr><td><a href="../02_flow_management/04_managementRouter.py"><code>04_managementRouter.py</code></a><small>02_flow_management</small></td><td><code>llm</code> 101행</td><td>연결된 Language Model 노드의 endpoint / model / API key를 새 환경으로 변경</td></tr><tr><td><a href="../02_flow_management/04_mappingRuleUpdateSqlGenerate.py"><code>04_mappingRuleUpdateSqlGenerate.py</code></a><small>02_flow_management</small></td><td><code>llm</code> 63행</td><td>연결된 Language Model 노드의 endpoint / model / API key를 새 환경으로 변경</td></tr><tr><td><a href="../03_job_execution/10C_migOneJobPocExecutor3.py"><code>10C_migOneJobPocExecutor3.py</code></a><small>03_job_execution</small></td><td><code>llm</code> 227행</td><td>연결된 Language Model 노드의 endpoint / model / API key를 새 환경으로 변경</td></tr><tr><td><a href="../03_job_execution/11B_failureCauseAnalyzer.py"><code>11B_failureCauseAnalyzer.py</code></a><small>03_job_execution</small></td><td><code>llm</code> 39행</td><td>연결된 Language Model 노드의 endpoint / model / API key를 새 환경으로 변경</td></tr><tr><td><a href="../03_job_execution/12C_sqlConversionOneJobPocExecutor.py"><code>12C_sqlConversionOneJobPocExecutor.py</code></a><small>03_job_execution</small></td><td><code>llm</code> 265행</td><td>연결된 Language Model 노드의 endpoint / model / API key를 새 환경으로 변경</td></tr><tr><td><a href="../03_job_execution/15C_sqlTuningOneJobPocExecutor.py"><code>15C_sqlTuningOneJobPocExecutor.py</code></a><small>03_job_execution</small></td><td><code>llm</code> 137행</td><td>연결된 Language Model 노드의 endpoint / model / API key를 새 환경으로 변경</td></tr><tr><td><a href="../03_job_execution/17C_sqlFormattingOneJobPocExecutor.py"><code>17C_sqlFormattingOneJobPocExecutor.py</code></a><small>03_job_execution</small></td><td><code>llm</code> 70행</td><td>연결된 Language Model 노드의 endpoint / model / API key를 새 환경으로 변경</td></tr></tbody></table></div><details><summary>관리 테이블·시퀀스 이름을 바꿀 때 수정할 파일</summary><p>이름을 바꾸는 경우에만 아래 파일의 조회·저장 SQL, 허용목록과 프롬프트를 수정하고 컴포넌트를 재등록하세요. 스키마만 바꿀 때는 유지하세요.</p><div class="table-wrap" tabindex="0" role="region" aria-label="컴포넌트 설정 목록"><table><thead><tr><th scope="col">파일</th><th scope="col">고정 이름과 행 번호</th></tr></thead><tbody><tr><td><a href="../01_agent_start/00A_logRuntimeStart.py"><code>00A_logRuntimeStart.py</code></a><small>01_agent_start</small></td><td><code>MIGRATION_LOG_SEQ</code>: 106행<br><code>NEXT_MIG_LOG</code>: 30, 103행</td></tr><tr><td><a href="../02_flow_management/04_currentProgress.py"><code>04_currentProgress.py</code></a><small>02_flow_management</small></td><td><code>NEXT_MIG_INFO</code>: 123, 179행<br><code>NEXT_MIG_LOG</code>: 256행<br><code>NEXT_SQL_INFO</code>: 124, 216행</td></tr><tr><td><a href="../02_flow_management/04_dashboard.py"><code>04_dashboard.py</code></a><small>02_flow_management</small></td><td><code>NEXT_MIG_INFO</code>: 98행<br><code>NEXT_SQL_INFO</code>: 128, 157, 188행</td></tr><tr><td><a href="../02_flow_management/04_managementRouter.py"><code>04_managementRouter.py</code></a><small>02_flow_management</small></td><td><code>NEXT_MIG_INFO</code>: 61행<br><code>NEXT_MIG_INFO_DTL</code>: 61행</td></tr><tr><td><a href="../02_flow_management/04_mappingRuleUpdateSqlGenerate.py"><code>04_mappingRuleUpdateSqlGenerate.py</code></a><small>02_flow_management</small></td><td><code>NEXT_MIG_INFO</code>: 22, 31, 48, 129, 251, 258, 337, 355, 368행<br><code>NEXT_MIG_INFO_DTL</code>: 23, 25, 32, 129, 252, 258, 463행</td></tr><tr><td><a href="../02_flow_management/04_ragCommandTool.py"><code>04_ragCommandTool.py</code></a><small>02_flow_management</small></td><td><code>NEXT_MIG_RAG_INFO</code>: 139, 531, 564, 572행<br><code>NEXT_SQL_INFO</code>: 399행</td></tr><tr><td><a href="../02_flow_management/04_saveVectorDB.py"><code>04_saveVectorDB.py</code></a><small>02_flow_management</small></td><td><code>NEXT_MIG_INFO</code>: 663행<br><code>NEXT_MIG_INFO_DTL</code>: 664행<br><code>NEXT_MIG_RAG_INFO</code>: 23행<br><code>NEXT_SQL_INFO</code>: 24, 755행</td></tr><tr><td><a href="../02_flow_management/04_selectCommandTool.py"><code>04_selectCommandTool.py</code></a><small>02_flow_management</small></td><td><code>NEXT_MIG_INFO</code>: 148, 150, 258, 263, 339, 340, 371, 390, 396, 436, 545, 629, 643, 644, 651, 682, 695, 705, 706, 713행<br><code>NEXT_MIG_INFO_DTL</code>: 154, 155, 160, 372, 391, 545행<br><code>NEXT_MIG_LOG</code>: 16, 283, 307, 545, 556, 611, 617, 624행<br><code>NEXT_MIG_RAG_INFO</code>: 518, 526, 527, 534, 545행<br><code>NEXT_SQL_INFO</code>: 182, 184, 208, 210, 226, 235, 342, 343, 344, 369, 436, 545, 655, 669, 670, 677, 683, 684, 685, 718, 728, 729, 736행</td></tr><tr><td><a href="../02_flow_management/04_updateCommandTool.py"><code>04_updateCommandTool.py</code></a><small>02_flow_management</small></td><td><code>NEXT_MIG_INFO</code>: 502행<br><code>NEXT_SQL_INFO</code>: 293, 315, 326, 357, 407, 428, 515, 534행</td></tr><tr><td><a href="../03_job_execution/06_getRemainingJobs.py"><code>06_getRemainingJobs.py</code></a><small>03_job_execution</small></td><td><code>NEXT_MIG_INFO</code>: 146, 187, 273행<br><code>NEXT_SQL_INFO</code>: 147, 188, 274행</td></tr><tr><td><a href="../03_job_execution/10A_migJobsToLoopTable.py"><code>10A_migJobsToLoopTable.py</code></a><small>03_job_execution</small></td><td><code>NEXT_MIG_INFO</code>: 123행</td></tr><tr><td><a href="../03_job_execution/10C_migOneJobPocExecutor3.py"><code>10C_migOneJobPocExecutor3.py</code></a><small>03_job_execution</small></td><td><code>NEXT_MIG_INFO</code>: 1470, 1628, 1641, 1662, 1680, 1712, 1743, 1762, 1784, 2199행<br><code>NEXT_MIG_INFO_DTL</code>: 1759, 1763행</td></tr><tr><td><a href="../03_job_execution/11_finalDashboard.py"><code>11_finalDashboard.py</code></a><small>03_job_execution</small></td><td><code>NEXT_MIG_INFO</code>: 97행<br><code>NEXT_SQL_INFO</code>: 126, 154, 183행</td></tr><tr><td><a href="../03_job_execution/11B_failureCauseAnalyzer.py"><code>11B_failureCauseAnalyzer.py</code></a><small>03_job_execution</small></td><td><code>NEXT_MIG_INFO</code>: 308행<br><code>NEXT_MIG_LOG</code>: 119, 143, 211행<br><code>NEXT_SQL_INFO</code>: 333행</td></tr><tr><td><a href="../03_job_execution/12A_sqlConversionJobsToLoopTable.py"><code>12A_sqlConversionJobsToLoopTable.py</code></a><small>03_job_execution</small></td><td><code>NEXT_SQL_INFO</code>: 130행</td></tr><tr><td><a href="../03_job_execution/12C_sqlConversionOneJobPocExecutor.py"><code>12C_sqlConversionOneJobPocExecutor.py</code></a><small>03_job_execution</small></td><td><code>NEXT_MIG_INFO</code>: 171, 1297행<br><code>NEXT_MIG_INFO_DTL</code>: 1298행<br><code>NEXT_MIG_RAG_INFO</code>: 1959행<br><code>NEXT_SQL_INFO</code>: 495, 1053, 1148, 1149, 1187, 1196, 1219, 1220행</td></tr><tr><td><a href="../03_job_execution/15A_sqlTuningJobsToLoopTable.py"><code>15A_sqlTuningJobsToLoopTable.py</code></a><small>03_job_execution</small></td><td><code>NEXT_SQL_INFO</code>: 118행</td></tr><tr><td><a href="../03_job_execution/15C_sqlTuningOneJobPocExecutor.py"><code>15C_sqlTuningOneJobPocExecutor.py</code></a><small>03_job_execution</small></td><td><code>NEXT_MIG_RAG_INFO</code>: 775행<br><code>NEXT_SQL_INFO</code>: 670, 687, 712, 719, 740행</td></tr><tr><td><a href="../03_job_execution/17A_sqlFormattingJobsToLoopTable.py"><code>17A_sqlFormattingJobsToLoopTable.py</code></a><small>03_job_execution</small></td><td><code>NEXT_SQL_INFO</code>: 96행</td></tr><tr><td><a href="../03_job_execution/17C_sqlFormattingOneJobPocExecutor.py"><code>17C_sqlFormattingOneJobPocExecutor.py</code></a><small>03_job_execution</small></td><td><code>NEXT_MIG_INFO</code>: 171, 365, 375, 388, 441, 445, 502행<br><code>NEXT_SQL_INFO</code>: 172, 296, 326, 370, 375, 391, 410, 414, 442, 465, 804, 825, 834행</td></tr><tr><td><a href="../03_job_execution/18A_fullWorkflowJobsToLoopTable.py"><code>18A_fullWorkflowJobsToLoopTable.py</code></a><small>03_job_execution</small></td><td><code>NEXT_MIG_INFO</code>: 192행<br><code>NEXT_SQL_INFO</code>: 193행</td></tr><tr><td><a href="../03_job_execution/18B_fullWorkflowLoop2.py"><code>18B_fullWorkflowLoop2.py</code></a><small>03_job_execution</small></td><td><code>NEXT_MIG_INFO</code>: 337, 540행<br><code>NEXT_SQL_INFO</code>: 541행</td></tr></tbody></table></div></details>
+<h3>3.3 변경 후 확인</h3>
+<p>기존 Flow를 복제하고 새 프로젝트 이름으로 저장하세요. 이전 <code>payload.db_config</code>를 재사용하지 말고 새 세션에서 시작하세요. 이전 스키마가 적힌 매핑·SQL 원문도 새 이름으로 바꾸세요.</p>
+<p>테이블 이름을 바꾼다면 00A logger, 04 매핑 생성기의 조회 SQL·허용목록·프롬프트, 04_saveVectorDB의 <code>RAG_TABLE</code>·<code>SQL_TABLE</code>, 실행기와 18B Loop의 조회·저장 SQL을 함께 수정하세요. 수정한 컴포넌트를 Langflow 사이트에 반영하고 Flow를 저장한 뒤 에이전트 빌더 플랫폼에서 배포하세요.</p>
+</section>
+<section class="panel" id="database" aria-label="새 계정과 테이블 SQL"><h2>2. Oracle 계정·권한과 관리 테이블 생성</h2>
+<h3>2.1 DBA에게 계정·권한 요청</h3>
+<p>기존 타겟 계정의 관리 테이블 생성 권한과 tablespace quota를 확인하세요. 계정·tablespace·테이블 이름은 실제 이름으로 바꾸세요.</p>
+<pre><code>-- DBA 실행
+GRANT CREATE SESSION, CREATE TABLE, CREATE SEQUENCE TO TGT_NEW;
+ALTER USER TGT_NEW QUOTA 100M ON USERS;
+
+-- 원천 테이블 소유자 실행
+GRANT SELECT ON SRC_NEW.SRC_CUSTOMER TO TGT_NEW;
+</code></pre>
+<p>소스 SELECT 권한은 참조하는 원천 테이블마다 부여하세요. 대상은 자기 소유 테이블이므로 별도 SELECT·INSERT GRANT가 필요하지 않습니다. 첫 검증에서는 <code>TRUNC_YN=N</code>을 사용하세요. <code>Y</code>이면 대상 테이블을 실제 TRUNCATE합니다.</p>
+<h3>2.2 접속 계정으로 소스·타겟 확인</h3>
+<p>Langflow에서 사용할 계정 <code>TGT_NEW</code>로 접속해 아래 SQL을 실행하세요. 스키마·테이블명은 실제 이름으로 바꾸세요.</p>
+<pre><code>-- 계정과 Oracle 서비스 확인
+SELECT USER, SYS_CONTEXT(&#x27;USERENV&#x27;, &#x27;SERVICE_NAME&#x27;) AS SERVICE_NAME FROM DUAL;
+
+-- 과거 데이터가 있는 소스 테이블과 접근 권한 확인
+SELECT COUNT(*) AS SOURCE_COUNT FROM SRC_NEW.SRC_CUSTOMER;
+
+-- 생성된 대상 테이블과 현재 데이터 유무 확인
+SELECT COUNT(*) AS TARGET_COUNT FROM TGT_NEW.TGT_MEMBER;
+
+-- 양쪽 테이블의 컬럼·타입·필수값 확인
+SELECT OWNER, TABLE_NAME, COLUMN_NAME, DATA_TYPE, NULLABLE
+  FROM ALL_TAB_COLUMNS
+ WHERE (OWNER = &#x27;SRC_NEW&#x27; AND TABLE_NAME = &#x27;SRC_CUSTOMER&#x27;)
+    OR (OWNER = &#x27;TGT_NEW&#x27; AND TABLE_NAME = &#x27;TGT_MEMBER&#x27;)
+ ORDER BY OWNER, TABLE_NAME, COLUMN_ID;</code></pre>
+<p>소스 데이터와 대상 컬럼·타입·PK가 매핑 정의서에 맞는지 확인한 다음 관리 테이블을 생성하세요.</p>
+<h3>2.3 타겟 계정에 관리 테이블 생성</h3>
+<p>SQL Developer에서 <code>TGT_NEW</code>로 접속하고 <a href="00_new_project_start_guide.html#sql-01">01_create_langflow_tables.sql</a>을 <strong>스크립트 실행(F5)</strong> 하세요. 이어서 <a href="00_new_project_start_guide.html#sql-03">03_verify_installation.sql</a>을 실행하세요.</p>
+<pre><code>SELECT USER, SYS_CONTEXT(&#x27;USERENV&#x27;, &#x27;CURRENT_SCHEMA&#x27;) AS CURRENT_SCHEMA FROM DUAL;
+@01_create_langflow_tables.sql
+@03_verify_installation.sql</code></pre>
+<p>SQL 파일이 있는 폴더에서 실행하거나 절대 경로를 사용하세요. 기존 TO-BE 테이블은 유지하고, SmartMigrate 관리 테이블·시퀀스가 아직 없는 타겟 스키마에 생성 SQL을 한 번 실행하세요.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="가로 스크롤 가능한 표"><table><thead><tr><th scope="col">생성 객체</th><th scope="col">용도</th></tr></thead><tbody><tr><td><code>NEXT_MIG_INFO</code></td><td>테이블 매핑·이관 결과</td></tr><tr><td><code>NEXT_MIG_INFO_DTL</code></td><td>컬럼 매핑. 키: <code>(MAP_ID, MAP_DTL)</code></td></tr><tr><td><code>NEXT_SQL_INFO</code></td><td>변환·튜닝·서식 대상 SQL</td></tr><tr><td><code>NEXT_MIG_RAG_INFO</code></td><td>참고 규칙·SQL 사례</td></tr><tr><td><code>NEXT_MIG_LOG</code></td><td>실행 로그</td></tr><tr><td><code>MIGRATION_LOG_SEQ</code></td><td>로그 번호</td></tr><tr><td><code>NEXT_SQL_INFO_SQL_SEQ</code></td><td>SQL 작업 번호</td></tr></tbody></table></div>
+<h2>실행할 SQL 전문</h2><p>생성·등록·검증 파일을 아래에서 펼쳐 읽고 내려받을 수 있다. 새 관리 계정으로 접속한 후 필요한 파일을 순서대로 실행한다. 브라우저에서 DB SQL을 실행하는 기능은 없다.</p><details class="sql-file" id="sql-01"><summary>01_create_langflow_tables.sql</summary><p><button type="button" class="download-sql" data-filename="01_create_langflow_tables.sql">SQL 파일 다운로드</button> <button type="button" class="copy-sql">SQL 전문 복사</button></p><pre><code>-- Run as target owner (TGT_NEW); SmartMigrate objects must not already exist.
+-- Does not create business tables, users, grants or restore old project data.
+SET DEFINE OFF;
+WHENEVER SQLERROR EXIT SQL.SQLCODE ROLLBACK;
+
+CREATE TABLE NEXT_MIG_INFO (
+    MAP_ID          NUMBER          NOT NULL,
+    MAP_TYPE        VARCHAR2(100),
+    FR_TABLE        VARCHAR2(4000)  NOT NULL,
+    TO_TABLE        VARCHAR2(4000)  NOT NULL,
+    TRUNC_YN        CHAR(1)         DEFAULT &#x27;N&#x27;,
+    CONDITION       CLOB,
+    USE_YN          CHAR(1)         DEFAULT &#x27;Y&#x27;,
+    PRIORITY        NUMBER          DEFAULT 5,
+    PRIOR_MAP_ID    NUMBER,
+    STATUS          VARCHAR2(100),
+    USER_EDITED     CHAR(1)         DEFAULT &#x27;N&#x27;,
+    MIG_SQL         CLOB,
+    VERIFY_SQL      CLOB,
+    VERIFY2_SQL     CLOB,
+    BATCH_CNT       NUMBER          DEFAULT 0,
+    RETRY_COUNT     NUMBER          DEFAULT 0,
+    ELAPSED_SECONDS NUMBER,
+    LOG             VARCHAR2(4000),
+    REG_TS          TIMESTAMP       DEFAULT CURRENT_TIMESTAMP,
+    UPD_TS          TIMESTAMP       DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT PK_NEXT_MIG_INFO PRIMARY KEY (MAP_ID),
+    CONSTRAINT CK_NEXT_MIG_INFO_USE_YN CHECK (USE_YN IN (&#x27;Y&#x27;, &#x27;N&#x27;)),
+    CONSTRAINT CK_NEXT_MIG_INFO_USER_EDITED CHECK (USER_EDITED IN (&#x27;Y&#x27;, &#x27;N&#x27;))
+);
+
+COMMENT ON TABLE NEXT_MIG_INFO IS &#x27;DB Migration 작업 master, 매핑 범위, 생성 SQL, 검증 SQL, 실행 상태를 저장한다.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_INFO.MAP_ID IS &#x27;DB Migration 작업 식별자. 단건 실행, 조회, 상태 초기화의 기준 key.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_INFO.MAP_TYPE IS &#x27;매핑 유형. SIMPLE, COMPLEX 등 migration rule 분류값.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_INFO.FR_TABLE IS &#x27;AS-IS source table 또는 source SQL scope.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_INFO.TO_TABLE IS &#x27;TO-BE target table.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_INFO.TRUNC_YN IS &#x27;Migration 실행 전 target truncate 여부.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_INFO.VERIFY2_SQL IS &#x27;record verification SQL.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_INFO.CONDITION IS &#x27;Migration SQL 생성 시 source row 범위를 제한하는 조건.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_INFO.USE_YN IS &#x27;작업 사용 여부. Y인 row만 실행 대상으로 본다.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_INFO.PRIORITY IS &#x27;실행 우선순위. 1이 높음, 기본값은 5.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_INFO.PRIOR_MAP_ID IS &#x27;선행 완료가 필요한 DB Migration MAP_ID.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_INFO.STATUS IS &#x27;DB Migration 실행 상태. PASS, RUNNING, FAIL-* 등을 저장한다.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_INFO.USER_EDITED IS &#x27;담당자가 SQL을 직접 보정했는지 여부.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_INFO.MIG_SQL IS &#x27;생성 또는 담당자 보정된 migration INSERT SQL.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_INFO.VERIFY_SQL IS &#x27;Migration 결과 검증 SQL.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_INFO.BATCH_CNT IS &#x27;작업 실행 시작 횟수.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_INFO.RETRY_COUNT IS &#x27;현재 작업의 retry 횟수.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_INFO.ELAPSED_SECONDS IS &#x27;마지막 실행 소요 시간 초 단위.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_INFO.LOG IS &#x27;마지막 실행 결과 또는 오류 요약.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_INFO.REG_TS IS &#x27;row 최초 등록 시각.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_INFO.UPD_TS IS &#x27;row 마지막 갱신 시각.&#x27;;
+
+CREATE INDEX IX_NEXT_MIG_INFO_STATUS ON NEXT_MIG_INFO (USE_YN, STATUS, PRIORITY);
+CREATE INDEX IX_NEXT_MIG_INFO_PRIOR ON NEXT_MIG_INFO (PRIOR_MAP_ID);
+CREATE INDEX IX_NEXT_MIG_INFO_TABLES ON NEXT_MIG_INFO (SUBSTR(FR_TABLE, 1, 200), SUBSTR(TO_TABLE, 1, 200));
+
+CREATE TABLE NEXT_MIG_INFO_DTL (
+    MAP_ID NUMBER          NOT NULL,
+    MAP_DTL NUMBER         NOT NULL,
+    FR_COL VARCHAR2(4000)  NOT NULL,
+    TO_COL VARCHAR2(4000),
+    REG_TS TIMESTAMP       DEFAULT CURRENT_TIMESTAMP,
+    UPD_TS TIMESTAMP       DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT PK_NEXT_MIG_INFO_DTL PRIMARY KEY (MAP_ID, MAP_DTL)
+);
+
+COMMENT ON TABLE NEXT_MIG_INFO_DTL IS &#x27;DB Migration 컬럼 매핑 detail을 저장한다.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_INFO_DTL.MAP_ID IS &#x27;NEXT_MIG_INFO.MAP_ID와 연결되는 mapping master 식별자.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_INFO_DTL.MAP_DTL IS &#x27;MAP_ID 내 detail mapping 식별자 및 정렬 기준.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_INFO_DTL.FR_COL IS &#x27;AS-IS source column.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_INFO_DTL.TO_COL IS &#x27;TO-BE target column. NULL, blank, NONE, N/A, NA, - 값은 미사용 컬럼으로 해석한다.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_INFO_DTL.REG_TS IS &#x27;row 최초 등록 시각.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_INFO_DTL.UPD_TS IS &#x27;row 마지막 갱신 시각.&#x27;;
+
+CREATE INDEX IX_NEXT_MIG_INFO_DTL_MAP ON NEXT_MIG_INFO_DTL (MAP_ID);
+
+CREATE TABLE NEXT_SQL_INFO (
+    SQL_SEQ           NUMBER          NOT NULL,
+    SPACE_NM          VARCHAR2(200)   NOT NULL,
+    SQL_ID            VARCHAR2(200)   NOT NULL,
+    REF_SEQ           NUMBER,
+    STATUS_CONVERSION VARCHAR2(100),
+    STATUS_TUNING     VARCHAR2(100),
+    PRIORITY          NUMBER          DEFAULT 5,
+    USER_EDITED       CHAR(1)         DEFAULT &#x27;N&#x27;,
+    TARGET_TABLE      VARCHAR2(4000),
+    TAG_KIND          VARCHAR2(100),
+    FR_SQL            CLOB,
+    EDIT_FR_SQL       CLOB,
+    TO_SQL            CLOB,
+    BIND_SQL          CLOB,
+    BIND_SET          CLOB,
+    TEST_SQL          CLOB,
+    TUNED_TO_SQL      CLOB,
+    TUNED_RESULT      CLOB,
+    TUNED_FR_SQL      CLOB,
+    FORMATTED_SQL     CLOB,
+    BLOCK_RAG_CONTENT CLOB,
+    BATCH_CNT         NUMBER          DEFAULT 0,
+    RETRY_COUNT       NUMBER          DEFAULT 0,
+    LOG               VARCHAR2(4000),
+    UPD_TS            TIMESTAMP       DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT PK_NEXT_SQL_INFO PRIMARY KEY (SPACE_NM, SQL_ID),
+    CONSTRAINT UQ_NEXT_SQL_INFO_SQL_SEQ UNIQUE (SQL_SEQ),
+    CONSTRAINT CK_NEXT_SQL_INFO_REF_SEQ CHECK (REF_SEQ IS NULL OR REF_SEQ &lt;&gt; SQL_SEQ),
+    CONSTRAINT CK_NEXT_SQL_INFO_USER_EDITED CHECK (USER_EDITED IN (&#x27;Y&#x27;, &#x27;N&#x27;))
+);
+
+COMMENT ON TABLE NEXT_SQL_INFO IS &#x27;SQL Conversion, SQL Tuning, SQL Formatting 대상 SQL과 산출물을 저장한다.&#x27;;
+COMMENT ON COLUMN NEXT_SQL_INFO.SQL_SEQ IS &#x27;사용자 지정 SQL 단건 번호. 최초 backfill은 SQL_ID, SPACE_NM 정렬 순번으로 부여하며 이후 변경하지 않는다.&#x27;;
+COMMENT ON COLUMN NEXT_SQL_INFO.SPACE_NM IS &#x27;SQL job 업무 영역 또는 namespace. SQL_ID와 함께 단건 식별 key로 사용한다.&#x27;;
+COMMENT ON COLUMN NEXT_SQL_INFO.SQL_ID IS &#x27;SQL job 식별자. SPACE_NM과 함께 단건 식별 key로 사용한다.&#x27;;
+COMMENT ON COLUMN NEXT_SQL_INFO.REF_SEQ IS &#x27;사용자 지정 Correct SQL 참고 대상으로 선택한 NEXT_SQL_INFO.SQL_SEQ. 지정 전 해당 row가 기존 Correct SQL 컬렉션에 존재하는지 검증한다.&#x27;;
+COMMENT ON COLUMN NEXT_SQL_INFO.TAG_KIND IS &#x27;SQL 유형 또는 처리 태그.&#x27;;
+COMMENT ON COLUMN NEXT_SQL_INFO.FR_SQL IS &#x27;AS-IS 원본 SQL.&#x27;;
+COMMENT ON COLUMN NEXT_SQL_INFO.EDIT_FR_SQL IS &#x27;담당자가 보정한 AS-IS 원본 SQL. 존재하면 FR_SQL보다 우선한다.&#x27;;
+COMMENT ON COLUMN NEXT_SQL_INFO.TARGET_TABLE IS &#x27;SQL Conversion에서 mapping rule과 Conversion RAG를 찾기 위한 AS-IS table scope.&#x27;;
+COMMENT ON COLUMN NEXT_SQL_INFO.TO_SQL IS &#x27;SQL Conversion으로 생성 또는 보정된 TO-BE SQL.&#x27;;
+COMMENT ON COLUMN NEXT_SQL_INFO.BIND_SQL IS &#x27;Bind parameter 추출 또는 검증용 SQL.&#x27;;
+COMMENT ON COLUMN NEXT_SQL_INFO.BIND_SET IS &#x27;Bind case/result set 정보.&#x27;;
+COMMENT ON COLUMN NEXT_SQL_INFO.TEST_SQL IS &#x27;Conversion 또는 Tuning 결과 검증 SQL.&#x27;;
+COMMENT ON COLUMN NEXT_SQL_INFO.TUNED_TO_SQL IS &#x27;SQL Tuning으로 생성 또는 보정된 TO-BE SQL.&#x27;;
+COMMENT ON COLUMN NEXT_SQL_INFO.TUNED_RESULT IS &#x27;Tuning 결과 설명, 변경 사유, 검증 요약.&#x27;;
+COMMENT ON COLUMN NEXT_SQL_INFO.TUNED_FR_SQL IS &#x27;Tuning 기준이 되는 원본 또는 보정 SQL.&#x27;;
+COMMENT ON COLUMN NEXT_SQL_INFO.FORMATTED_SQL IS &#x27;SQL Formatting 결과.&#x27;;
+COMMENT ON COLUMN NEXT_SQL_INFO.BLOCK_RAG_CONTENT IS &#x27;SQL Tuning block별로 사용된 RAG 검색 결과 요약.&#x27;;
+COMMENT ON COLUMN NEXT_SQL_INFO.STATUS_CONVERSION IS &#x27;SQL Conversion 상태. PASS-CONVERSION, RUNNING, FAIL-* 등을 저장한다.&#x27;;
+COMMENT ON COLUMN NEXT_SQL_INFO.STATUS_TUNING IS &#x27;SQL Tuning 상태. PASS-TUNING, RUNNING, FAIL-* 등을 저장한다.&#x27;;
+COMMENT ON COLUMN NEXT_SQL_INFO.USER_EDITED IS &#x27;담당자가 SQL을 직접 보정했는지 여부.&#x27;;
+COMMENT ON COLUMN NEXT_SQL_INFO.PRIORITY IS &#x27;실행 우선순위. 1이 높음, 기본값은 5.&#x27;;
+COMMENT ON COLUMN NEXT_SQL_INFO.BATCH_CNT IS &#x27;SQL job 실행 시작 횟수.&#x27;;
+COMMENT ON COLUMN NEXT_SQL_INFO.RETRY_COUNT IS &#x27;현재 작업의 retry 횟수.&#x27;;
+COMMENT ON COLUMN NEXT_SQL_INFO.LOG IS &#x27;마지막 실행 결과 또는 오류 요약.&#x27;;
+COMMENT ON COLUMN NEXT_SQL_INFO.UPD_TS IS &#x27;row 마지막 갱신 시각.&#x27;;
+
+CREATE INDEX IX_NEXT_SQL_INFO_CONV ON NEXT_SQL_INFO (STATUS_CONVERSION, USER_EDITED, PRIORITY);
+CREATE INDEX IX_NEXT_SQL_INFO_TUNING ON NEXT_SQL_INFO (STATUS_TUNING, USER_EDITED, PRIORITY);
+CREATE INDEX IX_NEXT_SQL_INFO_TARGET ON NEXT_SQL_INFO (SUBSTR(TARGET_TABLE, 1, 200));
+CREATE INDEX IX_NEXT_SQL_INFO_REF_SEQ ON NEXT_SQL_INFO (REF_SEQ);
+
+-- 신규 설치: importer가 신규 row INSERT 시 NEXTVAL을 사용한다.
+CREATE SEQUENCE NEXT_SQL_INFO_SQL_SEQ START WITH 1 INCREMENT BY 1 NOCACHE;
+
+CREATE TABLE NEXT_MIG_RAG_INFO (
+    RAG_ID        NUMBER GENERATED BY DEFAULT AS IDENTITY NOT NULL,
+    CATEGORY      VARCHAR2(50)    NOT NULL,
+    RULE_TYPE     VARCHAR2(50)    NOT NULL,
+    SOURCE_TABLES VARCHAR2(4000),
+    USE_YN        CHAR(1)         DEFAULT &#x27;Y&#x27;,
+    GUIDANCE_TEXT CLOB,
+    SOURCE_SQL    CLOB,
+    TARGET_SQL    CLOB,
+    HIT_CNT       NUMBER          DEFAULT 0,
+    CREATED_AT    TIMESTAMP       DEFAULT SYSTIMESTAMP,
+    UPDATED_AT    TIMESTAMP       DEFAULT SYSTIMESTAMP,
+    CONSTRAINT PK_NEXT_MIG_RAG_INFO PRIMARY KEY (RAG_ID),
+    CONSTRAINT CK_NEXT_MIG_RAG_CATEGORY CHECK (CATEGORY IN (&#x27;SQL_CONVERSION&#x27;, &#x27;SQL_TUNING&#x27;)),
+    CONSTRAINT CK_NEXT_MIG_RAG_RULE_TYPE CHECK (RULE_TYPE IN (&#x27;GENERAL&#x27;, &#x27;SEARCH&#x27;)),
+    CONSTRAINT CK_NEXT_MIG_RAG_USE_YN CHECK (USE_YN IN (&#x27;Y&#x27;, &#x27;N&#x27;))
+);
+
+COMMENT ON TABLE NEXT_MIG_RAG_INFO IS &#x27;SQL Conversion/Tuning RAG Guide 원천 rule, guidance, SQL 예시를 저장한다.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_RAG_INFO.RAG_ID IS &#x27;RAG Guide 식별자. 신규 추가 시 DB가 자동 생성한다.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_RAG_INFO.CATEGORY IS &#x27;RAG 적용 도메인. SQL_CONVERSION 또는 SQL_TUNING.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_RAG_INFO.RULE_TYPE IS &#x27;RAG 적용 방식. GENERAL은 공통 가이드, SEARCH는 유사 SQL 검색용 예시.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_RAG_INFO.SOURCE_TABLES IS &#x27;SQL_CONVERSION Guide의 table scope 메타데이터. 범위가 분명할 때만 입력하고, 기본값은 비워 둔다. SQL_TUNING에서는 비워 둔다.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_RAG_INFO.USE_YN IS &#x27;Guide 사용 여부. 삭제 요청은 물리 삭제가 아니라 N으로 비활성화한다.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_RAG_INFO.GUIDANCE_TEXT IS &#x27;가이드 본문. SQL_TUNING에서는 필수 입력값이다.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_RAG_INFO.SOURCE_SQL IS &#x27;SEARCH Guide의 원본 SQL 예시.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_RAG_INFO.TARGET_SQL IS &#x27;SEARCH Guide의 변환 또는 튜닝 후 SQL 예시.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_RAG_INFO.HIT_CNT IS &#x27;SEARCH Guide가 실행 중 참조된 횟수.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_RAG_INFO.CREATED_AT IS &#x27;Guide 최초 등록 시각.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_RAG_INFO.UPDATED_AT IS &#x27;Guide 마지막 갱신 시각.&#x27;;
+
+CREATE INDEX IX_NEXT_MIG_RAG_LOOKUP ON NEXT_MIG_RAG_INFO (CATEGORY, RULE_TYPE, USE_YN);
+CREATE INDEX IX_NEXT_MIG_RAG_UPDATED ON NEXT_MIG_RAG_INFO (UPDATED_AT);
+
+CREATE SEQUENCE MIGRATION_LOG_SEQ START WITH 1 INCREMENT BY 1 NOCACHE NOCYCLE;
+
+CREATE TABLE NEXT_MIG_LOG (
+    LOG_ID      NUMBER         NOT NULL,
+    MAP_ID      VARCHAR2(200),
+    MIG_KIND    VARCHAR2(100),
+    LOG_TYPE    VARCHAR2(100),
+    LOG_LEVEL   VARCHAR2(50),
+    STEP_NAME   VARCHAR2(200),
+    STATUS      VARCHAR2(100),
+    MESSAGE     CLOB,
+    RETRY_COUNT NUMBER         DEFAULT 0,
+    GENERATE_SQL CLOB,
+    CREATED_AT  TIMESTAMP      DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT PK_NEXT_MIG_LOG PRIMARY KEY (LOG_ID)
+);
+
+COMMENT ON TABLE NEXT_MIG_LOG IS &#x27;SmartMigrate 전체 workflow, 관리 요청, 도메인 실행 로그를 저장하는 단일 로그 테이블.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_LOG.LOG_ID IS &#x27;로그 식별자. MIGRATION_LOG_SEQ.NEXTVAL로 채번한다.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_LOG.MAP_ID IS &#x27;로그 대상 key. DB Migration은 MAP_ID, SQL Conversion/Tuning은 SQL_SEQ = 값, Formatting은 SQL_SEQ = 값 또는 MAP_ID = 값을 저장한다.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_LOG.MIG_KIND IS &#x27;로그 도메인. WORKFLOW, DB_MIGRATION, SQL_CONVERSION, SQL_TUNING, SQL_FORMATTING 등.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_LOG.LOG_TYPE IS &#x27;로그 유형. INFO, ERROR 등 업무 구분값.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_LOG.LOG_LEVEL IS &#x27;로그 레벨.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_LOG.STEP_NAME IS &#x27;실행 단계명 또는 component명.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_LOG.STATUS IS &#x27;단계 실행 상태. START, RUNNING, PASS, FAIL, ERROR 등.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_LOG.MESSAGE IS &#x27;로그 상세 메시지.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_LOG.RETRY_COUNT IS &#x27;로그 발생 시점의 retry count.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_LOG.GENERATE_SQL IS &#x27;생성 SQL 또는 오류 분석에 필요한 SQL 본문.&#x27;;
+COMMENT ON COLUMN NEXT_MIG_LOG.CREATED_AT IS &#x27;로그 생성 시각.&#x27;;
+
+CREATE INDEX IX_NEXT_MIG_LOG_TARGET ON NEXT_MIG_LOG (MAP_ID, MIG_KIND, CREATED_AT);
+CREATE INDEX IX_NEXT_MIG_LOG_STATUS ON NEXT_MIG_LOG (MIG_KIND, STATUS, CREATED_AT);
+</code></pre></details><details class="sql-file" id="sql-02"><summary>02_register_project_examples.sql</summary><p><button type="button" class="download-sql" data-filename="02_register_project_examples.sql">SQL 파일 다운로드</button> <button type="button" class="copy-sql">SQL 전문 복사</button></p><pre><code>-- EXAMPLES ONLY. Run as target/management owner (TGT_NEW); replace project names.
+-- Run selected statements as the target/management owner (TGT_NEW), after reviewing existing keys.
+-- Business tables must already exist. This script does not run migration.
+SET DEFINE OFF;
+WHENEVER SQLERROR EXIT SQL.SQLCODE ROLLBACK;
+
+INSERT INTO NEXT_MIG_INFO
+    (MAP_ID, MAP_TYPE, FR_TABLE, TO_TABLE, USE_YN, PRIORITY, TRUNC_YN)
+VALUES
+    (1001, &#x27;SIMPLE&#x27;, &#x27;SRC_NEW.SRC_CUSTOMER&#x27;, &#x27;TGT_NEW.TGT_MEMBER&#x27;, &#x27;Y&#x27;, 5, &#x27;N&#x27;);
+
+INSERT INTO NEXT_MIG_INFO_DTL (MAP_ID, MAP_DTL, FR_COL, TO_COL)
+VALUES (1001, 1, &#x27;CUSTOMER_ID&#x27;, &#x27;MEMBER_ID&#x27;);
+INSERT INTO NEXT_MIG_INFO_DTL (MAP_ID, MAP_DTL, FR_COL, TO_COL)
+VALUES (1001, 2, &#x27;CUSTOMER_NAME&#x27;, &#x27;MEMBER_NAME&#x27;);
+
+-- SQL jobs are separate from table/column mappings.
+-- TARGET_TABLE is the AS-IS table scope used for conversion mapping lookup.
+INSERT INTO NEXT_SQL_INFO
+    (SQL_SEQ, SPACE_NM, SQL_ID, TAG_KIND, TARGET_TABLE, FR_SQL, PRIORITY, USER_EDITED)
+VALUES
+    (NEXT_SQL_INFO_SQL_SEQ.NEXTVAL, &#x27;NEW_PROJECT&#x27;, &#x27;CUSTOMER_SELECT_001&#x27;, &#x27;SELECT&#x27;,
+     &#x27;SRC_NEW.SRC_CUSTOMER&#x27;,
+     &#x27;SELECT CUSTOMER_ID, CUSTOMER_NAME FROM SRC_NEW.SRC_CUSTOMER WHERE CUSTOMER_ID = :customer_id&#x27;,
+     5, &#x27;N&#x27;);
+
+-- Validate before committing. For SQL Developer execute the selected statements only.
+SELECT MAP_ID, MAP_TYPE, FR_TABLE, TO_TABLE, TRUNC_YN FROM NEXT_MIG_INFO WHERE MAP_ID = 1001;
+SELECT MAP_ID, MAP_DTL, FR_COL, TO_COL FROM NEXT_MIG_INFO_DTL WHERE MAP_ID = 1001 ORDER BY MAP_DTL;
+SELECT SQL_SEQ, SPACE_NM, SQL_ID, TARGET_TABLE FROM NEXT_SQL_INFO WHERE SPACE_NM = &#x27;NEW_PROJECT&#x27;;
+-- COMMIT; -- Execute explicitly after review; otherwise ROLLBACK.
+</code></pre></details><details class="sql-file" id="sql-03"><summary>03_verify_installation.sql</summary><p><button type="button" class="download-sql" data-filename="03_verify_installation.sql">SQL 파일 다운로드</button> <button type="button" class="copy-sql">SQL 전문 복사</button></p><pre><code>-- Read-only checks. Run as target/management owner (TGT_NEW).
+SET DEFINE OFF;
+SELECT USER, SYS_CONTEXT(&#x27;USERENV&#x27;, &#x27;CURRENT_SCHEMA&#x27;) AS CURRENT_SCHEMA FROM DUAL;
+
+-- Expect 5 tables and 2 sequences. Indexes are listed separately below.
+SELECT OBJECT_TYPE, OBJECT_NAME, STATUS FROM USER_OBJECTS
+ WHERE OBJECT_NAME IN (&#x27;NEXT_MIG_INFO&#x27;, &#x27;NEXT_MIG_INFO_DTL&#x27;, &#x27;NEXT_SQL_INFO&#x27;,
+                       &#x27;NEXT_MIG_RAG_INFO&#x27;, &#x27;NEXT_MIG_LOG&#x27;,
+                       &#x27;MIGRATION_LOG_SEQ&#x27;, &#x27;NEXT_SQL_INFO_SQL_SEQ&#x27;)
+ ORDER BY OBJECT_TYPE, OBJECT_NAME;
+
+-- Expect all 4 columns. MAP_ID in NEXT_MIG_LOG must be VARCHAR2.
+SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, DATA_LENGTH FROM USER_TAB_COLUMNS
+ WHERE (TABLE_NAME = &#x27;NEXT_SQL_INFO&#x27; AND COLUMN_NAME IN (&#x27;SQL_SEQ&#x27;, &#x27;REF_SEQ&#x27;))
+    OR (TABLE_NAME = &#x27;NEXT_MIG_INFO&#x27; AND COLUMN_NAME = &#x27;VERIFY2_SQL&#x27;)
+    OR (TABLE_NAME = &#x27;NEXT_MIG_LOG&#x27; AND COLUMN_NAME = &#x27;MAP_ID&#x27;)
+ ORDER BY TABLE_NAME, COLUMN_NAME;
+
+SELECT C.TABLE_NAME, C.CONSTRAINT_TYPE, CC.COLUMN_NAME, CC.POSITION
+  FROM USER_CONSTRAINTS C JOIN USER_CONS_COLUMNS CC
+    ON C.CONSTRAINT_NAME = CC.CONSTRAINT_NAME
+ WHERE C.TABLE_NAME IN (&#x27;NEXT_MIG_INFO&#x27;, &#x27;NEXT_MIG_INFO_DTL&#x27;, &#x27;NEXT_SQL_INFO&#x27;)
+   AND C.CONSTRAINT_TYPE IN (&#x27;P&#x27;, &#x27;U&#x27;)
+ ORDER BY C.TABLE_NAME, C.CONSTRAINT_NAME, CC.POSITION;
+
+SELECT TABLE_NAME, INDEX_NAME, STATUS FROM USER_INDEXES
+ WHERE TABLE_NAME IN (&#x27;NEXT_MIG_INFO&#x27;, &#x27;NEXT_MIG_INFO_DTL&#x27;, &#x27;NEXT_SQL_INFO&#x27;,
+                      &#x27;NEXT_MIG_RAG_INFO&#x27;, &#x27;NEXT_MIG_LOG&#x27;)
+ ORDER BY TABLE_NAME, INDEX_NAME;
+
+SELECT &#x27;NEXT_MIG_INFO&#x27; AS TABLE_NAME, COUNT(*) AS ROW_COUNT FROM NEXT_MIG_INFO
+UNION ALL SELECT &#x27;NEXT_MIG_INFO_DTL&#x27;, COUNT(*) FROM NEXT_MIG_INFO_DTL
+UNION ALL SELECT &#x27;NEXT_SQL_INFO&#x27;, COUNT(*) FROM NEXT_SQL_INFO
+UNION ALL SELECT &#x27;NEXT_MIG_RAG_INFO&#x27;, COUNT(*) FROM NEXT_MIG_RAG_INFO
+UNION ALL SELECT &#x27;NEXT_MIG_LOG&#x27;, COUNT(*) FROM NEXT_MIG_LOG;
+
+-- Expect zero rows: details without a master.
+SELECT D.MAP_ID, D.MAP_DTL FROM NEXT_MIG_INFO_DTL D
+ WHERE NOT EXISTS (SELECT 1 FROM NEXT_MIG_INFO M WHERE M.MAP_ID = D.MAP_ID);
+
+SELECT MAP_ID, STATUS, BATCH_CNT, RETRY_COUNT FROM NEXT_MIG_INFO ORDER BY MAP_ID;
+SELECT SQL_SEQ, SPACE_NM, SQL_ID, STATUS_CONVERSION, STATUS_TUNING
+  FROM NEXT_SQL_INFO ORDER BY SQL_SEQ;
+SELECT * FROM (
+    SELECT LOG_ID, CREATED_AT, MAP_ID, MIG_KIND, LOG_TYPE, STEP_NAME, STATUS,
+           DBMS_LOB.SUBSTR(MESSAGE, 500, 1) AS MESSAGE_PREVIEW
+      FROM NEXT_MIG_LOG ORDER BY LOG_ID DESC
+) WHERE ROWNUM &lt;= 30;
+</code></pre></details></section>
+<section class="panel" id="flow" aria-label="Flow 연결과 배포"><h2>4. Flow 연결·배포</h2>
+<ol><li><strong>Langflow 사이트</strong>에서 기존 Flow를 복제하거나 가져오고 새 프로젝트 이름을 지정하세요.</li><li>Custom Component 코드를 등록·수정하고 3단계의 새 설정값을 입력하세요.</li><li>시작 연결은 <code>Chat Input → 00A → 02</code>로 구성하세요.</li><li>매핑 연결은 <code>04 Router.Mapping Rule Update → 04_mappingRuleUpdateSqlGenerate.user_request → Chat Output</code>으로 구성하세요.</li><li><code>04_saveVectorDB.Tool Result</code>를 <strong>Management Agent의 Tool 입력</strong>에 연결하세요. 별도 VectorDB Router 분기는 만들지 마세요.</li><li>작업 실행은 <code>06 → 08 → A → B → C → D</code>로 연결하세요. Migration은 <strong>10C Executor3</strong>, 전체 반복은 <strong>18B Loop2</strong>를 사용하세요.</li><li>03 일반 응답과 Management Agent의 Prompt를 반영한 뒤 <strong>Langflow 사이트에서 Flow를 저장</strong>하세요.</li><li><strong>에이전트 빌더 플랫폼</strong>에서 저장한 새 프로젝트 Flow를 사용하도록 설정하고 에이전트를 배포하세요. 연결에 사용하는 Flow ID·endpoint·인증은 새 환경 값으로 지정하세요.</li><li>배포한 에이전트에 “대시보드 보여줘”를 요청하고 타겟 스키마의 <code>NEXT_MIG_LOG</code>에 로그가 쌓이는지 확인하세요.</li></ol></section>
+<section class="panel" id="mapping" aria-label="정의서 다운로드와 업로드 등록"><h2>5. 매핑 정의서 받기·작성·등록</h2>
+<h3>5.1 수퍼 에이전트에 템플릿 요청</h3>
+<p>아래 문구를 그대로 입력하고 생성된 XLSX를 내려받으세요.</p>
+<blockquote><p>매핑 정의서 템플릿 받기. Smart Migrate의 안내를 받은 후에 Code Interpreter를 실행하여 xlsx 파일을 생성해줘.</p><button class="copy-quote" type="button">요청문 복사</button></blockquote>
+<p>수퍼 에이전트가 Smart Migrate의 안내를 받은 뒤 Code Interpreter로 정해진 양식을 생성합니다.</p>
+<h3>5.2 정의서 작성</h3>
+<p><code>테이블매핑</code>, <code>컬럼 매핑</code> 두 시트를 사용하세요. 1행은 그룹 제목, 2행은 헤더이며 <strong>3행부터 입력</strong>하세요.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="가로 스크롤 가능한 표"><table><thead><tr><th scope="col">시트</th><th scope="col">작성 항목</th></tr></thead><tbody><tr><td>테이블매핑</td><td>A 순번→MAP_ID, D 대상 테이블→TO_TABLE, <strong>G 변환규칙→MAP_TYPE</strong>, I 원천 테이블→FR_TABLE, L 필터→CONDITION, M TRUNC여부→TRUNC_YN, N 선행 순번→PRIOR_MAP_ID</td></tr><tr><td>컬럼 매핑</td><td>A M→MAP_ID, B D→MAP_DTL, D 대상 컬럼→TO_COL, <strong>M 상세변환규칙→FR_COL</strong></td></tr></tbody></table></div>
+<p>테이블매핑 G에는 실제 변환규칙 코드를 입력하세요. 컬럼 매핑 I의 원천 컬럼명으로 M 상세변환규칙을 대체하지 마세요. 부모 MAP_ID와 상세 키 <code>(MAP_ID, MAP_DTL)</code>의 중복·누락을 확인하세요.</p>
+<h3>5.3 수퍼 에이전트에 파일 첨부·등록 요청</h3>
+<p>작성한 파일을 첨부하고 아래 문구를 그대로 입력하세요.</p>
+<blockquote><p>Super Agent의 파일 처리 기능을 활용하여 첨부파일의 내용을 조회해줘. Code Interpreter Tool은 사용하지 말고 해당 내용을 빠짐 없이 Smart Migrate 에이전트를 호출하여 전달하고 매핑룰을 등록해줘</p><button class="copy-quote" type="button">요청문 복사</button></blockquote>
+<ol><li>매핑 생성기에서 <code>execute_updates=false</code>로 대상을 미리 확인하세요.</li><li>검토 후 <code>Execute Generated SQL=true</code>로 바꾸고 같은 첨부·등록 요청을 다시 실행하세요.</li><li>성공·실패·미반영 건수와 실제 master/detail 행을 확인한 뒤 옵션을 false로 돌리세요.</li></ol>
+<p>빈 양식 생성에는 Code Interpreter를 사용하고, 작성한 파일의 조회·등록에는 수퍼 에이전트 파일 처리 기능을 사용하세요. 한 번에 생성하는 SQL은 기본 최대 200문장입니다.</p>
+<h2>6. 원본 SQL과 참고 규칙 등록</h2>
+<p>SQL 변환·튜닝·서식 작업에 사용할 원본 SQL을 <code>NEXT_SQL_INFO</code>에 등록하세요. <a href="00_new_project_start_guide.html#sql-02">02_register_project_examples.sql</a>의 계정·테이블·컬럼·SQL을 실제 프로젝트 값으로 수정한 뒤 필요한 INSERT를 실행하고 COMMIT하세요.</p>
+<p><code>SQL_SEQ</code>는 <code>NEXT_SQL_INFO_SQL_SEQ.NEXTVAL</code>로 부여하세요. 새 작업에는 이전 프로젝트의 실행 상태·결과 SQL을 복사하지 마세요.</p>
+<p>RAG를 사용할 경우 에이전트의 RAG 등록 기능으로 규칙을 추가하세요. <strong>다음 Milvus 초기 생성 전에 비어 있지 않은 원본 SQL 또는 RAG 자료를 최소 1건 등록하세요.</strong></p></section>
+<section class="panel" id="milvus" aria-label="Milvus DB와 컬렉션 생성"><h2>7. Milvus DB·컬렉션 생성과 동기화</h2>
+<h3>7.1 프로젝트 DB 생성</h3>
+<p>Milvus 관리자 계정으로 아래 Python을 실행하세요. <code>pymilvus</code>가 설치된 환경에서 실행하며 <code>SM_NEW_PROJECT</code>를 사용할 DB 이름으로 바꾸세요.</p>
+<pre><code>from getpass import getpass
+from pymilvus import MilvusClient
+
+client = MilvusClient(
+    uri=input(&quot;Milvus URI: &quot;).strip(),
+    user=input(&quot;Milvus 관리자 계정: &quot;).strip(),
+    password=getpass(&quot;Milvus 비밀번호: &quot;),
+    db_name=&quot;default&quot;,
+)
+project_db = &quot;SM_NEW_PROJECT&quot;
+if project_db not in client.list_databases():
+    client.create_database(db_name=project_db)
+print(client.list_databases())
+client.close()</code></pre>
+<p>운영 계정에 새 DB의 컬렉션 생성·인덱스 생성·load·조회·쓰기 권한을 부여하세요. 이미 프로젝트 DB가 있으면 생성은 건너뛰세요. DB를 추가할 수 없는 환경에서는 기존 DB를 사용하고, 아래 컬렉션 이름 모두에 프로젝트 접두사를 붙이세요. DB 생성 API는 <a href="https://milvus.io/docs/v2.6.x/manage_databases.md">Milvus 공식 안내</a>를 참고하세요.</p>
+<h3>7.2 동기화·검색 노드에 같은 설정 입력</h3>
+<p><code>04_saveVectorDB</code>, <code>04_ragCommandTool</code>, <code>04_updateCommandTool</code>, <code>10C</code>, <code>12C</code>, <code>15C</code>에서 제공하는 입력에 새 Milvus 주소·계정·비밀번호와 <strong>동일한 <code>milvus_db_name=SM_NEW_PROJECT</code></strong>를 지정하세요. Embedding 입력이 있는 노드에는 동일한 URL·모델·API key를 지정하세요.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="가로 스크롤 가능한 표"><table><thead><tr><th scope="col">생성할 컬렉션</th><th scope="col">동기화 노드 입력</th><th scope="col">검색·수정 노드 입력</th></tr></thead><tbody><tr><td><code>SM_RAG_RULES</code></td><td>04_saveVectorDB.rag_collection_name</td><td>12C·15C.rag_collection_name</td></tr><tr><td><code>SM_CORRECT_SQL_CONVERSION</code></td><td>04_saveVectorDB.correct_sql_conversion_collection_name</td><td>04_ragCommandTool·04_updateCommandTool의 같은 이름 / <strong>12C.correct_sql_collection_name</strong></td></tr><tr><td><code>SM_CORRECT_SQL_MIGRATION</code></td><td>04_saveVectorDB.correct_sql_migration_collection_name</td><td>04_ragCommandTool·10C의 같은 이름</td></tr><tr><td><code>SM_ASIS_SQL</code></td><td>04_saveVectorDB.asis_sql_collection_name</td><td>04_ragCommandTool·12C의 같은 이름</td></tr></tbody></table></div>
+<h3>7.3 기존 기능으로 컬렉션 4개 생성</h3>
+<p><strong><code>04_saveVectorDB.py</code>에 컬렉션 생성 기능이 있습니다.</strong> 별도 CREATE COLLECTION을 작성하지 말고 다음 순서로 실행하세요.</p>
+<ol><li>6단계에서 원본 SQL 또는 RAG 자료를 최소 1건 등록했는지 확인하세요.</li><li><code>04_saveVectorDB.Tool Result</code>가 Management Agent에 연결되어 있는지 확인하세요.</li><li>에이전트에 아래 문구로 요청하세요.</li></ol>
+<blockquote><p>새 프로젝트의 Milvus DB에 RAG Guide와 AS-IS SQL을 전체 동기화해줘. sync_all을 실행해서 없는 컬렉션도 생성해줘.</p><button class="copy-quote" type="button">요청문 복사</button></blockquote>
+<p>Tool을 직접 실행하는 경우 <code>command_json</code>에 아래 값을 넣고 <code>Tool Result</code>를 실행하세요.</p>
+<pre><code>{&quot;action&quot;:&quot;sync_all&quot;}</code></pre>
+<p>이 실행은 임베딩 차원을 확인하고, <strong>없는 컬렉션 4개와 필요한 스키마·인덱스를 생성한 뒤 load</strong>합니다. 이어 RAG·AS-IS SQL을 동기화합니다. 기존 컬렉션은 재생성하거나 스키마를 변경하지 않습니다.</p>
+<h3>7.4 생성 결과 확인</h3>
+<p><code>04_saveVectorDB</code>의 Tool 결과에서 아래 항목을 확인하세요.</p>
+<div class="table-wrap" tabindex="0" role="region" aria-label="가로 스크롤 가능한 표"><table><thead><tr><th scope="col">결과 항목</th><th scope="col">확인할 값</th></tr></thead><tbody><tr><td><code>ok</code></td><td><code>true</code></td></tr><tr><td><code>milvus_db_name</code></td><td><code>SM_NEW_PROJECT</code></td></tr><tr><td><code>collections</code></td><td>설정한 컬렉션 4개 이름</td></tr><tr><td><code>collection_created</code></td><td>최초 생성은 각 항목 true, 기존 컬렉션이면 false</td></tr><tr><td><code>vector_dim</code></td><td>사용한 임베딩 모델의 차원</td></tr><tr><td><code>rag</code>, <code>asis_sql</code></td><td>반영 건수와 failures가 없는지 확인</td></tr></tbody></table></div>
+<p>Correct SQL 컬렉션 2개는 처음에 비어 있어도 정상입니다. 담당자가 Correct SQL을 저장할 때 <code>sync_correct_sql</code>로 해당 SQL 한 건·종류를 동기화합니다. <code>sync_all</code>은 Correct SQL을 일괄 적재하지 않습니다.</p></section>
+<section class="panel" id="deploy" aria-label="실행 검증과 담당자 인계"><h2>8. 단건 실행 후 범위 확대</h2>
+<ol><li>“MAP_ID 1001의 DB Migration을 실행해줘”처럼 검증할 작업 1건을 지정하세요.</li><li>대상 데이터·건수·검증 SQL과 <code>NEXT_MIG_LOG</code>를 확인하세요.</li><li>SQL Conversion은 등록한 <code>SQL_SEQ</code> 1건으로 실행하고 <code>TO_SQL</code>, <code>BIND_SQL</code>, <code>TEST_SQL</code>과 상태를 확인하세요.</li><li>필요한 Tuning·Formatting을 확인한 뒤 일괄 실행 범위를 확대하세요.</li></ol>
+<h2>9. 막히는 단계 확인</h2>
+<div class="table-wrap" tabindex="0" role="region" aria-label="가로 스크롤 가능한 표"><table><thead><tr><th scope="col">증상</th><th scope="col">조치</th></tr></thead><tbody><tr><td>Oracle 객체 없음·권한 오류</td><td>system/source/target 스키마와 테이블별 권한 확인</td></tr><tr><td>이전 프로젝트에 로그가 기록됨</td><td>00A 설정과 payload.db_config를 새 값으로 변경하고 프로젝트 실행 프로세스 분리</td></tr><tr><td>매핑이 저장되지 않음</td><td>수퍼 에이전트가 전체 내용을 전달했는지 확인하고 execute_updates 옵션 점검</td></tr><tr><td>Milvus DB 없음</td><td>7.1에서 DB 생성 후 모든 노드의 milvus_db_name 일치 확인</td></tr><tr><td>No active source rows found for Milvus vector sync</td><td>원본 SQL 또는 RAG 자료를 1건 이상 등록한 뒤 sync_all 재실행</td></tr><tr><td>컬렉션 없음</td><td>04_saveVectorDB의 sync_all 실행·결과 확인</td></tr><tr><td>벡터 차원·필드 불일치</td><td>새 컬렉션 이름으로 설정을 통일하고 sync_all 실행</td></tr><tr><td>다른 프로젝트 사례가 검색됨</td><td>동기화·검색 노드의 DB·컬렉션 이름을 동일한 새 프로젝트 값으로 수정</td></tr></tbody></table></div></section>
+</main>
+<footer>SQL 전문은 Oracle 준비 탭에서 펼쳐 보고 내려받으세요. 매핑 정의서는 수퍼 에이전트에 고정 문구로 요청하세요.</footer>
+<div class="status" role="status" aria-live="polite"></div>
+<script>
+const panels=[...document.querySelectorAll('.panel')];const links=[...document.querySelectorAll('.guide-local a')];let active='summary';
+function selectView(){const hash=location.hash.slice(1)||'summary';const sqlTarget=hash.startsWith('sql-');active=sqlTarget?'database':panels.some(p=>p.id===hash)||hash==='all'?hash:'summary';panels.forEach(p=>p.hidden=active!=='all'&&p.id!==active);links.forEach(a=>{if(a.hash==='#'+active)a.setAttribute('aria-current','page');else a.removeAttribute('aria-current')});if(sqlTarget){const target=document.getElementById(hash);if(target){target.open=true;requestAnimationFrame(()=>target.scrollIntoView())}}}
+document.body.classList.add('ready');selectView();window.addEventListener('hashchange',()=>{selectView();if(!location.hash.startsWith('#sql-'))window.scrollTo(0,0)});
+let noticeTimer;function notice(message){const status=document.querySelector('.status');status.textContent=message;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>status.textContent='',3500)}
+async function copyText(value){try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(value)}else{const field=document.createElement('textarea');field.value=value;field.style.position='fixed';field.style.top='-10000px';document.body.append(field);field.select();const done=document.execCommand('copy');field.remove();if(!done)throw Error('copy')}notice('복사했습니다.')}catch{notice('자동 복사가 되지 않았습니다. 본문을 선택하여 복사하세요.')}}
+document.querySelectorAll('.copy-quote').forEach(b=>b.addEventListener('click',()=>copyText(b.closest('blockquote').querySelector('p').textContent)));
+document.querySelectorAll('.copy-sql').forEach(b=>b.addEventListener('click',()=>copyText(b.closest('.sql-file').querySelector('pre code').textContent)));
+document.querySelectorAll('.download-sql').forEach(b=>b.addEventListener('click',()=>{const text=b.closest('.sql-file').querySelector('pre code').textContent;const url=URL.createObjectURL(new Blob(['\uFEFF'+text],{type:'text/plain;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download=b.dataset.filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}));
+document.querySelector('#component-search').addEventListener('input',event=>{const query=event.target.value.trim().toLocaleLowerCase();const rows=[...document.querySelectorAll('#oracle-inventory tr[data-search]')];let count=0;rows.forEach(row=>{row.hidden=!row.textContent.toLocaleLowerCase().includes(query);if(!row.hidden)count++});document.querySelector('#search-result').textContent=count+' / '+rows.length+'개 표시';document.querySelector('#search-empty').hidden=count>0});
+</script>
+</body>
+</html>

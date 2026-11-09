@@ -1,21 +1,8 @@
-# Chapter 6. Oracle & Milvus Schema Reference
+﻿-- Run as target owner (TGT_NEW); SmartMigrate objects must not already exist.
+-- Does not create business tables, users, grants or restore old project data.
+SET DEFINE OFF;
+WHENEVER SQLERROR EXIT SQL.SQLCODE ROLLBACK;
 
-이 문서는 SmartMigrate가 사용하는 Oracle 기준 테이블과 sequence의 배포 DDL을 정리한다. 테이블명 앞에는 운영 환경의 `system_schema`를 붙여 사용할 수 있다.
-
-## 6.1 Object 목록
-
-| Object | 유형 | 용도 |
-|---|---|---|
-| `NEXT_MIG_INFO` | Table | DB Migration 작업 master, 생성 SQL, 검증 SQL, 실행 상태 저장 |
-| `NEXT_MIG_INFO_DTL` | Table | DB Migration 컬럼 매핑 detail 저장 |
-| `NEXT_SQL_INFO` | Table | SQL Conversion, SQL Tuning, SQL Formatting 대상과 산출물 저장 |
-| `NEXT_MIG_RAG_INFO` | Table | SQL Conversion/Tuning RAG Guide 원천 저장 |
-| `NEXT_MIG_LOG` | Table | 전체 workflow, 관리, 실행 로그 저장 |
-| `MIGRATION_LOG_SEQ` | Sequence | `NEXT_MIG_LOG.LOG_ID` 채번 |
-
-## 6.2 NEXT_MIG_INFO
-
-```sql
 CREATE TABLE NEXT_MIG_INFO (
     MAP_ID          NUMBER          NOT NULL,
     MAP_TYPE        VARCHAR2(100),
@@ -41,9 +28,7 @@ CREATE TABLE NEXT_MIG_INFO (
     CONSTRAINT CK_NEXT_MIG_INFO_USE_YN CHECK (USE_YN IN ('Y', 'N')),
     CONSTRAINT CK_NEXT_MIG_INFO_USER_EDITED CHECK (USER_EDITED IN ('Y', 'N'))
 );
-```
 
-```sql
 COMMENT ON TABLE NEXT_MIG_INFO IS 'DB Migration 작업 master, 매핑 범위, 생성 SQL, 검증 SQL, 실행 상태를 저장한다.';
 COMMENT ON COLUMN NEXT_MIG_INFO.MAP_ID IS 'DB Migration 작업 식별자. 단건 실행, 조회, 상태 초기화의 기준 key.';
 COMMENT ON COLUMN NEXT_MIG_INFO.MAP_TYPE IS '매핑 유형. SIMPLE, COMPLEX 등 migration rule 분류값.';
@@ -65,17 +50,11 @@ COMMENT ON COLUMN NEXT_MIG_INFO.ELAPSED_SECONDS IS '마지막 실행 소요 시�
 COMMENT ON COLUMN NEXT_MIG_INFO.LOG IS '마지막 실행 결과 또는 오류 요약.';
 COMMENT ON COLUMN NEXT_MIG_INFO.REG_TS IS 'row 최초 등록 시각.';
 COMMENT ON COLUMN NEXT_MIG_INFO.UPD_TS IS 'row 마지막 갱신 시각.';
-```
 
-```sql
 CREATE INDEX IX_NEXT_MIG_INFO_STATUS ON NEXT_MIG_INFO (USE_YN, STATUS, PRIORITY);
 CREATE INDEX IX_NEXT_MIG_INFO_PRIOR ON NEXT_MIG_INFO (PRIOR_MAP_ID);
 CREATE INDEX IX_NEXT_MIG_INFO_TABLES ON NEXT_MIG_INFO (SUBSTR(FR_TABLE, 1, 200), SUBSTR(TO_TABLE, 1, 200));
-```
 
-## 6.3 NEXT_MIG_INFO_DTL
-
-```sql
 CREATE TABLE NEXT_MIG_INFO_DTL (
     MAP_ID NUMBER          NOT NULL,
     MAP_DTL NUMBER         NOT NULL,
@@ -85,9 +64,7 @@ CREATE TABLE NEXT_MIG_INFO_DTL (
     UPD_TS TIMESTAMP       DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT PK_NEXT_MIG_INFO_DTL PRIMARY KEY (MAP_ID, MAP_DTL)
 );
-```
 
-```sql
 COMMENT ON TABLE NEXT_MIG_INFO_DTL IS 'DB Migration 컬럼 매핑 detail을 저장한다.';
 COMMENT ON COLUMN NEXT_MIG_INFO_DTL.MAP_ID IS 'NEXT_MIG_INFO.MAP_ID와 연결되는 mapping master 식별자.';
 COMMENT ON COLUMN NEXT_MIG_INFO_DTL.MAP_DTL IS 'MAP_ID 내 detail mapping 식별자 및 정렬 기준.';
@@ -95,17 +72,9 @@ COMMENT ON COLUMN NEXT_MIG_INFO_DTL.FR_COL IS 'AS-IS source column.';
 COMMENT ON COLUMN NEXT_MIG_INFO_DTL.TO_COL IS 'TO-BE target column. NULL, blank, NONE, N/A, NA, - 값은 미사용 컬럼으로 해석한다.';
 COMMENT ON COLUMN NEXT_MIG_INFO_DTL.REG_TS IS 'row 최초 등록 시각.';
 COMMENT ON COLUMN NEXT_MIG_INFO_DTL.UPD_TS IS 'row 마지막 갱신 시각.';
-```
 
-```sql
 CREATE INDEX IX_NEXT_MIG_INFO_DTL_MAP ON NEXT_MIG_INFO_DTL (MAP_ID);
-```
 
-현재 표준 10C Executor3/12C는 MAP_DTL을 읽거나 정렬 기준으로 사용합니다. 위 DDL은 이 실행기 기준입니다. 매핑 생성기와 표준 실행기는 MAP_DTL 컬럼을 사용합니다. 매핑 생성기는 기존 식별자만 SELECT하며 PK/인덱스 metadata는 조회하지 않습니다. 이 문서 수정은 운영 DB에 ALTER/DDL을 실행하지 않습니다. master의 TRUNC_YN과 VERIFY2_SQL도 Executor3 입력 컬럼입니다.
-
-## 6.4 NEXT_SQL_INFO
-
-```sql
 CREATE TABLE NEXT_SQL_INFO (
     SQL_SEQ           NUMBER          NOT NULL,
     SPACE_NM          VARCHAR2(200)   NOT NULL,
@@ -137,9 +106,7 @@ CREATE TABLE NEXT_SQL_INFO (
     CONSTRAINT CK_NEXT_SQL_INFO_REF_SEQ CHECK (REF_SEQ IS NULL OR REF_SEQ <> SQL_SEQ),
     CONSTRAINT CK_NEXT_SQL_INFO_USER_EDITED CHECK (USER_EDITED IN ('Y', 'N'))
 );
-```
 
-```sql
 COMMENT ON TABLE NEXT_SQL_INFO IS 'SQL Conversion, SQL Tuning, SQL Formatting 대상 SQL과 산출물을 저장한다.';
 COMMENT ON COLUMN NEXT_SQL_INFO.SQL_SEQ IS '사용자 지정 SQL 단건 번호. 최초 backfill은 SQL_ID, SPACE_NM 정렬 순번으로 부여하며 이후 변경하지 않는다.';
 COMMENT ON COLUMN NEXT_SQL_INFO.SPACE_NM IS 'SQL job 업무 영역 또는 namespace. SQL_ID와 함께 단건 식별 key로 사용한다.';
@@ -166,57 +133,15 @@ COMMENT ON COLUMN NEXT_SQL_INFO.BATCH_CNT IS 'SQL job 실행 시작 횟수.';
 COMMENT ON COLUMN NEXT_SQL_INFO.RETRY_COUNT IS '현재 작업의 retry 횟수.';
 COMMENT ON COLUMN NEXT_SQL_INFO.LOG IS '마지막 실행 결과 또는 오류 요약.';
 COMMENT ON COLUMN NEXT_SQL_INFO.UPD_TS IS 'row 마지막 갱신 시각.';
-```
 
-```sql
 CREATE INDEX IX_NEXT_SQL_INFO_CONV ON NEXT_SQL_INFO (STATUS_CONVERSION, USER_EDITED, PRIORITY);
 CREATE INDEX IX_NEXT_SQL_INFO_TUNING ON NEXT_SQL_INFO (STATUS_TUNING, USER_EDITED, PRIORITY);
 CREATE INDEX IX_NEXT_SQL_INFO_TARGET ON NEXT_SQL_INFO (SUBSTR(TARGET_TABLE, 1, 200));
 CREATE INDEX IX_NEXT_SQL_INFO_REF_SEQ ON NEXT_SQL_INFO (REF_SEQ);
-```
 
-```sql
 -- 신규 설치: importer가 신규 row INSERT 시 NEXTVAL을 사용한다.
 CREATE SEQUENCE NEXT_SQL_INFO_SQL_SEQ START WITH 1 INCREMENT BY 1 NOCACHE;
-```
 
-### `NEXT_SQL_INFO_BACKUP_260921` 복원 INSERT
-
-대상 `NEXT_SQL_INFO`가 비어 있을 때만 실행한다. `SQL_SEQ`는 `SQL_ID`, `SPACE_NM` 오름차순으로 부여하고, 백업에 없는 `REF_SEQ`는 `NULL`로 시작한다.
-
-```sql
-SELECT COUNT(*) AS NEXT_SQL_INFO_COUNT FROM NEXT_SQL_INFO;
-
-INSERT INTO NEXT_SQL_INFO (
-    SQL_SEQ, SPACE_NM, SQL_ID, REF_SEQ,
-    STATUS_CONVERSION, STATUS_TUNING, PRIORITY, USER_EDITED, TARGET_TABLE,
-    TAG_KIND, FR_SQL, EDIT_FR_SQL,
-    TO_SQL, BIND_SQL, BIND_SET, TEST_SQL,
-    TUNED_TO_SQL, TUNED_RESULT, TUNED_FR_SQL,
-    FORMATTED_SQL, BLOCK_RAG_CONTENT,
-    BATCH_CNT, RETRY_COUNT, LOG, UPD_TS
-)
-SELECT
-    ROW_NUMBER() OVER (ORDER BY SQL_ID ASC, SPACE_NM ASC) AS SQL_SEQ,
-    SPACE_NM, SQL_ID, NULL AS REF_SEQ,
-    STATUS_CONVERSION, STATUS_TUNING, PRIORITY, USER_EDITED, TARGET_TABLE,
-    TAG_KIND, FR_SQL, EDIT_FR_SQL,
-    TO_SQL, BIND_SQL, BIND_SET, TEST_SQL,
-    TUNED_TO_SQL, TUNED_RESULT, TUNED_FR_SQL,
-    FORMATTED_SQL, BLOCK_RAG_CONTENT,
-    BATCH_CNT, RETRY_COUNT, LOG, UPD_TS
-  FROM NEXT_SQL_INFO_BACK_260921;
-
-COMMIT;
-
-SELECT MAX(SQL_SEQ) + 1 AS NEXT_SQL_SEQ FROM NEXT_SQL_INFO;
--- 복원 절차에서는 위 결과를 <NEXT_SQL_SEQ>에 넣어 START WITH 1 대신 생성한다.
-CREATE SEQUENCE NEXT_SQL_INFO_SQL_SEQ START WITH <NEXT_SQL_SEQ> INCREMENT BY 1 NOCACHE;
-```
-
-## 6.5 NEXT_MIG_RAG_INFO
-
-```sql
 CREATE TABLE NEXT_MIG_RAG_INFO (
     RAG_ID        NUMBER GENERATED BY DEFAULT AS IDENTITY NOT NULL,
     CATEGORY      VARCHAR2(50)    NOT NULL,
@@ -234,9 +159,7 @@ CREATE TABLE NEXT_MIG_RAG_INFO (
     CONSTRAINT CK_NEXT_MIG_RAG_RULE_TYPE CHECK (RULE_TYPE IN ('GENERAL', 'SEARCH')),
     CONSTRAINT CK_NEXT_MIG_RAG_USE_YN CHECK (USE_YN IN ('Y', 'N'))
 );
-```
 
-```sql
 COMMENT ON TABLE NEXT_MIG_RAG_INFO IS 'SQL Conversion/Tuning RAG Guide 원천 rule, guidance, SQL 예시를 저장한다.';
 COMMENT ON COLUMN NEXT_MIG_RAG_INFO.RAG_ID IS 'RAG Guide 식별자. 신규 추가 시 DB가 자동 생성한다.';
 COMMENT ON COLUMN NEXT_MIG_RAG_INFO.CATEGORY IS 'RAG 적용 도메인. SQL_CONVERSION 또는 SQL_TUNING.';
@@ -249,16 +172,10 @@ COMMENT ON COLUMN NEXT_MIG_RAG_INFO.TARGET_SQL IS 'SEARCH Guide의 변환 또는
 COMMENT ON COLUMN NEXT_MIG_RAG_INFO.HIT_CNT IS 'SEARCH Guide가 실행 중 참조된 횟수.';
 COMMENT ON COLUMN NEXT_MIG_RAG_INFO.CREATED_AT IS 'Guide 최초 등록 시각.';
 COMMENT ON COLUMN NEXT_MIG_RAG_INFO.UPDATED_AT IS 'Guide 마지막 갱신 시각.';
-```
 
-```sql
 CREATE INDEX IX_NEXT_MIG_RAG_LOOKUP ON NEXT_MIG_RAG_INFO (CATEGORY, RULE_TYPE, USE_YN);
 CREATE INDEX IX_NEXT_MIG_RAG_UPDATED ON NEXT_MIG_RAG_INFO (UPDATED_AT);
-```
 
-## 6.6 NEXT_MIG_LOG
-
-```sql
 CREATE SEQUENCE MIGRATION_LOG_SEQ START WITH 1 INCREMENT BY 1 NOCACHE NOCYCLE;
 
 CREATE TABLE NEXT_MIG_LOG (
@@ -275,9 +192,7 @@ CREATE TABLE NEXT_MIG_LOG (
     CREATED_AT  TIMESTAMP      DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT PK_NEXT_MIG_LOG PRIMARY KEY (LOG_ID)
 );
-```
 
-```sql
 COMMENT ON TABLE NEXT_MIG_LOG IS 'SmartMigrate 전체 workflow, 관리 요청, 도메인 실행 로그를 저장하는 단일 로그 테이블.';
 COMMENT ON COLUMN NEXT_MIG_LOG.LOG_ID IS '로그 식별자. MIGRATION_LOG_SEQ.NEXTVAL로 채번한다.';
 COMMENT ON COLUMN NEXT_MIG_LOG.MAP_ID IS '로그 대상 key. DB Migration은 MAP_ID, SQL Conversion/Tuning은 SQL_SEQ = 값, Formatting은 SQL_SEQ = 값 또는 MAP_ID = 값을 저장한다.';
@@ -290,48 +205,6 @@ COMMENT ON COLUMN NEXT_MIG_LOG.MESSAGE IS '로그 상세 메시지.';
 COMMENT ON COLUMN NEXT_MIG_LOG.RETRY_COUNT IS '로그 발생 시점의 retry count.';
 COMMENT ON COLUMN NEXT_MIG_LOG.GENERATE_SQL IS '생성 SQL 또는 오류 분석에 필요한 SQL 본문.';
 COMMENT ON COLUMN NEXT_MIG_LOG.CREATED_AT IS '로그 생성 시각.';
-```
 
-```sql
 CREATE INDEX IX_NEXT_MIG_LOG_TARGET ON NEXT_MIG_LOG (MAP_ID, MIG_KIND, CREATED_AT);
 CREATE INDEX IX_NEXT_MIG_LOG_STATUS ON NEXT_MIG_LOG (MIG_KIND, STATUS, CREATED_AT);
-```
-
-## 6.7 제약 및 운영 메모
-
-| 항목 | 기준 |
-|---|---|
-| SQL job 단건 식별 | `NEXT_SQL_INFO`의 PK는 계속 `SPACE_NM + SQL_ID`다. `SQL_SEQ`는 사용자 입력, 조회, 실행 대상 지정에 쓰는 immutable unique 번호다. |
-| Correct SQL 지정 | 어떤 row의 `REF_SEQ`는 기존 `SM_CORRECT_SQL_CONVERSION`에 이미 존재하는 `SQL_SEQ`만 가리킬 수 있다. 지정 시 원본 row나 기존 Correct SQL 문서를 복제·수정하지 않는다. |
-| DB Migration 단건 식별 | `NEXT_MIG_INFO`는 `MAP_ID`를 단건 key로 사용한다. |
-| SQL Conversion RAG | `CATEGORY='SQL_CONVERSION'` row는 `SOURCE_TABLES`를 반드시 입력하고, `GUIDANCE_TEXT`는 비운다. |
-| SQL Tuning RAG | `CATEGORY='SQL_TUNING'` row는 `GUIDANCE_TEXT`를 입력하고 `SOURCE_TABLES`를 비운다. |
-| 로그 단일화 | `NEXT_SQL_LOG`는 사용하지 않고 SQL 계열 로그도 `NEXT_MIG_LOG`에 저장한다. |
-| FK 적용 | 초기 적재, 보정, 재실행 편의성을 위해 DDL에는 FK를 기본 포함하지 않는다. 필요 시 운영 정책에 따라 `NEXT_MIG_INFO_DTL.MAP_ID -> NEXT_MIG_INFO.MAP_ID`만 별도 추가한다. |
-
-## 6.8 Milvus 컬렉션 구조
-
-Milvus는 Oracle 원천 데이터를 검색용으로 복제한 벡터 저장소다. 동기화는 `04_saveVectorDB.py`가 수행하며, `doc_id`를 primary key로 사용한다. 모든 컬렉션에는 아래 공통 필드가 있다.
-
-| 공통 필드 | 타입 | 설명 |
-|---|---|---|
-| `doc_id` | VARCHAR(256), PK | Oracle row key에서 생성한 안정적인 문서 식별자 |
-| `content` | VARCHAR | embedding 및 BM25 입력 텍스트 |
-| `content_hash` | VARCHAR(64) | 원천/metadata 변경 감지용 SHA-256 |
-| `is_active` | BOOL | 동기화 기준 활성 여부 |
-| `updated_at` | VARCHAR(64) | Oracle 원천 갱신 시각 |
-| `dense_vector` | FLOAT_VECTOR | `content`의 embedding, COSINE index |
-| `sparse_vector` | SPARSE_FLOAT_VECTOR, 선택 | Milvus BM25를 지원하는 환경에서만 생성 |
-
-| 컬렉션 | Oracle 원천 | 전용 metadata | 사용처 |
-|---|---|---|---|
-| `SM_RAG_RULES` | `NEXT_MIG_RAG_INFO` | `rag_id`, `category`, `rule_type`, `use_yn`, `source_tables`, `guidance_text`, `source_sql`, `target_sql` | 12C Conversion, 15C Tuning RAG 검색 |
-| `SM_CORRECT_SQL_CONVERSION` | `save_correct_sql` 후 `sync_correct_sql(sql_seq, correct_sql_kind)`으로 저장된 `USER_EDITED='Y'` 단계 SQL | `sql_seq`, `space_nm`, `sql_id`, `status_conversion`, `correct_sql_kind`, `user_edited`, `tag_kind`, `target_table`, `source_sql`, `to_sql`, `bind_sql`, `test_sql` | 12C 단계별 Correct SQL hint 및 REF_SEQ 지정 대상 |
-| `SM_CORRECT_SQL_MIGRATION` | `save_migration_mig_sql`/`save_migration_verify_sql` 후 `sync_correct_sql(map_id, correct_sql_kind='MIG_SQL'/'VERIFY_SQL')`으로 저장된 단계별 Correct SQL 한 건 | `map_id`, `correct_sql_kind`, `fr_table`, `to_table`, `condition`, `mig_sql`, `verify_sql`, `user_edited`, `status` | 10C 단계별 Correct Migration SQL hint |
-| `SM_ASIS_SQL` | `NEXT_SQL_INFO`의 `EDIT_FR_SQL` 또는 `FR_SQL` | `sql_seq`, `space_nm`, `sql_id`, `tag_kind`, `target_table`, `fr_sql`, `edit_fr_sql` | 04 유사 AS-IS SQL 검색 및 12C Correct SQL hint 검색의 query vector 재사용 |
-
-`SM_ASIS_SQL`에는 실행 status와 TO-BE 결과 SQL을 저장하지 않는다. 검색 결과의 재실행 가능 여부와 최신 status는 항상 Oracle `NEXT_SQL_INFO`를 다시 조회해 판단한다.
-
-`SM_CORRECT_SQL_CONVERSION`과 `SM_ASIS_SQL`은 최초 생성 시부터 `sql_seq`(INT64) 필드를 포함해야 한다. 기존 컬렉션의 schema를 VectorDB sync가 자동 변경하지 않으므로, 구형 컬렉션은 운영자가 `sql_seq` 필드를 포함한 schema로 사전 마이그레이션해야 한다.
-
-`04_ragCommandTool`과 12C는 `SPACE_NM + SQL_ID`로 요청된 SQL만 `SM_ASIS_SQL.dense_vector`를 query vector로 재사용한다. 저장된 `EDIT_FR_SQL`/`FR_SQL`이 현재 source SQL과 정확히 같을 때만 사용하며, 직접 입력 SQL·동기화 누락·원문 불일치 시에는 embedding API로 새 벡터를 생성한다.

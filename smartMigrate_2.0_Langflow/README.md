@@ -4,34 +4,18 @@
 
 상세 아키텍처 문서는 `00_guide` 아래에 모아두고, 이 README는 프로젝트 구조, 공통 설계 특징, 실행 순서, 운영 확인 포인트만 요약합니다.
 
-기준일: 2026-10-07. 현재 표준 흐름은 `Chat Input → 00A → 02 LLM Router`입니다. 이전 01 classifier는 사용하지 않습니다.
+표준 흐름은 `Chat Input → 00A → 02 LLM Router`입니다.
 
-## 가이드 HTML 실행
+## 가이드 열기
 
-`00_guide/00_developer_guidebook.html`은 브라우저에서 바로 열 수 있는 정적 HTML입니다.
+[새 프로젝트 시작 가이드](00_guide/00_new_project_start_guide.html)를 더블클릭으로 여세요. 서버나 CDN 연결 없이 읽을 수 있습니다.
 
-HTML은 옆 Markdown을 fetch하고 Mermaid를 CDN에서 불러옵니다. 파일 더블클릭은 브라우저에 따라 문서 로딩이 차단되므로 아래 HTTP 서버로 실행합니다. Mermaid 렌더링에는 CDN 접속이 필요합니다.
-
-### 방법 2. 로컬 HTTP 서버로 열기
-
-일부 브라우저 보안 정책이나 링크 동작을 더 실제 환경처럼 확인하려면 로컬 서버로 여는 방식을 권장합니다.
-
-```powershell
-cd C:\Users\11824\Desktop\SmartMigrate_Refactoring\smartMigrate_2.0_Langflow
-python -m http.server 8000
-```
-
-브라우저에서 아래 주소를 엽니다.
-
-```text
-http://localhost:8000/00_guide/00_developer_guidebook.html
-```
-
-이미 8000 포트를 쓰고 있으면 다른 포트를 지정합니다.
-
-```powershell
-python -m http.server 8001
-```
+| 문서 | 내용 |
+|---|---|
+| [시작 가이드](00_guide/00_new_project_start_guide.html) | 계정·테이블·컴포넌트 설정, 배포, 매핑·Milvus 준비 |
+| [운영 가이드](00_guide/01_operations_guide.html) | 실행·실패 재개·Correct SQL·RAG |
+| [개발 참고서](00_guide/02_developer_reference.html) | payload·Loop·실행기·로그 계약 |
+| [구조·기능 도식](00_guide/00_architecture_chapter6_erd.html) | Oracle·Milvus·주요 처리 흐름 |
 
 ## 전체 패키지 구조
 
@@ -202,46 +186,16 @@ map_id, mig_kind, log_type, log_level, step_name, status, retry_count, generate_
 
 `02_flow_management/04_saveVectorDB.py`는 RAG Guide/AS-IS SQL 동기화와 채팅으로 저장된 Correct SQL의 단건 동기화를 담당합니다. Conversion은 `USER_EDITED='Y'`인 요청 행의 지정 단계(`TO_SQL`/`BIND_SQL`/`TEST_SQL`)만 `sync_correct_sql(sql_seq, correct_sql_kind)`으로 upsert하며, Migration은 Correct `MIG_SQL` 또는 `VERIFY_SQL`만 `sync_correct_sql(map_id, correct_sql_kind)`으로 kind별 upsert합니다. Migration Correct `MIG_SQL` 저장은 `STATUS='FAIL-TEST'`로 전이해 Verify부터 재개하고, Correct `VERIFY_SQL` 저장은 `STATUS='PASS'`로 종료한다. 두 흐름 모두 PASS를 요구하지 않으며 `sync_all`은 Correct SQL을 대량 색인하지 않습니다. Management의 유사 AS-IS SQL 검색 및 일괄 반영은 SQL Conversion 전용이며 DB Migration에는 제공하지 않습니다. 컬렉션이 없으면 현재 스키마로 생성하지만, 기존 컬렉션의 schema를 자동 변경·삭제하지는 않습니다. 기존 `SM_CORRECT_SQL_MIGRATION`에 `correct_sql_kind` 또는 신규 schema 필드가 없으면 운영자가 해당 컬렉션을 삭제한 뒤 다음 단건 sync로 재생성해야 합니다.
 
-## 최소 검증
+## Flow 저장과 에이전트 배포
 
-코드 수정 후에는 최소한 compile check를 권장합니다.
-
-```powershell
-cd C:\Users\11824\Desktop\SmartMigrate_Refactoring
-python -m compileall smartMigrate_2.0_Langflow\01_agent_start smartMigrate_2.0_Langflow\02_flow_management smartMigrate_2.0_Langflow\03_job_execution
-```
-
-특정 핵심 실행기만 확인하려면 아래처럼 돌릴 수 있습니다.
-
-```powershell
-python -m py_compile `
-  smartMigrate_2.0_Langflow\03_job_execution\10C_migOneJobPocExecutor3.py `
-  smartMigrate_2.0_Langflow\03_job_execution\12C_sqlConversionOneJobPocExecutor.py `
-  smartMigrate_2.0_Langflow\03_job_execution\15C_sqlTuningOneJobPocExecutor.py `
-  smartMigrate_2.0_Langflow\03_job_execution\17C_sqlFormattingOneJobPocExecutor.py `
-  smartMigrate_2.0_Langflow\02_flow_management\04_saveVectorDB.py
-```
+1. Langflow 사이트에서 컴포넌트 코드·입력값·노드 연결을 수정하세요.
+2. Langflow 사이트에서 새 프로젝트 Flow를 저장하세요.
+3. 에이전트 빌더 플랫폼에서 저장한 Flow 연결을 설정하고 에이전트를 배포하세요.
+4. 배포한 에이전트에서 대시보드와 작업 1건의 결과·로그를 확인하세요.
 
 ## 관련 문서
 
-매핑 SQL 생성·실행 조건과 성공/미리보기/실패 로그는 [매핑 룰 Flow·로그 가이드](00_guide/00_mapping_rule_update_flow_log_guide.md)를 참고합니다.
-
-사용자용 첫 안내와 개발자용 상세 설계는 아래 문서에서 관리합니다.
-
-| 문서 | 내용 |
-|---|---|
-| `00_guide/00_user_guide.md` | 일반 사용자가 이용 가능한 기능과 질문 예시 |
-| `00_guide/00_architecture.md` | 개발자용 전체 아키텍처 진입점과 상세 문서 목차 |
-| `00_guide/00_architecture_chapter1_overview.md` | 개발자용 시스템 목적, 저장소, 기본 흐름 |
-| `00_guide/00_architecture_chapter2_chat_management.md` | 채팅/관리 요청 처리 |
-| `00_guide/00_architecture_chapter3_job_execution.md` | 작업 실행 라우팅과 Loop 구조 |
-| `00_guide/00_architecture_chapter4_domain_executors.md` | 10C/12C/15C/17C 실행기 상세 |
-| `00_guide/00_architecture_chapter5_logging_operations.md` | logging, 운영, 장애 확인 |
-| `00_guide/00_architecture_chapter6_oracle_ddl.md` | Oracle 테이블 DDL, 컬럼 코멘트, 주요 인덱스 |
-| `00_guide/00_job_execution_payload_plan.md` | 개발자용 실행 요청 payload 전달 규칙 |
-| `00_guide/00_follow_up_payload_contract.md` | 현재 payload/연결 계약과 후속 발화 지원 범위 |
-| `00_guide/00A_file_upload_runtime_guide.md` | XLSX URL 파싱, 전달 계약, 매핑 등록/미리보기 |
-| `00_guide/00_logging_rules.txt` | 개발자용 workflow logging 세부 규칙 |
+목차와 실행 SQL은 [인수인계 가이드](00_guide/README.md)에 정리되어 있습니다. 가이드는 이 패키지의 `00_guide` 안에 있는 HTML·README·SQL 파일을 직접 수정하세요.
 
 ## 매핑 룰 변경과 파일 정리
 
@@ -249,8 +203,8 @@ python -m py_compile `
 
 매핑 식별자는 master MAP_ID, detail (MAP_ID, MAP_DTL)로 고정합니다. 기존 식별자만 SELECT하며 PK/인덱스 metadata는 조회하지 않습니다. `execute_updates=false`가 기본값이며 실제 DB 적용은 해당 옵션을 켰을 때 수행합니다. 실행 여부는 execute_updates 옵션 하나로 결정합니다. 생성 SQL은 mapping 컬럼과 literal 값, 정확한 PK equality만 허용하고 system_schema로 한정합니다. 모든 문장이 한 행씩 변경되어야 commit합니다.
 
-구버전 10C 두 개와 18B Loop, 00B URL 진단용 컴포넌트는 archive에 보관했습니다. 외부 Flow 사용 여부는 저장소에서 확인할 수 없습니다. 현재 표준은 10C Executor3와 18B Loop2입니다. 99.LogHelper.py는 운영 실행 노드가 아닌 logging 예제입니다.
+구버전 10C 두 개와 18B Loop, 00B URL 진단용 컴포넌트는 archive에 보관했습니다. 외부 Flow 사용 여부는 저장소에서 확인할 수 없습니다. 현재 표준은 10C Executor3와 18B Loop2입니다. 로깅 예제는 개발 참고서에 포함되어 있습니다.
 
 가이드/코드 수정은 기존 Langflow 노드에 자동 반영되지 않습니다. 00A, 02, 04 Router, Select Tool, 매핑 생성기와 Management Agent prompt를 다시 등록하고 연결을 점검합니다.
 
-회귀 검증: 저장소 루트에서 `python -m unittest discover -s tests -p test_langflow_management_components.py -v`를 실행합니다. 외부 Oracle/LLM 없이 SQL 범위 제한, PK 판별, 첨부 전달과 transaction 동작을 검증합니다. 실제 Langflow/운영 DB 연결 검증은 별도로 수행합니다.
+이관 전 소스 스키마에는 AS-IS 데이터가, 타겟 스키마에는 생성 완료된 TO-BE 테이블·컬럼·PK가 있어야 합니다. 접속 계정의 양쪽 스키마 접근 권한을 먼저 확인하세요.
