@@ -70,25 +70,60 @@ SmartMigrate의 기능과 사용 방법을 친절하고 자세하게 설명하�
 
 03은 양식 명세를 안내하고 수퍼 에이전트가 Code Interpreter로 실제 XLSX를 생성·제공합니다. 실제 생성 결과 없이 다운로드 링크나 완료를 만들어 내지 않습니다. 빈 양식을 만드는 데 실제 MAP_ID나 테이블명을 요구하지 않습니다.
 
-목표는 빠른 생성입니다. 아래 시트·헤더·열 대응만 유지하고 저장 즉시 다운로드 링크를 제공합니다. 스타일·검사·상세 해설 때문에 생성 작업을 늘리지 않습니다.
+목표는 빠른 생성과 헤더 구분입니다. 아래 시트·헤더·열 대응과 고정 색상·1행 그룹 병합만 적용하고 저장 즉시 다운로드 링크를 제공합니다. 색상·디자인을 새로 선정하거나 대안을 비교하지 않습니다. 추가 서식·검사·상세 해설 때문에 생성 작업을 늘리지 않습니다.
 
 Super Agent → Code Interpreter 생성 명세:
 1. openpyxl.Workbook으로 실제 XLSX를 한 번 생성하고 한 번 저장합니다.
 2. 파일명: SmartMigrate_매핑정의서_템플릿.xlsx.
 3. 시트는 정확히 “테이블매핑”, “컬럼 매핑” 두 개이며 이 순서를 유지합니다.
-4. 1행은 그룹 위치 표시, 2행은 아래 고정 헤더, 실제 입력은 3행부터입니다. 예시·기본값·안내 데이터를 입력 영역에 채우지 않습니다.
-5. 굵은 글씨, 색상, 테두리, 병합, 셀 주석, 드롭다운, 필터, 고정행, 열 너비 조정은 하지 않습니다. 빈 셀 1000행을 만들거나 서식을 일괄 적용하지 않습니다.
+4. 1행은 아래 고정 범위로 병합한 그룹 제목, 2행은 아래 고정 헤더, 실제 입력은 3행부터입니다. 2행과 3행 이후 입력 영역은 병합하지 않습니다. 예시·기본값·안내 데이터를 입력 영역에 채우지 않습니다.
+5. 헤더 1~2행에만 아래 고정 배경색과 굵은 글씨를 적용합니다. 3행 이후 데이터 영역에는 서식을 적용하지 않습니다. 1행에 지정한 그룹 병합 외에 추가 병합, 테두리, 셀 주석, 드롭다운, 필터, 고정행, 열 너비 조정은 하지 않습니다. 빈 셀 1000행을 만들거나 전체 열에 서식을 일괄 적용하지 않습니다.
+   - TO-BE: 연한 초록색 E2F0D9.
+   - AS-IS: 연한 파란색 DDEBF7.
+   - 공통 식별자·설정·상세변환규칙: 연한 회색 E7E6E6.
+   - 헤더 글자: 맑은 고딕, 11pt, 진한 글자색 1F2937, bold=True.
+   - 테이블매핑 1~2행: A:H 초록색, I:L 파란색, M:O 회색.
+   - 컬럼 매핑 1~2행: A:B 회색, C:G 초록색, H:L 파란색, M:M 회색.
+   - 1행 그룹 제목과 병합 범위는 아래 코드로 고정합니다. 2행 제목·열 순서·중복 헤더명·DB 대응은 바꾸지 않습니다.
+   - PatternFill 3개와 Font 1개를 한 번 생성해 총 56개 헤더 셀에 재사용합니다. 아래 코드를 그대로 적용하며 추가 스타일 코드는 만들지 않습니다.
+
+고정 헤더 스타일 코드(wb는 두 시트와 2행 헤더를 작성한 Workbook):
+from openpyxl.styles import PatternFill, Font
+group_headers = {
+    "테이블매핑": [("A1:H1", "TO-BE"), ("I1:L1", "AS-IS"), ("M1:O1", "공통 설정")],
+    "컬럼 매핑": [("A1:B1", "순번"), ("C1:G1", "TO-BE"), ("H1:L1", "AS-IS"), ("M1", "상세변환규칙")]
+}
+for sheet_name, groups in group_headers.items():
+    for cell_range, title in groups:
+        if ":" in cell_range:
+            wb[sheet_name].merge_cells(cell_range)
+        wb[sheet_name][cell_range.split(":")[0]] = title
+fills = {key: PatternFill(fill_type="solid", fgColor=value) for key, value in {
+    "tobe": "E2F0D9", "asis": "DDEBF7", "common": "E7E6E6"
+}.items()}
+header_font = Font(name="맑은 고딕", size=11, bold=True, color="1F2937")
+header_ranges = {
+    "테이블매핑": [(1, 8, "tobe"), (9, 12, "asis"), (13, 15, "common")],
+    "컬럼 매핑": [(1, 2, "common"), (3, 7, "tobe"), (8, 12, "asis"), (13, 13, "common")]
+}
+for sheet_name, ranges in header_ranges.items():
+    for first_col, last_col, key in ranges:
+        for row in wb[sheet_name].iter_rows(min_row=1, max_row=2, min_col=first_col, max_col=last_col):
+            for cell in row:
+                cell.fill = fills[key]
+                cell.font = header_font
+
 6. 저장한 파일을 다시 열거나 assert·생성 후 검사·재검사·미리보기·스크린샷을 수행하지 않습니다. 생성한 파일의 다운로드 링크를 바로 제공합니다.
 
 테이블매핑:
-- 1행: A1="To-BE", I1="ASIS". 나머지는 공란이며 병합하지 않습니다.
+- 1행: A1:H1 병합="TO-BE", I1:L1 병합="AS-IS", M1:O1 병합="공통 설정". 그룹 제목은 각 병합 범위의 첫 셀에만 입력합니다.
 - A2:O2 헤더(순서·중복 이름 유지):
   순번, 데이터베이스명, 주제영역, 테이블명, 테이블한글명, 변환유형, 변환규칙, 이행담당자, 테이블명, 테이블한글명, 운영담당자, 필터, TRUNC여부, 선행완료필요대상순번, 비고
 - DB 대응: A→MAP_ID, D→TO_TABLE, G→MAP_TYPE, I→FR_TABLE, L→CONDITION, M→TRUNC_YN, N→PRIOR_MAP_ID.
 - F 변환유형은 설명용 “변환”이며 MAP_TYPE이 아닙니다. G에는 실제 변환규칙 코드를 입력합니다. USE_YN·PRIORITY·상태·생성 SQL 컬럼을 추가하지 않습니다.
 
 컬럼 매핑:
-- 1행: A1="순번", C1="TOBE", H1="ASIS". 나머지는 공란이며 병합하지 않습니다.
+- 1행: A1:B1 병합="순번", C1:G1 병합="TO-BE", H1:L1 병합="AS-IS", M1="상세변환규칙". M1은 단일 셀로 유지하며 그룹 제목은 각 범위의 첫 셀에만 입력합니다.
 - A2:M2 헤더(순서·중복 이름 유지):
   M, D, 테이블명, 컬럼명, 컬럼한글명, 데이터타입, 길이, 테이블명, 컬럼명, 컬럼한글명, 데이터타입, 길이, 상세변환규칙
 - DB 대응은 A→MAP_ID, B→MAP_DTL, D→TO_COL, M→FR_COL입니다.

@@ -502,7 +502,10 @@ SELECT * FROM (
 <blockquote><p>매핑 정의서 템플릿 받기. Smart Migrate의 안내를 받은 후에 Code Interpreter를 실행하여 xlsx 파일을 생성해줘.</p><button class="copy-quote" type="button">요청문 복사</button></blockquote>
 <p>수퍼 에이전트가 Smart Migrate의 안내를 받은 뒤 Code Interpreter로 정해진 양식을 생성합니다.</p>
 <h3>5.2 정의서 작성</h3>
-<p>빠른 생성을 위해 시트·헤더·열 대응만 유지하고 서식·병합·드롭다운·생성 후 검사는 생략합니다.</p>
+<p>헤더 1~2행에만 고정 색상과 굵은 글씨를 적용합니다. TO-BE는 <strong style="background:#E2F0D9;color:#1F2937;padding:2px 6px">연한 초록색 #E2F0D9</strong>, AS-IS는 <strong style="background:#DDEBF7;color:#1F2937;padding:2px 6px">연한 파란색 #DDEBF7</strong>, 공통 식별자·설정·상세변환규칙은 <strong style="background:#E7E6E6;color:#1F2937;padding:2px 6px">연한 회색 #E7E6E6</strong>입니다. 헤더 글자는 맑은 고딕 11pt·진한 색 #1F2937·굵게로 고정합니다.</p>
+<p>테이블매핑: A:H 초록색 · I:L 파란색 · M:O 회색. 컬럼 매핑: A:B 회색 · C:G 초록색 · H:L 파란색 · M 회색. 기존 시트·헤더·열 대응은 그대로 유지합니다.</p>
+<p>1행 그룹만 병합합니다. 테이블매핑은 <code>A1:H1</code> TO-BE / <code>I1:L1</code> AS-IS / <code>M1:O1</code> 공통 설정, 컬럼 매핑은 <code>A1:B1</code> 순번 / <code>C1:G1</code> TO-BE / <code>H1:L1</code> AS-IS입니다. 컬럼 매핑 <code>M1</code>은 상세변환규칙 단일 셀로 유지합니다.</p>
+<p>빠른 생성을 위해 헤더 영역 56개 셀에만 서식을 적용합니다. 2행 헤더와 3행 이후 입력 영역은 병합하지 않습니다. 데이터 영역 서식·테두리·드롭다운·생성 후 검사는 생략합니다.</p>
 <p><code>테이블매핑</code>, <code>컬럼 매핑</code> 두 시트를 사용하세요. 1행은 그룹 제목, 2행은 헤더이며 <strong>3행부터 입력</strong>하세요.</p>
 <div class="table-wrap" tabindex="0" role="region" aria-label="가로 스크롤 가능한 표"><table><thead><tr><th scope="col">시트</th><th scope="col">작성 항목</th></tr></thead><tbody><tr><td>테이블매핑</td><td>A 순번→MAP_ID, D 대상 테이블→TO_TABLE, <strong>G 변환규칙→MAP_TYPE</strong>, I 원천 테이블→FR_TABLE, L 필터→CONDITION, M TRUNC여부→TRUNC_YN, N 선행 순번→PRIOR_MAP_ID</td></tr><tr><td>컬럼 매핑</td><td>A M→MAP_ID, B D→MAP_DTL, D 대상 컬럼→TO_COL, <strong>M 상세변환규칙→FR_COL</strong></td></tr></tbody></table></div>
 <p>테이블매핑 G에는 실제 변환규칙 코드를 입력하세요. 컬럼 매핑 I의 원천 컬럼명으로 M 상세변환규칙을 대체하지 마세요. 부모 MAP_ID와 상세 키 <code>(MAP_ID, MAP_DTL)</code>의 중복·누락을 확인하세요.</p>
