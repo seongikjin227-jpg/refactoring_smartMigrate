@@ -9,7 +9,7 @@
 | 3 | [개발 참고서](02_developer_reference.html) | 컴포넌트 역할, payload, Loop, 실행기, 매핑 검증·로그 계약 |
 | 필요 시 | [컴포넌트 스티커 메모](04_component_sticky_notes.html) | 각 컴포넌트 파일의 한 줄 설명 복사 |
 | 필요 시 | [템플릿 모음](03_request_templates.html) | 기능별 요청문 복사와 기대 결과 확인 |
-| 필요 시 | [구조·기능 도식](00_architecture_chapter6_erd.html) | Oracle·Milvus 구조와 처리 흐름 확인 |
+| 필요 시 | [발표자료 첨부용 도식화 이미지 생성](<발표자료 첨부용 도식화 이미지 생성.html>) | Oracle·Milvus 구조와 처리 흐름 확인 |
 
 ## 실행 SQL
 

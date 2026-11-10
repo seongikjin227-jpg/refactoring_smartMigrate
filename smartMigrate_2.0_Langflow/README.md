@@ -15,7 +15,7 @@
 | [시작 가이드](00_guide/00_new_project_start_guide.html) | 계정·테이블·컴포넌트 설정, 배포, 매핑·Milvus 준비 |
 | [운영 가이드](00_guide/01_operations_guide.html) | 실행·실패 재개·Correct SQL·RAG |
 | [개발 참고서](00_guide/02_developer_reference.html) | payload·Loop·실행기·로그 계약 |
-| [구조·기능 도식](00_guide/00_architecture_chapter6_erd.html) | Oracle·Milvus·주요 처리 흐름 |
+| [발표자료 첨부용 도식화 이미지 생성](<00_guide/발표자료 첨부용 도식화 이미지 생성.html>) | Oracle·Milvus·주요 처리 흐름 |
 
 ## 전체 패키지 구조
 
