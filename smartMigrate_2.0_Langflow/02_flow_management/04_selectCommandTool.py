@@ -447,12 +447,14 @@ class NewType04SelectCommandTool(Component):
         if domain in {"ALL", "DB_MIGRATION", "DB_MIG"}:
             data["migration_jobs"] = self._search_migration_jobs(keyword, fail_only, limit)
         if domain in {"ALL", *self.SQL_DOMAINS}:
-            data["sql_jobs"] = self._search_sql_jobs(keyword, domain if domain != "ALL" else "", fail_only, limit)
+            data["sql_jobs"] = self._search_sql_jobs(keyword, domain if domain != "ALL" else "", fail_only, limit,
+                                                     space_nm=str(command.get("space_nm") or "").strip())
         return {
             "ok": True,
             "component": "04_selectCommandTool",
             "action": "search_jobs",
-            "target": {"domain": domain, "keyword": keyword, "fail_only": fail_only, "limit": limit},
+            "target": {"domain": domain, "keyword": keyword, "space_nm": str(command.get("space_nm") or "").strip(),
+                       "fail_only": fail_only, "limit": limit},
             "data": data,
         }
 
@@ -651,10 +653,13 @@ class NewType04SelectCommandTool(Component):
             table_name="NEXT_MIG_INFO",
         )
 
-    def _search_sql_jobs(self, keyword: str, domain: str, fail_only: bool, limit: int) -> list[dict[str, Any]]:
+    def _search_sql_jobs(self, keyword: str, domain: str, fail_only: bool, limit: int, space_nm: str = "") -> list[dict[str, Any]]:
         column_types = self._available_column_types("NEXT_SQL_INFO")
         conditions = []
         params: dict[str, Any] = {"limit": limit}
+        if space_nm:
+            conditions.append("UPPER(TRIM(SPACE_NM)) = UPPER(TRIM(:space_nm))")
+            params["space_nm"] = space_nm
         if keyword:
             conditions.append(self._like_any_condition(["SPACE_NM", "SQL_ID", "TAG_KIND", "FR_SQL", "EDIT_FR_SQL", "TARGET_TABLE", "TO_SQL", "TUNED_TO_SQL", "BIND_SQL", "TEST_SQL", "LOG"], "keyword", column_types))
             params["keyword"] = f"%{keyword}%"

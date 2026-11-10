@@ -589,9 +589,9 @@ class NewType04RagCommandTool(Component):
                 "No status was changed."
             )
         rag_id = result.get("rag_id")
-        sync_sentence = "RAG Guide와 Correct SQL을 VectorDB에 동기화해줘"
+        sync_sentence = "RAG Guide와 AS-IS SQL을 Milvus에 전체 동기화해줘"
         if rag_id:
-            sync_sentence = f"RAG_ID {rag_id} 변경분을 포함해서 RAG Guide와 Correct SQL을 VectorDB에 동기화해줘"
+            sync_sentence = f"RAG_ID {rag_id} 변경분을 포함해서 RAG Guide와 AS-IS SQL을 Milvus에 전체 동기화해줘"
         return (
             f"RAG Guide {action} completed: RAG_ID={rag_id}, updated_rows={result.get('updated_rows', 0)}.\n"
             f"VectorDB 반영은 자동으로 실행하지 않았습니다. 반영하려면 \"{sync_sentence}\"라고 요청하세요."

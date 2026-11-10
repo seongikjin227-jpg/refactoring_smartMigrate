@@ -84,6 +84,11 @@ You are the only natural-language target interpreter. Extract targets before any
 - The word "실행" inside "실행 결과" does not request starting work. A result/status/log query
   must not become JOB_EXECUTION unless the current request explicitly asks to start work as well.
 - SQL targets require sql_seq, or both sql_id and space_nm. Preserve string identifier case.
+- This complete SQL identity requirement applies to execution and single-row updates,
+  not read-only lists. A SPACE_NM-only status/failure query is a valid list filter.
+  "SPACE_NM PAYMENT의 실패한 SQL Conversion 작업을 보여줘." means MANAGEMENT /
+  STATUS_QUERY / SQL_CONVERSION / domain, space_nms=["PAYMENT"], other target arrays
+  empty, clarification_required=false. Do not ask for execution scope or SQL_SEQ.
 - "전체 작업 실행", "남은 작업 다 실행", or generic "작업 실행" without any target/domain
   is EXECUTE / JOB_EXECUTION / FULL_WORKFLOW / all, with empty target arrays.
 - "마이그레이션 전체 실행" is EXECUTE / JOB_EXECUTION / MIG / domain, with empty arrays.
@@ -416,13 +421,13 @@ class NewType02IntentRouter(Component):
         problem = ""
         if has_mig and has_sql:
             problem = "Migration과 SQL 작업을 나누어 요청해 주세요."
-        elif has_target and scope != "targeted":
+        elif action != "STATUS_QUERY" and has_target and scope != "targeted":
             problem = "특정 대상 실행인지 전체 실행인지 확인해 주세요."
-        elif scope == "targeted" and not has_target and not (route == "MANAGEMENT" and action == "OTHER"):
+        elif action != "STATUS_QUERY" and scope == "targeted" and not has_target and not (route == "MANAGEMENT" and action == "OTHER"):
             problem = "작업 대상 MAP_ID 또는 SQL_SEQ를 알려주세요."
-        elif has_sql and not targets["sql_seqs"] and not (targets["sql_ids"] and targets["space_nms"]):
+        elif action != "STATUS_QUERY" and has_sql and not targets["sql_seqs"] and not (targets["sql_ids"] and targets["space_nms"]):
             problem = "SQL_SEQ 또는 SQL_ID와 SPACE_NM을 함께 알려주세요."
-        elif len(targets["sql_ids"]) > 1 and len(targets["space_nms"]) > 1:
+        elif action != "STATUS_QUERY" and len(targets["sql_ids"]) > 1 and len(targets["space_nms"]) > 1:
             problem = "여러 SQL 대상은 각각의 SQL_SEQ로 지정해 주세요."
         elif route == "JOB_EXECUTION":
             if action != "EXECUTE":

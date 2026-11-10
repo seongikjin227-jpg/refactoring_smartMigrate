@@ -308,7 +308,7 @@ class NewType04SaveVectorDB(Component):
         asis_sql = result.get("asis_sql") or {}
         return (
             "Correct SQL 및 Conversion / Tuning Guide를 Milvus Vector DB에 동기화 완료했습니다.\n"
-            f"- RAG Guide: active={rag.get('active_count', 0)}, upserted={rag.get('upserted_count', 0)}, skipped={rag.get('skipped_count', 0)}\n"
+            f"- RAG Guide: active={rag.get('active_count', 0)}, upserted={rag.get('upserted_count', 0)}, deactivated={rag.get('deactivated_count', 0)}, skipped={rag.get('skipped_count', 0)}\n"
             f"- Correct SQL Conversion: active={conversion.get('active_count', 0)}, upserted={conversion.get('upserted_count', 0)}, skipped={conversion.get('skipped_count', 0)}\n"
             f"- Correct SQL Migration: active={migration.get('active_count', 0)}, upserted={migration.get('upserted_count', 0)}, skipped={migration.get('skipped_count', 0)}\n"
             f"- AS-IS SQL: active={asis_sql.get('active_count', 0)}, upserted={asis_sql.get('upserted_count', 0)}, skipped={asis_sql.get('skipped_count', 0)}\n"
@@ -448,8 +448,8 @@ class NewType04SaveVectorDB(Component):
         # - 현재 Oracle snapshot에서 active 상태이고,
         # - content_hash가 Milvus의 active 복사본과 다를 때만 upsert한다.
         #
-        # 예전에는 Milvus에 있었지만 현재 Oracle 기준으로 비활성인 row는
-        # 즉시 삭제하지 않고 가능하면 inactive로 표시한다.
+        # Oracle에서 명시적으로 비활성화한 row는 기존 vector를 재사용해
+        # inactive로 표시한다. 이번 요청에 없는 문서는 유지한다.
         # 이렇게 하면 검색에서는 제외하면서도 추적 이력은 유지할 수 있다.
         active_doc_ids = {row["doc_id"] for row in rows if row.get("is_active")}
         existing = self._query_existing_docs(client, collection_name)
@@ -457,6 +457,29 @@ class NewType04SaveVectorDB(Component):
         skipped = len([row for row in rows if row.get("is_active")]) - len(to_upsert)
         failures: list[dict[str, Any]] = []
         upserted = 0
+        deactivated = 0
+        # Only explicitly inactive Oracle rows are changed. An empty Correct SQL
+        # snapshot (sync_all) or a one-job sync must not disable other documents.
+        inactive_rows = {row["doc_id"]: row for row in rows if not row.get("is_active")}
+        for batch in self._chunks(list(inactive_rows), BATCH_SIZE):
+            try:
+                stored = client.query(
+                    collection_name=collection_name,
+                    filter=f"doc_id in {json.dumps(batch, ensure_ascii=False)} and is_active == true",
+                    output_fields=["doc_id", "dense_vector"],
+                    limit=len(batch),
+                    consistency_level="Strong",
+                )
+                # Reuse each stored vector; inactive rules need no embedding.
+                entities = [
+                    {**inactive_rows[item["doc_id"]], "dense_vector": item["dense_vector"]}
+                    for item in stored or []
+                ]
+                if entities:
+                    client.upsert(collection_name=collection_name, data=entities)
+                    deactivated += len(entities)
+            except Exception as exc:
+                failures.append({"doc_ids": batch, "stage": "deactivate", "error": str(exc)})
         for batch in self._chunks(to_upsert, BATCH_SIZE):
             try:
                 # 이 줄에서만 현재 batch의 embedding API를 호출한다.
@@ -473,6 +496,7 @@ class NewType04SaveVectorDB(Component):
             "loaded_count": len(rows),
             "active_count": len(active_doc_ids),
             "upserted_count": upserted,
+            "deactivated_count": deactivated,
             "skipped_count": max(skipped, 0),
             "failed_batch_count": len(failures),
             "failures": failures[:10],
@@ -485,7 +509,7 @@ class NewType04SaveVectorDB(Component):
         
         result: dict[str, str] = {}
         try:
-            rows = client.query(collection_name=collection_name, filter='doc_id != ""', output_fields=["doc_id", "content_hash", "is_active"], limit=16384)
+            rows = client.query(collection_name=collection_name, filter='doc_id != ""', output_fields=["doc_id", "content_hash", "is_active"], limit=16384, consistency_level="Strong")
         except TypeError:
             rows = client.query(collection_name=collection_name, filter='doc_id != ""', output_fields=["doc_id", "content_hash", "is_active"])
         for row in rows or []:

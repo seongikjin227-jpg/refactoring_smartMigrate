@@ -7,6 +7,7 @@
 | 1 | [새 프로젝트 시작 가이드](00_new_project_start_guide.html) | 소스 데이터·생성된 타겟 테이블 확인, 권한·컴포넌트 설정, Langflow 저장·에이전트 빌더 배포, 매핑·Milvus 준비 |
 | 2 | [운영 가이드](01_operations_guide.html) | 조회·실행, 실패 재시도, Correct SQL 저장, 유사 SQL·RAG 관리 |
 | 3 | [개발 참고서](02_developer_reference.html) | 컴포넌트 역할, payload, Loop, 실행기, 매핑 검증·로그 계약 |
+| 필요 시 | [컴포넌트 스티커 메모](04_component_sticky_notes.html) | 각 컴포넌트 파일의 한 줄 설명 복사 |
 | 필요 시 | [템플릿 모음](03_request_templates.html) | 기능별 요청문 복사와 기대 결과 확인 |
 | 필요 시 | [구조·기능 도식](00_architecture_chapter6_erd.html) | Oracle·Milvus 구조와 처리 흐름 확인 |
 
