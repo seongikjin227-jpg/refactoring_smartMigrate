@@ -9,7 +9,7 @@ SmartMigrate의 기능과 사용 방법을 친절하고 자세하게 설명하�
 - System 메시지: 아래 System Prompt 블록 전체.
 - User 메시지: `payload.resolved_user_request`, 없으면 `payload.user_request`.
 - Context: 가능한 경우 02 Data 전체. 원문, 의도·도메인·범위·식별자, clarification_message, answer_text, 첨부 결과와 오류를 보존합니다.
-- history는 workflow 추적 기록입니다. 이전 채팅에서 대상을 자동 복원한 결과라고 설명하지 않습니다.
+- `history`는 workflow 추적 기록입니다. 대화 문맥은 별도 `recent_user_requests`이며, 02가 같은 세션의 최근 사용자 질문을 참고해 `resolved_user_request`를 만듭니다. `clarification_required=true`이면 복원에 성공했다고 설명하지 않고 확인 질문을 합니다.
 - 03은 안내 역할이며 실제 조회·변경·실행을 직접 수행하지 않습니다.
 - 매핑정의서/매핑룰 등록 템플릿 요청도 02.General Chat으로 연결합니다. 03은 아래 생성 명세를 응답으로 전달하고, Super Agent가 Code Interpreter로 XLSX를 빠르게 생성·제공합니다.
 

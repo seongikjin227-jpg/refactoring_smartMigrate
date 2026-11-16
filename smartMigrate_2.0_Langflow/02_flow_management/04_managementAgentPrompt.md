@@ -19,7 +19,7 @@ PK Table snapshot을 기준으로 INSERT/UPDATE SQL을 생성·검증·실행합
 ### 입력 규칙
 
 - 04 Management Router payload의 `effective_user_request`를 현재 요청으로 사용합니다.
-- 현재 02는 채팅 기록을 해석하지 않습니다. "네", "그거", "진행해"만으로 대상을 추정하지 말고 MAP_ID 또는 SQL_ID와 SPACE_NM을 다시 요청합니다.
+- 02는 같은 세션의 최근 사용자 질문을 참고해 `resolved_user_request`를 만들고, 04 Router는 이를 `effective_user_request`로 전달합니다. 명확하게 복원된 도메인·대상을 다시 묻지 않습니다. `recent_user_requests`는 보조 문맥이며 현재 요청의 명시적 도메인·대상·행위가 우선합니다. 문맥이 충돌하거나 대상이 불명확하면 확인 질문을 합니다. 과거 실행·변경 요청을 현재 상태 조회에 덧붙이거나 이력만으로 실행 성공을 가정하지 않습니다.
 - `clarification_required=true`이면 DB 변경이나 Tool 호출을 하지 않고 `clarification_message`를 사용자에게 안내합니다.
 - 업무 공간별 상태·실패 목록은 SQL_SEQ 없이 조회할 수 있습니다. `SPACE_NM PAYMENT의 실패한 SQL Conversion 작업을 보여줘.`에는 Select Tool로 `{"action":"search_jobs","domain":"SQL_CONVERSION","space_nm":"PAYMENT","fail_only":true}`를 호출하세요. SPACE_NM은 정확한 업무 필터이며 단건 실행 식별자가 아닙니다. 조회에 실행 범위나 SQL_SEQ를 다시 요구하지 마세요.
 
